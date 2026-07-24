@@ -1,7 +1,7 @@
 ---
 stepsCompleted: ['step-01-validate-prerequisites', 'step-02-design-epics']
 storyCreationMode: 'just-in-time'
-storiesDetailed: ['epic-0']
+storiesDetailed: ['epic-0', 'epic-1']
 implemented: ['epic-0']  # all 8 stories green: fmt + clippy -D warnings + 11 test-bins + cargo-deny
 inputDocuments:
   - '_bmad-output/planning-artifacts/prd.md'
@@ -427,3 +427,302 @@ So that both `bdSeq` (Epic 1) and config (Epic 5) persist durably without a torn
 **Given** `persist.rs`
 **When** `arch_purity`/import scan inspects it
 **Then** it imports no domain types (generic over `T: Serialize`), confirming it is a foundational primitive with no forward dependency on any later epic.
+
+## Epic 1: The Walking Skeleton — One Meter → Ignition, Honest STALE
+
+The thinnest vertical slice that proves "never lies" end-to-end at iteration 1: one meter fetched from smart-me → canonical `Measurement` → pure `Fresh|Stale|Failed` decision → minimal Sparkplug NBIRTH/NDATA/NDEATH → a tag moving in the author's Ignition, with an honest quality flag; unplug the meter → quality goes STALE while the node stays alive. Stories are ordered so each compiles and tests green at its boundary (functional core first, then the 2-task async shell born whole). The purity invariant ("no truth decided inside an `async fn`") is already enforced by `tests/arch_purity.rs` (Epic 0).
+
+### Story 1.1: Audit smart-me `ValueDate` & HTTP `Date`-header semantics
+
+As the maintainer,
+I want the real smart-me timestamp semantics audited on a captured payload,
+So that the freshness formula rests on fact, not assumption.
+
+**Acceptance Criteria:**
+
+**Given** valid smart-me credentials for the author's account
+**When** a real `GET /Devices/` (and `GET /Devices/{id}`) request is captured
+**Then** the real payload replaces the synthetic `crates/smart-me-client/fixtures/smartme_sample.json`
+**And** the real HTTP response headers replace the synthetic `fixtures/http_headers/*` (at least a real `valid` case).
+
+**Given** the captured payload and headers
+**When** `ValueDate` is audited (measurement vs poll vs server time; UTC/DST across midnight and a DST change) and the `Date` header's presence/format is checked
+**Then** the finding is recorded in an ADR (`docs/adr/0004-freshness-date-header.md`)
+**And** the ADR states either "formula `age = Date − ValueDate` confirmed" or "fallback: monotonic-`Instant` staleness only, with the documented limitation".
+
+**Given** the audit outcome
+**When** GitHub issue #1 is closed
+**Then** the decision it references is the ADR, and Epic 1's state machine (1.5) builds on it.
+
+*Note: blocked on the author configuring smart-me credentials; the capture tooling can be written first, the capture + audit run once creds exist.*
+
+### Story 1.2: Domain model — `Measurement`, physical newtypes, `Quality`
+
+As a developer,
+I want the canonical domain types with units carried in the type,
+So that no serial, topic, or physical quantity is ever a bare `String`/`f64`.
+
+**Acceptance Criteria:**
+
+**Given** the `domain` module
+**When** it is compiled
+**Then** it defines newtypes `Kw(f64)`, `Kwh(f64)`, `Serial`, `MeterId`, `TopicPath` and a canonical `Measurement { meter: MeterId, serial: Serial, power: Kw, energy: Kwh, value_date, quality: Quality }`
+**And** `Quality { Good, Stale, Bad }` is a single definition aligned with the `sparkplug-b` quality enum.
+
+**Given** the `domain` module
+**When** `tests/arch_purity.rs` scans it
+**Then** it imports no `tokio`/`axum`/`reqwest`/`rumqttc` (stays pure).
+
+**Given** a raw `f64` or `String`
+**When** a developer tries to use it as a serial, topic, or physical quantity
+**Then** the type system rejects it (construction goes through the newtype).
+
+### Story 1.3: `Clock` seam
+
+As a developer,
+I want time behind an injected `Clock` trait,
+So that no truth is ever computed from a hardcoded `now()`.
+
+**Acceptance Criteria:**
+
+**Given** the `core` module
+**When** it is compiled
+**Then** it defines `trait Clock` exposing a monotonic instant and a wall-clock time, with a `SystemClock` production impl and a `FakeClock` test double whose time advances only on explicit calls.
+
+**Given** any logic module
+**When** `tests/arch_purity.rs` and review inspect it
+**Then** no direct `SystemTime::now()`/`Instant::now()` call appears outside `SystemClock`.
+
+### Story 1.4: `Source` seam + fake
+
+As a developer,
+I want the meter source behind a `Source` trait with a fake,
+So that the staleness machine can be exercised deterministically without network.
+
+**Acceptance Criteria:**
+
+**Given** the `core` module
+**When** it is compiled
+**Then** it defines `trait Source` yielding a per-meter reading `{ value, value_date, http_date }` (or a typed error), plus a `FakeSource` that scripts `Ok` / transient error / timeout sequences.
+
+**Given** `FakeSource`
+**When** a test drives it
+**Then** it can reproduce fetch success, a transient failure, and a cloud timeout without any network or tokio.
+
+### Story 1.5: Pure `Fresh|Stale|Failed` state machine
+
+As a developer,
+I want the staleness decision as a pure, property-tested function,
+So that "is this a lie?" is decided deterministically and off the network.
+
+**Acceptance Criteria:**
+
+**Given** `core/state_machine.rs`
+**When** it is compiled
+**Then** it exposes a pure `step(prev, tick, now) -> (next, effect)` over `Fresh|Stale|Failed`, importing no tokio/transport crate.
+
+**Given** a `tick { value, value_date, http_date, now }`
+**When** `step` computes freshness as `http_date − value_date`
+**Then** it maps `system_time < 2020-01-01` → STALE, `age < 0` → STALE, and `age > threshold` → STALE, and only a fresh, in-bounds reading → `Fresh`.
+
+**Given** cold start (no successful fetch yet)
+**When** `step` runs before the first `Ok` reading
+**Then** the result is STALE-until-proven (never a restored last-known value shown fresh).
+
+**Given** the five header fixtures (valid/absent/malformed/negative_skew/huge_skew)
+**When** each is fed through `step` with the paired `ValueDate`
+**Then** each maps to its documented verdict (fresh only for `valid`; STALE for the other four)
+**And** `tests/staleness_injected_clock.rs` asserts them via `FakeClock` (this is the localization twin of `chaos_stale_on_cloud_timeout`).
+
+### Story 1.6: `smart-me-client` — GET device + `Date`-header capture
+
+As the operator,
+I want one meter read over TLS with the response `Date` captured,
+So that the bridge has correct data and the freshness oracle's clock input.
+
+**Acceptance Criteria:**
+
+**Given** an API key (with HTTP Basic fallback)
+**When** the client calls `GET /Devices/{id}` over TLS
+**Then** it deserializes `ActivePower`/`ActivePowerUnit`, `CounterReading`/`CounterReadingUnit`, `ValueDate`, `Serial`, `Id`, `Name`
+**And** it captures the HTTP response `Date` header alongside the body.
+
+**Given** a non-TLS endpoint or a TLS failure
+**When** the client attempts the request
+**Then** it hard-fails rather than falling back to plaintext (NFR13).
+
+**Given** the captured fixture (Story 1.1) served by an HTTP mock
+**When** the client parses it
+**Then** the fields and the `Date` header match the fixture (contract-of-record).
+
+### Story 1.7: `SmartMeCloudSource` adapter + fail-closed unit conversion
+
+As a developer,
+I want smart-me types mapped to `Measurement` with units converted in one place,
+So that an unknown unit is rejected rather than guessed.
+
+**Acceptance Criteria:**
+
+**Given** a smart-me device with `ActivePowerUnit`/`CounterReadingUnit`
+**When** `SmartMeCloudSource` (impl `Source`) maps it to a `Measurement`
+**Then** power is converted to `Kw` and energy to `Kwh` in exactly this adapter (nowhere else).
+
+**Given** an unknown or mismatched source unit
+**When** the adapter maps the reading
+**Then** it fails closed: the `Measurement` is marked `Quality::Bad` and no guessed value is produced (thin FR8; full coverage in Epic 2).
+
+### Story 1.8: `sparkplug-b` — encode + `seq`/`bdSeq` + NBIRTH/NDATA/NDEATH
+
+As a developer,
+I want the crate to emit a spec-correct Sparkplug flow carrying quality,
+So that Ignition can consume BIRTH/DATA/DEATH with engineering units.
+
+**Acceptance Criteria:**
+
+**Given** a metric name, value, timestamp, and `Quality`
+**When** the crate encodes a payload
+**Then** it produces a valid protobuf `Payload` with `seq` (0–255 wrapping) and per-session `bdSeq`, and builders for NBIRTH, NDATA, NDEATH (and the LWT/NDEATH payload).
+
+**Given** a cumulative energy value
+**When** it is encoded
+**Then** it uses the `Double` datatype (never float32), preserving full kWh resolution (FR45).
+
+**Given** an NBIRTH
+**When** it is built
+**Then** it is self-describing (metric names, engineering-unit properties) so a consumer can auto-discover units (FR18).
+
+**Given** the sequence logic
+**When** `tests/prop_seq_bdseq.rs` runs
+**Then** it asserts `seq` monotonic wrap 255→0 and `bdSeq` continuity across sessions.
+
+### Story 1.9: `SparkplugPublisher` adapter — mapping + cold-start NBIRTH=STALE
+
+As a developer,
+I want the `Measurement`→metric mapping confined to one file that never births a fresh-looking lie,
+So that identity/units are correct and the first message is honest.
+
+**Acceptance Criteria:**
+
+**Given** the bridge source
+**When** `tests/arch_purity.rs` scans `adapters/`
+**Then** the `Measurement`→Sparkplug metric mapping exists only in `sparkplug_publisher.rs`.
+
+**Given** a `Measurement` with `Quality::Good`
+**When** the publisher maps it
+**Then** the metric carries `kW`/`kWh` engineering units, the device is keyed by `Serial`, and the payload timestamp equals the source `ValueDate`.
+
+**Given** cold start (no successful fetch yet)
+**When** the publisher emits the first NBIRTH
+**Then** its metrics carry `quality = STALE` (never GOOD-by-default).
+
+**Given** a `Measurement` with `Quality::Stale`
+**When** the publisher processes it through the injectable sink
+**Then** no fresh NDATA is emitted for that metric (the sink assertion holds).
+
+### Story 1.10: `core/channel.rs` — inter-task message
+
+As a developer,
+I want the poll and mqtt tasks to communicate over one pure message type,
+So that the seam is defined before either task exists (no forward reference).
+
+**Acceptance Criteria:**
+
+**Given** the `core` module
+**When** it is compiled
+**Then** `channel.rs` defines a pure message carrying `(MeterId, Measurement, Quality)` and imports no tokio/transport crate.
+
+**Given** the message type
+**When** the two tasks are later built
+**Then** both reference this type and neither redefines it.
+
+### Story 1.11: `poll_publish` task — state machine + `last_loop_tick`
+
+As the bridge,
+I want one meter polled, judged, and forwarded with a liveness heartbeat,
+So that the staleness decision lives in one task and a wedge is detectable.
+
+**Acceptance Criteria:**
+
+**Given** the `poll_publish` task
+**When** it runs a loop iteration
+**Then** it updates `last_loop_tick` (monotonic) at the top of the loop before the network call, polls the meter via `Source`, runs the pure `step`, and sends the result on the channel.
+
+**Given** the state machine
+**When** `poll_publish` uses it
+**Then** the machine stays entirely inside this task and never crosses into the mqtt task.
+
+**Given** a unit test draining the channel
+**When** `poll_publish` processes a scripted `FakeSource` + `FakeClock`
+**Then** the emitted `(MeterId, Measurement, Quality)` matches the expected verdict — provable without the mqtt task existing.
+
+### Story 1.12: `mqtt_driver` task — EventLoop + `bdSeq` + boot order + broker-ACK
+
+As the bridge,
+I want the Sparkplug session driven correctly and delivery never over-claimed,
+So that the SCADA sees an honest, ordered lifecycle.
+
+**Acceptance Criteria:**
+
+**Given** startup
+**When** `mqtt_driver` initializes
+**Then** it follows the order `bdSeq → NDEATH serialized → LWT set in CONNECT → connect → NBIRTH`, and `bdSeq` is loaded/persisted via `persist_atomic` (Epic 0).
+
+**Given** a message on the channel
+**When** `mqtt_driver` publishes it
+**Then** it uses non-blocking `try_publish`, and "published ✓" is reported only on broker ACK (FR20); a full/broker-down queue yields a per-device traced drop, never silence.
+
+**Given** a transport death (LWT fires)
+**When** the NDEATH is delivered
+**Then** its `bdSeq` equals the session's NBIRTH `bdSeq` (asserted by `chaos_stale_on_death`).
+
+**Given** a reconnect
+**When** the broker returns
+**Then** `mqtt_driver` issues a rebirth (fresh NBIRTH) with `published-ts == source ValueDate` (no replay of old values).
+
+### Story 1.13: `supervisor` + `run()` + graceful shutdown (SIGTERM-NO-LIE)
+
+As the operator,
+I want the two tasks born whole together and death guaranteed on shutdown,
+So that a clean stop never leaves the SCADA showing a stale value as live.
+
+**Acceptance Criteria:**
+
+**Given** `lib::run()`
+**When** the process starts
+**Then** it builds the tokio runtime and spawns `poll_publish` + `mqtt_driver`, wiring the channel, `Clock`, `Source`, and `SparkplugPublisher`; `main.rs` only calls `run()`.
+
+**Given** a `SIGTERM`
+**When** the process shuts down
+**Then** the DEATH fires — either an explicit NDEATH is published before exit, or the connection is dropped so the LWT fires — verified by `chaos_sigterm_no_lie` (an independent subscriber sees no fresh DDATA survive and the DEATH delivered).
+
+### Story 1.14: Chaos — STALE-on-DEATH + STALE-on-cloud-timeout
+
+As the maintainer,
+I want both silent-lie failure modes proven end-to-end,
+So that the skeleton actually delivers the "never lies" guarantee, not just detects it.
+
+**Acceptance Criteria:**
+
+**Given** a running bridge against a testcontainers MQTT broker
+**When** the process is killed or the bridge↔broker link is cut (`chaos_stale_on_death`)
+**Then** an independent subscriber sees the affected tags marked STALE via NDEATH.
+
+**Given** a running bridge with the broker up but the smart-me cloud unreachable (`chaos_stale_on_cloud_timeout`)
+**When** the cloud fetch times out while the node stays alive
+**Then** the affected metrics are published with `quality = STALE` and no frozen value is shown fresh.
+
+### Story 1.15: Tier-3 Ignition contract test (manual) + runbook — first pass
+
+As the maintainer,
+I want a real Ignition MQTT Engine to confirm the hand-rolled protobuf,
+So that the wire format is validated early, while there is budget to fix the codec.
+
+**Acceptance Criteria:**
+
+**Given** `crates/sparkplug-b/tests/ignition_contract.rs` (`#[ignore]`/feature-gated `ignition_contract`)
+**When** it is run manually against the author's Ignition MQTT Engine
+**Then** Ignition accepts the Sparkplug flow, shows correct `kW`/`kWh` values with units, and marks tags STALE on death.
+
+**Given** `docs/ignition-contract-runbook.md`
+**When** the maintainer follows it
+**Then** the steps to arm, run, and interpret the Tier-3 test are documented (this is the early-discovery pass; the release-gate re-run is Epic 8).

@@ -1,0 +1,16 @@
+\chapter{Glossary}
+\label{app:glossary}
+
+\begin{description}[style=nextline, leftmargin=0pt]
+  \item[Sparkplug~B] An MQTT payload/topic specification with a stateful session lifecycle
+        (BIRTH/DATA/DEATH) and native quality semantics, consumed by Ignition's MQTT Engine.
+  \item[NBIRTH / NDATA / NDEATH] Node birth / data / death messages of a Sparkplug session.
+  \item[LWT] MQTT Last-Will and Testament — the message the broker publishes on the
+        bridge's behalf when it disconnects, driving \textsc{stale}-on-death.
+  \item[\texttt{ValueDate}] The measurement timestamp reported by smart-me for a reading.
+  \item[STALE] A quality flag telling the SCADA a value can no longer be trusted as fresh.
+  \item[\texttt{bdSeq}] The Sparkplug birth/death sequence number, persisted across restarts.
+  \item[CONTRACT\_VERSION] The version of the MQTT/Sparkplug contract embedded in the payload.
+\end{description}
+
+\stub{additional terms (traced-drop, re-arm, culprit classification) as they appear.}

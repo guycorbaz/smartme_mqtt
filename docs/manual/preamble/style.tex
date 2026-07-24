@@ -1,0 +1,87 @@
+% ============================================================================
+%  smartme_mqtt Operator Manual — shared style (Clean technical / KOMA).
+%  Engine: pdfLaTeX (robust on a minimal TeX Live). Modern look via layout,
+%  colour, and TeX Gyre Heros headings + Latin Modern serif body.
+% ============================================================================
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}          % serif body + mono
+\usepackage{tgheros}          % TeX Gyre Heros -> sans (headings)
+\usepackage{microtype}
+\usepackage{xspace}
+
+% ---- Colours -------------------------------------------------------------
+\usepackage{xcolor}
+\definecolor{accent}{HTML}{2563EB}      % modern blue
+\definecolor{accentdark}{HTML}{1E3A8A}
+\definecolor{slate}{HTML}{0F172A}
+\definecolor{muted}{HTML}{64748B}
+\definecolor{codebg}{HTML}{F5F7FA}
+\definecolor{codeframe}{HTML}{D9E1EC}
+\definecolor{warncol}{HTML}{B45309}
+\definecolor{okcol}{HTML}{047857}
+
+% ---- Headings (KOMA) -----------------------------------------------------
+\setkomafont{disposition}{\sffamily\bfseries}
+\addtokomafont{chapter}{\color{accentdark}}
+\addtokomafont{section}{\color{accent}}
+\addtokomafont{subsection}{\color{slate}}
+\setkomafont{pagenumber}{\sffamily\color{slate}}
+\setkomafont{pagehead}{\sffamily\small\color{muted}}
+
+% ---- Running heads / feet ------------------------------------------------
+\usepackage[headsepline,automark]{scrlayer-scrpage}
+\clearpairofpagestyles
+\ihead{\leftmark}
+\ohead{smartme\_mqtt}
+\ofoot*{\pagemark}
+\pagestyle{scrheadings}
+
+% ---- Links ---------------------------------------------------------------
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true, linkcolor=accent, urlcolor=accent, citecolor=accent,
+  pdftitle={smartme_mqtt Operator Manual}, pdfauthor={Guy Corbaz},
+  bookmarksnumbered=true
+}
+
+% ---- Tables, lists, graphics ---------------------------------------------
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{enumitem}
+\setlist{itemsep=2pt, topsep=3pt}
+
+% ---- Callout boxes (base tcolorbox; no skins/breakable) ------------------
+\usepackage{tcolorbox}
+\newtcolorbox{note}{colback=accent!6, colframe=accent, boxrule=0.5pt, arc=2pt,
+  left=7pt, right=7pt, top=5pt, bottom=5pt, title=Note,
+  fonttitle=\sffamily\bfseries\small, coltitle=white}
+\newtcolorbox{warning}{colback=warncol!6, colframe=warncol, boxrule=0.5pt, arc=2pt,
+  left=7pt, right=7pt, top=5pt, bottom=5pt, title=Warning,
+  fonttitle=\sffamily\bfseries\small, coltitle=white}
+\newtcolorbox{tip}{colback=okcol!6, colframe=okcol, boxrule=0.5pt, arc=2pt,
+  left=7pt, right=7pt, top=5pt, bottom=5pt, title=Tip,
+  fonttitle=\sffamily\bfseries\small, coltitle=white}
+
+% ---- Code listings -------------------------------------------------------
+\usepackage{listings}
+\lstdefinestyle{modern}{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single, framesep=6pt, rulecolor=\color{codeframe},
+  keywordstyle=\color{accentdark}\bfseries,
+  commentstyle=\color{okcol}\itshape,
+  stringstyle=\color{warncol},
+  showstringspaces=false, breaklines=true, columns=fullflexible,
+  xleftmargin=4pt, xrightmargin=2pt, aboveskip=1em, belowskip=1em,
+}
+\lstset{style=modern}
+
+% ---- Small helpers -------------------------------------------------------
+\newcommand{\prog}{\texttt{smartme\_mqtt}\xspace}
+\newcommand{\code}[1]{\texttt{#1}}
+% Just-in-time stub marker for sections written later.
+\newcommand{\stub}[1]{\par\smallskip\noindent
+  {\color{muted}\itshape\small$\hookrightarrow$\ To be written just-in-time: #1\par}\smallskip}

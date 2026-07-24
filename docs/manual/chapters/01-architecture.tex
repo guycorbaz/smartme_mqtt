@@ -1,0 +1,29 @@
+\chapter{Architecture at a glance}
+\label{ch:arch}
+
+\prog is a three-crate Rust workspace with strict, mechanically-enforced boundaries.
+
+\begin{center}
+\begin{tabular}{@{}>{\ttfamily}l p{9.2cm}@{}}
+\toprule
+\normalfont\textbf{Crate} & \textbf{Role} \\
+\midrule
+sparkplug-b & Pure, generic Sparkplug~B library (protobuf, \code{seq}/\code{bdSeq}/rebirth
+lifecycle). Zero application dependency — publishable to crates.io. \\
+smart-me-client & Pure smart-me REST client (auth, endpoints, deserialization). Isolates
+the heavy \code{reqwest}/\code{serde} dependencies. \\
+smartme-bridge & The application: canonical \code{Measurement}, the pure
+\code{Fresh|Stale|Failed} state machine, the two-task async runtime, adapters, web UI,
+config, and wiring. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The core that decides quality/staleness never imports async or transport crates —
+\textbf{“no truth is ever decided inside an \code{async fn}”} — an invariant enforced at
+compile time by \code{tests/arch\_purity.rs}. Dependency direction is one-way
+(\code{sparkplug-b}, \code{smart-me-client} $\rightarrow$ \code{smartme-bridge}), enforced
+by the Cargo graph and \code{cargo-deny}.
+
+\stub{the two-task runtime diagram (poll+publish vs mqtt-driver) and the data-flow figure
+(meter $\rightarrow$ bridge $\rightarrow$ broker $\rightarrow$ Ignition), authored during Epic~1.}

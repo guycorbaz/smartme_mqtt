@@ -1,0 +1,68 @@
+\chapter{Configuration}
+\label{ch:config}
+
+Secrets live only in a \code{.env} file (permissions \code{0600}, never committed, never
+logged). Non-secret settings live in a TOML config file the UI can re-read at runtime.
+
+\section{smart-me authentication}
+\label{sec:smartme-auth}
+
+smart-me offers several authentication mechanisms. \prog uses the one designed for
+headless devices.
+
+\subsection{The available mechanisms}
+\begin{itemize}
+  \item \textbf{OAuth “Device (Client Credentials)” app} — described by smart-me as
+        \emph{“a replacement for basic authentication in embedded devices\dots\ supports
+        only the OAuth flow client credentials.”} This is a non-interactive
+        machine-to-machine flow — exactly what a 24/7 daemon needs.
+  \item \textbf{OAuth Confidential / Public apps} — use interactive flows
+        (authorization-code~+~PKCE, device-code, implicit) that require a human to log in
+        and consent. Not suitable for an unattended bridge.
+  \item \textbf{HTTP Basic auth} — the smart-me account username and password.
+\end{itemize}
+
+\subsection{What \prog uses}
+\begin{description}[style=nextline]
+  \item[Primary — OAuth2 Client Credentials] The bridge exchanges a Client~ID and Client
+        Secret for a bearer token, then calls the API with
+        \code{Authorization: Bearer <token>}, refreshing the token on expiry.
+  \item[Fallback — HTTP Basic] Account user/password, used only if client credentials are
+        not configured.
+\end{description}
+
+\begin{note}
+This decision — client credentials primary, Basic fallback, TLS mandatory — is recorded
+in \code{docs/adr/0009-smartme-auth-client-credentials.md}. It supersedes the earlier
+\code{Authorization: ApiKey} assumption.
+\end{note}
+
+\subsection{Configuring it}
+Create a \emph{Device (Client Credentials)} OAuth app in the smart-me portal
+(\href{https://api.smart-me.com/swagger}{api.smart-me.com}), copy its Client~ID and
+secret, and set them in \code{.env}:
+
+\begin{lstlisting}[language=bash]
+# smart-me credentials -- LOCAL ONLY, never commit (.env is gitignored, perms 0600)
+SMARTME_CLIENT_ID=your-client-id
+SMARTME_CLIENT_SECRET=your-client-secret
+
+# Optional HTTP Basic fallback:
+# SMARTME_BASIC_USER=your-account-user
+# SMARTME_BASIC_PASSWORD=your-account-password
+\end{lstlisting}
+
+\begin{warning}
+If the client secret is lost or leaked, smart-me does not allow rotating it in place: the
+OAuth app must be deleted and recreated. All smart-me traffic is over TLS and hard-fails
+if TLS is unavailable.
+\end{warning}
+
+\section{MQTT broker connection}
+\stub{external broker host/port, optional TLS/auth, broker credentials in \code{.env}.}
+
+\section{Meter-to-topic mapping}
+\stub{default scheme, editing, first-run mapping confirmation.}
+
+\section{Poll interval, logging, and retention}
+\stub{configurable poll interval, log level, daily rotation and retention window.}

@@ -1,0 +1,24 @@
+\chapter{Configuration reference}
+\label{app:configref}
+
+Every environment variable and TOML key: name, whether required, format, example,
+default, and effect if missing.
+
+\begin{center}
+\begin{tabular}{@{}>{\ttfamily}l l p{6.5cm}@{}}
+\toprule
+\normalfont\textbf{Variable} & \textbf{Req.} & \textbf{Effect} \\
+\midrule
+SMARTME\_CLIENT\_ID     & yes\textsuperscript{*} & smart-me OAuth client-credentials ID. \\
+SMARTME\_CLIENT\_SECRET & yes\textsuperscript{*} & smart-me OAuth client-credentials secret. \\
+SMARTME\_BASIC\_USER    & no  & HTTP Basic fallback user. \\
+SMARTME\_BASIC\_PASSWORD& no  & HTTP Basic fallback password. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\footnotesize\textsuperscript{*}Either the OAuth client-credentials pair \emph{or} the
+Basic fallback pair must be present.\normalsize
+
+\stub{the full table (broker, poll interval, log level/retention, bind, mapping) as those
+settings are implemented.}

@@ -1,0 +1,43 @@
+% ============================================================================
+%  smartme_mqtt — Operator Manual
+%  Build:  cd docs/manual && latexmk        (uses latexmkrc -> pdfLaTeX)
+%  Output: build/smartme_mqtt-manual.pdf
+% ============================================================================
+\documentclass[11pt,a4paper,DIV=11,parskip=half-,numbers=noenddot,listof=totoc,bibliography=totoc]{scrreprt}
+\input{preamble/style}
+
+\begin{document}
+
+% ---- Title page ----------------------------------------------------------
+\begin{titlepage}
+\sffamily\raggedright
+\vspace*{3.5cm}
+{\color{accent}\rule{\linewidth}{2pt}}\\[0.5cm]
+{\Huge\bfseries smartme\_mqtt}\\[0.35cm]
+{\LARGE Operator Manual}\\[0.35cm]
+{\color{accent}\rule{\linewidth}{0.8pt}}\\[0.3cm]
+{\large Version 0.1 \textperiodcentered\ MIT License \textperiodcentered\ Guy Corbaz}\par
+\vfill
+{\normalsize A self-hosted Rust bridge: smart-me cloud energy meters $\rightarrow$
+MQTT/Sparkplug~B for an Ignition SCADA.}\\[0.3cm]
+{\large\bfseries\color{accentdark}“Never lies to the SCADA.”}\par
+\vspace{1.5cm}
+{\small\color{muted}\today}
+\end{titlepage}
+
+\tableofcontents
+\cleardoublepage
+
+\input{chapters/00-introduction}
+\input{chapters/01-architecture}
+\input{chapters/02-installation}
+\input{chapters/03-configuration}
+\input{chapters/04-mqtt-sparkplug-contract}
+\input{chapters/05-operations-ui}
+\input{chapters/06-troubleshooting}
+\input{chapters/07-updating}
+\appendix
+\input{chapters/08-appendix-config-reference}
+\input{chapters/09-appendix-glossary}
+
+\end{document}

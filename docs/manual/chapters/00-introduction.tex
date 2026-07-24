@@ -1,0 +1,54 @@
+\chapter{Introduction}
+\label{ch:intro}
+
+\prog is a self-hosted bridge that polls \href{https://smart-me.com}{smart-me} cloud
+energy meters and republishes instantaneous \emph{power} (kW) and consumed
+\emph{energy} (kWh) onto an MQTT broker as \textbf{Sparkplug~B}, where an Ignition
+SCADA/HMI consumes them as tags. It is a personal reliability tool: a compact Rust
+binary for dependable 24/7 operation on modest hardware (NAS / Raspberry~Pi), deployed
+via \code{docker compose}, and configured, previewed, and diagnosed through a built-in
+web UI. It is open-sourced under the MIT licence.
+
+\begin{warning}
+This manual tracks an \emph{early-development} project. Chapters are filled in as each
+epic is implemented; sections not yet written are marked as such.
+\end{warning}
+
+\section{The guiding principle — “never lies to the SCADA”}
+
+smart-me exposes meter data only through a cloud REST API, while supervision systems
+speak MQTT. The single rule of this bridge is: \textbf{never show the SCADA a false value
+dressed as true.} Concretely:
+
+\begin{itemize}
+  \item \textbf{Correct, explicit units} — power exactly kW, energy exactly kWh; unknown
+        or mismatched source units are rejected, not guessed.
+  \item \textbf{Visible staleness (two mechanisms)} — when the bridge disconnects from the
+        broker, Sparkplug \code{NDEATH} (via the MQTT Last-Will) marks tags
+        \textsc{stale} natively; when the \emph{cloud} fetch fails while the bridge is
+        still alive on MQTT (the most likely failure), the bridge actively publishes
+        quality \textsc{stale} rather than republishing a frozen value as fresh.
+  \item \textbf{Serial-bound identity} — every published topic is bound to its meter's
+        immutable serial number and verified, so a value is never attributed to the wrong
+        meter.
+  \item \textbf{Honest timestamps} — freshness is computed end-to-end from the meter's
+        measurement time, never from the poll time.
+\end{itemize}
+
+\section{What the bridge does (v1)}
+
+\begin{itemize}
+  \item Reads all meters of a single smart-me account over the cloud REST API, on a
+        configurable poll interval, with bounded backoff and an explicit error taxonomy.
+  \item Publishes power + energy as Sparkplug~B (one EON node, one device per meter) with
+        engineering units, source timestamps, and per-meter quality — consumed by
+        Ignition's MQTT Engine.
+  \item Serves a minimal web UI: configuration, live preview, diagnostics, and a
+        “state of the bridge” screen.
+  \item Runs behind Traefik via \code{docker compose}, connecting to an external MQTT
+        broker; image-based updates with zero config loss.
+\end{itemize}
+
+Local Modbus, multiple accounts, and a historian are explicitly out of scope: Ignition
+owns history, and smart-me remains the metering-of-record — this data is
+informative-only.
