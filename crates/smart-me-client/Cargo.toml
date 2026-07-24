@@ -1,0 +1,13 @@
+[package]
+name = "smart-me-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Pure smart-me REST client: auth, endpoints, deserialization to smart-me domain types."
+
+[dependencies]
+
+[dev-dependencies]
+serde_json = { workspace = true }

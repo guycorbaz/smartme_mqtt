@@ -1,0 +1,8 @@
+/target
+/data
+.env
+
+# BMAD framework install and local Claude Code settings (planning artifacts under
+# _bmad-output/ ARE tracked; the framework and local session data are not).
+/_bmad/
+/.claude/

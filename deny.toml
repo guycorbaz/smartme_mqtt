@@ -1,0 +1,32 @@
+# cargo-deny — Story 0.5.
+#
+# SCOPE: external dependencies + licenses ONLY. Internal crate topology (the one-way
+# graph sparkplug-b, smart-me-client -> smartme-bridge) is enforced by the Cargo graph
+# itself and by `crates/smartme-bridge/tests/arch_purity.rs` — NOT here.
+
+[licenses]
+# Deny-by-default: anything not listed fails the build.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"          # forbid `*` version requirements on external crates
+allow-wildcard-paths = true # ...but internal path deps (workspace crates) may omit a version
+
+[advisories]
+yanked = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

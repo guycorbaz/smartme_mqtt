@@ -1,0 +1,25 @@
+name: sparkplug-b isolated
+
+# Feature-leak guard (Story 0.7): build `sparkplug-b` on its own, with default features
+# off, so nothing a workspace sibling enables can silently leak into the published crate.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  isolated-build:
+    name: build sparkplug-b alone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools (protoc, mold, clang)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler mold clang
+      - name: Build sparkplug-b (--no-default-features)
+        run: cargo build -p sparkplug-b --no-default-features --locked
+      - name: Context-leak guard
+        run: cargo test -p sparkplug-b --test no_context_leak

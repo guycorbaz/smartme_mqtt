@@ -1,0 +1,46 @@
+[
+  {
+    "Id": "00000000-0000-0000-0000-000000000001",
+    "Name": "SYNTHETIC-Kamstrup-1",
+    "Serial": 10000001,
+    "DeviceEnergyType": "Electricity",
+    "ActivePower": 3.42,
+    "ActivePowerUnit": "kW",
+    "CounterReading": 12876.5,
+    "CounterReadingUnit": "kWh",
+    "ValueDate": "2026-07-24T12:00:00Z"
+  },
+  {
+    "Id": "00000000-0000-0000-0000-000000000002",
+    "Name": "SYNTHETIC-Kamstrup-2",
+    "Serial": 10000002,
+    "DeviceEnergyType": "Electricity",
+    "ActivePower": 1.08,
+    "ActivePowerUnit": "kW",
+    "CounterReading": 8421.0,
+    "CounterReadingUnit": "kWh",
+    "ValueDate": "2026-07-24T12:00:00Z"
+  },
+  {
+    "Id": "00000000-0000-0000-0000-000000000003",
+    "Name": "SYNTHETIC-Telstar-1",
+    "Serial": 20000001,
+    "DeviceEnergyType": "Electricity",
+    "ActivePower": 0.0,
+    "ActivePowerUnit": "kW",
+    "CounterReading": 55123.75,
+    "CounterReadingUnit": "kWh",
+    "ValueDate": "2026-07-24T12:00:00Z"
+  },
+  {
+    "Id": "00000000-0000-0000-0000-000000000004",
+    "Name": "SYNTHETIC-Telstar-2",
+    "Serial": 20000002,
+    "DeviceEnergyType": "Electricity",
+    "ActivePower": -0.25,
+    "ActivePowerUnit": "kW",
+    "CounterReading": 33098.125,
+    "CounterReadingUnit": "kWh",
+    "ValueDate": "2026-07-24T12:00:00Z"
+  }
+]

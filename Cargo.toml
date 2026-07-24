@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sparkplug-b",
+    "crates/smart-me-client",
+    "crates/smartme-bridge",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Shared dependencies are declared here as they are introduced (Stories 0.2+).
+# Internal crates are referenced by path from smartme-bridge only (one-way graph).
+prost = "0.14"
+prost-build = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"

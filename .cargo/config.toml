@@ -1,0 +1,12 @@
+# Cap parallel build processes to 2 to avoid saturating the host (NAS / Raspberry Pi class).
+# `jobs` limits the number of parallel rustc invocations Cargo spawns.
+# Applies to every `cargo` command run within this project tree.
+[build]
+jobs = 2
+
+# Use the mold linker (fast, low-overhead) instead of the default GNU ld.
+# Driver = clang; requires `mold` and `clang` on the build host (both present in dev;
+# the Docker build image / CI must install them too for this target).
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

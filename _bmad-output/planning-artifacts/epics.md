@@ -1,0 +1,429 @@
+---
+stepsCompleted: ['step-01-validate-prerequisites', 'step-02-design-epics']
+storyCreationMode: 'just-in-time'
+storiesDetailed: ['epic-0']
+implemented: ['epic-0']  # all 8 stories green: fmt + clippy -D warnings + 11 test-bins + cargo-deny
+inputDocuments:
+  - '_bmad-output/planning-artifacts/prd.md'
+  - '_bmad-output/planning-artifacts/architecture.md'
+  - '_bmad-output/planning-artifacts/product-brief-smartme_mqtt.md'
+  - '_bmad-output/planning-artifacts/product-brief-smartme_mqtt-distillate.md'
+  - '_bmad-output/planning-artifacts/prd-validation-report.md'
+---
+
+# smartme_mqtt - Epic Breakdown
+
+## Overview
+
+This document provides the complete epic and story breakdown for smartme_mqtt, decomposing the requirements from the PRD and Architecture into implementable stories. No separate UX Design document exists; UI requirements are carried by the PRD (FR28–FR37) and the Architecture "Observability — legible honesty" section.
+
+## Requirements Inventory
+
+### Functional Requirements
+
+**Meter Data Acquisition**
+- FR1: The bridge can connect to the smart-me cloud account using operator-provided credentials (API key, Basic-auth fallback).
+- FR2: The bridge can discover the account's meters, identified by name and serial number.
+- FR3: The bridge can read each meter's instantaneous power and cumulative energy on a configurable interval.
+- FR4: The bridge can recover automatically from transient source failures (timeout, 5xx, rate-limit) with bounded backoff.
+- FR5: The bridge can distinguish permanent auth failures (stop + surface) from transient ones (retry).
+- FR6: The bridge can handle a known meter that disappears from discovery — mark it stale/absent, never a silent disappearance.
+
+**Data Integrity & Trust ("never lies")**
+- FR7: The bridge can publish power in kW and energy in kWh with the unit explicitly attached to each value.
+- FR8: The bridge can reject readings with unknown/mismatched source units rather than publishing a guessed value.
+- FR9: The bridge can bind each published value to its meter's immutable serial number and verify that binding — if the API-returned serial differs from the bound serial, the value is marked quality BAD and not published; a meter name change never re-attributes a topic.
+- FR10: The bridge can attach the meter's measurement timestamp to each value, treat all timestamps as UTC end-to-end, and flag abnormal source clock skew.
+- FR11: The bridge can detect a meter's data going stale (aged past a configurable threshold, default 2× poll interval) and mark that value's quality as stale — even while still connected to the broker.
+- FR12: The bridge can signal staleness per meter independently (one silent meter doesn't affect the others).
+- FR13: The bridge can signal to the SCADA when the bridge itself is no longer alive.
+- FR14: The bridge can flag instantaneous values outside plausible physical bounds rather than propagating them silently.
+- FR15: The bridge can detect energy-counter non-monotonicity (reset / rollover / meter replacement), mark the quality, and never publish a negative delta as a valid measurement.
+- FR16: The bridge can validate the completeness and numeric domain of each smart-me payload before publishing; a missing/null/NaN field, or a value outside per-metric min/max bounds, yields degraded quality, never a substituted value.
+- FR45: The bridge can encode cumulative energy as a 64-bit double (never float32), preserving full kWh resolution up to at least 10⁷ kWh.
+
+**SCADA Publishing**
+- FR17: The bridge can publish meter data to an MQTT broker in a form Ignition consumes as tags (Sparkplug B).
+- FR18: The SCADA can auto-discover the meters and their engineering units from the bridge's published metadata.
+- FR19: The bridge can respond to a SCADA-initiated rebirth request by re-announcing its metrics.
+- FR20: The bridge can confirm a value is actually acknowledged by the broker before reporting it as delivered.
+- FR21: The bridge can purge orphan retained messages on old topics when a mapping changes (no ghost values).
+- FR22: The bridge can apply a defined policy to readings acquired during a broker outage — bounded buffer preserving the source timestamp, or a traced drop; never a re-timestamped replay.
+
+**Configuration**
+- FR23: The operator can provide credentials and broker details via environment/`.env`.
+- FR24: The operator can configure the meter→topic/tag mapping, with sensible defaults.
+- FR25: The operator can confirm the meter→topic mapping before data is published (first-run confirmation).
+- FR26: The bridge can validate the full configuration at startup (topic uniqueness, well-formed serials, completeness) and refuse to start on invalid config rather than start partially.
+- FR27: The bridge can persist configuration across restarts and image updates.
+
+**Observability & Diagnostics**
+- FR28: The operator can view, in one place, each meter's live value, unit, freshness age, target topic, serial, and published status.
+- FR29: The operator can see the independent health of the source (smart-me) and the sink (MQTT broker), from a single internal source of truth on source/sink/bridge state.
+- FR30: The operator can see, per meter, the last successful read, the last error, and where in the chain a failure occurred.
+- FR31: The operator can see actionable error messages (auth vs permissions vs timeout vs empty result), not stack traces.
+- FR32: The operator can distinguish an empty/unconfigured state from an error state from a loading state.
+- FR33: The bridge can expose a health/status endpoint (per-meter last-success, resource usage) consumable by the Docker healthcheck.
+- FR34: The operator can see a culprit label (world / you / bridge) on each fault, derived from the error nature and source-vs-sink health.
+- FR35: The operator can see an auto-written, human-readable, timestamped configuration context line (created, last change, meter count, priority meters) on the state screen.
+- FR36: The operator can open a "state of the bridge" orientation screen — a multi-meter overview with human-readable timestamps (absolute + relative).
+- FR37: The operator can trigger an on-demand end-to-end validation for a chosen meter (source → value → sink) and see the three links light up on one screen.
+
+**Logging**
+- FR38: The bridge can write daily-rotated log files at a configurable level and configurable retention (N days), never recording secrets.
+
+**Lifecycle & Deployment**
+- FR39: The operator can deploy and start the whole system via `docker compose`.
+- FR40: The operator can update the bridge by pulling a new image without losing configuration.
+- FR41: The operator can follow a documented update procedure with a rollback point and post-update verification.
+
+**Documentation**
+- FR42: The operator can rely on a documentation set (README, config reference, versioned Sparkplug/MQTT contract, troubleshooting, update) sufficient to install and troubleshoot without reading the code.
+
+**Broker & Versioning**
+- FR43: The operator can run the bridge against either a bundled MQTT broker or an external broker, with the broker connection optionally secured (TLS and/or authentication) or plain, per configuration. *(Architecture narrows v1 to external-broker-only; see AR11.)*
+- FR44: The operator can see the running application/image version in the web UI and on the health endpoint.
+
+### NonFunctional Requirements
+
+**Reliability & Availability**
+- NFR1: Runs unattended for weeks; automatic recovery from smart-me API and MQTT broker outages without manual restart (bounded exponential backoff + jitter, e.g. 1 s → 60 s cap).
+- NFR2: Per-meter staleness signalled no later than `last_success + 2×poll_interval + publish_margin`.
+- NFR3: No unbounded memory/FD growth — RSS_max ≤ 100 MB; RSS slope ≤ 1 %/24 h (linear regression, RSS sampled every 60 s); FD ≤ 64 via `/proc/self/fd`.
+- NFR4: Availability is best-effort; during a smart-me outage the system stays honest (quality=STALE) rather than available — integrity never traded for availability.
+
+**Data Integrity & Correctness ("never lies")**
+- NFR5: Units exactly kW/kWh, values match the meter to the digit — 0 unit/scale errors.
+- NFR6: Energy counters monotonic non-decreasing except on detected reset — 0 negative deltas published as valid.
+- NFR7: 0 mislabeled-identity values (serial-bound, verified at startup + periodically).
+- NFR8: No value ever presented as fresh when its measurement timestamp exceeds the staleness threshold (dual-mechanism staleness).
+
+**Performance & Footprint**
+- NFR9: Idle CPU/RAM low enough to co-exist on a Raspberry Pi / NAS (RSS_max target < ~100 MB).
+- NFR10: A new reading reaches MQTT within one poll cycle; read→broker-ACK latency p95 ≤ 3 s, p99 ≤ 5 s over a 24 h window under nominal load.
+- NFR11: Time-to-first-value < 15 min from a clean machine, with identity binding proven within it.
+
+**Security**
+- NFR12: Credentials only in `.env`/env vars, perms 0600, never in the image, never logged (incl. rotated logs) — log-grep test.
+- NFR13: All smart-me traffic over TLS; hard-fail if unavailable (esp. Basic-auth fallback).
+- NFR14: Web UI exposure safe-by-default (bind/auth posture decided in architecture); credentials never re-shown in clear.
+- NFR15: Explicit non-goal / threat model stated: informative-only (not metering-of-record); trusted-host/LAN assumption documented.
+- NFR16: The broker connection may be secured (TLS and/or auth) or plain per config; when secured, broker credentials follow the same discipline as smart-me creds (never logged).
+
+**Interoperability & Deployment**
+- NFR17: Sparkplug B output conforms to what Ignition MQTT Engine accepts — verified by a manual pre-release contract test against a real Ignition (values, units, STALE-on-death, NCMD/Rebirth). Not in automated CI.
+- NFR18: The Sparkplug/MQTT contract is a standalone versioned document; a breaking change bumps the contract version.
+- NFR19: The published `sparkplug-b` crate follows semver with a stable, documented public API (no third-party types leaked), complete crate metadata, and a documented conformance scope. Publish acceptance: `cargo publish` succeeds and `cargo add sparkplug-b` in a clean project compiles an encode→decode round-trip.
+- NFR20: The bridge works with either a bundled MQTT broker or an external broker.
+
+**Maintainability & Operability**
+- NFR21: Single-arch Docker Hub image with a Docker healthcheck; image-based updates preserve config (zero-config-loss integration test).
+- NFR22: Test seams (`Clock`, `Source`, injectable sink) enable deterministic tests without network; property/mock-contract/chaos tests run in CI; the Ignition contract test is a manual pre-release gate; `cargo-deny` in CI enforces dependency direction and licenses.
+- NFR23: Documentation sufficient for the author to install, operate, and troubleshoot without reading the code.
+
+**Operating Assumptions**
+- NFR24: Relies on an NTP-synchronized host clock (UTC); freshness/staleness guarantees assume a correct host clock. *(Architecture largely removes the host clock from the freshness path via the Date-header formula; see AR5.)*
+
+### Additional Requirements
+
+*Technical requirements derived from the Architecture Decision Document that shape implementation and story sequencing.*
+
+- AR1: **Native Cargo workspace scaffolding (no starter template).** First implementation story = create the virtual workspace + 3 crates (`sparkplug-b` lib, `smart-me-client` lib, `smartme-bridge` bin), Rust edition 2024 pinned via `rust-toolchain.toml`.
+- AR2: **3-crate boundary enforcement.** Dependency direction (`sparkplug-b`, `smart-me-client` → `smartme-bridge`; nothing depends on the bridge) enforced by the Cargo graph + `cargo-deny`; intra-crate purity enforced by `arch_purity.rs` (core/domain free of tokio/axum; `Measurement`→Sparkplug mapping only in `sparkplug_publisher.rs`); `sparkplug-b` crates.io purity enforced by isolated CI build + `no_context_leak.rs`.
+- AR3: **[BLOCKING] `ValueDate` / HTTP `Date`-header audit spike.** Second implementation story: capture a real smart-me payload + HTTP headers, audit `ValueDate` semantics (measurement vs poll vs server time; UTC/DST across midnight + a DST change) and confirm the `Date` header is present/usable. Documented fallback: monotonic-`Instant` staleness only + documented limitation.
+- AR4: **Fixtures-first.** First commits include `fixtures/smartme_sample.json` and captured HTTP-header fixtures (valid / absent / malformed / negative-skew / huge-skew), plus the checked-in Sparkplug `.proto` (via `prost`/`build.rs`).
+- AR5: **Freshness formula.** `freshness = HTTP Date-header(response) − ValueDate` (removes the host clock); guards: `system_time > 2020-01-01` at boot else STALE, `age < 0` → STALE. Two distinct time uses: staleness age = monotonic `Instant`; payload timestamp written to Sparkplug = honest wall-clock (`= source ValueDate`).
+- AR6: **2-task runtime + `watch` snapshot.** poll+publish task (owns the `Fresh|Stale|Failed` state machine + `last_loop_tick`) and mqtt-driver task (owns the rumqttc EventLoop + `bdSeq`), communicating over a pure `core/channel.rs` message type; UI/publisher read a coherent `watch<[MeterState; N]>` snapshot. The state machine is a pure function `(prev, tick, now) → next` and never crosses into the mqtt-driver task.
+- AR7: **Broker-down policy = traced-drop (no buffer).** `try_publish` non-blocking; on full/broker-down → per-device traced drop (`readings_dropped_total{meter,reason}` + WARN with source timestamp). No persistent buffer. Anti-replay invariant: every published Sparkplug timestamp == its source `ValueDate`, verified at the down→up reconnection instant.
+- AR8: **Config propagation = `ArcSwap<Config>`.** Non-structural fields (poll interval, log level, mapping labels) hot-swap per cycle; structural fields (broker host/port, meter count, secrets) are restart-required with a "pending restart" UI flag. Single-writer discipline on the config file.
+- AR9: **Atomic persistence.** `persist_atomic(path, &T)`: write-temp + `fsync(file)` + `fsync(parent_dir)` + rename. `bdSeq` + minimal Sparkplug session state persisted to TOML on a mounted volume; `bdSeq` written only by the mqtt-driver task.
+- AR10: **Sparkplug boot ordering.** `bdSeq → NDEATH serialized → LWT set in CONNECT → connect → NBIRTH`; reconnect triggers a rebirth. `sparkplug-b` exposes primitives (`publish_metric(name, value, timestamp_ms, quality)`) with a minimal `Quality { Good, Stale, Bad }` enum, `Measurement`-free.
+- AR11: **External-broker-only deployment behind Traefik.** `docker compose` runs the bridge alone; joins Traefik's `external: true` named network; `expose:` only (no host `ports:`); router labels for routing + TLS + optional auth middleware; no in-app auth. A commented `docker-compose.override.yml.example` gives a `ports:` fallback for non-Traefik users. Single-arch image, `restart: unless-stopped`.
+- AR12: **Liveness heartbeat healthcheck.** poll+publish loop updates `last_loop_tick` (monotonic `Instant`) at the top of every iteration before the network call; `GET /healthz` returns unhealthy only if `now − last_loop_tick > N × poll_interval` (N≈3). An honest STALE never triggers a restart; a wedged poller does.
+- AR13: **Graceful shutdown must not silence the DEATH.** On SIGTERM, either drop the connection abruptly (no clean MQTT DISCONNECT) so the LWT fires, or publish an explicit NDEATH before exit — confirmed against the author's broker via the `SIGTERM-NO-LIE` chaos test.
+- AR14: **Strong domain typing.** Newtypes `MeterId`, `Serial`, `TopicPath`, `Kw(f64)`, `Kwh(f64)`; single `Quality` enum; no stringly-typed serials/topics/units/quality. Unit conversion happens in exactly one place (`SmartMeCloudSource`), fail-closed on unknown units.
+- AR15: **Time discipline.** Never call `SystemTime::now()`/`Instant::now()` in logic — always the injected `Clock`. All timestamps UTC ISO-8601 on the wire, `i64` epoch-millis in Sparkplug payloads; never local time.
+- AR16: **Versioned Sparkplug/MQTT contract + non-drift.** Standalone versioned `docs/mqtt-sparkplug-contract.md` encoding traced-drop, per-device staleness, anti-replay, oracle→quality mapping, cold-start STALE; `CONTRACT_VERSION` embedded in the payload/BIRTH; each contract invariant has a clause-named test; `contract_golden.rs` fails if the mapping changes without a version bump.
+- AR17: **Test tiers.** Tier 1 (unit + injected-clock staleness, kWh monotonicity, identity), Tier 2 (mock cloud 401/429/500/timeout/empty/bad-unit), Tier 2b (Sparkplug seq/bdSeq/rebirth property tests + `bdSeq` crash-during-persist), Tier 2c (golden/round-trip via independent decoder), Tier 3 (manual pre-release Ignition contract test, `#[ignore]`/feature-gated), Tier 4 chaos (`chaos_stale_on_death`, `chaos_stale_on_cloud_timeout`, `chaos_broker_recovery`, `chaos_poller_wedge`, `chaos_sigterm_no_lie`), AC-LEAK-01 (100k-iteration RSS/FD stability), `config_validation_table`, `zero_config_loss_update`.
+- AR18: **Cold-start = STALE-until-proven.** Before the first successful fetch, publish quality=STALE; never restore a last-known value as fresh.
+- AR19: **Enriched published state for legible honesty.** Published state carries `published_at` + staleness threshold used, `last_changed_at` distinct from `last_published_at`, `culprit` (world/you/bridge) first-class + repair gesture, root-cause grouping, and the persisted *expected* mapping for Cold-Reopening reconciliation. UI consumes this state, never recomputes it.
+- AR20: **Documentation set + ADR trail.** Full `docs/` tree (index, glossary, operations-quickstart, configuration-reference, mqtt-sparkplug-contract, troubleshooting, update-procedure, ignition-contract-runbook, data-flow) plus 8 ADRs (0001-sparkplug-b-v1 … 0008-three-crate-split).
+- AR21: **`sparkplug-b` crates.io bar.** `#![forbid(unsafe_code)]`, semver, README + CHANGELOG, MSRV `rust-version`, complete crate metadata, documented conformance scope, no leaked third-party types. Structured now; actual publish deferred.
+- AR22: **CI/CD.** GitHub Actions: `fmt` + `clippy -D warnings` + `cargo-deny` + arch-purity test + all test tiers + AC-LEAK-01; isolated `sparkplug-b` build (`--no-default-features`); Docker Hub image build/push (deferred pipeline); `sparkplug-b` crates.io publish = separate manual deferred pipeline.
+- AR23: **Error taxonomy drives the state machine.** Per-crate `thiserror` enums, no leaked third-party types, no `anyhow` in libs; the bridge classifies every fallible boundary as transient (→ Stale/retry) vs fatal (→ Failed); no `unwrap()`/`expect()`/`panic!` outside tests and `main` startup.
+
+### UX Design Requirements
+
+*No standalone UX Design Specification exists for this project. UI/UX requirements are captured by the Functional Requirements (FR28–FR37) and the Additional Requirements AR19 (enriched published state / legible honesty). The web UI is a minimal server-rendered `axum` surface (config + live preview + diagnostics + "state of the bridge" screen), no SPA framework, assets embedded via `rust-embed`. Distinct visual vocabulary is required for empty-config vs 401 vs 403 vs timeout vs 200-empty states (never an infinite spinner) — see FR31/FR32.*
+
+### FR Coverage Map
+
+*Each FR is mapped to the epic that OWNS its completion ("done"). The walking skeleton (Epic 1) takes a deliberately thin vertical slice of several FRs (FR1/FR3/FR7/FR11/FR13/FR17/FR18/FR20/FR45) and proves the "never lies" principle end-to-end at iteration 1; later epics thicken behaviour along independent axes.*
+
+- FR1: Epic 1 — connect to smart-me cloud (thin slice; credential *provisioning* via `.env` = FR23/Epic 5)
+- FR2: Epic 3 — full fleet discovery by name + serial
+- FR3: Epic 1 — read one meter's power + energy (configurable interval hardened in Epic 5)
+- FR4: Epic 2 — automatic recovery from transient source failures (bounded backoff)
+- FR5: Epic 2 — distinguish permanent auth failure from transient
+- FR6: Epic 3 — meter disappears from discovery → stale/absent
+- FR7: Epic 1 — kW/kWh unit explicitly attached to the value
+- FR8: Epic 2 — reject unknown/mismatched source units (oracle)
+- FR9: Epic 2 — serial-number identity binding + verification (oracle)
+- FR10: Epic 2 — measurement timestamp UTC end-to-end + clock-skew flag
+- FR11: Epic 1 — staleness detection while still broker-connected (exhaustive transitions hardened in Epic 2)
+- FR12: Epic 3 — per-meter staleness isolation (needs the fleet)
+- FR13: Epic 1 — signal bridge-dead to the SCADA (LWT/NDEATH)
+- FR14: Epic 2 — flag values outside physical bounds (oracle)
+- FR15: Epic 2 — detect energy-counter non-monotonicity (oracle)
+- FR16: Epic 2 — payload completeness / numeric-domain validation (oracle)
+- FR17: Epic 1 — publish in Sparkplug B form Ignition consumes
+- FR18: Epic 1 — SCADA auto-discovers units from self-describing BIRTH
+- FR19: Epic 4 — respond to SCADA-initiated rebirth (NCMD)
+- FR20: Epic 1 — confirm broker ACK before reporting delivered
+- FR21: Epic 4 — purge orphan retained messages on mapping change
+- FR22: Epic 4 — broker-outage policy (traced-drop, exhaustive)
+- FR23: Epic 5 — credentials + broker details via `.env`
+- FR24: Epic 5 — meter→topic/tag mapping with defaults
+- FR25: Epic 5 — first-run mapping confirmation before publish
+- FR26: Epic 5 — startup config validation, refuse-to-start on invalid
+- FR27: Epic 5 — config persists across restarts + image updates
+- FR28: Epic 6 — unified per-meter live view (value/unit/age/topic/serial/status)
+- FR29: Epic 6 — independent source (smart-me) vs sink (MQTT) health
+- FR30: Epic 6 — per-meter last-success / last-error / broken-link locus
+- FR31: Epic 6 — actionable error messages, not stack traces
+- FR32: Epic 6 — distinguish empty/unconfigured vs error vs loading
+- FR33: Epic 6 — health/status endpoint for the Docker healthcheck
+- FR34: Epic 6 — culprit label (world / you / bridge) per fault
+- FR35: Epic 6 — auto-written timestamped config context line
+- FR36: Epic 6 — "state of the bridge" orientation screen
+- FR37: Epic 6 — on-demand end-to-end validation for a chosen meter
+- FR38: Epic 6 — daily-rotated logs, configurable level/retention, no secrets
+- FR39: Epic 7 — deploy + start via `docker compose`
+- FR40: Epic 7 — update by pulling a new image without config loss
+- FR41: Epic 8 — documented update procedure with rollback + verification
+- FR42: Epic 8 — full documentation set (README, config ref, contract, troubleshooting, update)
+- FR43: Epic 5 — external/bundled broker, optionally secured, per config
+- FR44: Epic 6 — running app/image version in UI + health endpoint
+- FR45: Epic 1 — cumulative energy encoded as 64-bit double (never float32)
+
+## Epic List
+
+*Structure adopted after a party-mode stress-test (Winston, John, Amelia, Murat): **walking-skeleton-first**. The pure "functional core" (no `tokio` in truth-deciding code) is not a temporal milestone but a **compile-time invariant** enforced across every slice from the socle onward — "no truth is ever decided inside an `async fn`". Epics 2–4 are independent thickening axes over the skeleton; each stands alone and requires no future epic to function.*
+
+### Epic 0: Socle — Workspace, CI Gates & Durability Primitive
+Establish the compilable, boundary-enforced substrate every later guarantee rests on: the 3-crate Cargo workspace (edition 2024), the CI gate wall (`fmt`, `clippy -D warnings`, `cargo-deny`, `arch_purity` — which bans `tokio`/`rumqttc` imports inside `core/`), the checked-in `.proto` + fixtures, and the shared atomic-persistence primitive `persist_atomic` (write-temp + fsync(file) + fsync(dir) + rename) with its crash-injection tests. Explicit enabler epic — its value is measured in risk avoided, not user-visible features.
+**FRs covered:** *(none — enabling)*
+**NFR/AR:** NFR22 · AR1, AR2, AR4, AR9 *(persist_atomic primitive)* · the "no truth in async fn" invariant *(AR15/AR23)*
+
+### Epic 1: The Walking Skeleton — One Meter → Ignition, Honest STALE
+The thinnest possible vertical slice that proves the founding principle end-to-end at iteration 1: fetch one meter from smart-me → canonical `Measurement` → pure `Fresh|Stale|Failed` decision → minimal Sparkplug NBIRTH/NDATA/NDEATH → a tag moving in the author's own Ignition, with an honest quality flag. Unplug the meter → quality goes STALE while the node stays alive. Includes the **[BLOCKING] `ValueDate`/HTTP `Date`-header audit spike** (unblocks the freshness formula, done first), the 2-task runtime born small-but-whole, and the three "never lies" seams Murat flagged: **cold-start NBIRTH carries quality=STALE**, the Date-header is extracted from the real HTTP response, and NDEATH `bdSeq` == the session's NBIRTH `bdSeq`.
+**FRs covered:** FR1 *(thin)*, FR3 *(thin)*, FR7, FR11, FR13, FR17, FR18, FR20, FR45
+**NFR/AR:** NFR5, NFR8, NFR13, NFR17 *(first Ignition contract test)*, NFR24 · AR3 *(audit spike)*, AR5 *(freshness formula)*, AR6 *(functional-core seam + 2-task runtime)*, AR7 *(traced-drop, minimal)*, AR10 *(boot ordering + bdSeq persist)*, AR13 *(SIGTERM-NO-LIE)*, AR14, AR15, AR18 *(cold-start STALE)* · chaos_stale_on_death + chaos_stale_on_cloud_timeout
+
+### Epic 2: Exhaustive "Never Lies" Oracles & Freshness Hardening
+Thicken the skeleton's single FRESH→STALE transition into the full integrity guarantee: all quality transitions and staleness edge cases, the resilience/backoff behaviour, error taxonomy (transient→retry vs fatal→stop), and the four runtime oracles — unit rejection, serial-identity binding + verification, physical bounds, energy-counter monotonicity, plus payload completeness/numeric-domain validation and UTC-timestamp/skew handling. This is where the "never lies" invariant is proven across every failure mode, not just the happy-path unplug.
+**FRs covered:** FR4, FR5, FR8, FR9, FR10, FR14, FR15, FR16
+**NFR/AR:** NFR1, NFR4, NFR6, NFR7 · AR16 *(oracle→quality mapping)*, AR17 *(freshness + oracle property tests)*
+
+### Epic 3: The Full Fleet — Multi-Meter Discovery & Per-Meter Isolation
+Grow from one meter to the author's actual 4-meter fleet on a single account: full discovery by name + serial, the real Sparkplug device topology (per-meter DBIRTH/DDEATH), and per-meter staleness isolation — one silent Kamstrup flips stale individually while the other three stay fresh. Delivers Journey 2 (A Meter Goes Silent) at fleet scale.
+**FRs covered:** FR2, FR6, FR12
+**NFR/AR:** NFR2 *(per-meter staleness latency)* · AR6 *(per-meter watch snapshot)*
+
+### Epic 4: Exhaustive Publishing State Machine — Reconnect, Rebirth & Backpressure
+Complete the publishing pipeline behaviours the skeleton stubbed: SCADA-initiated NCMD/Rebirth response, orphan-retained-message purge on mapping change, the full broker-outage traced-drop policy with anti-replay on the down→up transition, and the resource-stability guarantees (bounded growth, latency). Owns the runtime chaos suite.
+**FRs covered:** FR19, FR21, FR22
+**NFR/AR:** NFR3 *(AC-LEAK-01)*, NFR9, NFR10 · AR7 *(full traced-drop + anti-replay)* · chaos_broker_recovery, chaos_poller_wedge
+
+### Epic 5: Configuration, Secrets & Persistence
+The author configures the bridge safely and confirms mappings before anything publishes: `.env` secrets discipline, external/bundled broker connection (optionally TLS/auth), meter→topic mapping with defaults, first-run mapping confirmation, startup validation with refuse-to-start, and config that survives restarts + image updates (reusing the Epic 0 `persist_atomic` primitive via `ArcSwap`). Delivers Journey 1 (First Run) configuration.
+**FRs covered:** FR23, FR24, FR25, FR26, FR27, FR43
+**NFR/AR:** NFR12, NFR14, NFR16, NFR20 · AR8 *(ArcSwap config)*
+
+### Epic 6: Observability, Diagnostics & the State-of-the-Bridge UI
+Single-screen confidence plus 3am re-orientation: the unified `axum` UI (live per-meter view, dual source/sink health, actionable errors, empty/error/loading distinction), the health endpoint feeding the Docker healthcheck (with the `last_loop_tick` heartbeat), culprit labels, auto-written context line, the "state of the bridge" screen, on-demand end-to-end validation, version display, and daily-rotated logging. Delivers Journeys 2 & 5.
+**FRs covered:** FR28, FR29, FR30, FR31, FR32, FR33, FR34, FR35, FR36, FR37, FR38, FR44
+**NFR/AR:** NFR11, NFR12 *(log-grep)* · AR11 *(axum bind)*, AR12 *(healthz heartbeat)*, AR19 *(enriched published state)*
+
+### Epic 7: Deployment, Healthcheck & Update Lifecycle
+The author deploys via `docker compose` behind Traefik and updates painlessly: single-arch Dockerfile, Traefik integration (external network, no host port) with a non-Traefik `ports:` fallback, the healthcheck semantics (restart a wedged poller, never an honest STALE), zero-config-loss image updates, and the CI/CD pipeline building/pushing the Docker Hub image. Delivers Journey 3 (Updating the Bridge).
+**FRs covered:** FR39, FR40
+**NFR/AR:** NFR21 · AR11 *(compose/Traefik/Dockerfile)*, AR12 *(healthcheck wiring)*, AR22 *(CI/CD)*
+
+### Epic 8: Documentation, Versioned Contract & Crate Publishing
+First-class, dual-audience documentation and the release surface: README, configuration reference, the standalone versioned Sparkplug/MQTT contract (with `CONTRACT_VERSION` + clause-named conformance tests), troubleshooting guide, update procedure with rollback, Ignition-contract runbook, data-flow diagram, the 8-ADR trail, and the `sparkplug-b` crates.io publication bar (semver, README/CHANGELOG, conformance scope). The Tier-3 Ignition contract test runs here as the final release gate (re-confirming the first pass from Epic 1). Delivers Journeys 3 & 5 (docs).
+**FRs covered:** FR41, FR42
+**NFR/AR:** NFR18, NFR19, NFR23 · AR16 *(contract doc)*, AR20 *(docs + ADRs)*, AR21 *(crate publish)*
+
+## Epic 0: Socle — Workspace, CI Gates & Durability Primitive
+
+Establish the compilable, boundary-enforced substrate every later guarantee rests on: the 3-crate Cargo workspace, the CI gate wall, the checked-in Sparkplug `.proto` + fixtures scaffolding, and the shared atomic-persistence primitive. This epic delivers no user-visible feature; its value is measured in risk avoided — it makes the "never lies" invariants mechanically enforceable before the first line of behaviour is written.
+
+### Story 0.1: 3-Crate Cargo Virtual Workspace
+
+As a developer,
+I want a 3-crate Cargo virtual workspace pinned to a reproducible toolchain,
+So that every later crate builds identically in dev, CI, and Docker.
+
+**Acceptance Criteria:**
+
+**Given** a clean checkout with a root `Cargo.toml` (`[workspace]`, `resolver = "2"`, `members = ["crates/sparkplug-b", "crates/smart-me-client", "crates/smartme-bridge"]`)
+**When** I run `cargo build --workspace`
+**Then** all three crates compile
+**And** `crates/sparkplug-b` and `crates/smart-me-client` are library crates, and `crates/smartme-bridge` is a binary crate with a `lib.rs` plus a thin `main.rs` that only calls `lib::run()`.
+
+**Given** a committed `rust-toolchain.toml` pinning the edition-2024 toolchain
+**When** CI and Docker build the workspace
+**Then** they resolve the identical toolchain version
+**And** `Cargo.lock` is committed so dependency versions are reproducible.
+
+**Given** the workspace dependency graph
+**When** I inspect it
+**Then** `smartme-bridge` depends on both library crates
+**And** nothing depends on `smartme-bridge` (dependency direction is one-way).
+
+**Given** a committed `.cargo/config.toml` with `[build] jobs = 2`
+**When** any `cargo build`/`cargo test` runs in the project tree (dev, CI, or Docker)
+**Then** Cargo spawns at most 2 parallel `rustc` processes
+**And** the host (NAS / Raspberry Pi class) is never saturated by the build.
+
+**Given** the same `.cargo/config.toml` selecting the `mold` linker for `x86_64-unknown-linux-gnu` (`linker = "clang"`, `rustflags = ["-C", "link-arg=-fuse-ld=mold"]`)
+**When** a build links a binary on the target host
+**Then** `mold` performs the linking (verifiable: the binary's `.comment` section names `mold`)
+**And** the CI runner and the Docker build image install `mold` + `clang` so the linker choice holds there too.
+
+### Story 0.2: Sparkplug `.proto` Compiled via prost/build.rs
+
+As a developer,
+I want the Sparkplug B `.proto` checked in and compiled through `prost`/`build.rs`,
+So that `sparkplug-b` has reproducibly generated, typed protobuf messages.
+
+**Acceptance Criteria:**
+
+**Given** `crates/sparkplug-b/proto/sparkplug_b.proto` and a `crates/sparkplug-b/build.rs`
+**When** I run `cargo build -p sparkplug-b`
+**Then** `prost` generates the Sparkplug message types and the crate compiles.
+
+**Given** `#![forbid(unsafe_code)]` at the top of `sparkplug-b/src/lib.rs`
+**When** the crate builds
+**Then** no `unsafe` code is permitted anywhere in the crate.
+
+**Given** the `sparkplug-b` manifest
+**When** I inspect its dependencies
+**Then** `prost` is the only heavy runtime dependency
+**And** no `smart-me`, `rumqttc`, or bridge dependency is present.
+
+### Story 0.3: Fixtures Directory Scaffolding
+
+As a developer,
+I want the fixtures directory structure with a clearly-marked synthetic placeholder and HTTP-header slots,
+So that parsing and oracle tests have a home before the real captured payload lands in Epic 1.
+
+**Acceptance Criteria:**
+
+**Given** `crates/smart-me-client/fixtures/smartme_sample.json` containing a synthetic placeholder payload
+**When** a test loads it
+**Then** it deserializes into the smart-me device model shape.
+
+**Given** `crates/smart-me-client/fixtures/http_headers/` with named slots for `valid`, `absent`, `malformed`, `negative_skew`, and `huge_skew`
+**When** Epic 1's `ValueDate`/`Date`-header audit spike runs
+**Then** it replaces the synthetic placeholder with the real captured payload + headers.
+
+**Given** the placeholder fixture
+**When** any developer inspects it
+**Then** a comment or README marks it explicitly as synthetic
+**And** it is never mistaken for the parsing contract-of-record.
+
+### Story 0.4: fmt + clippy CI Gate
+
+As a maintainer,
+I want `cargo fmt --check` and `cargo clippy -D warnings` enforced in CI,
+So that formatting and lint regressions fail the build automatically.
+
+**Acceptance Criteria:**
+
+**Given** `.github/workflows/ci.yml` with a lint job
+**When** a pull request runs CI
+**Then** `cargo fmt --check` fails the build on any unformatted file
+**And** `cargo clippy --workspace --all-targets -D warnings` fails the build on any warning.
+
+**Given** committed `rustfmt.toml` and `clippy.toml`
+**When** the lint job runs
+**Then** the project's chosen formatting/lint configuration is applied.
+
+### Story 0.5: cargo-deny Dependency & License Gate
+
+As a maintainer,
+I want `cargo-deny` enforcing external-dependency policy and licenses in CI,
+So that a disallowed license or a forbidden dependency fails the build.
+
+**Acceptance Criteria:**
+
+**Given** a committed `deny.toml`
+**When** `cargo deny check` runs in CI
+**Then** a dependency with a non-MIT-compatible license fails the build.
+
+**Given** the dependency-direction rule (pure libs must not depend on `smartme-bridge`)
+**When** a hypothetical edge from `sparkplug-b` or `smart-me-client` to `smartme-bridge` is introduced
+**Then** the Cargo graph resolution fails
+**And** `deny.toml` scope is documented as external deps + licenses only (internal topology is guarded by the Cargo graph and `arch_purity`).
+
+### Story 0.6: arch_purity — Functional-Core Invariant
+
+As a maintainer,
+I want an `arch_purity` test that bans async/transport imports inside the pure modules and pins the `Measurement`→Sparkplug mapping to a single file,
+So that the "no truth is ever decided inside an `async fn`" invariant holds mechanically across every future slice.
+
+**Acceptance Criteria:**
+
+**Given** `crates/smartme-bridge/tests/arch_purity.rs`
+**When** it scans `src/core/` and `src/domain/`
+**Then** it fails if any file imports `tokio`, `rumqttc`, `axum`, or `reqwest`.
+
+**Given** the mapping-ownership rule
+**When** `arch_purity` scans the bridge source
+**Then** it fails if the `Measurement`→Sparkplug metric mapping appears anywhere outside `src/adapters/sparkplug_publisher.rs`.
+
+**Given** a violation is introduced (e.g. a `use tokio` added to `core/state_machine.rs`)
+**When** CI runs
+**Then** the build is red before merge — never discovered only at an epic boundary.
+
+### Story 0.7: sparkplug-b Isolated Build + Context-Leak Guard
+
+As a maintainer,
+I want `sparkplug-b` built in isolation with a negative test proving no bridge context leaks,
+So that the crates.io purity guarantee holds regardless of workspace feature unification.
+
+**Acceptance Criteria:**
+
+**Given** `.github/workflows/sparkplug-isolated.yml`
+**When** it builds `sparkplug-b` alone with `--no-default-features`
+**Then** the crate compiles without any workspace sibling present.
+
+**Given** `crates/sparkplug-b/tests/no_context_leak.rs`
+**When** it scans the crate's `src/`
+**Then** it fails the build if the tokens `smartme`, `ignition`, or `SMARTME_` appear anywhere in the source.
+
+### Story 0.8: persist_atomic Durability Primitive
+
+As a developer,
+I want a pure `persist_atomic` helper with crash-injection tests,
+So that both `bdSeq` (Epic 1) and config (Epic 5) persist durably without a torn write, and no consumer re-implements durability.
+
+**Acceptance Criteria:**
+
+**Given** `crates/smartme-bridge/src/persist.rs` exposing `persist_atomic<T: Serialize>(path, &T)`
+**When** it writes a value
+**Then** it writes to a temp file, fsyncs the file, fsyncs the parent directory, then renames over the target path.
+
+**Given** a crash injected between the fsync and the rename
+**When** the process restarts and reloads the file
+**Then** the value read is either the old or the new one, never a corrupt/torn intermediate.
+
+**Given** `crates/smartme-bridge/tests/prop_persist_atomic.rs`
+**When** it runs
+**Then** it asserts fsync is invoked, the temp file is cleaned up, and the rename is atomic.
+
+**Given** `persist.rs`
+**When** `arch_purity`/import scan inspects it
+**Then** it imports no domain types (generic over `T: Serialize`), confirming it is a foundational primitive with no forward dependency on any later epic.

@@ -1,0 +1,14 @@
+[package]
+name = "smartme-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "The smartme_mqtt bridge application: canonical Measurement, state machine, adapters, web UI, wiring."
+
+[dependencies]
+sparkplug-b = { path = "../sparkplug-b" }
+smart-me-client = { path = "../smart-me-client" }
+serde = { workspace = true }
+toml = { workspace = true }

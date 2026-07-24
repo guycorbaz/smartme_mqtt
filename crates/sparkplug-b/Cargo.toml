@@ -1,0 +1,13 @@
+[package]
+name = "sparkplug-b"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Pure, generic Sparkplug B library: protobuf encode/decode, EON node/device model, seq/bdSeq/rebirth lifecycle."
+
+[dependencies]
+prost = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }
