@@ -68,6 +68,11 @@ impl fmt::Display for SourceError {
 
 impl std::error::Error for SourceError {}
 
+/// One fetch outcome — what the poll task feeds the pure state machine. The
+/// epic's tick fields `{value, value_date, http_date}` live in [`Reading`]; the
+/// error side carries the typed failure the oracle turns into `Stale`/`Failed`.
+pub type Tick = Result<Reading, SourceError>;
+
 /// The meter feed. Implementations may write `async fn fetch(...)` against this
 /// declaration; the explicit `+ Send` bound is what lets the Story 1.11 poll task
 /// stay generic (`S: Source + Send`) and still cross `tokio::spawn`.

@@ -14,6 +14,8 @@
 
 pub mod clock;
 pub mod source;
+pub mod state_machine;
 
 pub use clock::{Clock, MonotonicMs, SystemClock};
-pub use source::{Reading, Source, SourceError};
+pub use source::{Reading, Source, SourceError, Tick};
+pub use state_machine::{PLAUSIBILITY_FLOOR, Policy, State};

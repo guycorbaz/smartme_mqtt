@@ -179,3 +179,19 @@ Fatal typé, bruyant, et une politique de fin explicite : le silence doit être 
 accidentel. » « Timeout instantané suffit pour 1.5 ; pour la revendication jumelle de 1.14 il faut
 EN PLUS une entrée Hang : sous start_paused, tokio::time::timeout expire vraiment et on exerce le
 chemin Elapsed → Timeout → STALE de production. »
+
+## D6 — Story 1.5 : `Failed` absorbant + planchers (orchestrateur, sur findings de revue)
+
+- **`Failed` est absorbant jusqu'au restart.** Les chasseurs ont montré que `prev` était un
+  paramètre mort : après une erreur fatale (auth rejetée), un simple timeout re-publiait `Stale`
+  (blanchiment de `Bad`) et un Ok re-passait `Fresh` en silence. Incohérent avec ADR 0009
+  (« stop + surface ») et la config restart-only. Tranché : `prev == Failed → (Failed, Bad)`,
+  première ligne de la table ; seul un restart (nouvel `initial()`) rouvre la porte.
+- **`Fatal` jugé avant le garde d'horloge de boot** : une RTC désynchronisée ne doit pas adoucir
+  une erreur d'auth (indépendante de l'horloge) en `Stale`.
+- **Le plancher 2020 s'applique aussi à `http_date`** : une paire cloud cohérente datée 1970
+  n'est pas une lecture vivante.
+- **Gardés en spec-litéral (différés Epic 2, consignés)** : oracle anti-feed-gelé (monotonie de
+  `http_date` inter-ticks), tolérance de troncature ±1 s, validation de `max_age_ms`.
+- **Rejeté explicitement** : hystérésis/debounce — la démotion instantanée EST le choix « when in
+  doubt, STALE » (bruit d'alarme accepté, mensonge refusé).
