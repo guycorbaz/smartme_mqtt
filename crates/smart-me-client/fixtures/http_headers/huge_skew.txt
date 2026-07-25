@@ -1,3 +1,5 @@
-HTTP/1.1 200 OK
-Date: Sat, 24 Jul 2027 12:00:00 GMT
-Content-Type: application/json
+HTTP/2 200
+date: Sun, 25 Jul 2027 13:06:33 GMT
+content-type: application/json; charset=utf-8
+server: cloudflare
+cf-cache-status: DYNAMIC

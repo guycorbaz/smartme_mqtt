@@ -1,22 +1,30 @@
 # Fixtures — smart-me-client
 
-**⚠️ SYNTHETIC PLACEHOLDERS — NOT the contract-of-record.**
+**✅ REAL CAPTURE — contract-of-record (Story 1.1, captured 2026-07-25T13:06:33Z).**
 
-`smartme_sample.json` and `http_headers/*.txt` here are hand-written synthetic samples
-created in Story 0.3 so parsing/oracle tests have a home before real data exists. Values
-are obviously fake (round numbers, zero UUIDs, `SYNTHETIC-*` names).
+`smartme_sample.json` is a real `GET /Devices` response from `api.smart-me.com`
+(4 devices), **anonymized**: `Id`/`Serial`/`Name` are scrubbed placeholders; every other
+field (values, units, `ValueDate`, voltages, currents, tariff counters) is verbatim from
+the wire. Notable contract facts vs the old synthetic guess:
 
-The **real** captured payload + HTTP headers land in **Epic 1** (the `ValueDate`/`Date`-header
-audit spike), which replaces `smartme_sample.json` with a real `GET /Devices/` capture and
-fills the `http_headers/` slots with real RFC 7231 `Date` headers. Only that captured
-fixture is the parsing contract-of-record.
+- `DeviceEnergyType` is an **integer** enum (1 = electricity), NOT the string `"Electricity"`.
+- `Serial` is a JSON **number**, `Id` a UUID **string**.
+- `ValueDate` is ISO-8601 **UTC with `Z` suffix** and 7-digit fractional seconds
+  (.NET ticks), e.g. `2026-07-25T13:06:32.0500519Z`. It is the **measurement**
+  timestamp: live meters showed ages of 0.9–48 s vs the response `Date` header, and one
+  meter that stopped reporting kept its last `ValueDate` (96 days old) — a natural STALE.
+- The API is served over HTTP/2 (Cloudflare): header names arrive **lowercase**
+  (`date:`), parsers must be case-insensitive. `Date` is RFC 7231 IMF-fixdate, GMT.
 
-## `http_headers/` slots (each paired against `ValueDate = 2026-07-24T12:00:00Z`)
+`http_headers/valid.txt` is the real (trimmed) response-header capture; the other four
+slots are synthetic variants in the same real HTTP/2 format. See ADR 0004 for the audit.
+
+## `http_headers/` slots (each paired against `ValueDate = 2026-07-25T13:06:32.0500519Z`, METER-A)
 
 | File | Purpose | Expected freshness verdict |
 |------|---------|----------------------------|
-| `valid.txt` | well-formed `Date`, +5 s after ValueDate | fresh (age ≈ 5 s) |
-| `absent.txt` | no `Date` header | STALE (no oracle input) |
-| `malformed.txt` | unparseable `Date` | STALE |
-| `negative_skew.txt` | `Date` before `ValueDate` | STALE (age < 0) |
-| `huge_skew.txt` | `Date` a year ahead | STALE (implausible age) |
+| `valid.txt` | real captured `date`, +0.95 s after ValueDate | fresh (age ≈ 1 s) |
+| `absent.txt` | no `date` header | STALE (no oracle input) |
+| `malformed.txt` | unparseable `date` | STALE |
+| `negative_skew.txt` | `date` 1 h before ValueDate | STALE (age < 0) |
+| `huge_skew.txt` | `date` a year ahead | STALE (implausible age) |

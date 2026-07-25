@@ -50,10 +50,13 @@ superseded by client credentials.
 - Configuration variables (see `.env.example`): `SMARTME_CLIENT_ID`, `SMARTME_CLIENT_SECRET`
   (primary); `SMARTME_BASIC_USER`, `SMARTME_BASIC_PASSWORD` (fallback). Secrets live only in
   `.env` (perms `0600`, gitignored, never logged — NFR12).
-- **Open detail, resolved in Story 1.1:** the exact **OAuth token endpoint URL** is not present in
-  the (truncated) `swagger.json`. `GET /Devices` and `GET /Devices/{id}` (uuid) are confirmed. The
-  Story 1.1 audit spike captures the token endpoint + a real `GET /Devices/` payload and `Date`
-  header, and this ADR is updated with the concrete URL.
+- **Resolved by Story 1.1 (2026-07-25):** the token endpoint is
+  **`POST https://api.smart-me.com/oauth/token`** (discovered via
+  `/.well-known/openid-configuration`; `client_credentials` grant listed, auth methods
+  `client_secret_post`/`client_secret_basic`). A real exchange with the `gateway` app
+  returned `{access_token, token_type: Bearer, expires_in: 3600}` and the token was
+  accepted on `GET /Devices` + `GET /Devices/{id}` (HTTP 200, scope `device.read`).
+  See ADR 0004 for the captured payload/`Date`-header audit.
 - Error classification (Story 1.6 / Epic 2): a failed token exchange or `401`/`403` is a **fatal**
   auth error (stop + surface as `you`-culprit), distinct from transient `429`/`5xx`/timeout.
 - If the client secret is lost or leaked, the smart-me OAuth app must be deleted and recreated
