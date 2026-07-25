@@ -1240,6 +1240,7 @@ name = "smartme-bridge"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "smart-me-client",
  "sparkplug-b",
  "toml",

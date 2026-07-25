@@ -204,6 +204,12 @@ impl SmartMeClient {
     /// Production endpoint.
     pub const DEFAULT_BASE: &'static str = "https://api.smart-me.com";
 
+    /// True in client-credentials mode (callers must obtain a token first);
+    /// false in Basic mode (`get_device` with `token: None`).
+    pub fn uses_client_credentials(&self) -> bool {
+        matches!(self.credentials, Credentials::ClientCredentials { .. })
+    }
+
     /// Builds a client for `base` (e.g. [`Self::DEFAULT_BASE`]). Refuses anything
     /// but a clean `https://host[:port]` — no userinfo, no query, no fragment —
     /// so there is no way to construct a plaintext (or credential-smuggling)

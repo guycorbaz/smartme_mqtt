@@ -57,6 +57,7 @@ impl Policy {
     /// | `Err(Fatal)`                      | Failed  | Bad     |
     /// | `now < PLAUSIBILITY_FLOOR`        | Stale   | Stale   |
     /// | `Err(Timeout | Transient)`        | Stale   | Stale   |
+    /// | `Ok`, value `Bad`                 | Stale   | Bad     |
     /// | `Ok`, `http_date = None`          | Stale   | Stale   |
     /// | `Ok`, `http_date < FLOOR`         | Stale   | Stale   |
     /// | `Ok`, `age < 0`                   | Stale   | Stale   |
@@ -99,6 +100,12 @@ impl Policy {
     }
 
     fn judge_reading(&self, reading: &Reading) -> (State, Quality) {
+        if reading.value.quality == Quality::Bad {
+            // Bad is judged BEFORE the timestamp guards: "do not use this value"
+            // must never be relabeled as the milder "old value" — a Bad reading
+            // whose ValueDate also failed to parse stays Bad, not Stale.
+            return (State::Stale, Quality::Bad);
+        }
         let Some(http_date) = reading.http_date else {
             // No oracle input (absent/malformed Date header): no freshness proof.
             return (State::Stale, Quality::Stale);
@@ -233,6 +240,24 @@ mod tests {
         let tick = Ok(reading(Quality::Bad, BASE, Some(BASE + 500)));
         assert_eq!(
             POLICY.step(State::Fresh, &tick, SANE_NOW),
+            (State::Stale, Quality::Bad)
+        );
+    }
+
+    #[test]
+    fn bad_survives_an_unusable_timestamp() {
+        // Story 1.7 pins an unparseable ValueDate to the epoch. The resulting
+        // huge age must NOT relabel Bad ("do not use this value") as the milder
+        // Stale ("old value") — Bad is judged first.
+        let tick = Ok(reading(Quality::Bad, 0, Some(BASE)));
+        assert_eq!(
+            POLICY.step(State::Fresh, &tick, SANE_NOW),
+            (State::Stale, Quality::Bad)
+        );
+        // Same when there is no Date header at all.
+        let no_header = Ok(reading(Quality::Bad, 0, None));
+        assert_eq!(
+            POLICY.step(State::Fresh, &no_header, SANE_NOW),
             (State::Stale, Quality::Bad)
         );
     }

@@ -29,3 +29,16 @@ Items deferred from reviews; each carries its origin and where it should be pick
   backoff + token-refresh handling").
 - Tolerant per-device list deserialization (today one degraded device fails the whole
   `GET /Devices` array parse; single-device path unaffected) — Epic 2 robustness.
+
+## Deferred from: code review of 1-7-smartme-cloud-source (2026-07-25)
+
+- Token-lifecycle tests (expiry boundary, 401 refresh-then-retry, double-401 → Fatal): need an
+  injectable client seam or an HTTP stub the workspace deliberately lacks. Land alongside the
+  Story 1.11 task tests.
+- `map_device` diagnostics: the three failure modes (unknown unit / non-finite value /
+  unparseable ValueDate) collapse into one undifferentiated `Bad` with no record of which field
+  or which raw string failed. Epic 2 diagnostics/culprit classification owns this.
+- `Bad` carrier value `0.0` on a cumulative kWh counter: a consumer that ignores the quality flag
+  sees the counter crash to zero and snap back (a huge negative then positive delta). Revisit
+  against real Ignition behaviour in Story 1.15 / Epic 2 — options: last-known-value carrier, or
+  omit the metric entirely.

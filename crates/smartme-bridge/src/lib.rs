@@ -5,6 +5,7 @@
 //! `tests/arch_purity.rs` (Story 0.6). `persist` is the shared atomic-write primitive
 //! (Story 0.8), reused by `bdSeq` (Epic 1) and config (Epic 5).
 
+pub mod adapters;
 pub mod core;
 pub mod domain;
 pub mod persist;

@@ -12,3 +12,6 @@ sparkplug-b = { path = "../sparkplug-b" }
 smart-me-client = { path = "../smart-me-client" }
 serde = { workspace = true }
 toml = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
