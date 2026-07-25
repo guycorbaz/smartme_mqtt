@@ -42,3 +42,16 @@ Items deferred from reviews; each carries its origin and where it should be pick
   sees the counter crash to zero and snap back (a huge negative then positive delta). Revisit
   against real Ignition behaviour in Story 1.15 / Epic 2 — options: last-known-value carrier, or
   omit the metric entirely.
+
+## Deferred from: code review of 1-8-sparkplug-b (2026-07-25)
+
+- `Node Control/Rebirth` metric in NBIRTH + the NCMD decode path that acts on it, and host
+  STATE handling. A Sparkplug-conformant edge node needs both; declaring the Rebirth capability
+  without being able to act on it would be its own lie, so the crate documents the gap in its
+  Conformance scope instead of stubbing it. Epic 3 owns the command path.
+- Device-level (D*) messages, metric aliases, templates/datasets, topic-string construction:
+  out of the walking skeleton's scope; the caller owns its topic namespace today.
+- BIRTH-declares / DATA-validates metric registry (a consumer may discard DATA for a metric the
+  BIRTH never declared), plus guards for an empty metric name and an empty BIRTH.
+- `is_historical` on replayed buffered data — only relevant once a broker-outage buffer exists
+  (v1 policy is traced-drop, no buffer).

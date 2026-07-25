@@ -62,7 +62,7 @@ development_status:
   1-5-pure-fresh-stale-failed-state-machine: done
   1-6-smart-me-client-get-device-date-header-capture: done
   1-7-smartme-cloud-source-adapter-fail-closed-unit-conversion: done
-  1-8-sparkplug-b-encode-seq-bdseq-birth-data-death: backlog
+  1-8-sparkplug-b-encode-seq-bdseq-birth-data-death: done
   1-9-sparkplug-publisher-adapter-mapping-cold-start-nbirth-stale: backlog
   1-10-core-channel-inter-task-message: backlog
   1-11-poll-publish-task-state-machine-last-loop-tick: backlog
