@@ -6,5 +6,7 @@
 //! decided here — adapters report facts, the core judges them.
 
 pub mod smartme_source;
+pub mod sparkplug_publisher;
 
 pub use smartme_source::SmartMeCloudSource;
+pub use sparkplug_publisher::{Outbound, Published, Sink, SparkplugPublisher};

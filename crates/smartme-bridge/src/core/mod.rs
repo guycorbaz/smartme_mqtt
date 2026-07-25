@@ -12,10 +12,12 @@
 //! outside their home files by the purity scan, so production modules cannot
 //! reach for them by accident).
 
+pub mod channel;
 pub mod clock;
 pub mod source;
 pub mod state_machine;
 
+pub use channel::MeterUpdate;
 pub use clock::{Clock, MonotonicMs, SystemClock};
 pub use source::{Reading, Source, SourceError, Tick};
 pub use state_machine::{PLAUSIBILITY_FLOOR, Policy, State};

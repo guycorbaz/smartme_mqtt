@@ -215,3 +215,44 @@ chemin Elapsed → Timeout → STALE de production. »
 - **NFR12 durci sur flag unanime des 3 couches** : Debug manuels rédigés (`<redacted>`) sur
   Credentials/TokenState/SmartMeClient + test anti-fuite ; redirections coupées
   (`Policy::none()` — un 307 ne rejouera jamais le formulaire du secret vers un autre hôte).
+
+## D8 — Stories 1.9/1.10 : device-level Sparkplug MAINTENANT (PARTY MODE — Winston vs Murat, arbitrage orchestrateur)
+
+**Question :** l'AC 1.9 dit « the device is keyed by Serial » et l'architecture « per-meter device
+keyed by Serial », mais la Story 1.8 avait DIFFÉRÉ les messages device-level (D*) et la
+construction de topics. Trois options : (A) node-level, identité du compteur dans le NOM de
+métrique ; (B) ajouter le device-level à `sparkplug-b` maintenant ; (C) node-level + amendement
+formel de l'AC via correct-course.
+
+**Désaccord franc du panel :**
+- **🏗️ Winston → C.** « Le coût réel n'est pas de rouvrir un crate — c'est rouvrir un modèle de
+  séquencement que je viens de stabiliser. [...] Construire le mécanisme le plus subtil sans
+  oracle, c'est de l'architecture à l'aveugle. » Il reconnaît la discontinuité d'historisation
+  mais la juge sans valeur métier en Epic 1 (« quelques semaines sur un seul compteur »).
+- **🧪 Murat → B.** (1) l'assertion du jumeau chaos devient structurelle (filtrage par le broker)
+  au lieu d'un string-splitting qui « passe au vert quand la sémantique est fausse » ; (2) le
+  NDEATH est per-node : sans device-level, aucune granularité protocole pour dire « compteur 3
+  STALE, les 3 autres GOOD » ; (3) asymétrie de risque : coût borné maintenant vs coût
+  irréversible côté données plus tard ; (4) seul B donne au test manuel 1.15 un pouvoir de
+  falsification réel.
+
+**Arbitrage : B.** L'argument (2) de Murat porte sur 4 compteurs — hors périmètre de l'Epic 1
+(un seul compteur), donc il ne tranche pas ici. Ce qui tranche est son point (3) : la grammaire
+de topic est un CONTRAT versionné et migrer après historisation SCADA casse la continuité des
+courbes — coût irréversible payé par l'utilisateur, contre un coût borné aujourd'hui sur un crate
+que personne d'autre ne consomme. L'architecture spécifie déjà le device-level : l'option C
+demanderait d'amender une décision d'architecture verrouillée, acte de gouvernance plus lourd
+qu'écrire DBIRTH/DDATA. Livré : `topic.rs` (EdgeNode validé, niveaux vérifiés en release aussi),
+`device_birth`/`device_data`/`device_death` partageant le `seq` de l'edge node.
+
+**Post-revue (défauts structurels corrigés, pas documentés) :**
+- Émission partielle : un serial illégal émettait le NBIRTH puis échouait → tous les topics sont
+  validés AVANT la première émission ; sur erreur, rien n'est parti et la session est intacte.
+- Le rebirth écrasait les valeurs connues par du Null/Stale à chaque reconnexion (blip transport
+  = trou d'historique) → le publisher mémorise la dernière lecture par device et la re-déclare.
+- Drop silencieux (`Ok(())`) contraire à l'exigence « traced drop, never silence » → issue typée
+  `Published { Emitted, DroppedBeforeBirth, DroppedUndeclaredDevice }`.
+- `CONTRACT_VERSION` était une constante morte — contradiction directe avec la justification de
+  D8 → publiée dans le NBIRTH (`Contract/Version`), un consommateur VOIT le changement de contrat.
+- Garde de niveau de topic en `debug_assert!` seulement (absent en release, là où ça compte) →
+  `Result` avec une variante `WrongLevel`.

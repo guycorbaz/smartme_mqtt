@@ -63,8 +63,8 @@ development_status:
   1-6-smart-me-client-get-device-date-header-capture: done
   1-7-smartme-cloud-source-adapter-fail-closed-unit-conversion: done
   1-8-sparkplug-b-encode-seq-bdseq-birth-data-death: done
-  1-9-sparkplug-publisher-adapter-mapping-cold-start-nbirth-stale: backlog
-  1-10-core-channel-inter-task-message: backlog
+  1-9-sparkplug-publisher-adapter-mapping-cold-start-nbirth-stale: done
+  1-10-core-channel-inter-task-message: done
   1-11-poll-publish-task-state-machine-last-loop-tick: backlog
   1-12-mqtt-driver-task-eventloop-bdseq-boot-order-broker-ack: backlog
   1-13-supervisor-run-graceful-shutdown-sigterm-no-lie: backlog

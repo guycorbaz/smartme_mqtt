@@ -131,6 +131,37 @@ impl LiveSession {
         self.build_birth(timestamp_ms, metrics)
     }
 
+    /// A device BIRTH: declares one device's tag set. It takes the next
+    /// sequence number like any other message — the sequence is per EDGE NODE
+    /// and shared by node and device messages, so a consumer sees one
+    /// uninterrupted numbering across both.
+    ///
+    /// Unlike a node BIRTH it does NOT reset the numbering and carries no
+    /// `bdSeq`: the session it belongs to is the node's.
+    #[must_use]
+    pub fn device_birth(&mut self, timestamp_ms: u64, metrics: Vec<Metric>) -> Payload {
+        self.data(timestamp_ms, metrics)
+    }
+
+    /// A device DATA message.
+    #[must_use]
+    pub fn device_data(&mut self, timestamp_ms: u64, metrics: Vec<Metric>) -> Payload {
+        self.data(timestamp_ms, metrics)
+    }
+
+    /// A device DEATH: says THIS device is gone while the node stays alive —
+    /// the granularity a node-level death cannot express.
+    #[must_use]
+    pub fn device_death(&mut self, timestamp_ms: u64) -> Payload {
+        Payload {
+            timestamp: Some(timestamp_ms),
+            metrics: Vec::new(),
+            seq: Some(self.seq.take()),
+            uuid: None,
+            body: None,
+        }
+    }
+
     /// The DEATH payload for this session — identical to the will registered
     /// before connecting, for the case where the node dies politely and
     /// publishes it itself.
@@ -167,6 +198,15 @@ impl LiveSession {
 #[must_use]
 pub fn encode(payload: &Payload) -> Vec<u8> {
     payload.encode_to_vec()
+}
+
+/// Parses protobuf bytes back into a payload.
+///
+/// Provided so a consumer — a test asserting what was actually put on the wire,
+/// or a subscriber — does not have to depend on `prost` directly just to look
+/// at a payload this crate produced.
+pub fn decode(bytes: &[u8]) -> Result<Payload, prost::DecodeError> {
+    Payload::decode(bytes)
 }
 
 /// A DEATH payload: the session's number, and deliberately NO sequence number —
@@ -450,6 +490,29 @@ mod tests {
                 ref other => panic!("expected a double value, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn device_messages_share_the_edge_node_numbering() {
+        let (mut live, birth) = live_from(0);
+        assert_eq!(birth.seq, Some(0));
+        // Node and device messages draw from ONE counter: a consumer must see
+        // an uninterrupted sequence across both.
+        assert_eq!(live.device_birth(1, vec![]).seq, Some(1));
+        assert_eq!(live.data(2, vec![]).seq, Some(2));
+        assert_eq!(live.device_data(3, vec![]).seq, Some(3));
+        assert_eq!(live.device_death(4).seq, Some(4));
+        assert_eq!(live.data(5, vec![]).seq, Some(5));
+    }
+
+    #[test]
+    fn a_device_death_carries_no_bdseq() {
+        let (mut live, _) = live_from(0);
+        let d = live.device_death(1);
+        assert!(
+            d.metrics.is_empty(),
+            "the session number belongs to the node, not the device"
+        );
     }
 
     #[test]

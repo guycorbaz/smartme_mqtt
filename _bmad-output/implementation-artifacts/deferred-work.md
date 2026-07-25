@@ -55,3 +55,18 @@ Items deferred from reviews; each carries its origin and where it should be pick
   BIRTH never declared), plus guards for an empty metric name and an empty BIRTH.
 - `is_historical` on replayed buffered data — only relevant once a broker-outage buffer exists
   (v1 policy is traced-drop, no buffer).
+
+## Deferred from: code review of 1-9/1-10 (2026-07-25)
+
+- `arch_purity`'s mapping-confinement guard is a text proxy: it trips only on a file containing
+  BOTH `Measurement` and `sparkplug_b::`. A future task file taking `&MeterUpdate` (which does
+  not contain the token `Measurement`) could duplicate the mapping undetected, and the scan
+  covers only `src/adapters/`. Strengthen when Story 1.12 lands its file.
+- Story 1.10's second AC ("both tasks reference this type, neither redefines it") cannot close
+  until Stories 1.11/1.12 exist; it needs its own purity clause then.
+- Report-by-exception / duplicate suppression: an unchanged `value_date` republishes the same
+  point every poll (duplicate historian points at one timestamp). Epic 2.
+- No plausibility floor on the publisher's `now`: an unsynced RTC at boot stamps the BIRTH
+  certificate with 1970 (values stay Stale, so no value lies — but the certificate does).
+- `Sink::emit` has no failure channel; an unpublishable message is indistinguishable from a
+  delivered one at that layer (Story 1.12's broker-ACK requirement will need one).

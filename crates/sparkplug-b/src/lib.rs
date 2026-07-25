@@ -17,11 +17,13 @@
 //! explicit null metrics, and metric properties for quality and engineering
 //! units.
 //!
+//! **Implemented (continued):** device-level BIRTH/DATA/DEATH sharing the edge
+//! node's sequence numbering, and validated topic construction ([`EdgeNode`]).
+//!
 //! **Not implemented — a conformant node must supply these itself:** the
 //! `Node Control/Rebirth` metric and the command (N/DCMD) path that acts on it,
-//! host STATE handling, device-level (D\*) messages, metric aliases, templates
-//! and datasets, and topic-string construction (a caller owns its own topic
-//! namespace, its QoS and its retain flags).
+//! host STATE handling, metric aliases, templates and datasets, and the QoS /
+//! retain flags of each publication (a caller owns its transport).
 //!
 //! # Public dependency
 //!
@@ -56,11 +58,13 @@ pub mod datatype;
 pub mod encode;
 pub mod model;
 pub mod seq;
+pub mod topic;
 
 pub use datatype::DataType;
-pub use encode::{LiveSession, NodeSession, encode};
+pub use encode::{LiveSession, NodeSession, decode, encode};
 pub use model::{Metric, MetricValue, Quality};
 pub use seq::{BD_SEQ_METRIC, BdSeq, SeqCounter};
+pub use topic::{EdgeNode, MessageType, NAMESPACE, TopicError};
 
 /// Generated Sparkplug B protobuf types (from `proto/sparkplug_b.proto`).
 ///
