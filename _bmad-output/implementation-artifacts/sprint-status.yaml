@@ -57,7 +57,7 @@ development_status:
   epic-1: in-progress
   1-1-audit-smart-me-valuedate-date-header-semantics: done
   1-2-domain-measurement-newtypes-quality: done
-  1-3-clock-seam: backlog
+  1-3-clock-seam: done
   1-4-source-seam-fake: backlog
   1-5-pure-fresh-stale-failed-state-machine: backlog
   1-6-smart-me-client-get-device-date-header-capture: backlog

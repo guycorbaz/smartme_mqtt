@@ -60,6 +60,44 @@ fn pure_modules_are_free_of_async_and_transport() {
     );
 }
 
+/// Story 1.3: raw time sources (and the fake that fabricates time) are confined to
+/// `core/clock.rs`. Everywhere else — including inline `#[cfg(test)]` modules — time
+/// must arrive through the injected `Clock`, or a staleness decision could silently
+/// depend on a hardcoded `now()`.
+#[test]
+fn raw_time_sources_are_confined_to_the_clock_module() {
+    const BANNED_TIME_TOKENS: &[&str] = &[
+        "Instant::now(",
+        "SystemTime::now(",
+        "use std::time::Instant",
+        "use std::time::SystemTime",
+        "FakeClock",
+    ];
+    let mut violations = Vec::new();
+    for file in rs_files(&src("")) {
+        if file.ends_with("core/clock.rs") {
+            continue;
+        }
+        let text = fs::read_to_string(&file).unwrap();
+        for line in text.lines() {
+            let t = line.trim();
+            if t.starts_with("//") {
+                continue;
+            }
+            for banned in BANNED_TIME_TOKENS {
+                if t.contains(banned) {
+                    violations.push(format!("{}: {}", file.display(), t));
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "raw time sources / FakeClock outside core/clock.rs:\n{}",
+        violations.join("\n")
+    );
+}
+
 #[test]
 fn measurement_to_sparkplug_mapping_is_confined_to_the_publisher() {
     let mut violations = Vec::new();
