@@ -222,10 +222,21 @@ impl SparkplugPublisher {
         for (serial, topic) in device_topics {
             let known = self.declared.get(&serial).cloned().flatten();
             let metrics = match &known {
-                Some(update) => metrics_for(&update.measurement, update.published),
+                // A re-declared reading has NOT been re-judged against now, so
+                // it is never re-asserted as Good: it is true history, published
+                // stale, stamped with its own ValueDate. Claiming Good here
+                // would turn a 45-minute broker outage into a fresh-looking lie
+                // the moment the link came back.
+                Some(update) => metrics_for(&update.measurement, degrade(update.published)),
                 None => cold_start_metrics(timestamp),
             };
-            let payload = live.device_birth(timestamp, metrics);
+            // The payload timestamp follows the data: a re-declared reading is
+            // stamped with when it was TRUE, not with now.
+            let payload_ts = match &known {
+                Some(update) => millis(update.measurement.value_date),
+                None => timestamp,
+            };
+            let payload = live.device_birth(payload_ts, metrics);
             sink.emit(Outbound {
                 topic,
                 payload: encode(&payload),
@@ -344,6 +355,15 @@ fn metrics_for(measurement: &Measurement, published: Quality) -> Vec<Metric> {
             .with_quality(published)
             .with_engineering_unit(UNIT_ENERGY),
     ]
+}
+
+/// A verdict that has not been re-computed cannot be re-asserted: `Good`
+/// becomes `Stale`, and anything already worse stays as bad as it was.
+fn degrade(published: Quality) -> Quality {
+    match published {
+        Quality::Good => Quality::Stale,
+        other => other,
+    }
 }
 
 /// Sparkplug timestamps are unsigned epoch-millis; a pre-epoch instant cannot be
@@ -620,7 +640,16 @@ mod tests {
             Some(payload::metric::Value::DoubleValue(0.018)),
             "a transport blip must not blank a tag the bridge can account for"
         );
-        assert_eq!(quality_of(power), Quality::Good.code());
+        assert_eq!(
+            quality_of(power),
+            Quality::Stale.code(),
+            "...but a value that has not been re-judged is never re-asserted as Good"
+        );
+        assert_eq!(
+            dbirth.timestamp,
+            Some(1_784_984_792_050),
+            "and it is stamped with when it was true, not with now"
+        );
     }
 
     #[test]

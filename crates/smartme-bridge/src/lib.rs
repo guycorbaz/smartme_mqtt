@@ -6,12 +6,17 @@
 //! (Story 0.8), reused by `bdSeq` (Epic 1) and config (Epic 5).
 
 pub mod adapters;
+pub mod app;
 pub mod core;
 pub mod domain;
 pub mod persist;
 
-/// Application entry point. Wiring is implemented from Epic 1 onward; this is the
-/// scaffold that proves the bin -> lib -> (sparkplug-b, smart-me-client) graph.
-pub fn run() {
-    // The 2-task runtime is born whole in Epic 1.
+/// Application entry point: build the runtime and run until the process is
+/// asked to stop. `main.rs` is a thin shell over this.
+pub fn run(config: app::BridgeConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(app::run(config, app::supervisor::shutdown_signal()))?;
+    Ok(())
 }

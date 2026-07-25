@@ -67,30 +67,77 @@ fn pure_modules_are_free_of_async_and_transport() {
 /// a hardcoded `now()` / a fake wired into production.
 #[test]
 fn raw_time_sources_and_fakes_are_confined_to_their_home_modules() {
-    // (banned token, the single file allowed to contain it)
-    const CONFINED_TOKENS: &[(&str, &str)] = &[
-        ("Instant::now(", "core/clock.rs"),
-        ("SystemTime::now(", "core/clock.rs"),
-        ("use std::time::Instant", "core/clock.rs"),
-        ("use std::time::SystemTime", "core/clock.rs"),
-        ("FakeClock", "core/clock.rs"),
-        ("FakeSource", "core/source.rs"),
-        ("poll_now(", "core/source.rs"),
+    // (banned token, the single file allowed to contain it). Raw time sources
+    // are banned EVERYWHERE, inline test modules included: a non-deterministic
+    // test of deterministic code is a contradiction. The test doubles are banned
+    // only in PRODUCTION code — a fake wired into the app is the hazard; a fake
+    // used by a test is the point — so their scan stops at the file's
+    // `#[cfg(test)]` marker.
+    const CONFINED_TOKENS: &[(&str, &str, bool)] = &[
+        ("Instant::now(", "core/clock.rs", true),
+        ("SystemTime::now(", "core/clock.rs", true),
+        ("use std::time::Instant", "core/clock.rs", true),
+        ("use std::time::SystemTime", "core/clock.rs", true),
+        ("FakeClock", "core/clock.rs", false),
+        ("FakeSource", "core/source.rs", false),
+        ("poll_now(", "core/source.rs", false),
     ];
+    // Story 1.11: the state machine lives ENTIRELY in the poll task. The mqtt
+    // task knows only connection birth and death, so it may not even NAME the
+    // machine; and nobody outside the poll task may RUN it (the supervisor is
+    // the composition root and legitimately passes the policy through as
+    // configuration, so it is judged on `.step(`, not on the type name).
+    const NAMING_BANNED_IN_MQTT: &[&str] = &["state_machine", "Policy", "State::"];
+    const RUNNING_BANNED_OUTSIDE_POLL: &str = ".step(";
     let mut violations = Vec::new();
     for file in rs_files(&src("")) {
+        let text = fs::read_to_string(&file).unwrap();
+        let mut in_test_module = false;
+        for line in text.lines() {
+            let t = line.trim();
+            if t.starts_with("#[cfg(test)]") {
+                in_test_module = true;
+            }
+            if t.starts_with("//") {
+                continue;
+            }
+            for (banned, home, applies_in_tests) in CONFINED_TOKENS {
+                if file.ends_with(home) || (in_test_module && !applies_in_tests) {
+                    continue;
+                }
+                if t.contains(banned) {
+                    violations.push(format!("{}: {}", file.display(), t));
+                }
+            }
+        }
+    }
+    for file in rs_files(&src("app")) {
+        if file.ends_with("poll_publish.rs") {
+            continue;
+        }
+        let is_mqtt_task = file.ends_with("mqtt_driver.rs");
         let text = fs::read_to_string(&file).unwrap();
         for line in text.lines() {
             let t = line.trim();
             if t.starts_with("//") {
                 continue;
             }
-            for (banned, home) in CONFINED_TOKENS {
-                if file.ends_with(home) {
-                    continue;
-                }
-                if t.contains(banned) {
-                    violations.push(format!("{}: {}", file.display(), t));
+            if t.contains(RUNNING_BANNED_OUTSIDE_POLL) {
+                violations.push(format!(
+                    "{}: only the poll task may run the state machine: {}",
+                    file.display(),
+                    t
+                ));
+            }
+            if is_mqtt_task {
+                for banned in NAMING_BANNED_IN_MQTT {
+                    if t.contains(banned) {
+                        violations.push(format!(
+                            "{}: the mqtt task must not reach for a verdict: {}",
+                            file.display(),
+                            t
+                        ));
+                    }
                 }
             }
         }

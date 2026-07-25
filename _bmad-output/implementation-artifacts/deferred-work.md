@@ -70,3 +70,19 @@ Items deferred from reviews; each carries its origin and where it should be pick
   certificate with 1970 (values stay Stale, so no value lies — but the certificate does).
 - `Sink::emit` has no failure channel; an unpublishable message is indistinguishable from a
   delivered one at that layer (Story 1.12's broker-ACK requirement will need one).
+
+## Deferred from: code review of 1-11/1-12/1-13 (2026-07-25)
+
+- `poll_publish::run` (the loop) is untested; only `step_once` is. Needs a `start_paused` test
+  covering ticker pacing, `MissedTickBehavior::Delay`, the `outbox.is_closed()` exit and state
+  carry-over.
+- bdSeq is persisted once at boot, not per session; a corrupt/missing file restarts at 1, which
+  replays numbers a long-lived consumer has seen. Epic 3 config validation should refuse to start
+  instead.
+- Reconnect backoff is a fixed 1 s with no exponential growth or jitter: a broker down for an
+  hour gets 3600 synchronized attempts.
+- No NCMD subscription, so `Node Control/Rebirth` cannot be honoured (pairs with the 1.8 deferral).
+- 1.11's channel test never asserts the `Measurement` payload (power/energy/value_date), only the
+  meter id and the qualities.
+- `arch_purity`'s `in_test_module` latch never resets: sound today (every `#[cfg(test)]` is the
+  final item in its file) but silently blind if anyone adds a mid-file test helper.

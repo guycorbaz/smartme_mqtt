@@ -12,6 +12,12 @@ sparkplug-b = { path = "../sparkplug-b" }
 smart-me-client = { path = "../smart-me-client" }
 serde = { workspace = true }
 toml = { workspace = true }
+tokio = { workspace = true }
+rumqttc = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

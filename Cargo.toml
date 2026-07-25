@@ -30,3 +30,15 @@ reqwest = { version = "0.13", default-features = false, features = [
     "form",          # OAuth token exchange is a form POST
 ] }
 thiserror = "2"
+# Stories 1.11-1.13 — the async shell (2 tasks + 1 channel).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+# MQTT transport. `use-rustls` is a DEFAULT feature and is switched off on
+# purpose: it pins rustls-webpki 0.102, which carries unfixed advisories
+# (RUSTSEC-2026-0049/0098/0099/0104) and cannot be upgraded past rumqttc's
+# `^0.102` requirement. The broker is reached over the local container network
+# (the smart-me API's TLS uses the separate, current rustls stack in reqwest),
+# so the vulnerable code would be dead weight we still ship. Broker TLS returns
+# when rumqttc upgrades its webpki — tracked as an issue.
+rumqttc = { version = "0.25", default-features = false }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
