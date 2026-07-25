@@ -1,6 +1,6 @@
 # Stories 1.11, 1.12, 1.13: the async shell (poll task, mqtt driver, supervisor)
 
-Status: 1.11 done · 1.12 **partially done** · 1.13 **partially done**
+Status: 1.11 done · 1.12 done (FR20 amended, ADR 0010) · 1.13 **partially done**
 
 Issues [#13](../../issues/13) (1.11), [#14](../../issues/14) (1.12), [#15](../../issues/15) (1.13).
 Delivered together: the epic specifies the 2-task shell is "born whole".
@@ -10,11 +10,13 @@ Delivered together: the epic specifies the 2-task shell is "born whole".
 The adversarial review of this batch was the harshest of the sprint and it was right.
 Two ACs are **not** met and are recorded as such rather than signed off:
 
-- **FR20 "published ✓ only on broker ACK" (1.12) — NOT MET.** The review established that this
-  is not merely unimplemented but *unimplementable as written*: Sparkplug mandates QoS 0 for
-  every edge-node message, and a QoS-0 publish is never acknowledged. Raised as issue **#19**
-  for a correct-course decision by Guy. What IS implemented is the strongest honest claim
-  available at QoS 0: non-blocking `try_publish` with a per-device traced drop.
+- **FR20 "published ✓ only on broker ACK" (1.12) — RESOLVED by amendment (ADR 0010).** The
+  review established that this was not merely unimplemented but *unimplementable as written*:
+  Sparkplug mandates QoS 0 for every edge-node message, and MQTT defines no acknowledgement at
+  QoS 0. Guy approved re-scoping (issue #19, closed): FR20 now reads "never over-claims
+  delivery — reported published only once accepted for transmission, with a per-device traced
+  drop rather than silence", which is exactly what the driver implements. PRD, epics and
+  architecture amended.
 - **`chaos_sigterm_no_lie` verification (1.13) — NOT MET.** The AC names a chaos test that is
   Story 1.14's deliverable. The death path was fixed (below) but is not yet verified end to end.
 

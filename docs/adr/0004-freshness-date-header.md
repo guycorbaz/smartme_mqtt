@@ -29,7 +29,8 @@ Findings:
    "poll time" and "server time" (those would be ~0 for every device).
 2. **A dead meter keeps its last `ValueDate`.** One device last reported
    `2026-04-20T12:04:35Z` (age ≈ 96 days at capture): exactly the honest-STALE case the
-   bridge exists for. `ActivePower` reads `0.0` on that device — a substituted-looking
+   bridge exists for. Confirmed with the maintainer (2026-07-26) — that meter is genuinely
+   unplugged, so this is a real stale device and not a cloud-side data anomaly. `ActivePower` reads `0.0` on that device — a substituted-looking
    value that only the age exposes as a lie.
 3. **No DST/local-time ambiguity.** Both sides of the subtraction are UTC (`Z` suffix;
    `Date` is RFC 7231 IMF-fixdate, GMT). Midnight/DST transitions cannot corrupt the age.

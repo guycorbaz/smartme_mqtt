@@ -256,3 +256,24 @@ qu'écrire DBIRTH/DDATA. Livré : `topic.rs` (EdgeNode validé, niveaux vérifi�
   D8 → publiée dans le NBIRTH (`Contract/Version`), un consommateur VOIT le changement de contrat.
 - Garde de niveau de topic en `debug_assert!` seulement (absent en release, là où ça compte) →
   `Result` avec une variante `WrongLevel`.
+
+## D9 — FR20 amendé : aucun ACK broker n'existe au QoS 0 imposé par Sparkplug (Guy, 2026-07-26)
+
+**Constat (revue de la Story 1.12) :** l'AC « published ✓ uniquement sur ACK broker » n'était pas
+seulement non implémenté mais **non implémentable tel qu'écrit**. Sparkplug impose QoS 0 sur tous
+les messages edge-node, et MQTT ne définit aucun acquittement à ce QoS — il n'existe pas de paquet
+PubAck à QoS 0. Obtenir un ACK aurait exigé soit de publier les données en QoS 1 (violation de
+spec), soit d'inventer une confirmation (exactement le mensonge que l'exigence interdisait).
+
+**Décision de Guy : option 1 — reformuler FR20** vers ce qui est honnêtement observable :
+« le bridge ne surestime jamais la livraison : une valeur n'est déclarée publiée qu'une fois
+acceptée pour transmission, et une valeur qu'il n'a pas pu remettre produit un drop tracé par
+device plutôt qu'un silence. »
+
+**Appliqué :** ADR 0010 écrit ; PRD (FR20), epics.md (liste FR + carte de couverture + AC de la
+Story 1.12) et architecture.md amendés ; issue #19 close ; Story 1.12 passe à `done`.
+
+**Leçon à retenir (consignée dans l'ADR) :** l'exigence a survécu à la revue de PRD, à la revue
+d'architecture et au découpage en epics. Le conflit n'est apparu que quand une revue adversariale
+a confronté l'AC au protocole plutôt qu'au code. La question qui l'a trouvé n'était pas « le code
+fait-il cela ? » mais « cela peut-il être vrai ? ».

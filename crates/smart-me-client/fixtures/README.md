@@ -12,7 +12,9 @@ the wire. Notable contract facts vs the old synthetic guess:
 - `ValueDate` is ISO-8601 **UTC with `Z` suffix** and 7-digit fractional seconds
   (.NET ticks), e.g. `2026-07-25T13:06:32.0500519Z`. It is the **measurement**
   timestamp: live meters showed ages of 0.9–48 s vs the response `Date` header, and one
-  meter that stopped reporting kept its last `ValueDate` (96 days old) — a natural STALE.
+  meter that stopped reporting kept its last `ValueDate` (96 days old) — a natural STALE, and a
+  CONFIRMED one: that device is genuinely unplugged, so the fixture carries a real stale reading
+  rather than a data anomaly.
 - The API is served over HTTP/2 (Cloudflare): header names arrive **lowercase**
   (`date:`), parsers must be case-insensitive. `Date` is RFC 7231 IMF-fixdate, GMT.
 

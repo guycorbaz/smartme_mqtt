@@ -46,7 +46,7 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 - FR17: The bridge can publish meter data to an MQTT broker in a form Ignition consumes as tags (Sparkplug B).
 - FR18: The SCADA can auto-discover the meters and their engineering units from the bridge's published metadata.
 - FR19: The bridge can respond to a SCADA-initiated rebirth request by re-announcing its metrics.
-- FR20: The bridge can confirm a value is actually acknowledged by the broker before reporting it as delivered.
+- FR20: The bridge never over-claims delivery: a value is reported as published only once it has been accepted for transmission, and a value it could not hand over yields a per-device traced drop rather than silence. *(Amended 2026-07-26 — ADR 0010.)*
 - FR21: The bridge can purge orphan retained messages on old topics when a mapping changes (no ghost values).
 - FR22: The bridge can apply a defined policy to readings acquired during a broker outage — bounded buffer preserving the source timestamp, or a traced drop; never a re-timestamped replay.
 
@@ -179,7 +179,7 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 - FR17: Epic 1 — publish in Sparkplug B form Ignition consumes
 - FR18: Epic 1 — SCADA auto-discovers units from self-describing BIRTH
 - FR19: Epic 4 — respond to SCADA-initiated rebirth (NCMD)
-- FR20: Epic 1 — confirm broker ACK before reporting delivered
+- FR20: Epic 1 — never over-claim delivery; traced drop, never silence (amended, ADR 0010)
 - FR21: Epic 4 — purge orphan retained messages on mapping change
 - FR22: Epic 4 — broker-outage policy (traced-drop, exhaustive)
 - FR23: Epic 5 — credentials + broker details via `.env`
@@ -669,7 +669,7 @@ So that the SCADA sees an honest, ordered lifecycle.
 
 **Given** a message on the channel
 **When** `mqtt_driver` publishes it
-**Then** it uses non-blocking `try_publish`, and "published ✓" is reported only on broker ACK (FR20); a full/broker-down queue yields a per-device traced drop, never silence.
+**Then** it uses non-blocking `try_publish`, and delivery is never over-claimed (FR20, amended — ADR 0010: Sparkplug mandates QoS 0, at which no broker ACK exists); a full/broker-down queue yields a per-device traced drop, never silence.
 
 **Given** a transport death (LWT fires)
 **When** the NDEATH is delivered

@@ -290,7 +290,7 @@ Must-have capabilities (without any one, the product fails its "never lies" purp
 - **FR17:** The bridge can publish meter data to an MQTT broker in a form Ignition consumes as tags (Sparkplug B).
 - **FR18:** The SCADA can auto-discover the meters and their engineering units from the bridge's published metadata.
 - **FR19:** The bridge can respond to a SCADA-initiated rebirth request by re-announcing its metrics.
-- **FR20:** The bridge can confirm a value is actually acknowledged by the broker before reporting it as delivered.
+- **FR20:** The bridge never over-claims delivery: a value is reported as published only once it has been accepted for transmission, and a value it could not hand over yields a per-device traced drop rather than silence. *(Amended 2026-07-26 — see ADR 0010: the original wording required a broker ACK, which the Sparkplug-mandated QoS 0 makes impossible by protocol.)*
 - **FR21:** The bridge can purge orphan retained messages on old topics when a mapping changes (no ghost values).
 - **FR22:** The bridge can apply a defined policy to readings acquired during a broker outage — bounded buffer preserving the source timestamp, or a traced drop; never a re-timestamped replay.
 
