@@ -20,3 +20,12 @@ Items deferred from reviews; each carries its origin and where it should be pick
   kept for Epic 1 (fail-safe: noise, never a lie); revisit the tolerance band (e.g. −2000 ms) with
   real polling data in Epic 2.
 - `Policy::max_age_ms` validation (reject ≤ 0 at config load) — Epic 3 config oracle.
+
+## Deferred from: code review of 1-6-smart-me-client (2026-07-25)
+
+- One-shot token-refresh-then-retry on 401 after a previously-valid token (ADR 0009) — the
+  bridge adapter owns that loop; land it in Story 1.7/1.11.
+- 429 `Retry-After` honoring + rate-limit backoff — Epic 2 (architecture: "rate-limit/429
+  backoff + token-refresh handling").
+- Tolerant per-device list deserialization (today one degraded device fails the whole
+  `GET /Devices` array parse; single-device path unaffected) — Epic 2 robustness.

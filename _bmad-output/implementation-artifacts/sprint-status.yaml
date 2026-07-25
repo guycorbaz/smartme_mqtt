@@ -60,7 +60,7 @@ development_status:
   1-3-clock-seam: done
   1-4-source-seam-fake: done
   1-5-pure-fresh-stale-failed-state-machine: done
-  1-6-smart-me-client-get-device-date-header-capture: backlog
+  1-6-smart-me-client-get-device-date-header-capture: done
   1-7-smartme-cloud-source-adapter-fail-closed-unit-conversion: backlog
   1-8-sparkplug-b-encode-seq-bdseq-birth-data-death: backlog
   1-9-sparkplug-publisher-adapter-mapping-cold-start-nbirth-stale: backlog

@@ -195,3 +195,23 @@ chemin Elapsed → Timeout → STALE de production. »
   `http_date` inter-ticks), tolérance de troncature ±1 s, validation de `max_age_ms`.
 - **Rejeté explicitement** : hystérésis/debounce — la démotion instantanée EST le choix « when in
   doubt, STALE » (bruit d'alarme accepté, mensonge refusé).
+
+## D7 — Story 1.6 client HTTP : stack verrouillée + déviations assumées (orchestrateur)
+
+- **Pas de party mode** : l'architecture verrouille déjà reqwest/serde/thiserror. Arbitrages :
+  backend TLS = **rustls + webpki-roots** (pas de native-tls/openssl dans l'arbre ; le conteneur
+  n'a pas besoin de ca-certificates) ; features reqwest 0.13 renommées (`rustls`, `form`, `http2`).
+- **Licence CDLA-Permissive-2.0 ajoutée à deny.toml** : données du root-store Mozilla CCADB dans
+  webpki-root-certs — licence de données permissive standard, commentée dans le fichier.
+- **AC3 sans mock HTTP** : le client refuse le plaintext par construction ; le contrat est prouvé
+  sur les OCTETS réels des fixtures avec les mêmes type-parameters serde que `get_device`
+  (y compris l'enveloppe objet de `/Devices/{id}`, fixture générée de la capture réelle après que
+  la revue a montré le trou liste-vs-objet). Un mock TLS self-signed aurait testé reqwest, pas
+  notre code.
+- **Classification transient/fatal exportée par le crate** (`is_fatal()`) : 400 du token endpoint
+  fatal SEULEMENT si le corps OAuth (RFC 6749) accuse le client — un artefact WAF ne doit pas
+  verrouiller le `Failed` absorbant de 1.5 (D6). Sentinelle `status: 0` remplacée par une
+  variante `Misconfigured`.
+- **NFR12 durci sur flag unanime des 3 couches** : Debug manuels rédigés (`<redacted>`) sur
+  Credentials/TokenState/SmartMeClient + test anti-fuite ; redirections coupées
+  (`Policy::none()` — un 307 ne rejouera jamais le formulaire du secret vers un autre hôte).

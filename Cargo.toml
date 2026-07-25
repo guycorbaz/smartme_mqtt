@@ -20,3 +20,13 @@ prost-build = "0.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+# Story 1.6 — smart-me-client transport (TLS mandatory, NFR13): rustls only, no
+# native-tls/openssl in the tree; `json` pulls serde_json for typed responses.
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",        # TLS backend: rustls only, no native-tls/openssl in the tree
+    "webpki-roots",  # baked-in Mozilla roots — container needs no ca-certificates
+    "http2",         # api.smart-me.com serves HTTP/2 via Cloudflare
+    "json",          # typed responses (serde_json)
+    "form",          # OAuth token exchange is a form POST
+] }
+thiserror = "2"

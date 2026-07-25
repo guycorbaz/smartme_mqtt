@@ -16,6 +16,9 @@ allow = [
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "Zlib",
+    # Story 1.6: webpki-root-certs ships the Mozilla CCADB root-store DATA under
+    # the permissive data license CDLA-Permissive-2.0 (standard for webpki-roots).
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 
