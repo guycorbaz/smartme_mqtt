@@ -59,6 +59,46 @@ anonymisées (`Id`/`Serial`/`Name`) avant commit.
   stories 1.5/1.11 ; `advance_ms` avance **les deux** horloges (réalisme), `set_wall` permet le
   saut NTP isolé.
 
+## D5 — Story 1.4 `Source` seam : trait async dans le core (PARTY MODE — Winston, Amelia, Murat)
+
+**Question :** trait `Source` sync vs async-natif (AFIT/RPITIT) dans le core pur ; forme de
+`Reading` ; sémantique du script de `FakeSource`.
+
+**Verdicts unanimes (transcript en annexe B) :**
+
+- **Trait async natif dans le core, forme désucrée `-> impl Future<...> + Send`** (Amelia : la
+  borne `Send` explicite est ce qui permet à la task 1.11 générique de traverser `tokio::spawn` ;
+  l'AFIT nu ne la donne pas et `trait-variant` = dépendance interdite). L'invariant « no truth
+  inside async fn » n'est pas menacé : `Source` est un port qui ne décide rien (Winston).
+  Option `block_on` interne rejetée à l'unanimité (panique/deadlock sur worker tokio).
+  Un trait sync casserait l'AC de 1.7 (« SmartMeCloudSource impl Source ») et rendrait le chemin
+  timeout réel inexerçable — le jumeau 1.14 deviendrait « un jumeau de l'API, pas du chemin
+  d'exécution » (Murat).
+- **`http_date: Option<UtcMillis>`** : un header absent/imparsable ne doit pas faire échouer un
+  fetch — la source n'invente jamais de timestamp, `step` (1.5) tire la conclusion conservatrice.
+  `absent` et `malformed` s'effondrent en `None` : même verdict, la distinction diagnostique est
+  un log d'adaptateur.
+- **Script `VecDeque` ; épuisement → `Err(Fatal{"script exhausted"})`, JAMAIS repeat-last ni
+  panic** (FakeSource compile en prod ; « le fake qui répète en silence est le seul design que je
+  bloquerais absolument » — Murat). Entrée **`Hang`** distincte (futur `pending`) pour exercer le
+  vrai chemin `tokio::time::timeout → Elapsed` sous temps pausé (jumeau 1.14).
+- **Helper `poll_now`** (Waker::noop, 1 poll, std pur) accepté comme outillage de test ; confiné
+  par arch_purity comme les fakes.
+
+**Arbitrages orchestrateur :**
+
+- `Reading { value: Measurement, http_date: Option<UtcMillis> }` + accesseur `value_date()` —
+  la forme de Winston. Amelia proposait `value: Kwh` (sans power) + variante `Malformed` : rejeté
+  car contradictoire avec l'AC 1.7 de l'epic (« power converted to Kw » et « the Measurement is
+  marked Quality::Bad » — le fail-closed unité passe par la mesure, pas par une erreur).
+- `SourceError { Timeout, Transient{reason}, Fatal{reason} }` : reasons `String` gardées
+  (diagnostics tracés, jamais parsés pour décider) ; pas de `#[non_exhaustive]` (sans effet
+  intra-crate — point d'Amelia).
+- Post-review (chasseurs) : side effects du fake déplacés DANS le futur (fidélité au vrai
+  `async fn` : un fetch droppé sans poll ne consomme rien) ; introspection
+  `remaining()`/`is_exhausted()` pour prouver la consommation complète des scripts ; `poll_now(`
+  ajouté aux tokens confinés.
+
 ## Annexe A — Transcript party mode D4
 
 ### 🏗️ Winston
@@ -110,3 +150,32 @@ l'adversaire malin — pas d'analyseur AST pour un outil 4 mètres. Bannir `now(
 `#[cfg(test)]` inline de src/ est un feature. V3 : pub + `#[doc(hidden)]` si ça démange, gardé
 par le scan V2. « Les trois verdicts s'appuient l'un sur l'autre — B rend le scan V2
 suffisant, et le scan V2 rend le pub V3 sûr. »
+
+## Annexe B — Transcript party mode D5 (extraits clés)
+
+### 🏗️ Winston
+« Notre règle dit : aucune vérité n'est décidée dans un async fn. Source::fetch ne décide rien —
+c'est un port d'I/O qui rapporte des faits bruts ; la vérité reste dans step(). Confondre "async
+dans la signature" et "décision dans l'async" serait du purisme de façade. » « B nous coûte deux
+seams au lieu d'un [...] 1.7 devient un mensonge d'AC qu'il faudra renégocier. » « C — rejeté sans
+appel : le genre de bombe qu'on découvre en prod à 3h du matin. » « Deux copies de la même vérité,
+c'est une invitation à ce qu'elles divergent » (pas de value_date dupliqué). « Exiger http_date
+forcerait l'adaptateur à inventer une valeur — c'est précisément mentir. »
+
+### 💻 Amelia
+« async fn nu en trait se désucre en RPITIT sans borne Send → E0277 au tokio::spawn générique de
+1.11 ; le fix standard est trait-variant, une dépendance → interdit. Donc désucrage manuel avec
++ Send dans le trait. » « &mut self est le bon receiver : la task possède son Source ; l'asymétrie
+avec FakeClock (Mutex, &self) est voulue. » « Script vide = Err, jamais panic — FakeSource est
+compilé en prod comme FakeClock ; répéter le dernier Ok simule des données fraîches à l'infini et
+masque exactement le scénario STALE de 1.14. » « Symétrie obligatoire : token "FakeSource" dans la
+deny-list d'arch_purity. »
+
+### 🧪 Murat
+« On juge une seam par les tests qu'elle rend triviaux ET par les mensonges qu'elle rend
+impossibles. » « Avec un trait sync, le jumeau 1.14 devient un jumeau de l'API, pas du chemin
+d'exécution — pour un système "never lies", trou de couverture de classe A. » « Épuisement →
+Fatal typé, bruyant, et une politique de fin explicite : le silence doit être scripté, jamais
+accidentel. » « Timeout instantané suffit pour 1.5 ; pour la revendication jumelle de 1.14 il faut
+EN PLUS une entrée Hang : sous start_paused, tokio::time::timeout expire vraiment et on exerce le
+chemin Elapsed → Timeout → STALE de production. »

@@ -60,31 +60,35 @@ fn pure_modules_are_free_of_async_and_transport() {
     );
 }
 
-/// Story 1.3: raw time sources (and the fake that fabricates time) are confined to
-/// `core/clock.rs`. Everywhere else — including inline `#[cfg(test)]` modules — time
-/// must arrive through the injected `Clock`, or a staleness decision could silently
-/// depend on a hardcoded `now()`.
+/// Stories 1.3/1.4: raw time sources and the test doubles that fabricate inputs are
+/// each confined to their home file. Everywhere else — including inline
+/// `#[cfg(test)]` modules — time arrives through the injected `Clock` and readings
+/// through the injected `Source`, or a staleness decision could silently depend on
+/// a hardcoded `now()` / a fake wired into production.
 #[test]
-fn raw_time_sources_are_confined_to_the_clock_module() {
-    const BANNED_TIME_TOKENS: &[&str] = &[
-        "Instant::now(",
-        "SystemTime::now(",
-        "use std::time::Instant",
-        "use std::time::SystemTime",
-        "FakeClock",
+fn raw_time_sources_and_fakes_are_confined_to_their_home_modules() {
+    // (banned token, the single file allowed to contain it)
+    const CONFINED_TOKENS: &[(&str, &str)] = &[
+        ("Instant::now(", "core/clock.rs"),
+        ("SystemTime::now(", "core/clock.rs"),
+        ("use std::time::Instant", "core/clock.rs"),
+        ("use std::time::SystemTime", "core/clock.rs"),
+        ("FakeClock", "core/clock.rs"),
+        ("FakeSource", "core/source.rs"),
+        ("poll_now(", "core/source.rs"),
     ];
     let mut violations = Vec::new();
     for file in rs_files(&src("")) {
-        if file.ends_with("core/clock.rs") {
-            continue;
-        }
         let text = fs::read_to_string(&file).unwrap();
         for line in text.lines() {
             let t = line.trim();
             if t.starts_with("//") {
                 continue;
             }
-            for banned in BANNED_TIME_TOKENS {
+            for (banned, home) in CONFINED_TOKENS {
+                if file.ends_with(home) {
+                    continue;
+                }
                 if t.contains(banned) {
                     violations.push(format!("{}: {}", file.display(), t));
                 }
@@ -93,7 +97,7 @@ fn raw_time_sources_are_confined_to_the_clock_module() {
     }
     assert!(
         violations.is_empty(),
-        "raw time sources / FakeClock outside core/clock.rs:\n{}",
+        "raw time sources / test fakes outside their home modules:\n{}",
         violations.join("\n")
     );
 }

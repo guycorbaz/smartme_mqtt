@@ -58,7 +58,7 @@ development_status:
   1-1-audit-smart-me-valuedate-date-header-semantics: done
   1-2-domain-measurement-newtypes-quality: done
   1-3-clock-seam: done
-  1-4-source-seam-fake: backlog
+  1-4-source-seam-fake: done
   1-5-pure-fresh-stale-failed-state-machine: backlog
   1-6-smart-me-client-get-device-date-header-capture: backlog
   1-7-smartme-cloud-source-adapter-fail-closed-unit-conversion: backlog
