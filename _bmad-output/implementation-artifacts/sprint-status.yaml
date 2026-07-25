@@ -37,7 +37,7 @@
 #   Ignition contract test (human action required — stays backlog until Guy runs it).
 
 generated: 2026-07-25
-last_updated: 2026-07-25
+last_updated: 2026-07-26
 project: smartme_mqtt
 project_key: NOKEY
 tracking_system: file-system
@@ -68,6 +68,6 @@ development_status:
   1-11-poll-publish-task-state-machine-last-loop-tick: done
   1-12-mqtt-driver-task-eventloop-bdseq-boot-order-broker-ack: review
   1-13-supervisor-run-graceful-shutdown-sigterm-no-lie: review
-  1-14-chaos-stale-on-death-stale-on-cloud-timeout: backlog
+  1-14-chaos-stale-on-death-stale-on-cloud-timeout: done
   1-15-tier-3-ignition-contract-test-manual-runbook: backlog
   epic-1-retrospective: optional
