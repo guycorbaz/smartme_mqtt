@@ -7,6 +7,10 @@
 //! crates.io independently (guarded by `tests/no_context_leak.rs`).
 #![forbid(unsafe_code)]
 
+pub mod model;
+
+pub use model::Quality;
+
 /// Generated Sparkplug B protobuf types (from `proto/sparkplug_b.proto`).
 ///
 /// The module path mirrors the proto `package org.eclipse.tahu.protobuf`.
