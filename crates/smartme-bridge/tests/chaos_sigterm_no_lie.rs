@@ -170,6 +170,22 @@ async fn chaos_sigterm_no_lie() {
 /// Choose a group that is obviously disposable. It is the top level of the
 /// topic, so it is the folder the SCADA will create and the folder whoever
 /// cleans up will look for.
+///
+/// # Cleaning up afterwards
+///
+/// The broker is left clean — the test asserts nothing is retained, so no
+/// subscriber connecting later hears anything. The SCADA is not: Ignition's
+/// MQTT Engine persists what it discovers, and the run leaves a tag folder
+///
+/// ```text
+/// [MQTT Engine]Edge Nodes/<group>/<node>/<serial>   e.g. .../ChaosTest/ChaosSigterm/30000001
+/// ```
+///
+/// Delete that folder in the Designer's tag browser — **only that folder**.
+/// Deleting MQTT Engine tags also discards their alarm and history
+/// configuration, and the real edge nodes live under the same parent. The node
+/// never republishes, so a plain delete sticks; if tags reappear, Cirrus Link's
+/// documented sequence is disable MQTT Engine, delete, re-enable.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "publishes to a real broker; needs SMARTME_CHAOS_BROKER and SMARTME_CHAOS_GROUP"]
 async fn chaos_sigterm_no_lie_against_an_external_broker() {
