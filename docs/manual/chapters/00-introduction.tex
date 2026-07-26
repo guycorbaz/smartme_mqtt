@@ -23,11 +23,13 @@ dressed as true.} Concretely:
 \begin{itemize}
   \item \textbf{Correct, explicit units} — power exactly kW, energy exactly kWh; unknown
         or mismatched source units are rejected, not guessed.
-  \item \textbf{Visible staleness (two mechanisms)} — when the bridge disconnects from the
-        broker, Sparkplug \code{NDEATH} (via the MQTT Last-Will) marks tags
-        \textsc{stale} natively; when the \emph{cloud} fetch fails while the bridge is
-        still alive on MQTT (the most likely failure), the bridge actively publishes
-        quality \textsc{stale} rather than republishing a frozen value as fresh.
+  \item \textbf{Visible staleness (two mechanisms)} — when the bridge stops or loses the
+        broker, a Sparkplug \code{NDEATH} marks its tags \textsc{stale} natively: the
+        bridge publishes that certificate itself on a graceful stop, and the broker's
+        Last-Will covers the case where it dies without the chance to
+        (see~\ref{sec:contract-shutdown}). When the \emph{cloud} fetch fails while the
+        bridge is still alive on MQTT (the most likely failure), the bridge actively
+        publishes quality \textsc{stale} rather than republishing a frozen value as fresh.
   \item \textbf{Serial-bound identity} — every published topic is bound to its meter's
         immutable serial number and verified, so a value is never attributed to the wrong
         meter.

@@ -25,5 +25,48 @@ compile time by \code{tests/arch\_purity.rs}. Dependency direction is one-way
 (\code{sparkplug-b}, \code{smart-me-client} $\rightarrow$ \code{smartme-bridge}), enforced
 by the Cargo graph and \code{cargo-deny}.
 
-\stub{the two-task runtime diagram (poll+publish vs mqtt-driver) and the data-flow figure
-(meter $\rightarrow$ bridge $\rightarrow$ broker $\rightarrow$ Ignition), authored during Epic~1.}
+\section{The two-task runtime}
+
+The running bridge is two asynchronous tasks joined by a single channel. They are started
+together and neither is meaningful alone, so there is no window in which one runs without
+the other.
+
+\begin{center}
+\begin{tabular}{@{}>{\ttfamily}l p{9.0cm}@{}}
+\toprule
+\normalfont\textbf{Task} & \textbf{Responsibility} \\
+\midrule
+poll\_publish & Paces the poll loop, fetches from the smart-me API under a deadline,
+\textbf{judges} the result through the pure state machine, and forwards the verdict. \\
+mqtt\_driver & Owns the Sparkplug session: \code{bdSeq}, the boot order, births, deaths
+and reconnects. It transports the verdict; it never forms one. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The split is the invariant, not an implementation detail. The state machine lives entirely
+in the poll task and is mechanically barred from the MQTT task, so no quality decision can
+be taken by the code that talks to the broker.
+
+\subsection{Data flow}
+
+\begin{center}
+\code{smart-me REST} $\rightarrow$ \code{poll\_publish} $\rightarrow$
+\emph{pure judgement} $\rightarrow$ channel $\rightarrow$ \code{mqtt\_driver}
+$\rightarrow$ broker $\rightarrow$ Ignition
+\end{center}
+
+A fetch that exceeds its deadline is abandoned and counted as a timeout rather than
+awaited, because a wedged loop stops publishing \textsc{stale} and so begins lying by
+omission. The loop records a heartbeat \emph{before} each network call, never after: a
+heartbeat written afterwards would look healthy exactly when the bridge is stuck.
+
+\subsection{Why the transport gets its own task}
+
+The MQTT event loop is polled in a task of its own rather than as a branch of a
+\code{select!}. Polling it in a \code{select!} is not cancellation-safe: a cancelled
+connect can abandon a half-finished CONNECT \emph{after} the broker has registered the
+will, which then fires against a node that never birthed.
+
+\stub{the rendered data-flow figure (currently described in prose above), once the
+diagram toolchain is settled.}

@@ -5,6 +5,201 @@ This chapter is the versioned integration contract of record between \prog and I
 the topic grammar, the metric definitions, quality/freshness semantics, and the
 lifecycle (NBIRTH/NDATA/NDEATH).
 
-\stub{the standalone versioned contract (topic grammar, closed meter/metric lists,
-payload spec, QoS/retain/LWT, freshness/quality semantics, \code{CONTRACT\_VERSION}),
-authored alongside Epic~1 and hardened in later epics.}
+\begin{note}
+Everything in this chapter describes behaviour that is \emph{implemented and tested} as of
+Epic~1. Where the bridge does not yet do something the Sparkplug specification allows, it
+is listed in section~\ref{sec:contract-limits} rather than described as though it worked.
+\end{note}
+
+\section{Contract version}
+
+The node BIRTH carries a metric \code{Contract/Version} (\code{Int64}), currently
+\textbf{1}. It is incremented on any breaking change to the topic grammar, to a metric
+name, or to a metric unit. Publishing it means a consumer can \emph{see} the contract
+change instead of having to notice it from broken tags.
+
+\section{Topic grammar}
+
+The namespace is \code{spBv1.0}. One EON node represents the bridge; each meter is a
+\emph{device} beneath it, identified by its immutable serial number.
+
+\begin{center}
+\begin{tabular}{@{}l>{\ttfamily}l@{}}
+\toprule
+\normalfont\textbf{Level} & \normalfont\textbf{Topic} \\
+\midrule
+Node   & spBv1.0/\{group\}/\{TYPE\}/\{node\} \\
+Device & spBv1.0/\{group\}/\{TYPE\}/\{node\}/\{serial\} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{group} and \code{node} are configured; \code{serial} is the meter's serial number,
+never a friendly name. Binding the topic to the serial is what makes it impossible to
+attribute a value to the wrong meter after a device is renamed or replaced.
+
+Identifiers are validated \emph{before} the bridge connects. A serial that cannot be a
+topic level makes the bridge refuse to start, because the alternative — connecting,
+never birthing, and publishing nothing — looks identical to a healthy but idle bridge.
+
+\subsection{Message types emitted}
+
+\begin{center}
+\begin{tabular}{@{}>{\ttfamily}l l p{7.4cm}@{}}
+\toprule
+\normalfont\textbf{Type} & \textbf{Level} & \textbf{When} \\
+\midrule
+NBIRTH & node   & On every successful connect, including reconnects. \\
+DBIRTH & device & Immediately after NBIRTH, one per meter. \\
+DDATA  & device & On each poll that produced a reading. \\
+NDEATH & node   & On shutdown (published by the bridge) and on connection loss
+                  (published by the broker as the last will). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{NDATA} and \code{DDEATH} are \emph{not} emitted: the bridge carries no node-level
+measurements, and a device only stops reporting when its node does.
+
+\section{Metrics}
+
+\begin{center}
+\begin{tabular}{@{}>{\ttfamily}l l l p{5.2cm}@{}}
+\toprule
+\normalfont\textbf{Metric} & \textbf{Type} & \textbf{Unit} & \textbf{Meaning} \\
+\midrule
+Contract/Version & Int64  & ---   & Contract version, node BIRTH only. \\
+Power            & Double & kW    & Instantaneous power. \\
+Energy           & Double & kWh   & Cumulative energy counter. \\
+bdSeq            & Int64  & ---   & Session number; BIRTH and DEATH only. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Units are exact and never inferred: a source value in a unit the bridge does not
+recognise is rejected, not converted on a guess.
+
+\section{Quality and freshness}
+
+Quality travels as a \textbf{metric property} under the key \code{Quality}, not as a
+value — a consumer that ignores properties still reads a number, and one that reads them
+learns whether to trust it. The codes are the conventional OPC-style triple:
+
+\begin{center}
+\begin{tabular}{@{}l r p{7.4cm}@{}}
+\toprule
+\textbf{Quality} & \textbf{Code} & \textbf{Meaning} \\
+\midrule
+\textsc{good}  & 192 & Fresh, trusted value. \\
+\textsc{stale} & 500 & A previously valid value that is no longer current. \\
+\textsc{bad}   & 0   & Unusable: read failure or failed validation. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Timestamps are the meter's, never the bridge's}
+
+Every published metric is stamped with the \emph{source} measurement time
+(\code{ValueDate}), never with the moment the bridge published it. Freshness is therefore
+computed end-to-end, and a message lost in transit reads downstream as old data rather
+than as current data.
+
+\subsection{The first message is honest}
+
+A cold-start device BIRTH declares the tag set with \textbf{no value} and quality
+\textsc{stale}. Before the first successful fetch the bridge genuinely has nothing to
+report, and declaring a placeholder zero would be indistinguishable from a meter reading
+zero.
+
+\subsection{A rebirth never promotes a value}
+
+On reconnect the bridge re-declares its tags. Re-declared readings are degraded
+(\textsc{good} becomes \textsc{stale}, never the reverse) and stamped with the reading's
+own \code{ValueDate}. Without this, a 45-minute outage would come back looking like a
+fresh measurement.
+
+\section{Delivery semantics}
+
+Every edge-node message is published at \textbf{QoS~0} with \textbf{retain false}, as the
+Sparkplug specification requires. Retain is the important half: a retained payload is a
+value the broker replays to any future subscriber with no way to judge its age --- a
+stored lie that outlives the process. Freshness is the BIRTH's job, not the broker's.
+
+\begin{note}
+QoS~0 defines no acknowledgement, so the bridge cannot and does not claim a message was
+\emph{delivered}. It reports a value as published only once the transport accepted it for
+transmission, and a value it could not hand over produces a per-device traced drop rather
+than silence. See ADR~0010.
+\end{note}
+
+\section{Session lifecycle}
+
+\subsection{Boot order}
+
+The order is not negotiable, and it is why the death certificate is built before anything
+connects:
+
+\begin{enumerate}
+  \item restore \code{bdSeq} from disk and open the next session;
+  \item serialise the NDEATH certificate for that session;
+  \item register it as the connection's last will \emph{inside} the CONNECT packet;
+  \item connect;
+  \item publish NBIRTH, then one DBIRTH per meter.
+\end{enumerate}
+
+Get this wrong and the broker holds no will while the node is alive: the bridge dies and
+nobody is told.
+
+\code{bdSeq} is persisted across restarts through an atomic write (write-temp, fsync,
+rename), so a power loss mid-write cannot leave a corrupt session number.
+
+\subsection{Shutdown --- both deaths fire}
+\label{sec:contract-shutdown}
+
+On \code{SIGTERM} the bridge publishes an explicit NDEATH, keeps the transport pumping
+until it reaches the wire, and then \textbf{drops} the connection. It never sends a clean
+MQTT DISCONNECT, because that instructs the broker to \emph{discard} the will.
+
+The consequence is visible on the wire and worth expecting: a consumer sees
+\textbf{two NDEATH messages} for one graceful stop, carrying the same \code{bdSeq} ---
+the bridge's own certificate first, then the broker's will when the socket closes at
+process exit. Duplicate deaths are idempotent for a consumer that has already marked the
+node down.
+
+\begin{note}
+Requiring the explicit certificate, rather than relying on the will alone, is a decision
+recorded in ADR~0011. The will only fires once the broker concludes the connection is
+dead; a half-open connection --- a container network torn down without a FIN, a firewall
+dropping the flow silently --- stays invisible until the keep-alive elapses, which at the
+configured 30~seconds means up to 45~seconds of a dead node displayed as live. That is
+acceptable for an unplanned death and not for a planned stop.
+\end{note}
+
+The two mechanisms are complementary rather than alternative: the will remains the
+\emph{only} mechanism for a hard death --- crash, \code{SIGKILL}, power loss.
+
+\section{Known limitations}
+\label{sec:contract-limits}
+
+\begin{itemize}
+  \item \textbf{No NCMD subscription}, so \code{Node Control/Rebirth} cannot be honoured.
+        A consumer that requests a rebirth is ignored; reconnects still rebirth on their
+        own.
+  \item \textbf{\code{bdSeq} is fixed for the lifetime of one MQTT client}, not
+        incremented per CONNECT as the specification would have it. The will is registered
+        once, inside the first CONNECT, and cannot be updated afterwards; advancing the
+        number on reconnect would leave the broker holding a certificate for a session
+        that no longer exists, and a consumer pairing death to birth by \code{bdSeq}
+        would ignore the death and keep a frozen value on screen. Matching the will is
+        the honest half of that trade.
+  \item \textbf{\code{bdSeq} is persisted once at boot}, not per session, and a missing or
+        corrupt file restarts the numbering at the sentinel rather than refusing to start.
+  \item \textbf{No report-by-exception}: an unchanged \code{ValueDate} republishes the
+        same point on every poll.
+  \item \textbf{Broker TLS is off} pending an upstream dependency upgrade; the broker is
+        expected on a trusted local network. Traffic to the smart-me cloud is unaffected
+        and remains TLS-only.
+\end{itemize}
+
+\stub{the closed meter/metric lists and the formal \code{CONTRACT\_VERSION} governance
+procedure, once multi-meter support lands in a later epic.}
