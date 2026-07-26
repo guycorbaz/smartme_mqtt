@@ -300,3 +300,156 @@ async fn ignition_contract() {
     println!("Delete ONLY that folder — removing MQTT Engine tags also discards their");
     println!("alarm and history configuration, and the real edge nodes share the parent.");
 }
+
+// ===========================================================================
+// Quality-code probe
+// ===========================================================================
+
+/// Publishes one tag per candidate quality code and lets the host tell us what
+/// each one means to it.
+///
+/// This exists because the first contract run found that our `STALE` code (500)
+/// renders as `Good(500)` in Ignition — the host reads the property, it just
+/// classifies the value at the Good level. That points at the raw-integer
+/// encoding: the quality LEVEL lives in the high bits, and the numbers in
+/// Ignition's published table (192, 257, 512, 516 …) are SUBCODES.
+///
+/// The correct raw integers can be derived from that — Cirrus Link documents
+/// `Bad_Disabled` as `-2147483133`, and `0x80000000 | 515` is exactly that — but
+/// a derivation is not a measurement, and these numbers are about to become a
+/// wire contract. So this asks the host directly.
+///
+/// It also settles the open design choice: seeing `Uncertain_LastKnownValue` and
+/// `Bad_Stale` side by side in the tag browser shows which one an operator would
+/// actually read as "do not trust this".
+///
+/// ```text
+/// SPARKPLUG_CONTRACT_BROKER=host:1883 \
+/// SPARKPLUG_CONTRACT_GROUP=QualityProbe \
+///   cargo test -p sparkplug-b --test ignition_contract quality_code_probe -- --ignored --nocapture
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "manual probe: publishes to a real broker for a human to inspect"]
+async fn quality_code_probe() {
+    let target = std::env::var("SPARKPLUG_CONTRACT_BROKER")
+        .expect("set SPARKPLUG_CONTRACT_BROKER=host:port — there is deliberately no default");
+    let group = std::env::var("SPARKPLUG_CONTRACT_GROUP").expect(
+        "set SPARKPLUG_CONTRACT_GROUP to a disposable group — there is deliberately no default",
+    );
+    assert_ne!(
+        group, "Site",
+        "refusing to publish into the production group"
+    );
+    let (host, port) = target
+        .rsplit_once(':')
+        .expect("SPARKPLUG_CONTRACT_BROKER must be host:port");
+    let port: u16 = port.parse().expect("the port must be a number");
+
+    // (tag name, raw Int32 bit pattern). Every tag carries the SAME value, so the
+    // only thing that can differ downstream is the quality.
+    const BAD: u32 = 0x8000_0000;
+    const UNCERTAIN: u32 = 0x4000_0000;
+    let candidates: Vec<(String, u32)> = vec![
+        ("q_192_good_today".to_string(), 192),
+        ("q_500_stale_today".to_string(), 500),
+        ("q_257_uncertain_lastknown".to_string(), UNCERTAIN | 257),
+        ("q_256_uncertain".to_string(), UNCERTAIN | 256),
+        ("q_512_bad".to_string(), BAD | 512),
+        ("q_516_bad_stale".to_string(), BAD | 516),
+    ];
+
+    let node = EdgeNode::new(group.clone(), "QualityProbe".to_string()).expect("identifiers");
+    let n_birth = node.node_topic(MessageType::NBirth).expect("topic");
+    let n_death = node.node_topic(MessageType::NDeath).expect("topic");
+    let d_birth = node
+        .device_topic(MessageType::DBirth, DEVICE)
+        .expect("topic");
+
+    let session = NodeSession::start(BdSeq::new(9));
+    let will = session.will(now_ms());
+    let mut options = MqttOptions::new("sparkplug-quality-probe", host, port);
+    options.set_keep_alive(Duration::from_secs(30));
+    options.set_last_will(rumqttc::LastWill::new(
+        n_death,
+        encode(&will),
+        QoS::AtMostOnce,
+        false,
+    ));
+    let (client, mut eventloop) = AsyncClient::new(options, 32);
+    let pump = tokio::spawn(async move {
+        loop {
+            if let Err(error) = eventloop.poll().await {
+                println!("  → transport: {error}");
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        }
+    });
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let ts = now_ms();
+    let (mut live, birth) = session.birth(ts, vec![]);
+    client
+        .publish(n_birth, QoS::AtMostOnce, false, encode(&birth))
+        .await
+        .expect("publish");
+
+    // Built against the protobuf types directly: `Metric::with_quality` can only
+    // express our own three-valued enum, and the whole point here is to send
+    // codes that enum cannot currently produce.
+    let mut payload = live.device_birth(ts, vec![]);
+    payload.metrics = candidates
+        .iter()
+        .map(|(name, code)| sparkplug_b::protobuf::payload::Metric {
+            name: Some(name.clone()),
+            alias: None,
+            timestamp: Some(ts),
+            datatype: Some(sparkplug_b::DataType::Double.code()),
+            is_historical: None,
+            is_transient: None,
+            is_null: None,
+            metadata: None,
+            properties: Some(sparkplug_b::protobuf::payload::PropertySet {
+                keys: vec![Quality::PROPERTY_KEY.to_string()],
+                values: vec![sparkplug_b::protobuf::payload::PropertyValue {
+                    r#type: Some(sparkplug_b::DataType::Int32.code()),
+                    is_null: None,
+                    value: Some(
+                        sparkplug_b::protobuf::payload::property_value::Value::IntValue(*code),
+                    ),
+                }],
+            }),
+            value: Some(sparkplug_b::protobuf::payload::metric::Value::DoubleValue(
+                42.0,
+            )),
+        })
+        .collect();
+    client
+        .publish(d_birth, QoS::AtMostOnce, false, encode(&payload))
+        .await
+        .expect("publish");
+
+    println!("\n=== Quality-code probe ===");
+    println!("Every tag below carries the SAME value (42.0). Only the Quality property differs.\n");
+    for (name, code) in &candidates {
+        println!("  {name:<28} sent as Int32 {:>12}", *code as i32);
+    }
+
+    checkpoint(
+        "Read the quality Ignition shows for each tag",
+        &[
+            "q_192_good_today            -> expected Good",
+            "q_500_stale_today           -> what we ship now; showed Good(500) last run",
+            "q_257_uncertain_lastknown   -> Uncertain / last known value?",
+            "q_256_uncertain             -> Uncertain?",
+            "q_512_bad                   -> Bad?",
+            "q_516_bad_stale             -> Bad / stale?",
+            "",
+            "Write down EXACTLY what each one displays, including any number in",
+            "parentheses. That string is the evidence the fix will be based on.",
+        ],
+    );
+
+    pump.abort();
+    println!("\n=== Clean-up (required) ===");
+    println!("Delete Edge Nodes/{group}/QualityProbe in the Designer — only that folder.");
+}
