@@ -70,4 +70,4 @@ development_status:
   1-13-supervisor-run-graceful-shutdown-sigterm-no-lie: done
   1-14-chaos-stale-on-death-stale-on-cloud-timeout: done
   1-15-tier-3-ignition-contract-test-manual-runbook: done
-  epic-1-retrospective: optional
+  epic-1-retrospective: done
