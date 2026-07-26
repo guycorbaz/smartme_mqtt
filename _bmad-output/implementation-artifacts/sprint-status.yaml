@@ -54,7 +54,7 @@ development_status:
   0-7-sparkplug-b-isolated-build-context-leak-guard: done
   0-8-persist-atomic-durability-primitive: done
   epic-0-retrospective: optional
-  epic-1: in-progress
+  epic-1: done
   1-1-audit-smart-me-valuedate-date-header-semantics: done
   1-2-domain-measurement-newtypes-quality: done
   1-3-clock-seam: done
@@ -69,5 +69,5 @@ development_status:
   1-12-mqtt-driver-task-eventloop-bdseq-boot-order-broker-ack: done
   1-13-supervisor-run-graceful-shutdown-sigterm-no-lie: done
   1-14-chaos-stale-on-death-stale-on-cloud-timeout: done
-  1-15-tier-3-ignition-contract-test-manual-runbook: in-progress
+  1-15-tier-3-ignition-contract-test-manual-runbook: done
   epic-1-retrospective: optional
