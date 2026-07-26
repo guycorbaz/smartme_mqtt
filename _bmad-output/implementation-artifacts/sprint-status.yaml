@@ -67,7 +67,7 @@ development_status:
   1-10-core-channel-inter-task-message: done
   1-11-poll-publish-task-state-machine-last-loop-tick: done
   1-12-mqtt-driver-task-eventloop-bdseq-boot-order-broker-ack: done
-  1-13-supervisor-run-graceful-shutdown-sigterm-no-lie: review
+  1-13-supervisor-run-graceful-shutdown-sigterm-no-lie: done
   1-14-chaos-stale-on-death-stale-on-cloud-timeout: done
   1-15-tier-3-ignition-contract-test-manual-runbook: backlog
   epic-1-retrospective: optional
