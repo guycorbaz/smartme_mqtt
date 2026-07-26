@@ -11,3 +11,11 @@ prost = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
+
+# Story 1.15 — the Tier-3 Ignition contract test needs to put real bytes on a
+# real broker. These are DEV-dependencies: they do not appear in the dependency
+# graph of anyone who consumes the published crate, and the isolated-build guard
+# (`cargo build -p sparkplug-b --no-default-features`) never compiles them.
+[dev-dependencies]
+rumqttc = { workspace = true }
+tokio = { workspace = true }

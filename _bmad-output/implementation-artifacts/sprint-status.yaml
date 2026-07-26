@@ -69,5 +69,5 @@ development_status:
   1-12-mqtt-driver-task-eventloop-bdseq-boot-order-broker-ack: done
   1-13-supervisor-run-graceful-shutdown-sigterm-no-lie: done
   1-14-chaos-stale-on-death-stale-on-cloud-timeout: done
-  1-15-tier-3-ignition-contract-test-manual-runbook: backlog
+  1-15-tier-3-ignition-contract-test-manual-runbook: in-progress
   epic-1-retrospective: optional
