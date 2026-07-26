@@ -1,7 +1,7 @@
 ---
 stepsCompleted: ['step-01-validate-prerequisites', 'step-02-design-epics']
 storyCreationMode: 'just-in-time'
-storiesDetailed: ['epic-0', 'epic-1']
+storiesDetailed: ['epic-0', 'epic-1', 'epic-4']
 implemented: ['epic-0']  # all 8 stories green: fmt + clippy -D warnings + 11 test-bins + cargo-deny
 inputDocuments:
   - '_bmad-output/planning-artifacts/prd.md'
@@ -742,3 +742,334 @@ So that the wire format is validated early, while there is budget to fix the cod
 **Given** `docs/ignition-contract-runbook.md`
 **When** the maintainer follows it
 **Then** the steps to arm, run, and interpret the Tier-3 test are documented (this is the early-discovery pass; the release-gate re-run is Epic 8).
+
+## Epic 4: Sparkplug Conformance & the Exhaustive Publishing State Machine
+
+Runs immediately after Epic 1. Two halves that belong together: first establish what the implementation actually owes the Sparkplug B specification — an artifact that does not exist today — then complete the publishing behaviours the skeleton stubbed. Epic 1 proved the happy path is honest; this epic proves the *protocol* is honest, and that the publisher behaves under reconnect, rebirth and backpressure.
+
+Stories 4.1–4.3 are the audit. **They come first on purpose and the rest of the epic is explicitly allowed to be reshaped by their findings** — the audit is what measures the gap, so it cannot be planned around. Stories 4.4 onward are the known work; the audit may add more.
+
+*Two drafting notes, applying the rule adopted at the Epic 1 retrospective (an acceptance criterion may not defer its decision to an artifact that does not yet exist):*
+
+- *Primary Host / STATE is split into a **measurement** story and a **decision** story. Nothing here says "decide later, verified by the audit".*
+- ***NFR10 is not written into an AC below.** It specifies "read→broker-ACK latency p95 ≤ 3 s", and ADR 0010 established that no broker acknowledgement exists at the QoS 0 Sparkplug mandates — the same defect FR20 had. It needs the same amendment treatment before a story can discharge it. Tracked separately; Story 4.16 is blocked on it.*
+
+### Story 4.1: Conformance matrix — framework, namespace and topic clauses
+
+As the maintainer,
+I want a clause-by-clause record of what the topic layer owes the specification,
+So that conformance is a document I can audit rather than a belief.
+
+**Acceptance Criteria:**
+
+**Given** the Sparkplug B specification and `crates/sparkplug-b/src/topic.rs`
+**When** every namespace and topic-grammar clause is walked
+**Then** `docs/sparkplug-conformance.md` exists with one row per clause: clause reference, requirement level (MUST/SHOULD/MAY), our behaviour, the test that proves it, and a verdict of `conformant` / `deviation` / `gap`
+**And** every `deviation` row carries a rationale and a link to the ADR or deferred-work entry that records it
+**And** every `gap` row carries an issue number.
+
+**Given** a row marked `conformant`
+**When** the row names no test
+**Then** the row is `gap`, not `conformant` — a behaviour nothing exercises is not a proven behaviour.
+
+### Story 4.2: Conformance matrix — payload, metrics and datatype clauses
+
+As the maintainer,
+I want the payload encoding audited against the specification,
+So that the hand-rolled protobuf is trustworthy for reasons beyond "Ignition accepted it once".
+
+**Acceptance Criteria:**
+
+**Given** the specification's payload and metric clauses
+**When** `encode.rs`, `model.rs` and `datatype.rs` are walked against them
+**Then** the matrix gains rows for: metric naming, datatype codes, `is_null` semantics, property sets, timestamp units and interpretation, and the `Quality` property
+**And** the known deviation "no aliases, no templates, no DataSets" is recorded as a `deviation` with its rationale, not left implicit.
+
+**Given** the quality-code defect found in Epic 1
+**When** the matrix records the `Quality` property row
+**Then** it states explicitly that the *values* are host-defined and were established by measurement (`quality_code_probe`), not by reading a table — the failure mode that caused contract v1.
+
+### Story 4.3: Conformance matrix — session lifecycle and host interaction
+
+As the maintainer,
+I want the lifecycle and host-facing clauses audited,
+So that the gaps we suspect are counted and the ones we do not suspect are found.
+
+**Acceptance Criteria:**
+
+**Given** the specification's session and host-interaction clauses
+**When** they are walked against the implementation
+**Then** the matrix gains rows for: birth/death ordering, `seq` numbering and wrap, `bdSeq` per CONNECT, NDEATH via will and explicit publish, NCMD/`Node Control/Rebirth`, DDEATH, and the primary-host STATE mechanism
+**And** the two gaps already known — NCMD/Rebirth unimplemented, STATE never considered — appear as `gap` rows pointing at Stories 4.4–4.8.
+
+**Given** the completed matrix
+**When** Epic 4's remaining stories are reviewed against it
+**Then** any newly discovered `gap` is either scheduled into this epic or recorded with an issue and an owning epic — no gap is left unassigned.
+
+### Story 4.4: Primary Host / STATE — measure what the host actually does
+
+As the maintainer,
+I want to observe the real primary-host mechanism before designing for it,
+So that the decision rests on this deployment's behaviour rather than on a reading of the spec.
+
+**Acceptance Criteria:**
+
+**Given** the author's broker, which carries live `spBv1.0/STATE/…` topics
+**When** a read-only observer records the STATE traffic (topic, payload, retain flag, QoS) across an Ignition restart
+**Then** the findings are recorded: whether a primary host ID is configured, what the host publishes on going online and offline, and whether it expects edge nodes to react.
+
+**Given** the observation
+**When** it is written up
+**Then** it states plainly what an edge node that ignores STATE — which is what the bridge does today — actually loses in this deployment.
+
+*Read-only: this story publishes nothing. The broker is production and the only one available.*
+
+### Story 4.5: Primary Host / STATE — decide, and record the decision
+
+As the maintainer,
+I want STATE either implemented or ruled out in writing,
+So that it stops being an omission and becomes a position.
+
+**Acceptance Criteria:**
+
+**Given** Story 4.4's findings
+**When** the decision is taken
+**Then** ADR 0012 records it, with the observed behaviour as evidence
+**And** if the decision is to implement, the ADR states what the bridge does when the primary host goes offline
+**And** if the decision is to rule out, the ADR states the conditions under which it would have to be revisited.
+
+**Given** the decision interacts with graceful shutdown
+**When** ADR 0012 is written
+**Then** it states explicitly whether ADR 0011 (both deaths fire on SIGTERM) still holds unchanged — a primary host going offline may change *when* an edge node should stop publishing.
+
+### Story 4.6: NCMD subscription — plumbing that ignores safely
+
+As the bridge,
+I want to receive node commands without acting on ones I do not understand,
+So that an unknown command is never mistaken for a known one.
+
+**Acceptance Criteria:**
+
+**Given** a connected session
+**When** the driver subscribes
+**Then** it subscribes to the node's NCMD topic **at QoS 1**, as the specification requires (`tck-id-...-edge-node-subscribe-ncmd`: "It MUST subscribe on this topic with a QoS of 1"), as part of the same post-CONNACK sequence that publishes NBIRTH
+**And** the subscription is re-established on every reconnect.
+
+**Given** an NCMD payload the bridge does not recognise
+**When** it arrives
+**Then** it is traced at INFO with the metric names it carried, and otherwise ignored
+**And** a malformed payload is traced at WARN and ignored — never a panic, never a partial application.
+
+**Given** the mqtt driver task
+**When** an NCMD is handled
+**Then** no quality or staleness decision is taken there: the confinement guard in `arch_purity` still holds.
+
+### Story 4.7: `Node Control/Rebirth` — answer with a fresh birth (FR19)
+
+As the SCADA,
+I want a rebirth request answered with a complete re-announcement,
+So that I can resynchronise without waiting for the bridge to reconnect on its own.
+
+**Acceptance Criteria:**
+
+**Given** an NCMD carrying `Node Control/Rebirth` set true
+**When** the driver handles it
+**Then** it republishes NBIRTH followed by one DBIRTH per meter, with `seq` reset per the specification
+**And** the re-announced readings follow the existing degradation rule — `Good` becomes `Stale`, never the reverse — and carry the reading's own `ValueDate`, never `now`.
+
+**Given** a rebirth request while the cloud is unreachable
+**When** the bridge answers
+**Then** the declared metrics carry no value and quality `Stale`, exactly as at cold start — a rebirth never invents a reading.
+
+**Given** the rebirth is answered
+**When** the `bdSeq` is inspected
+**Then** it is unchanged: a rebirth re-announces a session, it does not open one.
+
+### Story 4.8: Extend the Tier-3 gate to NCMD/Rebirth — close NFR17
+
+As the maintainer,
+I want the manual contract test to exercise a real Ignition-issued rebirth,
+So that NFR17 is covered by the artifact it names.
+
+**Acceptance Criteria:**
+
+**Given** `crates/sparkplug-b/tests/ignition_contract.rs`
+**When** a step is added for rebirth
+**Then** it instructs the operator to issue a rebirth from Ignition and to confirm the node re-announces, with the checklist stating what could make the step pass for the wrong reason
+**And** the runbook's run table gains a column or note recording that NCMD/Rebirth was exercised.
+
+**Given** NFR17's coverage note in `epics.md`
+**When** this story is done
+**Then** the note stops saying "the NCMD/Rebirth half is Epic 4" and records the version it was verified against.
+
+### Story 4.9: Give `chaos_sigterm_no_lie` a discriminator that survives per-CONNECT `bdSeq`
+
+As the maintainer,
+I want the SIGTERM proof to stop depending on the will being stamped once,
+So that Story 4.10 can change that without silently disarming the test.
+
+**Acceptance Criteria:**
+
+**Given** `chaos_sigterm_no_lie` distinguishes the explicit NDEATH from the will by comparing payload timestamps
+**When** the will is rebuilt per CONNECT (Story 4.10)
+**Then** that discriminator no longer discriminates — ADR 0011 records this explicitly.
+
+**Given** the test
+**When** a new discriminator is introduced
+**Then** it does not rest on the will's timestamp
+**And** it is falsified before being trusted: with the explicit publish removed, the test fails; with it restored, it passes.
+
+*This story precedes 4.10 deliberately. Reversing the order would leave a window in which the test passes for a reason that has stopped being true.*
+
+### Story 4.10: Own the reconnect loop — `bdSeq` per CONNECT
+
+As the bridge,
+I want a new session number on every CONNECT, as the specification requires,
+So that a consumer pairing death to birth is never handed a certificate for a session that no longer exists.
+
+**Acceptance Criteria:**
+
+**Given** the recorded deviation in `mqtt_driver.rs` — `bdSeq` fixed for a client's lifetime because the will cannot be updated after construction
+**When** the driver owns its reconnect loop and rebuilds the client per CONNECT
+**Then** `bdSeq` advances on each CONNECT and the will registered in that CONNECT carries the same number
+**And** the module documentation's "recorded deviation" section is replaced by a statement of the conforming behaviour.
+
+**Given** a reconnect
+**When** the new session births
+**Then** the NDEATH the broker holds carries the new session's `bdSeq`, verified from an independent subscriber.
+
+**Given** `bdSeq` is persisted
+**When** it advances per CONNECT rather than per boot
+**Then** the persistence path is exercised at reconnect frequency, and the deferred concern "persisted once at boot" is closed or restated.
+
+### Story 4.11: Broker-outage policy — the traced drop, exhaustively (FR22, AR7)
+
+As the operator,
+I want every reading the bridge could not hand over to be visible,
+So that a broker outage reads as loss, never as silence.
+
+**Acceptance Criteria:**
+
+**Given** a full outbound queue or a broker that is down
+**When** a reading cannot be handed to the transport
+**Then** it is counted per meter and per reason, and traced at WARN carrying the reading's source timestamp
+**And** no persistent buffer is introduced: the policy is a traced drop, per AR7.
+
+**Given** a sustained outage
+**When** readings are dropped throughout
+**Then** memory and file descriptors stay bounded — the drop path allocates nothing that survives it.
+
+### Story 4.12: Anti-replay at the down→up instant
+
+As the SCADA,
+I want nothing re-timestamped when the broker comes back,
+So that an outage reads as a gap rather than as a burst of fresh data.
+
+**Acceptance Criteria:**
+
+**Given** a broker that returns after an outage
+**When** the bridge reconnects and rebirths
+**Then** every published Sparkplug timestamp equals its source `ValueDate` — verified at the reconnection instant, not merely in steady state
+**And** no reading acquired during the outage is published with a post-outage timestamp.
+
+**Given** the rebirth that follows reconnection
+**When** it re-declares the last known reading
+**Then** that reading is degraded to `Stale` and stamped with its own `ValueDate`.
+
+### Story 4.13: `chaos_broker_recovery`
+
+As the maintainer,
+I want the down→up transition proven from outside,
+So that anti-replay is a measured property rather than a reviewed one.
+
+**Acceptance Criteria:**
+
+**Given** a running bridge and a broker container that is stopped and restarted
+**When** an independent subscriber records the whole sequence
+**Then** it observes: the node dying, the node rebirthing, and no published timestamp that post-dates its own `ValueDate`
+**And** the test is falsified before being trusted — with the anti-replay stamping broken, it fails.
+
+### Story 4.14: `chaos_poller_wedge`
+
+As the maintainer,
+I want a wedged poll loop to be detectable from outside the process,
+So that lying by omission is caught the same way lying by commission is.
+
+**Acceptance Criteria:**
+
+**Given** a source that hangs beyond every deadline
+**When** the poll loop is wedged
+**Then** an independent subscriber sees the affected metrics go `Stale` rather than simply stop updating
+**And** the liveness heartbeat visibly stops advancing, so an external health check can distinguish "wedged" from "idle".
+
+### Story 4.15: `AC-LEAK-01` — resource stability under sustained load (NFR3, NFR9)
+
+As the operator,
+I want the bridge to run for weeks on a NAS without growing,
+So that a leak surfaces here rather than on the fourth epic built on top of it.
+
+**Acceptance Criteria:**
+
+**Given** a 100k-iteration run with the transport exercised
+**When** RSS is sampled every 60 s and file descriptors are counted via `/proc/self/fd`
+**Then** RSS_max ≤ 100 MB, the RSS slope by linear regression is ≤ 1 %/24 h, and FD ≤ 64
+**And** the measured figures are recorded, not merely asserted — a threshold met by a wide margin and one met barely are different results.
+
+**Given** the run
+**When** it is executed
+**Then** it is feature-gated or `#[ignore]`d so it never runs in the ordinary `cargo test` path.
+
+### Story 4.16: Latency budget (NFR10) — BLOCKED
+
+As the operator,
+I want a stated latency budget from reading to publication,
+So that "a new reading reaches MQTT within one poll cycle" is measured rather than assumed.
+
+**Blocked.** NFR10 specifies "read→**broker-ACK** latency p95 ≤ 3 s, p99 ≤ 5 s", and ADR 0010 established that MQTT defines no acknowledgement at the QoS 0 Sparkplug mandates — the same defect FR20 carried. The measurable analogue is read→accepted-for-transmission, which is a weaker claim and must be agreed rather than substituted quietly.
+
+This story stays unwritten until NFR10 is amended. Recording it as blocked, rather than writing an acceptance criterion around the problem, is the rule adopted at the Epic 1 retrospective.
+
+### Story 4.17: Fix the Will QoS — the specification says 1, we send 0
+
+As the bridge,
+I want my death certificate registered at the QoS the specification requires,
+So that the broker is obliged to deliver it rather than permitted to lose it.
+
+**Acceptance Criteria:**
+
+**Given** the Sparkplug B specification, chapter 5
+**When** `tck-id-message-flow-edge-node-birth-publish-will-message-qos` is applied — *"The Edge Node's MQTT Will Message's MQTT QoS MUST be 1"*
+**Then** the will is registered at QoS 1 with retain false
+**And** `qos_for` stops returning a single value for every message type, since the specification does not.
+
+**Given** the unit test `every_edge_node_message_is_qos_zero_and_never_retained`
+**When** it is revisited
+**Then** it is replaced by one that encodes what the specification actually requires — QoS 0 for NBIRTH and DBIRTH, QoS 1 for the will, retain false throughout — because the current test locks in the violation and would block the fix.
+
+**Given** the change
+**When** it reaches the wire
+**Then** an independent subscriber confirms the will still fires on an ungraceful disconnect, and `chaos_stale_on_death` still passes.
+
+*Found before the audit formally began, by reading the specification in response to Guy asking whether QoS 0 was a liberty we had taken. It was not: it is mandated for births and forbidden for the will.*
+
+### Story 4.18: Re-open ADR 0010 — the FR20 amendment rested on a false premise
+
+As the maintainer,
+I want the FR20 decision re-taken on correct facts,
+So that a requirement weakened for a reason that turned out to be wrong is either restored or re-justified.
+
+**Acceptance Criteria:**
+
+**Given** ADR 0010, which states *"The Sparkplug B specification requires QoS 0 for every edge-node message… Only host STATE messages use QoS 1"*
+**When** that claim is checked against chapter 5
+**Then** it is recorded as incorrect: the will MUST be QoS 1, and **NDATA/DDATA/DDEATH carry no QoS requirement at all**
+**And** therefore ADR 0010's option 3 — publish DATA at QoS 1 to obtain PubAcks — was rejected as a specification violation that it is not.
+
+**Given** the corrected facts
+**When** the decision is re-taken
+**Then** a superseding ADR records either that FR20's amendment stands on engineering grounds (QoS 1 costs ACK bookkeeping and retransmission on steady telemetry, and Sparkplug leans on birth/death + `seq` rather than per-message durability), or that FR20 is restored and DATA moves to QoS 1
+**And** NFR10's "read→broker-ACK latency" is resolved in the same decision, since it becomes measurable if DATA moves to QoS 1.
+
+**Given** the outcome
+**When** it is applied
+**Then** the PRD, epics and the manual are updated together, as they were for the original amendment.
