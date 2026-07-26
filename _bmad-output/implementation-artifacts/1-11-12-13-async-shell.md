@@ -151,12 +151,26 @@ before being signed off:
   cannot cancel, stalling the very shutdown being measured. Now removed from the child's env.
 - **The state dir leaked on every failing path** while the child had a `Drop` guard. It has one now.
 
-**Open question for Guy, not resolved here.** `epics.md:696` states the AC as a disjunction —
-"either an explicit NDEATH is published before exit, **or** the connection is dropped so the LWT
-fires". This test enforces only the first branch. Asserting the stronger property satisfies the
-AC, and the reasoning is sound (a graceful stop must not lean on the fallback), but the epic text
-still permits an implementation the suite would now reject. When FR20 was re-scoped the team
-amended PRD, epics and architecture and raised an issue; the same treatment is owed here.
+**Resolved 2026-07-26 — ADR 0011, approved by Guy.** The AC read as a disjunction ("either an
+explicit NDEATH ... **or** the connection is dropped so the LWT fires") while the test enforces
+only the first branch. Investigating it showed the disjunction was never a settled decision:
+AR13 and architecture item ⑧ both deferred the choice of mechanism *to this very test*
+("confirmed against the author's broker via the `SIGTERM-NO-LIE` chaos test"), and the test had
+not existed until now.
+
+Measuring settled it — the implementation does not choose, it does **both**:
+
+| Message | Timestamp | vs NBIRTH |
+| --- | --- | --- |
+| Will (broker) | 1785059893052 | −1 ms (stamped before CONNECT) |
+| NBIRTH | 1785059893053 | — |
+| Explicit NDEATH (bridge) | 1785059894099 | +1046 ms (stamped at shutdown) |
+
+The explicit certificate is immediate; the will follows when the socket closes at exit. Requiring
+the explicit branch is what keeps a *planned* stop from depending on the broker noticing a socket
+— up to 1.5× keep-alive (45 s at the configured 30 s) if the connection is left half-open.
+Amended in `epics.md` (AR13 + the AC) and `architecture.md` (the shutdown decision, open item ⑧
+now closed, and the test-tier description). FR13 is stated as an outcome and needed no change.
 
 ## Remaining known gaps (deferred)
 
