@@ -111,7 +111,7 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 - NFR16: The broker connection may be secured (TLS and/or auth) or plain per config; when secured, broker credentials follow the same discipline as smart-me creds (never logged).
 
 **Interoperability & Deployment**
-- NFR17: Sparkplug B output conforms to what Ignition MQTT Engine accepts — verified by a manual pre-release contract test against a real Ignition (values, units, STALE-on-death, NCMD/Rebirth). Not in automated CI.
+- NFR17: Sparkplug B output conforms to what Ignition MQTT Engine accepts — verified by a manual pre-release contract test against a real Ignition (values, units, STALE-on-death, NCMD/Rebirth). Not in automated CI. *(Epic 1 delivered the first pass covering values, units and STALE-on-death; the NCMD/Rebirth half is Epic 4 — see the Epic 1 retrospective.)*
 - NFR18: The Sparkplug/MQTT contract is a standalone versioned document; a breaking change bumps the contract version.
 - NFR19: The published `sparkplug-b` crate follows semver with a stable, documented public API (no third-party types leaked), complete crate metadata, and a documented conformance scope. Publish acceptance: `cargo publish` succeeds and `cargo add sparkplug-b` in a clean project compiles an encode→decode round-trip.
 - NFR20: The bridge works with either a bundled MQTT broker or an external broker.
@@ -180,7 +180,7 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 - FR18: Epic 1 — SCADA auto-discovers units from self-describing BIRTH
 - FR19: Epic 4 — respond to SCADA-initiated rebirth (NCMD)
 - FR20: Epic 1 — never over-claim delivery; traced drop, never silence (amended, ADR 0010)
-- FR21: Epic 4 — purge orphan retained messages on mapping change
+- FR21: Epic 3 — purge orphan retained messages on mapping change *(moved from Epic 4, 2026-07-26)*
 - FR22: Epic 4 — broker-outage policy (traced-drop, exhaustive)
 - FR23: Epic 5 — credentials + broker details via `.env`
 - FR24: Epic 5 — meter→topic/tag mapping with defaults
@@ -210,6 +210,14 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 
 *Structure adopted after a party-mode stress-test (Winston, John, Amelia, Murat): **walking-skeleton-first**. The pure "functional core" (no `tokio` in truth-deciding code) is not a temporal milestone but a **compile-time invariant** enforced across every slice from the socle onward — "no truth is ever decided inside an `async fn`". Epics 2–4 are independent thickening axes over the skeleton; each stands alone and requires no future epic to function.*
 
+> **Execution order: 0 → 1 → 4 → 2 → 3 → 5 → 6 → 7 → 8.**
+>
+> Epic numbers are **identifiers, not sequence**. Epic 4 was pulled ahead of Epic 2 at the Epic 1 retrospective (2026-07-26) for three reasons: it owns the Sparkplug conformance audit, and Epic 1 demonstrated what stacking on an unverified channel costs; Epic 2 will define many oracle→quality mappings (AR16), which are cheaper to land on a settled publishing machine than to revisit after rebirth and anti-replay change republication semantics; and Epic 4 carries NFR3 / AC-LEAK-01, so a resource leak surfaces before two more epics are built on top of it.
+>
+> The epics were deliberately **not renumbered**: seventeen references to epic numbers live in Rust doc comments, plus the coverage map, the manual and the issue tracker. Renumbering would invalidate all of them for a cosmetic gain.
+>
+> *Known residual risk of the reorder:* rebirth re-declares metrics with their qualities, and Epic 2 may extend the quality set. The degradation rule (`Good` → `Stale`, never upward) would then need revisiting in the rebirth path. Small, and accepted.
+
 ### Epic 0: Socle — Workspace, CI Gates & Durability Primitive
 Establish the compilable, boundary-enforced substrate every later guarantee rests on: the 3-crate Cargo workspace (edition 2024), the CI gate wall (`fmt`, `clippy -D warnings`, `cargo-deny`, `arch_purity` — which bans `tokio`/`rumqttc` imports inside `core/`), the checked-in `.proto` + fixtures, and the shared atomic-persistence primitive `persist_atomic` (write-temp + fsync(file) + fsync(dir) + rename) with its crash-injection tests. Explicit enabler epic — its value is measured in risk avoided, not user-visible features.
 **FRs covered:** *(none — enabling)*
@@ -227,13 +235,17 @@ Thicken the skeleton's single FRESH→STALE transition into the full integrity g
 
 ### Epic 3: The Full Fleet — Multi-Meter Discovery & Per-Meter Isolation
 Grow from one meter to the author's actual 4-meter fleet on a single account: full discovery by name + serial, the real Sparkplug device topology (per-meter DBIRTH/DDEATH), and per-meter staleness isolation — one silent Kamstrup flips stale individually while the other three stay fresh. Delivers Journey 2 (A Meter Goes Silent) at fleet scale.
-**FRs covered:** FR2, FR6, FR12
+**FRs covered:** FR2, FR6, FR12, FR21 *(moved from Epic 4 — mapping changes originate here)*
 **NFR/AR:** NFR2 *(per-meter staleness latency)* · AR6 *(per-meter watch snapshot)*
 
-### Epic 4: Exhaustive Publishing State Machine — Reconnect, Rebirth & Backpressure
-Complete the publishing pipeline behaviours the skeleton stubbed: SCADA-initiated NCMD/Rebirth response, orphan-retained-message purge on mapping change, the full broker-outage traced-drop policy with anti-replay on the down→up transition, and the resource-stability guarantees (bounded growth, latency). Owns the runtime chaos suite.
-**FRs covered:** FR19, FR21, FR22
-**NFR/AR:** NFR3 *(AC-LEAK-01)*, NFR9, NFR10 · AR7 *(full traced-drop + anti-replay)* · chaos_broker_recovery, chaos_poller_wedge
+### Epic 4: Sparkplug Conformance & the Exhaustive Publishing State Machine
+**Runs immediately after Epic 1 — see the execution order above.** Establish what the implementation actually owes the Sparkplug B specification, then complete the publishing behaviours the skeleton stubbed: a clause-by-clause conformance audit (spec → implementation → test matrix), SCADA-initiated NCMD/Rebirth response with the Tier-3 gate extended to cover it, a decision on Primary Host / STATE, the full broker-outage traced-drop policy with anti-replay on the down→up transition, and the resource-stability guarantees (bounded growth, latency). Owns the runtime chaos suite.
+**FRs covered:** FR19, FR22
+**NFR/AR:** NFR3 *(AC-LEAK-01)*, NFR9, NFR10, NFR17 *(completing the Tier-3 gate — NCMD/Rebirth)* · AR7 *(full traced-drop + anti-replay)* · chaos_broker_recovery, chaos_poller_wedge
+
+*Scope widened at the Epic 1 retrospective (2026-07-26). The conformance audit is **story 1**, and the rest of the epic is explicitly allowed to be reshaped by its findings — the audit is the artifact that tells us the size of the gap, so it cannot be planned around. Two known entries for it: NFR17 requires the Tier-3 test to verify NCMD/Rebirth and it does not; and Primary Host / STATE appears nowhere in any planning artifact while the author's broker carries live `spBv1.0/STATE` topics. Note that a Primary Host decision may force a revisit of ADR 0011, since an offline primary host changes when an edge node should stop publishing.*
+
+*FR21 (orphan-retained purge on mapping change) moved to Epic 3: mapping changes originate with multi-meter discovery, and at one meter there is no honest way to exercise it. It is also near-moot today — the bridge publishes everything with `retain = false`, so it cannot create the orphans FR21 purges; the requirement guards against orphans left by something else.*
 
 ### Epic 5: Configuration, Secrets & Persistence
 The author configures the bridge safely and confirms mappings before anything publishes: `.env` secrets discipline, external/bundled broker connection (optionally TLS/auth), meter→topic mapping with defaults, first-run mapping confirmation, startup validation with refuse-to-start, and config that survives restarts + image updates (reusing the Epic 0 `persist_atomic` primitive via `ArcSwap`). Delivers Journey 1 (First Run) configuration.
