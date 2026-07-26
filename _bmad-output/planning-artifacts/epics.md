@@ -1053,24 +1053,25 @@ So that the broker is obliged to deliver it rather than permitted to lose it.
 
 *Found before the audit formally began, by reading the specification in response to Guy asking whether QoS 0 was a liberty we had taken. It was not: it is mandated for births and forbidden for the will.*
 
-### Story 4.18: Re-open ADR 0010 — the FR20 amendment rested on a false premise
+### Story 4.18: Correct ADR 0010's wording — its conclusion stands, its premise is overstated
 
 As the maintainer,
-I want the FR20 decision re-taken on correct facts,
-So that a requirement weakened for a reason that turned out to be wrong is either restored or re-justified.
+I want ADR 0010 to say something true about the specification,
+So that the next person reasoning from it is not misled the way we were.
 
 **Acceptance Criteria:**
 
-**Given** ADR 0010, which states *"The Sparkplug B specification requires QoS 0 for every edge-node message… Only host STATE messages use QoS 1"*
-**When** that claim is checked against chapter 5
-**Then** it is recorded as incorrect: the will MUST be QoS 1, and **NDATA/DDATA/DDEATH carry no QoS requirement at all**
-**And** therefore ADR 0010's option 3 — publish DATA at QoS 1 to obtain PubAcks — was rejected as a specification violation that it is not.
+**Given** ADR 0010, which states *"The Sparkplug B specification requires QoS 0 for **every** edge-node message (NBIRTH/NDATA/NDEATH/DBIRTH/DDATA/DDEATH). Only host STATE messages use QoS 1"*
+**When** it is checked against the vendored specification
+**Then** its **conclusion is confirmed**: `topics-ndata-mqtt` and `topics-ddata-mqtt` both require QoS 0 with retain false, so no broker acknowledgement exists for data and FR20 was genuinely unimplementable as written
+**And** its **premise is corrected**: the blanket "every edge-node message" is wrong — the Will Message MUST be QoS 1 (chapter 5), and chapter 4 states no QoS for NDEATH at all.
 
-**Given** the corrected facts
-**When** the decision is re-taken
-**Then** a superseding ADR records either that FR20's amendment stands on engineering grounds (QoS 1 costs ACK bookkeeping and retransmission on steady telemetry, and Sparkplug leans on birth/death + `seq` rather than per-message durability), or that FR20 is restored and DATA moves to QoS 1
-**And** NFR10's "read→broker-ACK latency" is resolved in the same decision, since it becomes measurable if DATA moves to QoS 1.
-
-**Given** the outcome
+**Given** the correction
 **When** it is applied
-**Then** the PRD, epics and the manual are updated together, as they were for the original amendment.
+**Then** ADR 0010 gains an addendum citing the tck-ids per message type rather than a blanket claim, and records that the overstatement was what made the will violation (#26) invisible for an epic.
+
+**Given** NFR10's "read→broker-ACK latency"
+**When** resolved in the same pass
+**Then** it is amended to a measurable analogue (read→accepted-for-transmission), since the QoS-0 requirement for data is confirmed and no ACK will ever exist. Story 4.16 unblocks on that amendment.
+
+*History worth keeping: this story was first written to **re-open** ADR 0010, on my claim that DATA carried no QoS requirement. That claim came from grepping chapter 5 alone and concluding from absence. Chapter 4 has the requirements. The vendored specification caught the error within minutes of being vendored — which is the argument for vendoring it.*
