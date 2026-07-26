@@ -24,8 +24,8 @@ quality codes a real host read as `Good` while every internal test agreed with i
 
 | Chapter | Story | State |
 | --- | --- | --- |
-| 4 — Topics & namespace | 4.1 | **done** (this pass) |
-| 6 — Payloads, metrics, datatypes | 4.2 | pending |
+| 4 — Topics & namespace | 4.1 | **done** |
+| 6 — Payloads, metrics, datatypes | 4.2 | **in progress** — quality clauses done, aliases/datatypes/templates pending |
 | 2, 5 — Principles, session lifecycle, host interaction | 4.3 | pending |
 
 Chapter 4 also carries the Host Application `STATE` clauses (`host-topic-phid-*`). They are
@@ -101,6 +101,32 @@ constraint; ideally the bridge refuses to start on a detectable collision. Issue
 question, unaddressed by these clauses and open as Stories 4.4–4.5.
 
 ---
+
+## Chapter 6 — Payloads (partial: the quality property)
+
+| tck-id | Level | Our behaviour | Proof | Verdict |
+| --- | --- | --- | --- | --- |
+| `payloads-propertyset-quality-value-type` | MUST | property type `Int32` (code 3) | `encode.rs::quality_travels_as_a_property_on_every_message` | conformant |
+| `payloads-propertyset-quality-value-value` | MUST | **the bridge publishes Ignition's codes, not `0`/`192`/`500`** | `sparkplug_publisher.rs::no_non_good_quality_can_be_mistaken_for_good_by_ignition` | **deviation** ([ADR 0012](adr/0012-quality-codes-spec-versus-host.md)) |
+
+**The most consequential row in this matrix.** The specification admits exactly `0`, `192` and
+`500`. Ignition reads `500` as `Good(500)` and `0` as `Good_Unspecified` — so two of the three
+mandated codes report an unusable value as trustworthy on the host this bridge publishes to.
+Conforming here produces the exact silent lie the project exists to prevent, so the bridge
+deviates and says so.
+
+The generic `sparkplug-b` crate returns to the specified codes; only the bridge deviates, via
+`Metric::with_quality_code`. A test asserts each side stays on its own footing, so they cannot
+silently converge again.
+
+| tck-id | Level | Our behaviour | Proof | Verdict |
+| --- | --- | --- | --- | --- |
+| `payloads-nbirth-rebirth-req` | MUST | NBIRTH carries no `Node Control/Rebirth` metric | — | **gap** (Story 4.7) |
+| `payloads-ndeath-will-message-qos` | MUST | will registered at QoS 0 | — | **gap** ([#26](https://github.com/guycorbaz/smartme_mqtt/issues/26), Story 4.17) |
+| `payloads-ndeath-will-message-retain` | MUST | will retain false | `every_edge_node_message_is_qos_zero_and_never_retained` | conformant |
+| `payloads-ndeath-will-message-publisher` | SHOULD | the bridge publishes NDEATH itself before disconnecting | `chaos_sigterm_no_lie` | conformant — **and it vindicates [ADR 0011](adr/0011-graceful-shutdown-requires-both-deaths.md)**, which reached the same conclusion by reasoning before this clause was read |
+| `payloads-ndeath-seq` | MUST NOT | death carries no `seq` | `encode.rs::the_will_matches_the_birth_and_carries_no_sequence` | conformant |
+| `payloads-ndeath-bdseq` | MUST | death carries the birth's `bdSeq` | same, plus `chaos_stale_on_death` | conformant |
 
 ## Findings carried forward from this pass
 

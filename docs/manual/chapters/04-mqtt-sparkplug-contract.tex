@@ -121,13 +121,20 @@ consumer, which is what the two-mechanism design promises: one visible outcome, 
 mechanism noticed.
 
 \begin{warning}
-Contract version~1 published \code{500} for \textsc{stale} and \code{0} for \textsc{bad}.
-Both were wrong, and wrong in the dangerous direction: a real host displayed \code{500} as
-\emph{Good(500)} — a good-\emph{level} code with an unrecognised subcode — and \code{0} is
-that host's own code for \emph{good, unspecified}. A version-1 bridge therefore told its
-SCADA that an unusable value was trustworthy. Found by the Tier-3 contract test and fixed
-in contract version~2. Nothing inside the bridge could have detected it, which is precisely
-why that test exists.
+\textbf{These codes deviate from the Sparkplug B specification, deliberately.} The
+specification admits exactly three quality values —
+\code{0}, \code{192}, \code{500} — but Ignition does not classify the property by that
+enumeration: it reads the raw integer as its own quality code, in which the \emph{level} sits
+in the top bits. Measured on Ignition~8.3.7, \code{500} displays as \emph{Good(500)} and
+\code{0} as \emph{Good\_Unspecified}. Two of the three specified codes therefore report an
+unusable value as trustworthy on the host this bridge publishes to.
+
+Between conforming and not lying, \prog does not lie. The deviation is recorded in ADR~0012
+and in \code{docs/sparkplug-conformance.md}; the generic \code{sparkplug-b} library keeps the
+specified codes, so only this bridge deviates, and only for this consumer.
+
+Contract version~1 published the specified codes and was, for that reason, displaying stale
+data as good.
 \end{warning}
 
 \subsection{Timestamps are the meter's, never the bridge's}

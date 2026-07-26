@@ -273,9 +273,9 @@ fn encode_value(value: &MetricValue) -> payload::metric::Value {
 fn encode_properties(metric: &Metric) -> Option<payload::PropertySet> {
     let mut keys = Vec::new();
     let mut values = Vec::new();
-    if let Some(quality) = metric.quality {
+    if let Some(code) = metric.quality_code {
         keys.push(Quality::PROPERTY_KEY.to_string());
-        values.push(int_property(quality.code()));
+        values.push(int_property(code));
     }
     if let Some(unit) = &metric.engineering_unit {
         keys.push(Metric::ENG_UNIT_KEY.to_string());

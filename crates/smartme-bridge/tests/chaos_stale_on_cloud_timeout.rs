@@ -16,7 +16,9 @@ mod common;
 use std::time::Duration;
 
 use smart_me_client::Credentials;
-use smartme_bridge::adapters::sparkplug_publisher::{METRIC_ENERGY, METRIC_POWER};
+use smartme_bridge::adapters::sparkplug_publisher::{
+    METRIC_ENERGY, METRIC_POWER, ignition_quality_code,
+};
 use smartme_bridge::app::{BridgeConfig, PollConfig};
 use smartme_bridge::core::state_machine::Policy;
 use smartme_bridge::domain::{MeterId, Serial};
@@ -74,7 +76,7 @@ async fn chaos_stale_on_cloud_timeout() {
     for metric in [METRIC_POWER, METRIC_ENERGY] {
         assert_eq!(
             birth.quality_of(metric),
-            Some(sparkplug_b::Quality::Stale.code()),
+            Some(ignition_quality_code(sparkplug_b::Quality::Stale)),
             "{metric} must be STALE before the first successful fetch"
         );
         assert!(
@@ -91,7 +93,8 @@ async fn chaos_stale_on_cloud_timeout() {
     let mut lies = Vec::new();
     while let Ok(s) = seen.try_recv() {
         for metric in [METRIC_POWER, METRIC_ENERGY] {
-            let claims_good = s.quality_of(metric) == Some(sparkplug_b::Quality::Good.code());
+            let claims_good =
+                s.quality_of(metric) == Some(ignition_quality_code(sparkplug_b::Quality::Good));
             if claims_good || (s.topic.contains("/DDATA/") && s.has_value(metric)) {
                 lies.push(format!("{} claimed {metric} was usable", s.topic));
             }

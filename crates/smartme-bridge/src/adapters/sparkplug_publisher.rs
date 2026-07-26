@@ -30,12 +30,47 @@ use crate::domain::{Measurement, Serial, UtcMillis};
 /// to the topic grammar, to a metric name or unit, or to the meaning of a
 /// published quality code.
 ///
-/// - **2** — quality codes corrected. Version 1 published `500` for stale and
-///   `0` for bad; a Tier-3 run showed a real host reading both as *good*, so a
-///   v1 consumer was being told an unusable value was trustworthy. See
-///   `sparkplug_b::Quality::code`.
-/// - **1** — initial contract.
+/// - **2** — quality codes changed from the specification's `0`/`192`/`500` to
+///   Ignition's `QualityCode` encoding. A Tier-3 run showed Ignition reading
+///   `500` as `Good(500)` and `0` as `Good_Unspecified`, so a v1 consumer was
+///   told an unusable value was trustworthy. A deliberate deviation from the
+///   specification — see [`ignition_quality_code`] and ADR 0012.
+/// - **1** — initial contract, with the specification's quality codes.
 pub const CONTRACT_VERSION: i64 = 2;
+
+/// The quality code this bridge publishes for `quality`.
+///
+/// **A deliberate deviation from Sparkplug B**, taken with eyes open.
+///
+/// The specification admits exactly three quality codes — `0`, `192`, `500`
+/// (`tck-id-payloads-propertyset-quality-value-value`). Ignition does not
+/// classify the property by that enumeration. It reads the raw integer as its
+/// own `QualityCode`, in which the *level* lives in the top bits: `500` comes
+/// back as `Good(500)` and `0` is `Good_Unspecified`. Measured on Ignition
+/// 8.3.7 — see `quality_code_probe`, and ADR 0012.
+///
+/// So against this consumer the conformant codes are worse than useless: two of
+/// the three report an unusable value as trustworthy, which is the one failure
+/// this project exists to prevent. Between conforming and not lying, we do not
+/// lie — and we say so here rather than bending the generic crate, which stays
+/// specification-correct for everyone else.
+///
+/// `Stale` deliberately reuses `Bad_Stale`, the code Ignition itself raises
+/// when a node's DEATH marks its tags stale: transport-level and app-level
+/// staleness then present identically, which is what the two-mechanism design
+/// promises — one visible outcome, whichever mechanism noticed.
+pub const fn ignition_quality_code(quality: Quality) -> u32 {
+    /// Ignition's `Bad` quality level, carried in the top bits of the code.
+    const BAD_LEVEL: u32 = 0x8000_0000;
+    match quality {
+        // 192 is `Good` in both encodings — the only code they agree on.
+        Quality::Good => 192,
+        // `Bad_Stale`, subcode 516 → -2147483132 read as a signed 32-bit int.
+        Quality::Stale => BAD_LEVEL | 516,
+        // `Bad`, subcode 512 → -2147483136.
+        Quality::Bad => BAD_LEVEL | 512,
+    }
+}
 
 /// Metric under which [`CONTRACT_VERSION`] is published in the node BIRTH.
 pub const METRIC_CONTRACT_VERSION: &str = "Contract/Version";
@@ -308,7 +343,7 @@ fn contract_metric(timestamp_ms: u64) -> Metric {
         MetricValue::Int64(CONTRACT_VERSION),
         timestamp_ms,
     )
-    .with_quality(Quality::Good)
+    .with_quality_code(ignition_quality_code(Quality::Good))
 }
 
 /// The tag set declared for a device with no reading yet: named, unit-carrying,
@@ -320,14 +355,14 @@ fn cold_start_metrics(timestamp_ms: u64) -> Vec<Metric> {
             MetricValue::Null(DataType::Double),
             timestamp_ms,
         )
-        .with_quality(Quality::Stale)
+        .with_quality_code(ignition_quality_code(Quality::Stale))
         .with_engineering_unit(UNIT_POWER),
         Metric::new(
             METRIC_ENERGY,
             MetricValue::Null(DataType::Double),
             timestamp_ms,
         )
-        .with_quality(Quality::Stale)
+        .with_quality_code(ignition_quality_code(Quality::Stale))
         .with_engineering_unit(UNIT_ENERGY),
     ]
 }
@@ -356,10 +391,10 @@ fn metrics_for(measurement: &Measurement, published: Quality) -> Vec<Metric> {
     };
     vec![
         Metric::new(METRIC_POWER, power, timestamp)
-            .with_quality(published)
+            .with_quality_code(ignition_quality_code(published))
             .with_engineering_unit(UNIT_POWER),
         Metric::new(METRIC_ENERGY, energy, timestamp)
-            .with_quality(published)
+            .with_quality_code(ignition_quality_code(published))
             .with_engineering_unit(UNIT_ENERGY),
     ]
 }
@@ -382,6 +417,37 @@ fn millis(t: UtcMillis) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    /// The property that outlives the exact constants: neither non-good quality
+    /// may land on Ignition's *good* level, whatever its subcode. That was the
+    /// contract-v1 defect, and it was invisible from inside this tree.
+    #[test]
+    fn no_non_good_quality_can_be_mistaken_for_good_by_ignition() {
+        const BAD_LEVEL: u32 = 0x8000_0000;
+        for quality in [super::Quality::Stale, super::Quality::Bad] {
+            assert_ne!(
+                super::ignition_quality_code(quality) & BAD_LEVEL,
+                0,
+                "{quality:?} must carry Ignition's bad level in its top bits, or \
+                 the host reads it as good and shows an untrustworthy value as \
+                 trustworthy"
+            );
+        }
+        assert_eq!(
+            super::ignition_quality_code(super::Quality::Good),
+            192,
+            "192 is Good in both encodings"
+        );
+    }
+
+    /// The generic crate must stay specification-correct even though this
+    /// bridge deviates: the deviation lives here, not there.
+    #[test]
+    fn the_generic_crate_still_publishes_the_specified_codes() {
+        assert_eq!(sparkplug_b::Quality::Good.code(), 192);
+        assert_eq!(sparkplug_b::Quality::Stale.code(), 500);
+        assert_eq!(sparkplug_b::Quality::Bad.code(), 0);
+    }
+
     use super::*;
     use crate::domain::{Kw, Kwh, MeterId};
     use sparkplug_b::protobuf::{Payload, payload};
@@ -480,7 +546,7 @@ mod tests {
             let m = metric(&dbirth, name);
             assert_eq!(
                 quality_of(m),
-                Quality::Stale.code(),
+                ignition_quality_code(Quality::Stale),
                 "{name} is STALE at cold start, never GOOD-by-default"
             );
             assert_eq!(m.value, None, "{name} carries no fabricated value");
@@ -503,7 +569,7 @@ mod tests {
             Some(payload::metric::Value::LongValue(CONTRACT_VERSION as u64)),
             "a consumer can SEE the contract version, not infer it"
         );
-        assert_eq!(quality_of(m), Quality::Good.code());
+        assert_eq!(quality_of(m), ignition_quality_code(Quality::Good));
     }
 
     #[test]
@@ -526,7 +592,7 @@ mod tests {
             "the payload timestamp IS the source ValueDate"
         );
         let power = metric(&ddata, METRIC_POWER);
-        assert_eq!(quality_of(power), Quality::Good.code());
+        assert_eq!(quality_of(power), ignition_quality_code(Quality::Good));
         assert_eq!(unit_of(power), UNIT_POWER);
         assert_eq!(
             power.value,
@@ -554,7 +620,7 @@ mod tests {
         for name in [METRIC_POWER, METRIC_ENERGY] {
             assert_eq!(
                 quality_of(metric(&ddata, name)),
-                Quality::Stale.code(),
+                ignition_quality_code(Quality::Stale),
                 "{name} must carry the oracle's verdict, not the source's"
             );
         }
@@ -576,7 +642,7 @@ mod tests {
         let ddata = decode(&sink.emitted[0]);
         for name in [METRIC_POWER, METRIC_ENERGY] {
             let m = metric(&ddata, name);
-            assert_eq!(quality_of(m), Quality::Bad.code());
+            assert_eq!(quality_of(m), ignition_quality_code(Quality::Bad));
             assert_eq!(m.value, None, "{name}: no number a consumer could record");
             assert_eq!(m.is_null, Some(true));
         }
@@ -649,7 +715,7 @@ mod tests {
         );
         assert_eq!(
             quality_of(power),
-            Quality::Stale.code(),
+            ignition_quality_code(Quality::Stale),
             "...but a value that has not been re-judged is never re-asserted as Good"
         );
         assert_eq!(

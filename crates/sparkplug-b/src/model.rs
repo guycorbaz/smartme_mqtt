@@ -37,59 +37,34 @@ impl Quality {
     /// whether they may act on it.
     pub const PROPERTY_KEY: &'static str = "Quality";
 
-    /// Quality-level mask: *uncertain*, carried in the top bits of a code.
-    ///
-    /// Exposed because the level, not the subcode, is what decides whether a
-    /// consumer trusts a value — and because a caller extending this crate with
-    /// a richer quality set needs the same masks [`Self::code`] uses rather than
-    /// a second, divergent copy of them.
-    pub const UNCERTAIN: u32 = 0x4000_0000;
-
-    /// Quality-level mask: *bad*, carried in the top bits of a code.
-    ///
-    /// See [`Self::UNCERTAIN`].
-    pub const BAD: u32 = 0x8000_0000;
-
-    /// The numeric quality code, as a 32-bit pattern published under
+    /// The **specification-mandated** quality code, published under
     /// [`Self::PROPERTY_KEY`] with wire type `Int32`.
     ///
-    /// The **level lives in the top bits** and the low 16 bits are a subcode:
-    /// `0x0000_0000` good, [`Self::UNCERTAIN`], [`Self::BAD`]. So `Bad_Stale`
-    /// (subcode 516) is `0x8000_0204`, which a consumer reading the field as a
-    /// signed 32-bit integer sees as `-2147483132`.
+    /// Sparkplug B v3.0.0 admits exactly three values
+    /// (`tck-id-payloads-propertyset-quality-value-value`):
     ///
-    /// # These numbers were measured, not assumed
+    /// > The 'value' of the Property Value MUST be an int_value and be one of
+    /// > the valid quality codes of **0, 192, or 500**.
     ///
-    /// An earlier version published what it called "the OPC-style triple":
-    /// `192` good, `500` stale, `0` bad. A Tier-3 run against a real Sparkplug
-    /// host found that only the first was right, and that the other two were
-    /// wrong in the dangerous direction:
+    /// # When a host does not honour them
     ///
-    /// - `500` was displayed as **`Good(500)`** — the top bits are clear, so it
-    ///   is a *good* code with an unrecognised subcode, not a stale one. The
-    ///   published tables list 256–511 as the "uncertain" band, but those are
-    ///   subcode allocations; the raw integer decides nothing on its own.
-    /// - `0` is worse still: it is the host's own code for **good, unspecified**.
+    /// Some host implementations classify the quality property by their own
+    /// encoding rather than by this enumeration, and read `500` or `0` as
+    /// *good*. Against such a host, publishing the specified codes is
+    /// conformant and still misleading — an unusable value is displayed as
+    /// trustworthy.
     ///
-    /// Both failed towards *good*, which is precisely the silent lie a quality
-    /// field exists to prevent. A host that shows a dead reading as trustworthy
-    /// cannot be corrected by anything downstream.
-    ///
-    /// Encoding this HERE — beside the enum, in the crate that owns the wire
-    /// format — is deliberate: a mapping invented per-consumer is exactly the
-    /// drift a single definition exists to prevent.
+    /// This crate does not resolve that conflict, because it cannot: the right
+    /// answer depends on the consumer, and a generic library that silently
+    /// emitted one vendor's encoding while claiming to implement the
+    /// specification would be the worst of both. Use
+    /// [`Metric::with_quality_code`] to publish a host-specific value, at the
+    /// call site, where the deviation is visible and can be justified.
     pub const fn code(self) -> u32 {
         match self {
-            // Plain `Good`; a consumer displays it without a subcode.
             Quality::Good => 192,
-            // `Bad_Stale` (516). Deliberately the same code a host raises when a
-            // node's DEATH marks its tags stale: transport-level and app-level
-            // staleness then present identically, which is what the
-            // two-mechanism design promises — one visible outcome, whichever
-            // mechanism noticed.
-            Quality::Stale => Self::BAD | 516,
-            // `Bad` (512), the generic unusable-value code.
-            Quality::Bad => Self::BAD | 512,
+            Quality::Stale => 500,
+            Quality::Bad => 0,
         }
     }
 }
@@ -153,10 +128,14 @@ pub struct Metric {
     /// Acquisition time, milliseconds since the UNIX epoch — when the value was
     /// TRUE, not when it was sent.
     pub timestamp_ms: u64,
-    /// Quality, published as a metric property. `None` omits the property
-    /// entirely (a consumer then applies its own default) — prefer being
-    /// explicit.
-    pub quality: Option<Quality>,
+    /// The quality code published as a metric property, or `None` to omit the
+    /// property entirely (a consumer then applies its own default) — prefer
+    /// being explicit.
+    ///
+    /// Stored as the raw code rather than as a [`Quality`], because a caller
+    /// may have to publish a host-specific value the enumeration cannot name.
+    /// See [`Metric::with_quality`] and [`Metric::with_quality_code`].
+    pub quality_code: Option<u32>,
     /// Engineering unit (for example `"kW"`), published under
     /// [`Metric::ENG_UNIT_KEY`] so a consumer can auto-discover what the number
     /// means instead of hard-coding it.
@@ -173,15 +152,37 @@ impl Metric {
             name: name.into(),
             value,
             timestamp_ms,
-            quality: None,
+            quality_code: None,
             engineering_unit: None,
         }
     }
 
-    /// Attaches the quality property.
+    /// Attaches the quality property using the **specification-mandated** code
+    /// for `quality` — see [`Quality::code`].
+    ///
+    /// This is the right call unless you know your consumer does not honour
+    /// those codes.
     #[must_use]
     pub fn with_quality(mut self, quality: Quality) -> Self {
-        self.quality = Some(quality);
+        self.quality_code = Some(quality.code());
+        self
+    }
+
+    /// Attaches the quality property using a **raw, host-specific** code.
+    ///
+    /// Sparkplug B admits only `0`, `192` and `500`
+    /// (`tck-id-payloads-propertyset-quality-value-value`), so any other value
+    /// is a deliberate deviation from the specification. It exists because some
+    /// hosts classify quality by their own encoding and read the specified
+    /// codes as *good*, which turns a conformant publication into a silent lie
+    /// about the data.
+    ///
+    /// Deviating may well be the honest choice for a given deployment — but it
+    /// is a choice, and it belongs at the call site with a comment saying which
+    /// host required it, not hidden inside this crate.
+    #[must_use]
+    pub fn with_quality_code(mut self, code: u32) -> Self {
+        self.quality_code = Some(code);
         self
     }
 
@@ -198,41 +199,23 @@ impl Metric {
 mod tests {
     use super::*;
 
-    /// The exact bit patterns a real host was observed to honour. Written as
-    /// the signed values a consumer reads, because that is the form the
-    /// evidence came back in — and because a typo here reintroduces the silent
-    /// lie these codes were changed to fix.
+    /// The three codes the specification admits, and nothing else
+    /// (`tck-id-payloads-propertyset-quality-value-value`).
     #[test]
-    fn quality_codes_are_the_ones_a_host_was_measured_to_honour() {
-        assert_eq!(Quality::Good.code() as i32, 192, "Good");
-        assert_eq!(
-            Quality::Stale.code() as i32,
-            -2_147_483_132,
-            "Bad_Stale 516"
-        );
-        assert_eq!(Quality::Bad.code() as i32, -2_147_483_136, "Bad 512");
+    fn quality_codes_are_the_three_the_specification_admits() {
+        assert_eq!(Quality::Good.code(), 192);
+        assert_eq!(Quality::Stale.code(), 500);
+        assert_eq!(Quality::Bad.code(), 0);
     }
 
-    /// The regression guard that matters more than the exact values: a code
-    /// whose top bits are clear is a GOOD code, whatever its subcode. The two
-    /// non-good qualities must never land there again — that was the defect,
-    /// and it was invisible from inside this crate.
+    /// A host-specific code is expressible, and does not go through the enum —
+    /// deviating is possible, but only by saying so.
     #[test]
-    fn no_non_good_quality_can_be_mistaken_for_good() {
-        for quality in [Quality::Stale, Quality::Bad] {
-            assert_ne!(
-                quality.code() & Quality::BAD,
-                0,
-                "{quality:?} must carry the bad level in its top bits, or a \
-                 consumer reads it as good and shows an untrustworthy value as \
-                 trustworthy"
-            );
-        }
-        assert_eq!(
-            Quality::Good.code() & (Quality::BAD | Quality::UNCERTAIN),
-            0,
-            "Good must carry no level bits"
-        );
+    fn a_host_specific_code_bypasses_the_enumeration() {
+        let m = Metric::new("x", MetricValue::Double(1.0), 1).with_quality_code(0x8000_0204);
+        assert_eq!(m.quality_code, Some(0x8000_0204));
+        let spec = Metric::new("x", MetricValue::Double(1.0), 1).with_quality(Quality::Stale);
+        assert_eq!(spec.quality_code, Some(500));
     }
 
     #[test]
@@ -270,7 +253,7 @@ mod tests {
         let m = Metric::new("Energy", MetricValue::Double(42.5), 1_000)
             .with_quality(Quality::Good)
             .with_engineering_unit("kWh");
-        assert_eq!(m.quality, Some(Quality::Good));
+        assert_eq!(m.quality_code, Some(Quality::Good.code()));
         assert_eq!(m.engineering_unit.as_deref(), Some("kWh"));
         assert_eq!(m.timestamp_ms, 1_000);
     }
