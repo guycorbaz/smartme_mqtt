@@ -762,9 +762,10 @@ So that conformance is a document I can audit rather than a belief.
 
 **Acceptance Criteria:**
 
-**Given** the Sparkplug B specification and `crates/sparkplug-b/src/topic.rs`
+**Given** the vendored specification at `docs/spec/sparkplug-b-3.0.0/` (release tag v3.0.0, EPL-2.0) and `crates/sparkplug-b/src/topic.rs`
 **When** every namespace and topic-grammar clause is walked
-**Then** `docs/sparkplug-conformance.md` exists with one row per clause: clause reference, requirement level (MUST/SHOULD/MAY), our behaviour, the test that proves it, and a verdict of `conformant` / `deviation` / `gap`
+**Then** `docs/sparkplug-conformance.md` exists with one row per clause: the `tck-id-…` identifier, requirement level (MUST/SHOULD/MAY), our behaviour, the test that proves it, and a verdict of `conformant` / `deviation` / `gap`
+**And** the matrix names the specification version it was built against — a conformance claim is meaningless without one, and a version change invalidates the matrix rather than merely dating it
 **And** every `deviation` row carries a rationale and a link to the ADR or deferred-work entry that records it
 **And** every `gap` row carries an issue number.
 
