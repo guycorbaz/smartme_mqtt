@@ -71,3 +71,26 @@ development_status:
   1-14-chaos-stale-on-death-stale-on-cloud-timeout: done
   1-15-tier-3-ignition-contract-test-manual-runbook: done
   epic-1-retrospective: done
+  # Epic 4 runs BEFORE Epic 2 — decided at the Epic 1 retrospective (2026-07-26).
+  # Execution order: 0 -> 1 -> 4 -> 2 -> 3 -> 5 -> 6 -> 7 -> 8. Epic numbers are
+  # identifiers, not sequence; see the note in epics.md.
+  epic-4: in-progress
+  4-1-conformance-matrix-namespace-and-topics: done
+  4-2-conformance-matrix-payloads-metrics-datatypes: in-progress
+  4-3-conformance-matrix-lifecycle-and-host-interaction: backlog
+  4-4-primary-host-state-measure: backlog
+  4-5-primary-host-state-decide: backlog
+  4-6-ncmd-subscription-plumbing: backlog
+  4-7-node-control-rebirth-answer: backlog
+  4-8-tier-3-gate-covers-ncmd-rebirth: backlog
+  4-9-sigterm-discriminator-survives-per-connect-bdseq: backlog
+  4-10-own-the-reconnect-loop-bdseq-per-connect: backlog
+  4-11-broker-outage-traced-drop-exhaustive: backlog
+  4-12-anti-replay-at-the-down-up-instant: backlog
+  4-13-chaos-broker-recovery: backlog
+  4-14-chaos-poller-wedge: backlog
+  4-15-ac-leak-01-resource-stability: backlog
+  4-16-latency-budget: backlog
+  4-17-fix-the-will-qos: backlog
+  4-18-correct-adr-0010-wording: backlog
+  epic-4-retrospective: optional
