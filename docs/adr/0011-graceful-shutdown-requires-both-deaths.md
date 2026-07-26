@@ -64,9 +64,17 @@ Architecture item ⑧ is resolved: **both, not either.**
   are idempotent for a consumer that has already marked the node down, but this is a real,
   observable behaviour of the wire format and it is not obvious from the code. Story 1.15's
   Ignition contract test should confirm Ignition treats it benignly.
-- **The mechanism is confirmed against Mosquitto 2, not against Ignition's broker.** AR13's
-  original wording asked for confirmation against *the author's broker*; a containerised
-  Mosquitto is a close but not identical proxy. Story 1.15 closes that gap.
+- **Confirmed against the real broker (2026-07-26).** AR13 asked for confirmation against
+  *the author's broker*, and a containerised Mosquitto is a close but not identical proxy.
+  `chaos_sigterm_no_lie_against_an_external_broker` — `#[ignore]`d, with no default target
+  and no default group — was run against the author's own Mosquitto and passed unchanged.
+  What remains for Story 1.15 is the *consumer* half: whether Ignition tolerates the double
+  NDEATH, which no broker-level test can answer.
+- **That test must never run by accident.** The author has exactly one broker and it is
+  production, with Ignition live on it. Publishing a Sparkplug node onto such a broker makes
+  every subscribed host discover and persist it, leaving a phantom device to be deleted by
+  hand. Hence the ignore attribute, the absence of defaults, and the refusal to publish into
+  the default `Site` group.
 - **The distinguishing signal is a timestamp, and that is fragile in one specific way.** The will
   and the explicit death are byte-identical in shape; only the stamp separates them, and only
   because the will is serialised once, before CONNECT, and re-registered verbatim by `rumqttc` on

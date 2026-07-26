@@ -145,7 +145,55 @@ fn why_no_birth(what: &str, child: &mut Child, log: &Path) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn chaos_sigterm_no_lie() {
     let (_broker, port) = common::start_broker().await;
-    let mut seen = common::independent_subscriber(port).await;
+    run_case("127.0.0.1", port, "Site").await;
+}
+
+/// The same proof, against a broker that is not a container.
+///
+/// AR13 asked for the mechanism to be "confirmed against the author's broker",
+/// and a containerised Mosquitto is a close but not identical proxy. This is
+/// how that confirmation is taken.
+///
+/// **It is `#[ignore]`d and takes its target from the environment on purpose.**
+/// A real broker is somebody's production: publishing a Sparkplug node onto one
+/// makes every subscribed SCADA host discover it and persist it in its tag
+/// tree, where it survives the test as a phantom device someone has to delete
+/// by hand. That must never happen as a side effect of `cargo test`, so there
+/// is no default target and no default group — both must be stated:
+///
+/// ```text
+/// SMARTME_CHAOS_BROKER=host:1883 \
+/// SMARTME_CHAOS_GROUP=ChaosTest \
+///   cargo test -p smartme-bridge --test chaos_sigterm_no_lie -- --ignored --nocapture
+/// ```
+///
+/// Choose a group that is obviously disposable. It is the top level of the
+/// topic, so it is the folder the SCADA will create and the folder whoever
+/// cleans up will look for.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "publishes to a real broker; needs SMARTME_CHAOS_BROKER and SMARTME_CHAOS_GROUP"]
+async fn chaos_sigterm_no_lie_against_an_external_broker() {
+    let target = std::env::var("SMARTME_CHAOS_BROKER")
+        .expect("set SMARTME_CHAOS_BROKER=host:port — there is deliberately no default");
+    let group = std::env::var("SMARTME_CHAOS_GROUP").expect(
+        "set SMARTME_CHAOS_GROUP to a disposable group id — there is deliberately no default",
+    );
+    let (host, port) = target
+        .rsplit_once(':')
+        .expect("SMARTME_CHAOS_BROKER must be host:port");
+    let port: u16 = port.parse().expect("the port must be a number");
+
+    assert_ne!(
+        group, "Site",
+        "refusing to publish a test node into the default production group"
+    );
+    eprintln!("publishing a disposable Sparkplug node to {host}:{port} under group {group:?}");
+
+    run_case(host, port, &group).await;
+}
+
+async fn run_case(broker_host: &str, port: u16, group: &str) {
+    let mut seen = common::named_subscriber_on(broker_host, port, "independent-observer").await;
 
     let state_dir = std::env::temp_dir().join(format!("chaos_sigterm_{}", std::process::id()));
     std::fs::create_dir_all(&state_dir).expect("state dir");
@@ -176,9 +224,9 @@ async fn chaos_sigterm_no_lie() {
         .env("SMARTME_METER_ID", "garage")
         .env("SMARTME_DEVICE_ID", "a1a1a1a1-b2b2-c3c3-d4d4-000000000001")
         .env("SMARTME_SERIAL", SERIAL)
-        .env("SMARTME_GROUP_ID", "Site")
+        .env("SMARTME_GROUP_ID", group)
         .env("SMARTME_NODE_ID", NODE_ID)
-        .env("SMARTME_BROKER_HOST", "127.0.0.1")
+        .env("SMARTME_BROKER_HOST", broker_host)
         .env("SMARTME_BROKER_PORT", port.to_string())
         .env("SMARTME_STATE_DIR", state_dir.0.display().to_string())
         // reqwest honours the proxy environment by default. Inherited from a
@@ -330,7 +378,7 @@ async fn chaos_sigterm_no_lie() {
     // is handed a node that announces itself as online — one that exited
     // minutes ago. The bridge is gone and nothing else publishes here, so a
     // subscriber arriving now must hear silence.
-    let mut latecomer = common::named_subscriber(port, "late-observer").await;
+    let mut latecomer = common::named_subscriber_on(broker_host, port, "late-observer").await;
     let retained = common::wait_for(&mut latecomer, Duration::from_secs(3), |_| true).await;
     assert!(
         retained.is_none(),

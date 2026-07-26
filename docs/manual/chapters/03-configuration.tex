@@ -77,28 +77,55 @@ kind of quiet wrong answer this project avoids.
 
 \subsection{Authentication and transport security}
 
+Both are \textbf{planned and optional} --- the broker connection may be secured with TLS
+and/or authentication, or left plain, per configuration (FR43, NFR16). Neither is
+implemented in the current build.
+
 \begin{warning}
-Broker authentication is \textbf{not implemented yet}, and broker TLS is
-\textbf{currently disabled} pending an upstream dependency upgrade. \prog therefore
-expects its broker to sit on a \textbf{trusted internal network}, reachable only from
-hosts you control.
+As of this build the broker connection is \textbf{plain and unauthenticated}. \prog
+therefore expects its broker to sit on a \textbf{trusted internal network}, reachable only
+from hosts you control. Traffic to the \emph{smart-me cloud} is unaffected and remains
+TLS-only, hard-failing if TLS is unavailable --- the two paths use different TLS stacks
+and only the broker one is disabled.
 \end{warning}
 
-This is a deliberate, bounded position rather than an oversight:
+\subsubsection*{Why optional rather than mandatory}
 
-\begin{itemize}
-  \item Traffic to the \emph{smart-me cloud} is unaffected and remains TLS-only, hard
-        failing if TLS is unavailable. The two paths use different TLS stacks; only the
-        broker one is disabled.
-  \item The disabled stack pinned a transitive dependency carrying unfixed advisories that
-        could not be upgraded past its own requirement. Shipping it unused would have
-        meant carrying vulnerable code for no benefit.
-\end{itemize}
+A homelab broker is usually shared. It commonly serves devices --- older sensors,
+closed-firmware appliances --- that cannot present credentials at all, so a bridge that
+\emph{required} authentication would either force the broker into a configuration its
+other clients cannot meet, or force a second broker into existence. Enabling
+authentication is a decision about the whole broker, not about this bridge, and \prog
+follows it rather than driving it.
 
-When broker authentication does land it will be \textbf{optional}, not mandatory: a shared
-homelab broker commonly serves devices --- older sensors, closed-firmware appliances ---
-that cannot present credentials at all, and requiring them would make the broker unusable
-for its other clients.
+\subsubsection*{Reserved settings}
+
+The variable names are reserved now so that enabling authentication later is a
+configuration change rather than a migration:
+
+\begin{lstlisting}[language=bash]
+# Broker authentication -- reserved, not yet honoured by the bridge
+# SMARTME_BROKER_USER=
+# SMARTME_BROKER_PASSWORD=
+\end{lstlisting}
+
+\begin{note}
+Broker credentials will follow the same discipline as the smart-me ones: \code{.env} only,
+never logged, never in a committed file (NFR16).
+\end{note}
+
+\subsubsection*{Authentication and TLS are worth landing together}
+
+MQTT carries username and password \emph{in the clear} inside the CONNECT packet. On a
+plain connection, enabling authentication protects against an accidental or careless
+client on the same network, but not against anyone able to observe the traffic --- they
+would simply read the credentials as they go past. On a trusted LAN that is still a real
+improvement; treating it as confidentiality is not.
+
+Broker TLS is currently blocked upstream: the MQTT client's default TLS stack pinned a
+transitive dependency carrying unfixed advisories that could not be upgraded past its own
+requirement, so it was disabled rather than shipped unused. When that upgrade lands, TLS
+and authentication are best enabled in the same change.
 
 \subsection{Sparkplug identity}
 

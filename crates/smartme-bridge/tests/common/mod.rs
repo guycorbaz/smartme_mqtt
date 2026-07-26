@@ -96,7 +96,15 @@ pub async fn independent_subscriber(port: u16) -> mpsc::Receiver<Seen> {
 /// evicts the older session when a client id reconnects, so two observers
 /// sharing a name would silently unplug each other.
 pub async fn named_subscriber(port: u16, client_id: &str) -> mpsc::Receiver<Seen> {
-    let mut options = MqttOptions::new(client_id, "127.0.0.1", port);
+    named_subscriber_on("127.0.0.1", port, client_id).await
+}
+
+/// As [`named_subscriber`], but against a broker that is not on loopback.
+///
+/// Used by the manual confirmation run against a real broker; the containerised
+/// tests never need it.
+pub async fn named_subscriber_on(host: &str, port: u16, client_id: &str) -> mpsc::Receiver<Seen> {
+    let mut options = MqttOptions::new(client_id, host, port);
     options.set_keep_alive(Duration::from_secs(5));
     let (client, mut eventloop) = AsyncClient::new(options, 64);
     let (tx, rx) = mpsc::channel(256);
