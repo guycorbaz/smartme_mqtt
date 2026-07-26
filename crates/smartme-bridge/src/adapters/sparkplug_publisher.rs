@@ -27,8 +27,15 @@ use crate::core::channel::MeterUpdate;
 use crate::domain::{Measurement, Serial, UtcMillis};
 
 /// Version of the topic/metric contract with the SCADA host. Bump on ANY change
-/// to the topic grammar or to a metric name or unit.
-pub const CONTRACT_VERSION: i64 = 1;
+/// to the topic grammar, to a metric name or unit, or to the meaning of a
+/// published quality code.
+///
+/// - **2** — quality codes corrected. Version 1 published `500` for stale and
+///   `0` for bad; a Tier-3 run showed a real host reading both as *good*, so a
+///   v1 consumer was being told an unusable value was trustworthy. See
+///   `sparkplug_b::Quality::code`.
+/// - **1** — initial contract.
+pub const CONTRACT_VERSION: i64 = 2;
 
 /// Metric under which [`CONTRACT_VERSION`] is published in the node BIRTH.
 pub const METRIC_CONTRACT_VERSION: &str = "Contract/Version";

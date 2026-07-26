@@ -14,9 +14,21 @@ is listed in section~\ref{sec:contract-limits} rather than described as though i
 \section{Contract version}
 
 The node BIRTH carries a metric \code{Contract/Version} (\code{Int64}), currently
-\textbf{1}. It is incremented on any breaking change to the topic grammar, to a metric
-name, or to a metric unit. Publishing it means a consumer can \emph{see} the contract
-change instead of having to notice it from broken tags.
+\textbf{2}. It is incremented on any breaking change to the topic grammar, to a metric name
+or unit, or to the meaning of a published quality code. Publishing it means a consumer can
+\emph{see} the contract change instead of having to notice it from broken tags.
+
+\begin{center}
+\begin{tabular}{@{}c p{10.2cm}@{}}
+\toprule
+\textbf{Version} & \textbf{Change} \\
+\midrule
+2 & Quality codes corrected --- version~1 published codes a real host read as
+    \emph{good}. See section~\ref{sec:quality}. \\
+1 & Initial contract. \\
+\bottomrule
+\end{tabular}
+\end{center}
 
 \section{Topic grammar}
 
@@ -68,7 +80,7 @@ measurements, and a device only stops reporting when its node does.
 \toprule
 \normalfont\textbf{Metric} & \textbf{Type} & \textbf{Unit} & \textbf{Meaning} \\
 \midrule
-Contract/Version & Int64  & ---   & Contract version, node BIRTH only. \\
+Contract/Version & Int64  & ---   & Contract version, node BIRTH only. Currently 2. \\
 Power            & Double & kW    & Instantaneous power. \\
 Energy           & Double & kWh   & Cumulative energy counter. \\
 bdSeq            & Int64  & ---   & Session number; BIRTH and DEATH only. \\
@@ -80,22 +92,43 @@ Units are exact and never inferred: a source value in a unit the bridge does not
 recognise is rejected, not converted on a guess.
 
 \section{Quality and freshness}
+\label{sec:quality}
 
-Quality travels as a \textbf{metric property} under the key \code{Quality}, not as a
-value — a consumer that ignores properties still reads a number, and one that reads them
-learns whether to trust it. The codes are the conventional OPC-style triple:
+Quality travels as a \textbf{metric property} under the key \code{Quality}, typed
+\code{Int32}, not as a value — a consumer that ignores properties still reads a number, and
+one that reads them learns whether to trust it.
+
+The code is a 32-bit pattern in which the \textbf{level lives in the top bits} and the low
+16 bits are a subcode:
 
 \begin{center}
-\begin{tabular}{@{}l r p{7.4cm}@{}}
+\begin{tabular}{@{}l r r p{4.6cm}@{}}
 \toprule
-\textbf{Quality} & \textbf{Code} & \textbf{Meaning} \\
+\textbf{Quality} & \textbf{Subcode} & \textbf{Sent as (Int32)} & \textbf{Meaning} \\
 \midrule
-\textsc{good}  & 192 & Fresh, trusted value. \\
-\textsc{stale} & 500 & A previously valid value that is no longer current. \\
-\textsc{bad}   & 0   & Unusable: read failure or failed validation. \\
+\textsc{good}  & 192 & \code{192}         & Fresh, trusted value. \\
+\textsc{stale} & 516 & \code{-2147483132} & Previously valid, no longer current
+                                            (\emph{Bad\_Stale}). \\
+\textsc{bad}   & 512 & \code{-2147483136} & Unusable: read failure or failed
+                                            validation (\emph{Bad}). \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+\textsc{stale} deliberately uses the same code a host raises when a node's DEATH marks its
+tags stale. Transport-level and application-level staleness then look identical to the
+consumer, which is what the two-mechanism design promises: one visible outcome, whichever
+mechanism noticed.
+
+\begin{warning}
+Contract version~1 published \code{500} for \textsc{stale} and \code{0} for \textsc{bad}.
+Both were wrong, and wrong in the dangerous direction: a real host displayed \code{500} as
+\emph{Good(500)} — a good-\emph{level} code with an unrecognised subcode — and \code{0} is
+that host's own code for \emph{good, unspecified}. A version-1 bridge therefore told its
+SCADA that an unusable value was trustworthy. Found by the Tier-3 contract test and fixed
+in contract version~2. Nothing inside the bridge could have detected it, which is precisely
+why that test exists.
+\end{warning}
 
 \subsection{Timestamps are the meter's, never the bridge's}
 

@@ -37,17 +37,59 @@ impl Quality {
     /// whether they may act on it.
     pub const PROPERTY_KEY: &'static str = "Quality";
 
-    /// The conventional numeric quality code recognised by SCADA consumers
-    /// (the OPC-style triple): `192` good, `500` stale/uncertain, `0` bad.
+    /// Quality-level mask: *uncertain*, carried in the top bits of a code.
+    ///
+    /// Exposed because the level, not the subcode, is what decides whether a
+    /// consumer trusts a value — and because a caller extending this crate with
+    /// a richer quality set needs the same masks [`Self::code`] uses rather than
+    /// a second, divergent copy of them.
+    pub const UNCERTAIN: u32 = 0x4000_0000;
+
+    /// Quality-level mask: *bad*, carried in the top bits of a code.
+    ///
+    /// See [`Self::UNCERTAIN`].
+    pub const BAD: u32 = 0x8000_0000;
+
+    /// The numeric quality code, as a 32-bit pattern published under
+    /// [`Self::PROPERTY_KEY`] with wire type `Int32`.
+    ///
+    /// The **level lives in the top bits** and the low 16 bits are a subcode:
+    /// `0x0000_0000` good, [`Self::UNCERTAIN`], [`Self::BAD`]. So `Bad_Stale`
+    /// (subcode 516) is `0x8000_0204`, which a consumer reading the field as a
+    /// signed 32-bit integer sees as `-2147483132`.
+    ///
+    /// # These numbers were measured, not assumed
+    ///
+    /// An earlier version published what it called "the OPC-style triple":
+    /// `192` good, `500` stale, `0` bad. A Tier-3 run against a real Sparkplug
+    /// host found that only the first was right, and that the other two were
+    /// wrong in the dangerous direction:
+    ///
+    /// - `500` was displayed as **`Good(500)`** — the top bits are clear, so it
+    ///   is a *good* code with an unrecognised subcode, not a stale one. The
+    ///   published tables list 256–511 as the "uncertain" band, but those are
+    ///   subcode allocations; the raw integer decides nothing on its own.
+    /// - `0` is worse still: it is the host's own code for **good, unspecified**.
+    ///
+    /// Both failed towards *good*, which is precisely the silent lie a quality
+    /// field exists to prevent. A host that shows a dead reading as trustworthy
+    /// cannot be corrected by anything downstream.
     ///
     /// Encoding this HERE — beside the enum, in the crate that owns the wire
     /// format — is deliberate: a mapping invented per-consumer is exactly the
     /// drift a single definition exists to prevent.
     pub const fn code(self) -> u32 {
         match self {
+            // Plain `Good`; a consumer displays it without a subcode.
             Quality::Good => 192,
-            Quality::Stale => 500,
-            Quality::Bad => 0,
+            // `Bad_Stale` (516). Deliberately the same code a host raises when a
+            // node's DEATH marks its tags stale: transport-level and app-level
+            // staleness then present identically, which is what the
+            // two-mechanism design promises — one visible outcome, whichever
+            // mechanism noticed.
+            Quality::Stale => Self::BAD | 516,
+            // `Bad` (512), the generic unusable-value code.
+            Quality::Bad => Self::BAD | 512,
         }
     }
 }
@@ -156,11 +198,41 @@ impl Metric {
 mod tests {
     use super::*;
 
+    /// The exact bit patterns a real host was observed to honour. Written as
+    /// the signed values a consumer reads, because that is the form the
+    /// evidence came back in — and because a typo here reintroduces the silent
+    /// lie these codes were changed to fix.
     #[test]
-    fn quality_codes_are_the_conventional_triple() {
-        assert_eq!(Quality::Good.code(), 192);
-        assert_eq!(Quality::Stale.code(), 500);
-        assert_eq!(Quality::Bad.code(), 0);
+    fn quality_codes_are_the_ones_a_host_was_measured_to_honour() {
+        assert_eq!(Quality::Good.code() as i32, 192, "Good");
+        assert_eq!(
+            Quality::Stale.code() as i32,
+            -2_147_483_132,
+            "Bad_Stale 516"
+        );
+        assert_eq!(Quality::Bad.code() as i32, -2_147_483_136, "Bad 512");
+    }
+
+    /// The regression guard that matters more than the exact values: a code
+    /// whose top bits are clear is a GOOD code, whatever its subcode. The two
+    /// non-good qualities must never land there again — that was the defect,
+    /// and it was invisible from inside this crate.
+    #[test]
+    fn no_non_good_quality_can_be_mistaken_for_good() {
+        for quality in [Quality::Stale, Quality::Bad] {
+            assert_ne!(
+                quality.code() & Quality::BAD,
+                0,
+                "{quality:?} must carry the bad level in its top bits, or a \
+                 consumer reads it as good and shows an untrustworthy value as \
+                 trustworthy"
+            );
+        }
+        assert_eq!(
+            Quality::Good.code() & (Quality::BAD | Quality::UNCERTAIN),
+            0,
+            "Good must carry no level bits"
+        );
     }
 
     #[test]

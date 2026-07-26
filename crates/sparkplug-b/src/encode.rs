@@ -422,9 +422,21 @@ mod tests {
             .with_engineering_unit("kW");
         let p = live.data(1, vec![stale]);
         let props = p.metrics[0].properties.as_ref().expect("properties");
+        // Deliberately expressed through the enum rather than a literal: the
+        // exact bit pattern is pinned once, next to the enum, by the test that
+        // records what a real host was measured to honour. Repeating it here
+        // would just be a second place to get it wrong.
         assert_eq!(
             props.values[0].value,
-            Some(payload::property_value::Value::IntValue(500))
+            Some(payload::property_value::Value::IntValue(
+                Quality::Stale.code()
+            ))
+        );
+        assert_eq!(
+            props.values[0].r#type,
+            Some(crate::datatype::DataType::Int32.code()),
+            "quality must be typed Int32 on the wire, or a consumer reads the \
+             field as something else"
         );
     }
 
