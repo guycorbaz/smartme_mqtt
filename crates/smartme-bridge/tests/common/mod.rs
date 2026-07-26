@@ -87,7 +87,16 @@ pub async fn start_broker() -> (ContainerAsync<GenericImage>, u16) {
 /// Subscribes to everything under the Sparkplug namespace and streams what
 /// arrives. This client has no relationship with the bridge beyond the broker.
 pub async fn independent_subscriber(port: u16) -> mpsc::Receiver<Seen> {
-    let mut options = MqttOptions::new("independent-observer", "127.0.0.1", port);
+    named_subscriber(port, "independent-observer").await
+}
+
+/// As [`independent_subscriber`], but with an explicit client id.
+///
+/// A test that wants a SECOND observer must name it differently: a broker
+/// evicts the older session when a client id reconnects, so two observers
+/// sharing a name would silently unplug each other.
+pub async fn named_subscriber(port: u16, client_id: &str) -> mpsc::Receiver<Seen> {
+    let mut options = MqttOptions::new(client_id, "127.0.0.1", port);
     options.set_keep_alive(Duration::from_secs(5));
     let (client, mut eventloop) = AsyncClient::new(options, 64);
     let (tx, rx) = mpsc::channel(256);

@@ -1,6 +1,6 @@
 # Stories 1.11, 1.12, 1.13: the async shell (poll task, mqtt driver, supervisor)
 
-Status: 1.11 done · 1.12 done (FR20 amended, ADR 0010) · 1.13 **partially done**
+Status: 1.11 done · 1.12 done (FR20 amended, ADR 0010) · 1.13 done (2026-07-26)
 
 Issues [#13](../../issues/13) (1.11), [#14](../../issues/14) (1.12), [#15](../../issues/15) (1.13).
 Delivered together: the epic specifies the 2-task shell is "born whole".
@@ -8,7 +8,8 @@ Delivered together: the epic specifies the 2-task shell is "born whole".
 ## Honest status
 
 The adversarial review of this batch was the harshest of the sprint and it was right.
-Two ACs are **not** met and are recorded as such rather than signed off:
+Two ACs were left unmet rather than signed off; both have since been resolved — one by
+amendment, one by the test that was missing:
 
 - **FR20 "published ✓ only on broker ACK" (1.12) — RESOLVED by amendment (ADR 0010).** The
   review established that this was not merely unimplemented but *unimplementable as written*:
@@ -17,8 +18,9 @@ Two ACs are **not** met and are recorded as such rather than signed off:
   delivery — reported published only once accepted for transmission, with a per-device traced
   drop rather than silence", which is exactly what the driver implements. PRD, epics and
   architecture amended.
-- **`chaos_sigterm_no_lie` verification (1.13) — NOT MET.** The AC names a chaos test that is
-  Story 1.14's deliverable. The death path was fixed (below) but is not yet verified end to end.
+- **`chaos_sigterm_no_lie` verification (1.13) — NOW MET (2026-07-26, issue #15).** The test
+  exists and the death path is verified end to end. See below for what it proves and what it
+  still does not.
 
 ## Critical defects the review caught, and what was done
 
@@ -67,14 +69,119 @@ local container network, so the vulnerable stack was dead weight we would still 
 The smart-me API's TLS is unaffected (separate, current rustls in reqwest — NFR13 holds). Issue
 **#20** tracks re-enabling broker TLS.
 
+## Closing 1.13: `chaos_sigterm_no_lie` (2026-07-26)
+
+The AC was left unmet because the death path had been *fixed* but never *observed*. It is now
+observed from outside, on the real binary, against a real broker.
+
+**Why it needed its own test rather than an extension of `chaos_stale_on_death`.** That test
+kills the bridge outright, which proves the BROKER's mechanism: the will fires. A graceful stop
+is the case where the bridge does have a chance to speak, and must not fall back on the broker
+noticing a dropped socket. Those are different mechanisms and only one of them was covered.
+
+**The problem the test had to solve.** On the wire an explicit NDEATH and a will are
+indistinguishable — same topic, same payload shape. Timing does not separate them either: the
+driver drops the transport rather than sending DISCONNECT (deliberately, so the will survives as
+the fallback), and a dropped socket makes the broker fire the will immediately, not after the
+keep-alive. So a test that merely waits for an NDEATH passes whether or not the bridge published
+anything, which is exactly the bug the review had found.
+
+What does separate them is the **timestamp**. The will is serialised and handed to the broker
+inside CONNECT, so it carries a connect-time stamp; the explicit death is stamped when the
+shutdown is handled. A death stamped at or after the instant the SIGTERM was sent can only be
+the one the bridge published itself. The test sleeps one second between birth and signal so the
+two stamps are separated by far more than clock granularity.
+
+**Run as a real process.** Every other test drives `app::run` in-process, where no signal can
+land. This one spawns `CARGO_BIN_EXE_smartme-bridge` and sends a genuine SIGTERM, so
+`main.rs → run() → shutdown_signal()` is exercised — the only coverage that path has.
+
+**Both new assertions were falsified before being trusted**, since a test written against
+already-fixed code proves nothing by passing:
+
+- Replacing `publish(&client, publisher.will(...))` with a discard makes the will arrive instead,
+  and the test fails on the timestamp with the connect-time stamp in the message. This is the
+  precise regression the review caught, now guarded.
+- Flipping `qos_for` to `retain = true` makes a late subscriber receive a retained NBIRTH for a
+  process that has already exited, and the test fails naming the topic.
+
+Both probes were reverted; `mqtt_driver.rs` is byte-identical to before.
+
+**What it does not prove.** The AC's "no fresh DDATA survives" clause is **vacuously satisfied,
+not verified** — the honest word is unverified, and an earlier draft of this section overstated it
+as "asserted in its general form". Two independent reasons: the cloud is unroutable in every chaos
+scenario so no DDATA is ever produced, and structurally `supervisor::run` signals the death then
+aborts the poll task while the driver has already left its `select!` loop, so no path exists by
+which a reading could follow the certificate. The post-death drain is a guard against a future
+ordering regression, not evidence about today's behaviour. Proving the clause needs a
+TLS-terminating fake of the smart-me API (HTTPS is mandatory — `client.rs` rejects any non-`https`
+scheme — and webpki rejects self-signed certs). Recorded in `deferred-work.md`.
+
+## Review of the closing work (2026-07-26)
+
+Three adversarial layers ran against the diff. Two independently reproduced both falsification
+probes, confirming the test is a real oracle. They also found defects, and the test was hardened
+before being signed off:
+
+- **The discriminator spanned two clocks.** The original assertion compared the death's stamp
+  against the instant the *test* sent the SIGTERM. A backward NTP step during the run — a mode
+  this project explicitly models (`FakeClock::set_wall` documents "an NTP step, forward or
+  backward") — would let the will satisfy it, passing off the exact regression the test exists to
+  catch. Now compared against the *birth's* stamp: both come from the bridge's own clock, so a
+  step perturbs them together and only in the conservative direction. Re-falsified after the
+  change — the probe shows the will stamped 1 ms *before* the birth, against a 1 s margin the
+  other way.
+- **A buffered will could cause a false failure.** A transport blip before the signal fires the
+  will, which then sits in the observer's queue; `wait_for` would pop that one and blame the
+  production code for a certificate it did publish. The stream is now drained immediately before
+  the signal.
+- **The `bdSeq` pairing was a tautology.** A fresh state dir made `load_bd_seq` fall back to the
+  sentinel, so birth and death both carried the same low constant every run and a hard-coded
+  number would have passed. The test now seeds the persisted number (41 → session 42) and asserts
+  the bridge adopted it. *This flaw is inherited from `chaos_stale_on_death`, where it still
+  stands.*
+- **The post-death drain ran after the exit was confirmed**, where a dead process cannot publish
+  and the check could not fail for any reason. Moved before the exit wait, and `try_recv().ok()`
+  replaced with an explicit match so a closed channel is not silently read as silence.
+- **Startup failures were undiagnosable.** Both streams went to `/dev/null`, so a bridge that
+  refused its config produced a 30 s hang and a message blaming the subscriber. The log is now
+  captured and its tail included in the panic, alongside the child's actual exit status.
+- **Proxy variables were inherited**, which would route the "unroutable" request to a host that
+  answers — and a proxy named by hostname resolves on the blocking pool, which `poll.abort()`
+  cannot cancel, stalling the very shutdown being measured. Now removed from the child's env.
+- **The state dir leaked on every failing path** while the child had a `Drop` guard. It has one now.
+
+**Open question for Guy, not resolved here.** `epics.md:696` states the AC as a disjunction —
+"either an explicit NDEATH is published before exit, **or** the connection is dropped so the LWT
+fires". This test enforces only the first branch. Asserting the stronger property satisfies the
+AC, and the reasoning is sound (a graceful stop must not lean on the fallback), but the epic text
+still permits an implementation the suite would now reject. When FR20 was re-scoped the team
+amended PRD, epics and architecture and raised an issue; the same treatment is owed here.
+
 ## Remaining known gaps (deferred)
 
 `poll_publish::run` (the loop itself) is untested — only `step_once` is; bdSeq is persisted once
 at boot rather than per session; a corrupt bdSeq file restarts at 1 rather than refusing;
 reconnect backoff is fixed 1 s with no jitter; no NCMD subscription. See deferred-work.md.
 
+## File List
+
+- `crates/smartme-bridge/tests/chaos_sigterm_no_lie.rs` (new)
+- `crates/smartme-bridge/tests/common/mod.rs` (modified: `named_subscriber` extracted so a
+  second observer can use a distinct client id — a broker evicts the older session when a
+  client id reconnects, so two observers sharing a name would silently unplug each other)
+
 ## Change Log
 
 - 2026-07-25: Implemented; combined review found 26 findings incl. 4 critical; the critical and
   high-severity correctness defects are fixed, two ACs are recorded as unmet with issues #19/#20
   raised. 144 workspace tests green; clippy, fmt and cargo-deny green.
+- 2026-07-26: Closed 1.13's last AC — `chaos_sigterm_no_lie` added (issue #15). No production
+  code changed. 147 workspace tests green (was 146); fmt and clippy `-D warnings` green;
+  cargo-deny unaffected (no manifest change).
+- 2026-07-26: Adversarial review of the closing work; seven defects fixed in the test itself
+  (cross-clock discriminator, buffered-will false failure, tautological `bdSeq` pairing, a drain
+  that ran where it could not fail, undiagnosable startup failures, inherited proxy env, leaking
+  state dir). Documentation corrected: the DDATA clause is recorded as vacuously satisfied rather
+  than "asserted". Four new items in `deferred-work.md`, and one spec amendment left for Guy.
+  Re-falsified after the changes; 147 tests, fmt and clippy still green.

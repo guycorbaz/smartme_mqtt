@@ -86,3 +86,33 @@ Items deferred from reviews; each carries its origin and where it should be pick
   meter id and the qualities.
 - `arch_purity`'s `in_test_module` latch never resets: sound today (every `#[cfg(test)]` is the
   final item in its file) but silently blind if anyone adds a mid-file test helper.
+
+## Deferred from: closing 1.13's `chaos_sigterm_no_lie` (2026-07-26)
+
+- No chaos test cuts off a live stream of GOOD readings. Every chaos scenario points the bridge
+  at an unroutable smart-me API, so the poll task never obtains a reading and no DDATA is ever
+  produced — the "no fresh DDATA survives the death" clause is proven only in its general form
+  (nothing at all reaches a subscriber after the certificate). Proving the narrow claim needs a
+  TLS-terminating fake of the smart-me API, because `SmartMeClient` mandates HTTPS and the
+  webpki roots reject a self-signed cert. Worth building once: it would also unlock testing the
+  Good → Stale transition end to end, and rebirth-with-real-values.
+- `chaos_sigterm_no_lie` shells out to `kill(1)` to send the signal, so it needs `kill` on PATH.
+  A `libc` dev-dependency would be more robust; it was avoided because it is a dependency
+  addition the story did not authorise, and `kill` is present on every target platform.
+- **`chaos_stale_on_death` has the tautological `bdSeq` pairing that `chaos_sigterm_no_lie` was
+  fixed for**: its state dir is created fresh, so `load_bd_seq` returns the sentinel and both
+  sides of `death.bd_seq() == birth_bd_seq` are the same low constant on every run. Seed the
+  persisted number there too.
+- `mqtt_driver.rs`'s death-flush is `timeout(death_flush, sleep(death_flush))` — a tautology whose
+  `flushed.is_err()` branch is a coin flip, so the "death flush timed out; falling back to the
+  will" warning is meaningless and untested. Nothing verifies the certificate actually reached the
+  wire before `pump.abort()`; on a loaded runner (jobs capped at 2, plus a container broker) the
+  pump may not drain in time, which surfaces as a `chaos_sigterm_no_lie` failure indistinguishable
+  from the real regression.
+- The suite now treats a will-only graceful death as a hard failure, while `epics.md:696` still
+  states the AC as a disjunction that permits it. Spec and gate disagree — the epic text needs
+  amending (see the Story 1.13 notes).
+- `shutdown_signal()` registers its SIGTERM handler only when first polled, at `supervisor.rs:129`.
+  Everything before that — runtime build, client construction, both spawns — runs under SIGTERM's
+  default disposition, i.e. immediate termination with no explicit death. A container runtime that
+  stops the bridge during startup is therefore uncovered, and no test can reach that window.
