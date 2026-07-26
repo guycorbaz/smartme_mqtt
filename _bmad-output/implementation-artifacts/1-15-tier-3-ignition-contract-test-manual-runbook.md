@@ -81,14 +81,21 @@ first contact.
 
 ## Verified after the fix
 
-Re-run against Ignition with contract v2: all five steps pass, including step 4 (both tags go
-non-good while the node stays online) and step 5 (the double NDEATH of ADR 0011 is a no-op for
-Ignition, not a fault).
+**Ignition 8.3.7, contract v2, 2026-07-26: all five steps pass** — including step 4 (both tags
+go non-good while the node stays online) and step 5 (the double NDEATH of ADR 0011 is a no-op
+for Ignition, not a fault). Recorded in the runbook's run table alongside the v1 failure.
+
+Worth noting for anyone re-reading the diagnosis: Cirrus Link's published documentation for the
+MQTT modules is written against Ignition 8.1, while the host here is 8.3.7. That mismatch did
+not matter, because the quality codes were established by *measuring* what this host honoured
+rather than by reading those tables — which is fortunate, since the tables are what misled the
+original implementation.
 
 ## Residual
 
-- **The Ignition version was not recorded.** The runbook asks for it, because a pass is only
-  meaningful against a stated version. Fill it in before the Epic 8 release-gate re-run.
+- **The MQTT Engine module version was not recorded**, only the Ignition platform version. The
+  module is what decodes Sparkplug, so it governs conformance more directly. Capture it at the
+  Epic 8 release-gate re-run.
 - Test groups left in the Ignition tag tree need deleting: `ChaosTest`, `ContractTest`,
   `ContractTest2`, `QualityProbe`, `ContractV2` — the cost of measuring against the only
   broker available, which is production.

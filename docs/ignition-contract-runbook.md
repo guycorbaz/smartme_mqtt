@@ -113,6 +113,22 @@ Check the Ignition logs, not just the tag values.
 
 ---
 
+## Record of runs
+
+| Date | Ignition | Contract | Result |
+| --- | --- | --- | --- |
+| 2026-07-26 | 8.3.7 | v2 | **Pass**, all five steps |
+| 2026-07-26 | 8.3.7 | v1 | **Fail at step 4** — quality `STALE` displayed as `Good(500)`; see [#22](https://github.com/guycorbaz/smartme_mqtt/issues/22) |
+
+A pass is only meaningful against a stated version, so add a row rather than editing one.
+
+> The MQTT Engine **module** version is not recorded above and should be, next time: it is the
+> component that decodes Sparkplug, so it governs conformance more directly than the Ignition
+> platform version does. Note also that Cirrus Link's published documentation for these modules
+> is written against Ignition 8.1; the quality-code behaviour in this project was established by
+> measurement on 8.3.7, not by reading those tables — which is just as well, since the tables
+> are what misled the original implementation.
+
 ## Interpreting the result
 
 **Pass** — every box ticked. Record the Ignition version alongside the result.
