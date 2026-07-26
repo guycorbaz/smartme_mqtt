@@ -59,7 +59,63 @@ if TLS is unavailable.
 \end{warning}
 
 \section{MQTT broker connection}
-\stub{external broker host/port, optional TLS/auth, broker credentials in \code{.env}.}
+\label{sec:broker-config}
+
+\prog connects to an \emph{external} broker; it does not embed one. Host and port are
+deployment-specific, so they belong in \code{.env} alongside the credentials and never in
+a committed file:
+
+\begin{lstlisting}[language=bash]
+# MQTT broker -- LOCAL ONLY, never commit
+SMARTME_BROKER_HOST=mqtt.example.lan   # host or IP of your broker
+SMARTME_BROKER_PORT=1883               # optional; defaults to 1883
+\end{lstlisting}
+
+A port that is not a number makes the bridge refuse to start. It does not fall back to
+\code{1883} silently --- connecting to a different broker than intended is precisely the
+kind of quiet wrong answer this project avoids.
+
+\subsection{Authentication and transport security}
+
+\begin{warning}
+Broker authentication is \textbf{not implemented yet}, and broker TLS is
+\textbf{currently disabled} pending an upstream dependency upgrade. \prog therefore
+expects its broker to sit on a \textbf{trusted internal network}, reachable only from
+hosts you control.
+\end{warning}
+
+This is a deliberate, bounded position rather than an oversight:
+
+\begin{itemize}
+  \item Traffic to the \emph{smart-me cloud} is unaffected and remains TLS-only, hard
+        failing if TLS is unavailable. The two paths use different TLS stacks; only the
+        broker one is disabled.
+  \item The disabled stack pinned a transitive dependency carrying unfixed advisories that
+        could not be upgraded past its own requirement. Shipping it unused would have
+        meant carrying vulnerable code for no benefit.
+\end{itemize}
+
+When broker authentication does land it will be \textbf{optional}, not mandatory: a shared
+homelab broker commonly serves devices --- older sensors, closed-firmware appliances ---
+that cannot present credentials at all, and requiring them would make the broker unusable
+for its other clients.
+
+\subsection{Sparkplug identity}
+
+The group and edge-node identifiers default to \code{Site} and \code{Bridge} and can be
+overridden:
+
+\begin{lstlisting}[language=bash]
+SMARTME_GROUP_ID=Site
+SMARTME_NODE_ID=Bridge
+\end{lstlisting}
+
+\begin{warning}
+These form the topic grammar, which is a \emph{versioned contract} (chapter~\ref{ch:contract}).
+Changing them after a SCADA has begun historising the tags breaks the continuity of its
+stored curves --- the history stays under the old topic and the new one starts empty.
+Choose them before the first production run, not after.
+\end{warning}
 
 \section{Meter-to-topic mapping}
 \stub{default scheme, editing, first-run mapping confirmation.}
