@@ -790,6 +790,15 @@ So that the hand-rolled protobuf is trustworthy for reasons beyond "Ignition acc
 **When** the matrix records the `Quality` property row
 **Then** it states explicitly that the *values* are host-defined and were established by measurement (`quality_code_probe`), not by reading a table — the failure mode that caused contract v1.
 
+**Given** the 109 `tck-id-payloads-*` clauses of chapter 6 — the whole set, verified to live in that chapter and nowhere else in the vendored specification
+**When** the pass ends
+**Then** every one of them is accounted for by a row or by a collective block that **names its member ids**, and the arithmetic `conformant + deviation + gap + n/a = 109` is stated in the matrix
+**And** a clause satisfied by construction but exercised by no named test is recorded as a `gap`, not as a `conformant`
+**And** a `gap` carries an owning story or epic where one exists, and a new issue where none does
+**And** the Status table row for chapter 6 is updated.
+
+*Added 2026-07-27 while contexting the story. Story 4.1 already carries the "no test named → `gap`" rule and closed with a chapter tally, but 4.2 inherited neither, so nothing obliged this pass to report how much of the chapter it had covered — an audit could have declared itself finished after twenty clauses of a hundred and nine. No ADR: this adds a completeness obligation, it reverses no position. The 109 is a measured count, not an estimate; the enumeration command is in the story file.*
+
 ### Story 4.3: Conformance matrix — session lifecycle and host interaction
 
 As the maintainer,

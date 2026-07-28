@@ -37,7 +37,7 @@
 #   Ignition contract test (human action required — stays backlog until Guy runs it).
 
 generated: 2026-07-25
-last_updated: 2026-07-26
+last_updated: 2026-07-28
 project: smartme_mqtt
 project_key: NOKEY
 tracking_system: file-system
@@ -76,7 +76,30 @@ development_status:
   # identifiers, not sequence; see the note in epics.md.
   epic-4: in-progress
   4-1-conformance-matrix-namespace-and-topics: done
-  4-2-conformance-matrix-payloads-metrics-datatypes: in-progress
+  # 4.2 was worked before it had a story file: the chapter-6 quality rows landed
+  # with the quality-code fix (d28bb02), which is why it read 'in-progress' with
+  # nothing in the stories folder. The story file now exists and 101 of the 109
+  # chapter-6 clauses remain, so the honest status is 'ready-for-dev', not a
+  # forward step. Recorded rather than quietly overwritten. (2026-07-27)
+  #
+  # 2026-07-28: the remaining 101 were in fact written later on 2026-07-27, in the
+  # working tree, by a session that never checked a box or moved this line — which
+  # is why the story file (4-2-conformance-matrix-payloads-metrics-datatypes.md)
+  # said 'ready-for-dev' while this line said 'in-progress'.
+  # The 2026-07-28 run was therefore a verification pass, not a drafting one: all
+  # 109 clauses confirmed present by set difference, 34 cited tests and 6 issues
+  # confirmed to exist, six mutations run against the code. One over-claim in the
+  # tally corrected. Now genuinely ready for review.
+  #
+  # 2026-07-28, code review (3 adversarial layers, 22 findings applied): the audit
+  # held on coverage and citations — 0 clauses missing, 0 invented, 34/34 tests and
+  # 6/6 issues real, all spec citations verbatim — but four `conformant` rows named
+  # evidence weaker than their clause, one of them a test asserting production's own
+  # expression against itself. Chapter-6 tally 34·5·11·59 -> 30·5·15·59. Chapter 4
+  # recounted (17·0·8·21 was wrong; it is 14·0·6·21) and demoted from `done` to
+  # `audited, not complete` — 27 of its 70 clauses are recorded nowhere, deferred.
+  # ADR 0013 (payload timestamp) and ADR 0014 (schema as evidence) written.
+  4-2-conformance-matrix-payloads-metrics-datatypes: done
   4-3-conformance-matrix-lifecycle-and-host-interaction: backlog
   4-4-primary-host-state-measure: backlog
   4-5-primary-host-state-decide: backlog

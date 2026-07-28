@@ -116,3 +116,21 @@ Items deferred from reviews; each carries its origin and where it should be pick
   Everything before that — runtime build, client construction, both spawns — runs under SIGTERM's
   default disposition, i.e. immediate termination with no explicit death. A container runtime that
   stops the bridge during startup is therefore uncovered, and no test can reach that window.
+
+## Deferred from: code review of 4-2-conformance-matrix-payloads-metrics-datatypes (2026-07-28)
+
+- **Chapter 4 of `docs/sparkplug-conformance.md` is marked `done` but fails the completeness
+  standard Story 4.2 invents.** Applying 4.2's own two mechanical checks to
+  `docs/spec/sparkplug-b-3.0.0/chapters/Sparkplug_4_Topics.adoc`: it holds **70** `tck-id`s, of
+  which **27 have no row and appear in no collective block** — including `topics-nbirth-metrics`,
+  `-nbirth-seq-num`, `-nbirth-timestamp`, `topics-ndeath-payload`, `-ndeath-seq`,
+  `topics-ddata-seq-num`, and three `host-topic-phid-death-payload-timestamp-*` ids the STATE block
+  omits. The stated tally "17 conformant · 0 deviations · 8 gaps · 21 n/a" (46) does not match the
+  rows, which count **14 · 0 · 8 · 19** (41) — over-stated by 3 conformant and 2 n/a.
+  Most pointedly, **`tck-id-topics-nbirth-bdseq-increment` is unrecorded**: that is chapter 4's own
+  id for the per-CONNECT `bdSeq` increment, i.e. the exact Story-4.10 deviation the chapter-6 pass
+  presents as a discovery. Pre-existing to Story 4.1 and not introduced by 4.2 — but 4.2 reaffirms
+  `chapter 4 | 4.1 | **done**` in the Status table and adds an `epics.md` acceptance criterion
+  ("every clause accounted for … the arithmetic … is stated") that chapter 4 does not meet.
+  Decide whether Story 4.1 reopens or a new story owns the chapter-4 completion; either way it
+  needs a GitHub issue per CLAUDE.md.
