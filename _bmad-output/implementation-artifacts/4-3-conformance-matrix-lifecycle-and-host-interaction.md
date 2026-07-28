@@ -1,6 +1,6 @@
 # Story 4.3: Conformance matrix — session lifecycle and host interaction
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -39,8 +39,8 @@ so that the gaps we suspect are counted and the ones we do not suspect are found
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — enumerate mechanically, and confirm the remainder is exactly 124** (AC: 3)
-  - [ ] Run this and keep the output as the worklist. Do not hand-read the chapters; the count is the contract.
+- [x] **Task 1 — enumerate mechanically, and confirm the remainder is exactly 124** (AC: 3)
+  - [x] Run this and keep the output as the worklist. Do not hand-read the chapters; the count is the contract.
     ```bash
     for f in 1_Introduction 2_Principles 3_Components 5_Operational_Behavior 10_Conformance; do
       grep -oE 'tck-id-[A-Za-z0-9-]+' \
@@ -48,8 +48,8 @@ so that the gaps we suspect are counted and the ones we do not suspect are found
     done | sort -u
     ```
     Expected: **124 ids.**
-  - [ ] **The chapter partition was verified, not assumed, and it is clean.** Per-chapter distinct counts are 8 · 4 · 1 · 70 · 99 · 109 · 12 (chapters 1, 2, 3, 4, 5, 6, 10) and they sum to **303**, which equals `grep -rhoE 'tck-id-[A-Za-z0-9-]+' docs/spec/sparkplug-b-3.0.0/ | sed 's/-$//' | sort -u | wc -l`. Because the sum equals the total, **no id appears in two chapters** — the same property 4.2 checked for chapter 6, established here for the whole tree. Chapters 7, 8, 9 and both appendices carry **zero** ids. Re-run both if you doubt the worklist.
-  - [ ] **Clause budget — the 124 are allocated with no overlap and no remainder.** Check your worklist against it before starting; if it does not reconcile, the enumeration is wrong, not the budget.
+  - [x] **The chapter partition was verified, not assumed, and it is clean.** Per-chapter distinct counts are 8 · 4 · 1 · 70 · 99 · 109 · 12 (chapters 1, 2, 3, 4, 5, 6, 10) and they sum to **303**, which equals `grep -rhoE 'tck-id-[A-Za-z0-9-]+' docs/spec/sparkplug-b-3.0.0/ | sed 's/-$//' | sort -u | wc -l`. Because the sum equals the total, **no id appears in two chapters** — the same property 4.2 checked for chapter 6, established here for the whole tree. Chapters 7, 8, 9 and both appendices carry **zero** ids. Re-run both if you doubt the worklist.
+  - [x] **Clause budget — the 124 are allocated with no overlap and no remainder.** Check your worklist against it before starting; if it does not reconcile, the enumeration is wrong, not the budget.
 
     | Task | Clauses | Families |
     | --- | ---: | --- |
@@ -62,58 +62,58 @@ so that the gaps we suspect are counted and the ones we do not suspect are found
     | 8 — conformance profiles | 12 | `conformance-*` 12 |
     | **Total** | **124** | + 70 (ch. 4) + 109 (ch. 6) = **303** |
 
-- [ ] **Task 2 — edge-node session lifecycle: births, deaths, reconnect, `seq`, `bdSeq`** (AC: 1)
-  - [ ] `operational-behavior-edge-*` (12) and `message-flow-edge-node-*` (19), against `crates/sparkplug-b/src/encode.rs`, `seq.rs`, and `crates/smartme-bridge/src/app/mqtt_driver.rs`.
-  - [ ] **`tck-id-message-flow-edge-node-ncmd-subscribe` (`Sparkplug_5_Operational_Behavior.adoc:158`) is this story's most important single row.** The 4.2 code review moved the publish-side NCMD/DCMD clauses to `n/a` in *both* chapters 4 and 6, precisely because they bind a Host Application publisher. **This is the clause that carries the real "we do not subscribe" gap**, and until this pass files it, that obligation is recorded nowhere as a first-class row. `gap (unimplemented)`, owner **Story 4.6**. Its DCMD twin is `-device-dcmd-subscribe` (`:403`) — note it requires **QoS 1** on the subscription, which Story 4.6 must honour.
-  - [ ] Cross-reference rather than re-decide: chapter 6's `payloads-nbirth-*`, `-ndeath-*` and `payloads-sequence-num-*` rows already rule on `seq`/`bdSeq` content. This pass rules on the **flow** — when a birth must be sent, what a reconnect owes. Where a chapter-5 clause restates a chapter-6 one, both get a row (the matrix is keyed by `tck-id`) and the later one cross-references the proof.
-  - [ ] **`bdSeq` per CONNECT is already a known deviation with an owner** — chapter 6 records it at `payloads-nbirth-bdseq-repeat` (Story 4.10): the will is serialised into `MqttOptions` once and `rumqttc` rebuilds every reconnect's CONNECT from that snapshot (`mqtt_driver.rs:29-30, 156-163`), so the number never increments. Any chapter-5 clause demanding a per-CONNECT increment is the *same* defect; point it at Story 4.10, do not open a second issue.
-  - [ ] **Chapter 4 has an unrecorded id for this exact requirement**: `tck-id-topics-nbirth-bdseq-increment`. It is one of the **29** chapter-4 clauses recorded nowhere, and they now belong to **Story 4.19** — so leave it alone. Cross-reference it if useful; do not absorb it.
+- [x] **Task 2 — edge-node session lifecycle: births, deaths, reconnect, `seq`, `bdSeq`** (AC: 1)
+  - [x] `operational-behavior-edge-*` (12) and `message-flow-edge-node-*` (19), against `crates/sparkplug-b/src/encode.rs`, `seq.rs`, and `crates/smartme-bridge/src/app/mqtt_driver.rs`.
+  - [x] **`tck-id-message-flow-edge-node-ncmd-subscribe` (`Sparkplug_5_Operational_Behavior.adoc:158`) is this story's most important single row.** The 4.2 code review moved the publish-side NCMD/DCMD clauses to `n/a` in *both* chapters 4 and 6, precisely because they bind a Host Application publisher. **This is the clause that carries the real "we do not subscribe" gap**, and until this pass files it, that obligation is recorded nowhere as a first-class row. `gap (unimplemented)`, owner **Story 4.6**. Its DCMD twin is `-device-dcmd-subscribe` (`:403`) — note it requires **QoS 1** on the subscription, which Story 4.6 must honour.
+  - [x] Cross-reference rather than re-decide: chapter 6's `payloads-nbirth-*`, `-ndeath-*` and `payloads-sequence-num-*` rows already rule on `seq`/`bdSeq` content. This pass rules on the **flow** — when a birth must be sent, what a reconnect owes. Where a chapter-5 clause restates a chapter-6 one, both get a row (the matrix is keyed by `tck-id`) and the later one cross-references the proof.
+  - [x] **`bdSeq` per CONNECT is already a known deviation with an owner** — chapter 6 records it at `payloads-nbirth-bdseq-repeat` (Story 4.10): the will is serialised into `MqttOptions` once and `rumqttc` rebuilds every reconnect's CONNECT from that snapshot (`mqtt_driver.rs:29-30, 156-163`), so the number never increments. Any chapter-5 clause demanding a per-CONNECT increment is the *same* defect; point it at Story 4.10, do not open a second issue.
+  - [x] **Chapter 4 has an unrecorded id for this exact requirement**: `tck-id-topics-nbirth-bdseq-increment`. It is one of the **29** chapter-4 clauses recorded nowhere, and they now belong to **Story 4.19** — so leave it alone. Cross-reference it if useful; do not absorb it.
 
-- [ ] **Task 3 — data behaviour, and the RBE clause the bridge does not satisfy** (AC: 1, 2)
-  - [ ] `operational-behavior-data-*` (24) against `crates/smartme-bridge/src/app/poll_publish.rs` and `core/state_machine.rs`.
-  - [ ] **See "A defect found while drafting" below — `tck-id-principles-rbe-recommended` is filed under Task 7 by id, but this task owns the behaviour it judges.** Rule on it once, in one place, and cross-reference from the other.
+- [x] **Task 3 — data behaviour, and the RBE clause the bridge does not satisfy** (AC: 1, 2)
+  - [x] `operational-behavior-data-*` (24) against `crates/smartme-bridge/src/app/poll_publish.rs` and `core/state_machine.rs`.
+  - [x] **See "A defect found while drafting" below — `tck-id-principles-rbe-recommended` is filed under Task 7 by id, but this task owns the behaviour it judges.** Rule on it once, in one place, and cross-reference from the other.
 
-- [ ] **Task 4 — device lifecycle** (AC: 1)
-  - [ ] `operational-behavior-device-*` (1), `message-flow-device-birth-*` (7), `message-flow-device-dcmd-*` (1).
-  - [ ] DDEATH is `gap (unimplemented)` owned by **Epic 3**, consistent with chapters 4 and 6. Record precisely what chapter 6 recorded: the **crate side is conformant and tested** (`LiveSession::device_death`, `encode.rs:155-163`, asserted by `device_messages_share_the_edge_node_numbering` and `a_device_death_carries_no_bdseq`); the gap is entirely in the bridge, which never calls it. Epic 3's work is a caller, not an encoder.
+- [x] **Task 4 — device lifecycle** (AC: 1)
+  - [x] `operational-behavior-device-*` (1), `message-flow-device-birth-*` (7), `message-flow-device-dcmd-*` (1).
+  - [x] DDEATH is `gap (unimplemented)` owned by **Epic 3**, consistent with chapters 4 and 6. Record precisely what chapter 6 recorded: the **crate side is conformant and tested** (`LiveSession::device_death`, `encode.rs:155-163`, asserted by `device_messages_share_the_edge_node_numbering` and `a_device_death_carries_no_bdseq`); the gap is entirely in the bridge, which never calls it. Epic 3's work is a caller, not an encoder.
 
-- [ ] **Task 5 — Host Application and primary host: the biggest `n/a` block, and the one place it must not be reflexive** (AC: 1)
-  - [ ] `operational-behavior-host-*` (22), `-primary-*` (4), `message-flow-phid-sparkplug-*` (6), `-hid-sparkplug-*` (1), `components-ph-state` (1) = **34**.
-  - [ ] Most of these bind a Host Application and are `n/a` for the same reason chapter 4's `host-topic-phid-*` and chapter 6's `payloads-state-*` are. **List them collectively, by id, once.**
-  - [ ] **But `operational-behavior-primary-*` (4) and any clause that binds an *Edge Node's reaction* to a primary host are NOT `n/a`.** They are the substance of Stories 4.4–4.5 and must be `gap` rows pointing there. This is the distinction the whole STATE blind spot turns on: *what a Host publishes* is not our clause; *what an Edge Node must do when the Host goes offline* is. Read each of the 34 for which side it binds — do not classify by prefix.
-  - [ ] `tck-id-intro-sparkplug-host-state` (chapter 1, filed under Task 6 by id) is the same subject; cross-reference rather than deciding it twice.
+- [x] **Task 5 — Host Application and primary host: the biggest `n/a` block, and the one place it must not be reflexive** (AC: 1)
+  - [x] `operational-behavior-host-*` (22), `-primary-*` (4), `message-flow-phid-sparkplug-*` (6), `-hid-sparkplug-*` (1), `components-ph-state` (1) = **34**.
+  - [x] Most of these bind a Host Application and are `n/a` for the same reason chapter 4's `host-topic-phid-*` and chapter 6's `payloads-state-*` are. **List them collectively, by id, once.**
+  - [x] **But `operational-behavior-primary-*` (4) and any clause that binds an *Edge Node's reaction* to a primary host are NOT `n/a`.** They are the substance of Stories 4.4–4.5 and must be `gap` rows pointing there. This is the distinction the whole STATE blind spot turns on: *what a Host publishes* is not our clause; *what an Edge Node must do when the Host goes offline* is. Read each of the 34 for which side it binds — do not classify by prefix.
+  - [x] `tck-id-intro-sparkplug-host-state` (chapter 1, filed under Task 6 by id) is the same subject; cross-reference rather than deciding it twice.
 
-- [ ] **Task 6 — identifiers and case sensitivity** (AC: 1)
-  - [ ] `intro-*` (8) and `case-sensitivity-*` (2), against `crates/sparkplug-b/src/topic.rs::check_identifier` and the `EdgeNode`/`device_topic` constructors.
-  - [ ] Chapter 4 already rules on `topic-structure-namespace-valid-*` and the two uniqueness clauses. The `intro-*` ids are the **character and string** rules underneath them. Expect several to be discharged by the same `wildcards_and_separators_are_refused_in_every_element` test — but check the character sets **clause by clause**: the chapter-1 rules and chapter 4's `+`/`/`/`#` rejection are not obviously the same set, and assuming they are is failure mode 4.
-  - [ ] `tck-id-intro-edge-node-id-uniqueness` is very likely the same requirement as `topic-structure-namespace-unique-edge-node-descriptor` — already `gap (unimplemented)` under **[#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)**. Point at #27; do not open a second issue for one requirement stated twice. (Chapter 6's `payloads-nbirth-edge-node-descriptor` is the third statement of it.)
-  - [ ] `case-sensitivity-metric-names` bears on the fixed names `Power` / `Energy` / `Contract/Version` (`sparkplug_publisher.rs:76-84`); `-sparkplug-ids` on group/node/device ids.
+- [x] **Task 6 — identifiers and case sensitivity** (AC: 1)
+  - [x] `intro-*` (8) and `case-sensitivity-*` (2), against `crates/sparkplug-b/src/topic.rs::check_identifier` and the `EdgeNode`/`device_topic` constructors.
+  - [x] Chapter 4 already rules on `topic-structure-namespace-valid-*` and the two uniqueness clauses. The `intro-*` ids are the **character and string** rules underneath them. Expect several to be discharged by the same `wildcards_and_separators_are_refused_in_every_element` test — but check the character sets **clause by clause**: the chapter-1 rules and chapter 4's `+`/`/`/`#` rejection are not obviously the same set, and assuming they are is failure mode 4.
+  - [x] `tck-id-intro-edge-node-id-uniqueness` is very likely the same requirement as `topic-structure-namespace-unique-edge-node-descriptor` — already `gap (unimplemented)` under **[#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)**. Point at #27; do not open a second issue for one requirement stated twice. (Chapter 6's `payloads-nbirth-edge-node-descriptor` is the third statement of it.)
+  - [x] `case-sensitivity-metric-names` bears on the fixed names `Power` / `Energy` / `Contract/Version` (`sparkplug_publisher.rs:76-84`); `-sparkplug-ids` on group/node/device ids.
 
-- [ ] **Task 7 — principles: four clauses, and two of them bite** (AC: 1, 2)
-  - [ ] All four are quoted in full under "Two defects found while drafting" and "The clean-session clause" below. Rule on them against those readings, not from memory.
-  - [ ] `tck-id-principles-birth-certificates-order` — *"Birth Certificates MUST be the first MQTT messages published by any Edge Node"* (`:97-99`). `publish()` refuses before the birth (`Published::DroppedBeforeBirth`), asserted by `a_drop_before_the_birth_is_reported_not_silent` and observed on a real broker by `chaos_sigterm_no_lie`. Likely `conformant` — but ask what the named test would do if the guard were removed.
-  - [ ] `tck-id-principles-persistence-clean-session-311` — see below; expect `gap (unproven)`.
-  - [ ] `tck-id-principles-persistence-clean-session-50` — `n/a`, the bridge speaks MQTT 3.1.1. The evidence is already established and re-checkable: `rumqttc = "0.25"` (`Cargo.toml:42`) and the driver imports `rumqttc::{AsyncClient, …}`, **not** `rumqttc::v5::*` (`mqtt_driver.rs:43,156`).
-  - [ ] `tck-id-principles-rbe-recommended` — see below; a `deviation` if we keep the behaviour, a `gap` if we do not.
+- [x] **Task 7 — principles: four clauses, and two of them bite** (AC: 1, 2)
+  - [x] All four are quoted in full under "Two defects found while drafting" and "The clean-session clause" below. Rule on them against those readings, not from memory.
+  - [x] `tck-id-principles-birth-certificates-order` — *"Birth Certificates MUST be the first MQTT messages published by any Edge Node"* (`:97-99`). `publish()` refuses before the birth (`Published::DroppedBeforeBirth`), asserted by `a_drop_before_the_birth_is_reported_not_silent` and observed on a real broker by `chaos_sigterm_no_lie`. Likely `conformant` — but ask what the named test would do if the guard were removed.
+  - [x] `tck-id-principles-persistence-clean-session-311` — see below; expect `gap (unproven)`.
+  - [x] `tck-id-principles-persistence-clean-session-50` — `n/a`, the bridge speaks MQTT 3.1.1. The evidence is already established and re-checkable: `rumqttc = "0.25"` (`Cargo.toml:42`) and the driver imports `rumqttc::{AsyncClient, …}`, **not** `rumqttc::v5::*` (`mqtt_driver.rs:43,156`).
+  - [x] `tck-id-principles-rbe-recommended` — see below; a `deviation` if we keep the behaviour, a `gap` if we do not.
 
-- [ ] **Task 8 — conformance profiles: read them, do not assume `n/a`** (AC: 1)
-  - [ ] `conformance-*` (12). The chapter defines four profiles: **Sparkplug Edge Node** (`:35`), **Sparkplug Host Application** (`:42`), **Sparkplug Compliant MQTT Server** (`:53`), **Sparkplug Aware MQTT Server** (`:71`).
-  - [ ] **Verified while drafting: the Edge Node profile section carries no `tck-id` of its own** (`:35-41` is prose). The 12 ids sit under the Host Application profile (`conformance-primary-host`, 1) and the two MQTT Server profiles (`conformance-mqtt-*` and `conformance-mqtt-aware-*`, 11). So a blanket `n/a` is probably right — **and that is exactly why it must be justified per profile rather than waved through.** `n/a` for "we are not an MQTT Server" is legitimate; `n/a` because a clause is awkward is the dustbin failure.
-  - [ ] Record the consequence plainly: **the specification's Edge Node conformance profile imposes no additional testable clause beyond those already audited.** That is a useful finding for NFR19's "documented conformance scope" and belongs in the matrix, not only in this story.
+- [x] **Task 8 — conformance profiles: read them, do not assume `n/a`** (AC: 1)
+  - [x] `conformance-*` (12). The chapter defines four profiles: **Sparkplug Edge Node** (`:35`), **Sparkplug Host Application** (`:42`), **Sparkplug Compliant MQTT Server** (`:53`), **Sparkplug Aware MQTT Server** (`:71`).
+  - [x] **Verified while drafting: the Edge Node profile section carries no `tck-id` of its own** (`:35-41` is prose). The 12 ids sit under the Host Application profile (`conformance-primary-host`, 1) and the two MQTT Server profiles (`conformance-mqtt-*` and `conformance-mqtt-aware-*`, 11). So a blanket `n/a` is probably right — **and that is exactly why it must be justified per profile rather than waved through.** `n/a` for "we are not an MQTT Server" is legitimate; `n/a` because a clause is awkward is the dustbin failure.
+  - [x] Record the consequence plainly: **the specification's Edge Node conformance profile imposes no additional testable clause beyond those already audited.** That is a useful finding for NFR19's "documented conformance scope" and belongs in the matrix, not only in this story.
 
-- [ ] **Task 9 — findings, tally, status** (AC: 2, 3)
-  - [ ] Extend **Findings carried forward** with everything this pass turns up, using the existing table's `Finding | Chapter | Where` shape. Anything that is a defect rather than a gap gets an issue (`gh issue create`) per CLAUDE.md.
-  - [ ] Add a **per-chapter tally** for each of 1, 2, 3, 5 and 10 in the shape of chapters 4 and 6, plus a **whole-specification total** discharging AC3's `70 + 109 + 124 = 303`.
-  - [ ] Add Status table rows for chapters 1, 2, 3 and 10 (they do not exist today — the table lists only 4, 6 and "2, 5"). Split the "2, 5" row.
-  - [ ] **AC2 is a real task, not a formality.** Walk Epic 4's remaining stories (4.4–4.18) against every new `gap`. Each one is either scheduled into an existing story, or gets an issue **and** an owning epic. An unowned, unnumbered gap is not acceptable.
-  - [ ] Reconcile: `conformant + deviation + gap + n/a` must equal **124**. State the arithmetic. An audit whose numbers do not add up has not been completed.
+- [x] **Task 9 — findings, tally, status** (AC: 2, 3)
+  - [x] Extend **Findings carried forward** with everything this pass turns up, using the existing table's `Finding | Chapter | Where` shape. Anything that is a defect rather than a gap gets an issue (`gh issue create`) per CLAUDE.md.
+  - [x] Add a **per-chapter tally** for each of 1, 2, 3, 5 and 10 in the shape of chapters 4 and 6, plus a **whole-specification total** discharging AC3's `70 + 109 + 124 = 303`.
+  - [x] Add Status table rows for chapters 1, 2, 3 and 10 (they do not exist today — the table lists only 4, 6 and "2, 5"). Split the "2, 5" row.
+  - [x] **AC2 is a real task, not a formality.** Walk Epic 4's remaining stories (4.4–4.18) against every new `gap`. Each one is either scheduled into an existing story, or gets an issue **and** an owning epic. An unowned, unnumbered gap is not acceptable.
+  - [x] Reconcile: `conformant + deviation + gap + n/a` must equal **124**. State the arithmetic. An audit whose numbers do not add up has not been completed.
 
-- [ ] **Task 10 — verification** (AC: 3)
-  - [ ] Diff the enumerated 124 ids against those present in `docs/sparkplug-conformance.md`, **in both directions** — missing *and* invented. Use the Python form now printed in the matrix's chapter-6 tally, changing only the spec file list. **Do not use `comm`**: under this locale it emitted *"le fichier 2 n'est pas dans l'ordre trié"* during 4.2, and a `comm` over mis-sorted input can report an empty difference that means nothing.
-  - [ ] **Arm the check before trusting it.** Run it against `git show HEAD:docs/sparkplug-conformance.md` first and confirm it reports **124 missing**. A check that has not been seen red is not a check. (This is how 4.2's was validated: 101 missing at `HEAD`, 0 after.)
-  - [ ] Re-read **"How this audit could pass wrongly"** and check the finished sections against all six modes.
-  - [ ] `./scripts/ci-local.sh --fast` — this story should change no Rust, so the run is a regression check, not a gate on new behaviour.
-  - [ ] `git diff -- crates/*/src/` must be empty. See "Scope boundaries".
+- [x] **Task 10 — verification** (AC: 3)
+  - [x] Diff the enumerated 124 ids against those present in `docs/sparkplug-conformance.md`, **in both directions** — missing *and* invented. Use the Python form now printed in the matrix's chapter-6 tally, changing only the spec file list. **Do not use `comm`**: under this locale it emitted *"le fichier 2 n'est pas dans l'ordre trié"* during 4.2, and a `comm` over mis-sorted input can report an empty difference that means nothing.
+  - [x] **Arm the check before trusting it.** Run it against `git show HEAD:docs/sparkplug-conformance.md` first and confirm it reports **124 missing**. A check that has not been seen red is not a check. (This is how 4.2's was validated: 101 missing at `HEAD`, 0 after.)
+  - [x] Re-read **"How this audit could pass wrongly"** and check the finished sections against all six modes.
+  - [x] `./scripts/ci-local.sh --fast` — this story should change no Rust, so the run is a regression check, not a gate on new behaviour.
+  - [x] `git diff -- crates/*/src/` must be empty. See "Scope boundaries".
 
 ## Dev Notes
 
@@ -247,8 +247,133 @@ Read these before writing rows. The lifecycle lives in three places and the spli
 
 ### Agent Model Used
 
+Claude Opus 5 (1M context) — `claude-opus-5[1m]`, 2026-07-28.
+
 ### Debug Log References
+
+**Mechanical enumeration (Task 1).** The worklist is exactly **124** ids, and the chapter partition
+was verified rather than assumed: per-chapter distinct counts are `8 · 4 · 1 · 70 · 99 · 109 · 12`
+summing to **303**, which equals the whole-tree total — so no id appears in two chapters. The clause
+budget in Task 1 reconciled with **zero** unmatched ids across all seven families.
+
+**Coverage check, armed before trusted (Task 10).** Against `git show HEAD:` it reports **123**
+missing; against the finished file, **0 missing / 0 invented**. *The story predicted 123 as 124.*
+Exactly one clause, `tck-id-message-flow-edge-node-ncmd-subscribe`, was already cited at HEAD in the
+chapter-4 and chapter-6 notes pointing forward to this story — the prediction was off by that
+forward reference. Recorded in the matrix.
+
+**The check caught failure mode 3 on its first run.** It reported 26 missing ids because three
+collective blocks used abbreviated forms (`` `-death-qos` ``, `` `-reordering-start` ``). Rewritten
+with full ids. A block that satisfies a reader and fails the diff is exactly what the mode predicts.
+
+**Eight mutations run against production code** (all reverted; `git diff -- crates/*/src/` is empty).
+Six expected red went red; two expected green went green. Tabulated in the matrix under the
+chapter-5 tally. The seventh **corrected the row it tested** — the ordering clauses were drafted as
+"vacuous, payloads too small to be out of order", and stamping `Energy` 60 s earlier than `Power`
+produced a genuinely mis-ordered payload with all 69 tests green. Not vacuous; unwitnessed.
+
+**One measurement, not a mutation.** A throwaway probe against `EdgeNode::new` (added under
+`crates/sparkplug-b/tests/`, run, removed) showed `U+0000` passing `check_identifier` and reaching
+the topic `"spBv1.0/a\0b/NBIRTH/node"`. This is the evidence behind the three chapter-1 `-chars`
+gaps and [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34).
+
+**`rumqttc`'s clean-session default verified in the registry source**, not from the story's summary:
+`rumqttc-0.25.1/src/lib.rs:513` and `mqttbytes/v4/connect.rs:27` both default `clean_session: true`.
+The story's claim held.
+
+**`./scripts/ci-local.sh --fast`** — first run exited 1 at `cargo-deny` (*"failed to obtain lock file
+… read-only path"*), the known sandbox trap; re-run with the sandbox disabled exits **0**, all steps
+reproduced. Chaos tests skipped: **no Docker daemon on this machine**, so no chapter-5 verdict rests
+on a chaos test this session re-ran — the chaos citations are read from the tests' own assertions.
+
+**The manual was rebuilt** (`latexmk`, 23 pages, clean).
 
 ### Completion Notes List
 
+**AC1 — satisfied.** Rows exist for birth/death ordering, `seq` numbering and wrap, `bdSeq` per
+CONNECT, NDEATH via will and explicit publish, NCMD/`Node Control/Rebirth`, DDEATH and the
+primary-host STATE mechanism. Both known gaps appear as `gap` rows pointing at Stories 4.4–4.8:
+NCMD/Rebirth as seven clauses (`-ncmd-subscribe` plus six `-rebirth-*`), STATE as eleven.
+
+**AC2 — satisfied, and it was a task rather than a formality.** All 31 gaps were walked against
+Stories 4.4–4.18; the walk is tabulated in the matrix under *Gap ownership*. Outcome: **2 new issues**
+([#34](https://github.com/guycorbaz/smartme_mqtt/issues/34) identifier character set → Epic 3,
+[#35](https://github.com/guycorbaz/smartme_mqtt/issues/35) clean-session and single-server →
+Story 4.10) and **2 widened** (comments posted on
+[#27](https://github.com/guycorbaz/smartme_mqtt/issues/27) and
+[#30](https://github.com/guycorbaz/smartme_mqtt/issues/30) — the matrix claims they were widened, so
+they were actually widened). No gap is unowned. **Epic 4 needed no reshaping**: 4.4–4.7 and 4.10
+already covered the two missing mechanisms.
+
+**AC3 — satisfied.** All **124** clauses carry a row or a collective block naming its member ids.
+The arithmetic is stated and closes: **`26 conformant + 3 deviations + 31 gaps + 64 n/a = 124`**, and
+the whole-specification total **`70 + 109 + 124 = 303`** is stated with a per-chapter table. Status
+rows now exist for chapters 1, 2, 3, 5 and 10 — the old "2, 5" row is split. Every `conformant` with
+no named test was recorded as `gap (unproven)`; every gap carries an owner.
+
+**What the pass found that was not suspected.**
+
+1. **A measured defect, not a paperwork one.** `check_identifier` implements chapter 4's
+   `+`/`/`/`#` rule, and chapter 1 defers its character set to the *MQTT* specification. A `U+0000`
+   reaches a published topic. Assuming the two sets were equal — the natural reading, and the one
+   this pass nearly took — would have produced three false `conformant` rows.
+2. **The audit's reach has a limit worth stating.** The MQTT specification is **not vendored** here,
+   so those three clauses cannot be audited in full against their own norm. #34 should begin by
+   pinning it.
+3. **Six `operational-behavior-edge-node-*` ids bind Host Applications despite their prefix**, and
+   four `operational-behavior-primary-*` ids split three/one between Edge Node and Host. Classifying
+   either family by prefix would have moved three real gaps into `n/a`.
+4. **The chapter-10 finding is an absence**: the Edge Node conformance profile carries no `tck-id`,
+   so an Edge Node's conformance claim is exactly the union of chapters 1–6. Direct input to NFR19.
+
+**Judgements a reviewer should attack first**, stated with their alternatives rather than buried:
+
+- **The five `-phid-*` clauses are `gap`, not `n/a`.** They are conditional on a Primary Host
+  configuration the bridge does not have. Reading the condition as "false, therefore vacuous" is
+  available and was rejected: the condition is a *capability* the bridge lacks, not a deployment
+  fact, and AC1 requires the STATE blind spot to stay visible. This is the most reversible call here.
+- **`-device-dcmd-subscribe` is `n/a` while `-ncmd-subscribe` is a `gap`.** Decided by the matrix's
+  own hold-the-datum criterion (no writable output exists; every node has a rebirthable session).
+  The story text implied 4.6 should own the DCMD one.
+- **`-nbirth-payload-bdSeq` is `conformant` where chapter 6's `-nbirth-bdseq-repeat` is a
+  `deviation`.** Not the chapters disagreeing: chapter 5 gives the increment its own id
+  (`-will-message-payload-bdSeq`, marked `deviation`), chapter 6 does not. One defect, one owner
+  (Story 4.10), one row per chapter.
+
+**One inconsistency found and deliberately NOT fixed.** Chapter 4's `topics-dcmd-topic` is a `gap`
+where chapter 5's `-device-dcmd-subscribe` is `n/a`. Re-deciding chapter-4 rows is outside this
+story's scope boundary, so it is recorded in the findings for **Story 4.19** rather than changed.
+
+**Manual updated, because the audit changed what it claims.**
+`docs/manual/chapters/04-mqtt-sparkplug-contract.tex:163` said every message is QoS 0 *"as the
+Sparkplug specification requires"* — false for the registered will, which two clauses require at
+QoS 1. Corrected, with the violation added to *Known limitations* along with the absent Primary Host
+support. This is the same over-claim already recorded against
+`every_edge_node_message_is_qos_zero_and_never_retained`; it had propagated into the manual.
+
+**No production code changed.** `git diff -- crates/*/src/` is empty. No test was added — this story
+audits and records; the fixes are Stories 4.4–4.10, 4.17, 4.19 and Epic 3.
+
 ### File List
+
+- `docs/sparkplug-conformance.md` — modified: Status table split per chapter; new chapter 1, 2, 3, 5
+  and 10 sections; 15 rows added to *Findings carried forward*; tallies for chapters 1, 2, 3, 5 and
+  10; *Whole-specification total*; *Gap ownership* (the AC2 walk); the chapter-5 mutation table; the
+  armed coverage check for chapters 1, 2, 3, 5 and 10
+- `docs/manual/chapters/04-mqtt-sparkplug-contract.tex` — modified: corrected the QoS-0 over-claim
+  under *Delivery semantics*; added the will-QoS violation and the absent Primary Host support to
+  *Known limitations*
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — modified: story status
+- `_bmad-output/implementation-artifacts/4-3-conformance-matrix-lifecycle-and-host-interaction.md` —
+  modified: this record
+
+**Created outside the repository** — [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34),
+[#35](https://github.com/guycorbaz/smartme_mqtt/issues/35); scope comments on
+[#27](https://github.com/guycorbaz/smartme_mqtt/issues/27) and
+[#30](https://github.com/guycorbaz/smartme_mqtt/issues/30).
+
+## Change Log
+
+| Date | Change |
+| --- | --- |
+| 2026-07-28 | Story 4.3 implemented. 124 clauses audited across chapters 1, 2, 3, 5 and 10; `26 · 3 · 31 · 64 = 124`. Coverage check armed (123 missing at HEAD) and green (0/0). Eight mutations run, one of which corrected the row it tested. Issues #34 and #35 opened; #27 and #30 widened. Manual corrected. No production code changed. Status → review |

@@ -160,10 +160,22 @@ fresh measurement.
 
 \section{Delivery semantics}
 
-Every edge-node message is published at \textbf{QoS~0} with \textbf{retain false}, as the
-Sparkplug specification requires. Retain is the important half: a retained payload is a
-value the broker replays to any future subscriber with no way to judge its age --- a
-stored lie that outlives the process. Freshness is the BIRTH's job, not the broker's.
+Every edge-node message \prog \emph{publishes} goes out at \textbf{QoS~0} with
+\textbf{retain false}, which is what the Sparkplug specification requires for those
+messages. Retain is the important half: a retained payload is a value the broker replays
+to any future subscriber with no way to judge its age --- a stored lie that outlives the
+process. Freshness is the BIRTH's job, not the broker's.
+
+\begin{note}
+\textbf{The registered will is the exception, and \prog gets it wrong today.} The
+specification requires the death certificate registered in the CONNECT packet to be
+\textbf{QoS~1}, not 0 --- it says so twice, at
+\code{tck-id-message-flow-edge-node-birth-publish-will-message-qos} and
+\code{tck-id-payloads-ndeath-will-message-qos}. \prog registers it at QoS~0 like everything
+else. In practice a broker holding a will delivers it once regardless, so the observable
+effect is small; it is nonetheless a violation and it is listed under
+\hyperref[sec:contract-limits]{Known limitations} below.
+\end{note}
 
 \begin{note}
 QoS~0 defines no acknowledgement, so the bridge cannot and does not claim a message was
@@ -224,7 +236,17 @@ The two mechanisms are complementary rather than alternative: the will remains t
 \begin{itemize}
   \item \textbf{No NCMD subscription}, so \code{Node Control/Rebirth} cannot be honoured.
         A consumer that requests a rebirth is ignored; reconnects still rebirth on their
-        own.
+        own. \prog issues no MQTT subscription of any kind.
+  \item \textbf{The registered will is QoS~0 where the specification requires QoS~1.}
+        See the note under \emph{Delivery semantics}.
+  \item \textbf{No \emph{Primary Host Application} support.} Sparkplug lets an Edge Node
+        name a host and change its behaviour with that host's \code{STATE}: wait for it
+        before birthing, disconnect when it goes offline, walk to another broker. \prog
+        implements none of this --- it births as soon as the broker answers, whether or
+        not any consumer is listening, and never reads a \code{STATE} topic. On a
+        single-broker installation with a permanently connected host this is invisible;
+        it matters in a redundant-broker topology, where an Edge Node can otherwise be
+        stranded on a broker its host cannot reach.
   \item \textbf{\code{bdSeq} is fixed for the lifetime of one MQTT client}, not
         incremented per CONNECT as the specification would have it. The will is registered
         once, inside the first CONNECT, and cannot be updated afterwards; advancing the

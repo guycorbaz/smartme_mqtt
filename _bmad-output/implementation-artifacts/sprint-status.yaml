@@ -104,7 +104,22 @@ development_status:
   # chapters 1, 2, 3, 5 and 10 (124) — mechanical enumeration showed 21 clauses were
   # owned by no story in any epic, so the audit could have closed every chapter
   # tally while leaving the specification 21 short. epics.md amended with AC3.
-  4-3-conformance-matrix-lifecycle-and-host-interaction: ready-for-dev
+  # 2026-07-28: audited. All 124 clauses of chapters 1, 2, 3, 5 and 10 carry a row
+  # or a collective block naming its members; 26 conformant · 3 deviations ·
+  # 31 gaps · 64 n/a = 124, and 70 + 109 + 124 = 303 is now stated per chapter.
+  # The coverage check was armed at HEAD (123 missing, not the 124 the story
+  # predicted — `message-flow-edge-node-ncmd-subscribe` was already cited in the
+  # chapter-4/6 forward references) and reports 0/0 against the finished file.
+  # Eight mutations run against production code, all reverted; one went green and
+  # CORRECTED the row it tested — the metric-ordering clauses were drafted as
+  # vacuous and are in fact violable with nothing noticing.
+  # Found unsuspected: `check_identifier` implements Sparkplug's wildcard rule and
+  # not MQTT's character set, measured by a U+0000 reaching a published topic (#34);
+  # six `operational-behavior-edge-node-*` ids bind Host Applications despite their
+  # prefix. Issues #34 and #35 opened, #27 and #30 widened. The manual's claim that
+  # QoS 0 is "as the specification requires" was corrected — false for the will.
+  # No production code changed.
+  4-3-conformance-matrix-lifecycle-and-host-interaction: review
   4-4-primary-host-state-measure: backlog
   4-5-primary-host-state-decide: backlog
   4-6-ncmd-subscription-plumbing: backlog
