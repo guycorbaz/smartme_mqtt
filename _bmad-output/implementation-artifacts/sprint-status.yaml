@@ -97,7 +97,7 @@ development_status:
   # evidence weaker than their clause, one of them a test asserting production's own
   # expression against itself. Chapter-6 tally 34·5·11·59 -> 30·5·15·59. Chapter 4
   # recounted (17·0·8·21 was wrong; it is 14·0·6·21) and demoted from `done` to
-  # `audited, not complete` — 27 of its 70 clauses are recorded nowhere, deferred.
+  # `audited, not complete` — 29 of its 70 clauses are recorded nowhere; Story 4.19.
   # ADR 0013 (payload timestamp) and ADR 0014 (schema as evidence) written.
   4-2-conformance-matrix-payloads-metrics-datatypes: done
   # 2026-07-28: contexted. Scope enlarged from "chapters 2 and 5" (103 clauses) to
@@ -120,4 +120,10 @@ development_status:
   4-16-latency-budget: backlog
   4-17-fix-the-will-qos: backlog
   4-18-correct-adr-0010-wording: backlog
+  # 2026-07-28: added out of the Story 4.2 code review. Chapter 4 records 41 of its
+  # 70 clauses; Story 4.1 audited the topic grammar and left the chapter's own
+  # payload-content requirements. Separate story rather than re-opening 4.1, whose
+  # work is correct as far as it goes and already pushed. Independent recount says
+  # 29 missing, not the 27 the review reported.
+  4-19-finish-chapter-4-payload-clauses: backlog
   epic-4-retrospective: optional

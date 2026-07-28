@@ -48,7 +48,7 @@ witness say so.
 
 | Chapter | Story | State |
 | --- | --- | --- |
-| 4 — Topics & namespace | 4.1 | **audited, not complete** — 41 of the chapter's 70 `tck-id`s carry a row; see the chapter-4 tally |
+| 4 — Topics & namespace | 4.1, completed by **4.19** | **audited, not complete** — 41 of the chapter's 70 `tck-id`s carry a row; the other 29 are Story 4.19. See the chapter-4 tally |
 | 6 — Payloads, metrics, datatypes | 4.2 | **done** — all 109 `tck-id-payloads-*` clauses accounted for |
 | 2, 5 — Principles, session lifecycle, host interaction | 4.3 | pending |
 
@@ -609,15 +609,20 @@ The 6 gaps are all `gap (unimplemented)`: two uniqueness checks ([#27](https://g
 two DDEATH topics (Epic 3), two command-topic subscriptions (Story 4.6).
 
 **41 rows is not the chapter's clause set.** `Sparkplug_4_Topics.adoc` carries **70** `tck-id`s, so
-**27 are recorded nowhere** — among them `topics-nbirth-metrics`, `-nbirth-seq-num`,
-`-nbirth-timestamp`, `topics-ndeath-payload`, `-ndeath-seq`, `topics-ddata-seq-num`, and three
-`host-topic-phid-death-payload-timestamp-*` ids the STATE block omits. Most pointedly,
-**`tck-id-topics-nbirth-bdseq-increment` is absent** — chapter 4's own id for the per-CONNECT
-`bdSeq` increment, the very deviation chapter 6 records under Story 4.10. Chapter 4 was audited
-before this matrix required a countable pass; completing it is deferred work, recorded in
-`_bmad-output/implementation-artifacts/deferred-work.md`. **The Status table says "audited, not
-complete" for exactly this reason** — it read `done` until the code review of Story 4.2 applied
-chapter 6's own completeness check to chapter 4 and found it failed.
+**29 are recorded nowhere**, and the shape of the 29 explains itself: **26 are `topics-*` clauses
+about payload *content*** — `-nbirth-metrics`, `-nbirth-metric-reqs`, `-nbirth-seq-num`,
+`-nbirth-timestamp`, `-nbirth-templates`, the three `-nbirth-bdseq-*`, `-nbirth-rebirth-metric`,
+their DBIRTH/NDATA/DDATA/NCMD/DCMD/NDEATH/DDEATH counterparts — plus **3
+`host-topic-phid-death-payload-timestamp-*`** ids the STATE block omits (the spec carries seven
+`-death-payload*` ids; the block lists four).
+
+Story 4.1 audited the chapter's **topic grammar** and left the payload requirements the same chapter
+also states. Most pointedly, **`tck-id-topics-nbirth-bdseq-increment` is absent** — chapter 4's own
+id for the per-CONNECT `bdSeq` increment, the very deviation chapter 6 records under Story 4.10.
+
+**Story 4.19 owns closing this**, and the Status table says "audited, not complete" for exactly this
+reason: it read `done` until the code review of Story 4.2 applied chapter 6's own completeness check
+to chapter 4 and found it failed.
 
 Every chapter-4 `conformant` row names a test. No row is asserted from reading the code alone.
 

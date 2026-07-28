@@ -1098,3 +1098,29 @@ So that the next person reasoning from it is not misled the way we were.
 **Then** it is amended to a measurable analogue (read→accepted-for-transmission), since the QoS-0 requirement for data is confirmed and no ACK will ever exist. Story 4.16 unblocks on that amendment.
 
 *History worth keeping: this story was first written to **re-open** ADR 0010, on my claim that DATA carried no QoS requirement. That claim came from grepping chapter 5 alone and concluding from absence. Chapter 4 has the requirements. The vendored specification caught the error within minutes of being vendored — which is the argument for vendoring it.*
+
+### Story 4.19: Finish chapter 4 — the 29 clauses Story 4.1 did not record
+
+As the maintainer,
+I want chapter 4's payload clauses audited and its tally made to close,
+So that "chapter 4 is done" is a countable claim rather than a remembered one.
+
+**Acceptance Criteria:**
+
+**Given** `Sparkplug_4_Topics.adoc`, which carries **70** `tck-id`s, and `docs/sparkplug-conformance.md`, which records **41** of them
+**When** the remaining **29** are walked against the implementation
+**Then** each gains a row or a place in a collective block that **names its member ids**, under the existing chapter-4 headings
+**And** the chapter-4 tally is restated so that `conformant + deviation + gap + n/a = 70`
+**And** the Status table row for chapter 4 changes from **audited, not complete** to **done**.
+
+**Given** the 29 are, by shape, chapter 4's own *payload-content* requirements — 26 `topics-*` (`-nbirth-metrics`, `-nbirth-metric-reqs`, `-nbirth-seq-num`, `-nbirth-timestamp`, `-nbirth-templates`, the three `-nbirth-bdseq-*`, `-nbirth-rebirth-metric`, and their DBIRTH/NDATA/DDATA/NCMD/DCMD/NDEATH/DDEATH counterparts) plus 3 `host-topic-phid-death-payload-timestamp-*`
+**When** each is ruled on
+**Then** no verdict is copied from its chapter-6 twin — the twins are cited as cross-references, and each clause is read against chapter 4's own wording
+**And** `topics-nbirth-bdseq-increment` is recorded as a `deviation` owned by **Story 4.10**, not as a new finding: it is chapter 4's statement of the frozen-`bdSeq` defect chapter 6 already records at `payloads-nbirth-bdseq-repeat`
+**And** `topics-nbirth-rebirth-metric` points at **Story 4.7**, and `topics-nbirth-templates` at the scope-limit deviation, rather than opening new issues for requirements already owned.
+
+**Given** the completed chapter
+**When** the whole-specification arithmetic is restated
+**Then** `70 + 109 + 124 = 303` holds with every chapter fully recorded, and the matrix says so.
+
+*Created 2026-07-28, out of the Story 4.2 code review. Story 4.1 audited the chapter's **topic grammar** and left the payload requirements the same chapter also states; nothing at the time obliged it to report how much of the chapter it had covered, since the completeness rule was only added to 4.2 and 4.3 afterwards. The count was 27 in the review's own report and is **29** on an independent recount — the review under-counted, which is worth noting about numbers produced by a single pass. Deliberately a separate story rather than re-opening 4.1: 4.1's work is correct as far as it goes and its commits are pushed; this is the remainder, and it is cheaper to schedule than to retro-fit.*

@@ -122,6 +122,8 @@ Items deferred from reviews; each carries its origin and where it should be pick
 - **Chapter 4 of `docs/sparkplug-conformance.md` is marked `done` but fails the completeness
   standard Story 4.2 invents.** Applying 4.2's own two mechanical checks to
   `docs/spec/sparkplug-b-3.0.0/chapters/Sparkplug_4_Topics.adoc`: it holds **70** `tck-id`s, of
+  **CLOSED 2026-07-28 — now owned by Story 4.19**, and the count was wrong here: an independent
+  recount gives **29**, not 27. Left in place as the record of how it was found. Original entry:
   which **27 have no row and appear in no collective block** — including `topics-nbirth-metrics`,
   `-nbirth-seq-num`, `-nbirth-timestamp`, `topics-ndeath-payload`, `-ndeath-seq`,
   `topics-ddata-seq-num`, and three `host-topic-phid-death-payload-timestamp-*` ids the STATE block
@@ -132,5 +134,6 @@ Items deferred from reviews; each carries its origin and where it should be pick
   presents as a discovery. Pre-existing to Story 4.1 and not introduced by 4.2 — but 4.2 reaffirms
   `chapter 4 | 4.1 | **done**` in the Status table and adds an `epics.md` acceptance criterion
   ("every clause accounted for … the arithmetic … is stated") that chapter 4 does not meet.
-  Decide whether Story 4.1 reopens or a new story owns the chapter-4 completion; either way it
-  needs a GitHub issue per CLAUDE.md.
+  Decided 2026-07-28: **Story 4.19** owns the chapter-4 completion, rather than re-opening 4.1 whose
+  work is correct as far as it goes and already pushed. No GitHub issue — CLAUDE.md requires an
+  owning story *or* an issue, and the story is the stronger record.
