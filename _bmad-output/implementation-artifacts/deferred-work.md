@@ -137,3 +137,45 @@ Items deferred from reviews; each carries its origin and where it should be pick
   Decided 2026-07-28: **Story 4.19** owns the chapter-4 completion, rather than re-opening 4.1 whose
   work is correct as far as it goes and already pushed. No GitHub issue — CLAUDE.md requires an
   owning story *or* an issue, and the story is the stronger record.
+
+## Deferred from: code review of 4-3-conformance-matrix-lifecycle-and-host-interaction (2026-07-28)
+
+- **Chapter 6's `payloads-nbirth-bdseq-repeat` may be a wrong verdict against its own clause text.**
+  It reads *"The bdSeq number value MUST match the bdSeq number value that was sent in the prior MQTT
+  CONNECT packet WILL Message"* (`Sparkplug_6_Payloads.adoc:1075-1077`) — a requirement the bridge
+  **satisfies**. Chapter 5's `-nbirth-payload-bdSeq` states the same testable requirement
+  (`Sparkplug_5:224-226`) and this pass ruled it `conformant`. The increment obligation that makes
+  the chapter-6 row a `deviation` appears in chapter 6 only as a **non-normative sub-bullet**
+  (`:1521-1522`), whereas chapter 5 gives it its own id (`-will-message-payload-bdSeq`, ruled
+  `deviation` here). So chapter 6 may be carrying a defect on a row whose clause is met, and a reader
+  auditing that row against the norm will not find the defect it names. Not re-decided: chapter-6
+  rows are outside Story 4.3's scope boundary. **Owner: Story 4.19**, alongside `topics-dcmd-topic`.
+  Found by the Edge Case Hunter layer, which read both clause texts verbatim.
+
+- **Chapter 4's `topics-dcmd-topic` is a `gap` where chapter 5's `-device-dcmd-subscribe` is `n/a`.**
+  Under the matrix's own hold-the-datum criterion — no device declares a writable output, so no DCMD
+  could address anything — both should be `n/a`. Recorded rather than changed, for the same scope
+  reason. **Owner: Story 4.19.**
+
+- **The "SIGKILLed" misdescription of `chaos_stale_on_death` originates in chapter 6.** The test
+  aborts a tokio task in-process (`chaos_stale_on_death.rs:68`); there is no signal and no separate
+  process. `chaos_sigterm_no_lie` is the real-process, real-signal test. Story 4.3 propagated the
+  error into chapter 5 and has now fixed it **there only** — chapter 6's row at the NDEATH table
+  still says it. **Owner: Story 4.19.** The witness itself is genuine (the socket drops, the broker
+  fires the will, an independent subscriber receives it); only the mechanism was misstated.
+
+- **No falsification has ever been aimed at the `n/a` column.** All nine mutations run for Story 4.3
+  target `conformant` or `gap (unproven)` rows. `n/a` is **64 of 124** clauses in this pass and 144
+  of 274 across the audited specification — the largest column, and the one the matrix itself calls
+  the dustbin risk. It is checked only by re-reading, which is the method the same document dismisses
+  ("an audit agreeing with itself proves nothing"). No mechanical falsification exists for "this
+  clause binds a role we do not play", which is why it has not been done; inventing one — e.g. a
+  script asserting every `n/a` clause's text contains a Host-Application or MQTT-Server subject — is
+  a genuine open problem worth an epic-level decision. **No owner yet; raise at the Epic 4
+  retrospective.**
+
+- **Eleven untracked dotfiles sit at the repository root** (`.bashrc`, `.gitconfig`, `.idea`,
+  `.mcp.json`, `.vscode`, `.zshrc`, …). Environment artefacts of the working directory, not project
+  output, and present before Story 4.3. They are a live hazard given `CLAUDE.md`'s rule against
+  `git add <directory>`: a careless `git add .` commits a developer's shell configuration to a
+  **public** repository. Either `.gitignore` them or move the checkout out of the home directory.

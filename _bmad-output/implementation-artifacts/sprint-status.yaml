@@ -119,7 +119,23 @@ development_status:
   # prefix. Issues #34 and #35 opened, #27 and #30 widened. The manual's claim that
   # QoS 0 is "as the specification requires" was corrected — false for the will.
   # No production code changed.
-  4-3-conformance-matrix-lifecycle-and-host-interaction: review
+  #
+  # 2026-07-28, code review (3 adversarial layers, fresh contexts; 27 patches applied).
+  # All three ACs PASS — the Auditor reproduced the enumeration, the coverage check,
+  # every tally, all 22 cited tests and the four issues independently. The defects were
+  # in EVIDENCE and DESCRIPTION, not in verdicts: no verdict and no tally moved.
+  # Four factual errors: `chaos_stale_on_death` does not SIGKILL (it aborts a tokio
+  # task); the NBIRTH carries TWO metrics not one, so both ordering clauses are live
+  # today rather than latent; `chaos_sigterm_no_lie` does not observe the NBIRTH
+  # "before anything else" (`wait_for` discards non-matching messages); the U+0000
+  # probe showed a constructed topic, not a published one. Gap split 39/13 -> 38/14.
+  # A ninth mutation added — the `-nbirth-qos` proof cell had INHERITED a mutation
+  # result from chapter 6 without running it; now run, red. A second coverage check
+  # added because the first proves an id is mentioned, not that it carries a verdict
+  # (88 rows + 36 block members = 124). ADR 0015 (#36) ratifies the language-type-
+  # invariant witness the pass had used without deciding it — the same failure ADR 0014
+  # was written to correct, committed again one chapter later.
+  4-3-conformance-matrix-lifecycle-and-host-interaction: done
   4-4-primary-host-state-measure: backlog
   4-5-primary-host-state-decide: backlog
   4-6-ncmd-subscription-plumbing: backlog

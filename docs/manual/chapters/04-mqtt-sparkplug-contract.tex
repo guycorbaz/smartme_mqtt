@@ -161,19 +161,30 @@ fresh measurement.
 \section{Delivery semantics}
 
 Every edge-node message \prog \emph{publishes} goes out at \textbf{QoS~0} with
-\textbf{retain false}, which is what the Sparkplug specification requires for those
-messages. Retain is the important half: a retained payload is a value the broker replays
-to any future subscriber with no way to judge its age --- a stored lie that outlives the
-process. Freshness is the BIRTH's job, not the broker's.
+\textbf{retain false}. Retain is the important half: a retained payload is a value the
+broker replays to any future subscriber with no way to judge its age --- a stored lie that
+outlives the process. Freshness is the BIRTH's job, not the broker's.
 
 \begin{note}
-\textbf{The registered will is the exception, and \prog gets it wrong today.} The
+\textbf{What the specification actually mandates, since \prog goes further than it in one
+place and falls short in another.} QoS~0 is required for NBIRTH, DBIRTH, NDATA and DDATA
+(\code{tck-id-payloads-nbirth-qos} and its three siblings). It is \emph{not} mandated for
+an explicitly published NDEATH or for DDEATH --- the specification carries no QoS clause
+for either, so \prog's choice of QoS~0 there is a decision, not a requirement.
+\end{note}
+
+\begin{note}
+\textbf{The registered will is a genuine violation, and \prog gets it wrong today.} The
 specification requires the death certificate registered in the CONNECT packet to be
 \textbf{QoS~1}, not 0 --- it says so twice, at
 \code{tck-id-message-flow-edge-node-birth-publish-will-message-qos} and
 \code{tck-id-payloads-ndeath-will-message-qos}. \prog registers it at QoS~0 like everything
-else. In practice a broker holding a will delivers it once regardless, so the observable
-effect is small; it is nonetheless a violation and it is listed under
+else.
+
+This is not cosmetic. At QoS~0 the broker performs no acknowledgement, no retry and no
+queueing, so a will published to a subscriber whose session is momentarily disconnected can
+simply be lost --- and the death certificate is the one message whose loss produces exactly
+the frozen-value-shown-as-live failure this chapter exists to prevent. Listed under
 \hyperref[sec:contract-limits]{Known limitations} below.
 \end{note}
 

@@ -1,6 +1,6 @@
 # Story 4.3: Conformance matrix — session lifecycle and host interaction
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -114,6 +114,119 @@ so that the gaps we suspect are counted and the ones we do not suspect are found
   - [x] Re-read **"How this audit could pass wrongly"** and check the finished sections against all six modes.
   - [x] `./scripts/ci-local.sh --fast` — this story should change no Rust, so the run is a regression check, not a gate on new behaviour.
   - [x] `git diff -- crates/*/src/` must be empty. See "Scope boundaries".
+
+### Review Findings
+
+**Code review 2026-07-28** — three adversarial layers in fresh contexts (Blind Hunter: diff only;
+Edge Case Hunter: diff + repository; Acceptance Auditor: diff + spec + context docs). All three ACs
+were judged **PASS** by the Auditor, which independently reproduced the enumeration, the coverage
+check, every tally, all 22 cited tests and the four GitHub issues. The findings below are defects in
+**evidence and description**, not in the verdicts — with two exceptions marked `[Decision]`.
+
+**Two findings converged across independent layers** (Blind + Auditor), which is the strongest signal
+in the run: the chapter-1 `-string` proof cells, and the undisclosed chaos-test caveat.
+
+- [x] [Review][Decision] **The five `-phid-*` clauses: `gap` or `n/a`?** — The specification says
+  plainly that the capability is optional: *"Specifying a Primary Host is not required for an Edge
+  Node"* (`Sparkplug_5:190-191`) and *"It is not required that an Edge Node must have a Primary Host
+  configured"* (`Sparkplug_1:285-286`). Neither sentence is quoted in the matrix. Structurally these
+  are identical to `message-flow-device-dcmd-subscribe`, which this same pass ruled **`n/a`** on the
+  grounds that its antecedent is an absent capability. Two absent capabilities, two opposite
+  verdicts. **Against changing:** AC1 requires the STATE blind spot to appear as `gap` rows pointing
+  at Stories 4.4–4.8, and a distinction does exist — DCMD's antecedent is a fact about the *meter*
+  (no writable output exists), the Primary Host antecedent is a fact about *our software* (we never
+  built the option), and Guy's broker carries live `spBv1.0/STATE` topics. Moving them would make
+  chapter 5 `22/2/21/54` and the whole-specification totals `70/8/47/149`.
+- [x] [Review][Decision] **Chapter 1's three `-string` rows extend the admissible-witness class
+  without an ADR** — `intro-group-id-string`, `-edge-node-id-string`, `-device-id-string` are
+  `conformant` because a Rust `String` is UTF-8 by construction. The document's ratified rule
+  ([ADR 0014](../../docs/adr/0014-schema-as-conformance-evidence.md)) admits exactly one non-test
+  witness, the vendored protobuf schema, and says that where the guarantee comes from *our own code
+  shape* the verdict is `gap (unproven)` — the reading this same pass applied to downgrade
+  `-single-server`. This is the one place the pass **loosened** a rule. Options: (a) amend ADR 0014
+  to admit language-level type invariants, with an issue, keeping `conformant`; (b) downgrade all
+  three to `gap (unproven)`, making chapter 1 `0/0/7/1` and the story total `23/3/34/64`. Note the
+  distinction that favours (a): `String`'s invariant is the *language's* and cannot be changed by
+  us, unlike `MqttConfig`'s shape.
+
+- [x] [Review][Patch] **`chaos_stale_on_death` does not SIGKILL anything** — the row claims *"the
+  bridge is SIGKILLed"*; the test calls `bridge.abort()` on a tokio task in-process, with no signal
+  and no separate process [docs/sparkplug-conformance.md `-birth-publish-will-message` row; `crates/smartme-bridge/tests/chaos_stale_on_death.rs:68`]
+- [x] [Review][Patch] **"The NBIRTH carries one metric" is false — it carries two** — `build_birth`
+  prepends `bd_seq_metric` before `Contract/Version` (`encode.rs:180-182`). Stated four times, and
+  it inverts the analysis: `-nbirth-order` is live **today** over two metrics, not latent [docs/sparkplug-conformance.md, data-behaviour section and Findings]
+- [x] [Review][Patch] **`chaos_sigterm_no_lie` does not observe the NBIRTH "before anything else"** —
+  `wait_for` silently discards non-matching messages, so a pre-birth DDATA would be dropped and the
+  test would still pass [docs/sparkplug-conformance.md `principles-birth-certificates-order`; `tests/common/mod.rs:157-161`]
+- [x] [Review][Patch] **The manual still over-claims specification backing** — no QoS clause exists
+  for an *explicitly published* NDEATH; the only NDEATH QoS clause governs the will. The edit fixed
+  the will half and left the published-NDEATH half [docs/manual/chapters/04-mqtt-sparkplug-contract.tex:163-165]
+- [x] [Review][Patch] **The manual minimises the will-QoS violation with an unsupported claim** —
+  *"a broker holding a will delivers it once regardless, so the observable effect is small"*: at QoS 0
+  there is no acknowledgement, retry or queueing, so the certificate can be lost outright. Cited by
+  two layers independently [docs/manual/chapters/04-mqtt-sparkplug-contract.tex:174-176]
+- [x] [Review][Patch] **The U+0000 finding is described as reaching the wire; the probe showed a
+  constructed string** — no broker, no publish call. Reword, and give the probe as a re-runnable
+  command so the evidence is not a deleted artefact [docs/sparkplug-conformance.md, chapter 1]
+- [x] [Review][Patch] **The coverage check proves an id is *mentioned*, not that it carries a
+  verdict** — 88 of 124 sit in a verdict row; the other 36 rest on hand-counted collective blocks.
+  The document's own anomaly (`-ncmd-subscribe` cited at HEAD) demonstrates the hole [docs/sparkplug-conformance.md, coverage check]
+- [x] [Review][Patch] **The whole-specification gap split is wrong: 39/13 claimed, 38/14 actual** —
+  recomputed from each chapter's own stated numbers [docs/sparkplug-conformance.md, Whole-specification total]
+- [x] [Review][Patch] **A mutation claim in the `-nbirth-qos` proof cell was inherited from chapter 6
+  and never run** — now run (`qos_for` → `AtLeastOnce`): **red**. Add as the ninth mutation and
+  correct the count [docs/sparkplug-conformance.md `-nbirth-qos`]
+- [x] [Review][Patch] **The chaos-tests-were-not-run caveat appears only in the Debug Log** — three
+  chapter-5 `conformant` rows name a chaos test as their only proof, and the durable artifact carries
+  no qualification. Mitigating and worth stating: CI runs them on `ubuntu-latest` [docs/sparkplug-conformance.md, chapter 5]
+- [x] [Review][Patch] **"15 rows added to Findings carried forward" — the diff adds 13** [story File List]
+- [x] [Review][Patch] **The *Gap ownership* Primary-Host row itemises 10 clauses under a count of
+  11** — `-termination-host-offline-timestamp` is missing from the breakdown [docs/sparkplug-conformance.md, Gap ownership]
+- [x] [Review][Patch] **"45 of the 99 … 33 host and 12 command clauses" reconciles to nothing** — the
+  `-data-commands-*` family has 16 rows; 33 + 16 = 49. The 45 was mis-transposed from the story's
+  count over a different set [docs/sparkplug-conformance.md, chapter-5 tally]
+- [x] [Review][Patch] **`-will-message-topic` cites the chaos test as "matching the topic off the
+  wire"** — it only tests `.contains("/NDEATH/")`; `foo/NDEATH/bar` would satisfy it. Chapter 6
+  describes the same test accurately, so this row contradicts it [docs/sparkplug-conformance.md]
+- [x] [Review][Patch] **`-will-message-will-retained` and `-nbirth-qos` treat the same derivation
+  oppositely** — both flow from `qos_for`'s single return, accepted as proof in one row and rejected
+  in the other. Conservative, but state the convention instead of leaving it implicit [docs/sparkplug-conformance.md]
+- [x] [Review][Patch] **`-single-server`'s rationale names Story 4.5; its owner is Story 4.10** — on
+  the document's own reasoning the guard could land after the change it guards [docs/sparkplug-conformance.md]
+- [x] [Review][Patch] **"Chapters 7, 8, 9 and both appendices carry zero ids — verified" cites a
+  command that does not grep them** — the claim is true (I re-checked: all zero), the citation is not [docs/sparkplug-conformance.md, Status]
+- [x] [Review][Patch] **18 host-application `n/a` ids are dismissed by bucket name with no
+  quotation** — the verdicts are right (the Auditor spot-read 11 of 30 and all bind a Host), but the
+  showing is thin in the one family where this pass proved prefix is unreliable [docs/sparkplug-conformance.md, Host section]
+- [x] [Review][Patch] **The mutation narrative claims both a clean prediction record and a surprise
+  from the same run** — M7 went green as predicted; what changed was the row's rationale. Say that [docs/sparkplug-conformance.md, mutation table]
+- [x] [Review][Patch] **The `prd.md` / `architecture.md` RBE corrections read as this commit's work**
+  — they were an earlier commit; date them as prior [docs/sparkplug-conformance.md, chapter 2]
+- [x] [Review][Patch] **Task 10 required confirming 123→"124 missing" and got 123; the box was ticked
+  and the shortfall turned into a compliment** — record it as unmet-as-written per CLAUDE.md [story Task 10]
+- [x] [Review][Patch] **The six failure modes are discharged in substance but never recorded per
+  mode** — the story demands the check; the record does not show it [story / matrix]
+- [x] [Review][Patch] **Vacuity is scored three ways in one table without stating the selecting
+  principle** — `-publish-nbirth` conformant, `-nbirth-change` n/a, `-nbirth-order` gap (unproven).
+  The rule (does the clause bind a message we emit? if so, is it proven?) is sound but unstated [docs/sparkplug-conformance.md, data behaviour]
+- [x] [Review][Patch] **Change Log writes `26 · 3 · 31 · 64 = 124`**, which reads as multiplication in
+  a document asserting that audits whose numbers do not add up are incomplete [story Change Log]
+- [x] [Review][Patch] **`-dcmd-subscribe`'s quotation takes its punctuation from `:399` (prose), not
+  the cited `:403-407`** — cosmetic, verdict unaffected [docs/sparkplug-conformance.md]
+
+- [x] [Review][Defer] **Chapter 6's `payloads-nbirth-bdseq-repeat` may be a wrong verdict against its
+  own clause text** [docs/sparkplug-conformance.md] — deferred, pre-existing. The increment
+  requirement appears in chapter 6 only as a non-normative sub-bullet (`:1521-1522`), so the clause
+  at `:1075` states the same satisfied requirement as chapter 5's `-nbirth-payload-bdSeq`. Re-deciding
+  chapter-6 rows is outside this story's scope; hand to **Story 4.19** with `topics-dcmd-topic`
+- [x] [Review][Defer] **The "SIGKILLed" misdescription originates in chapter 6's row** [docs/sparkplug-conformance.md] — deferred, pre-existing. This story propagated it into chapter 5; fix here, and correct chapter 6 under Story 4.19
+- [x] [Review][Defer] **No falsification was aimed at the `n/a` column** [docs/sparkplug-conformance.md] — deferred, pre-existing method gap. All nine mutations target `conformant` or `gap (unproven)` rows; `n/a` is 64 of 124 and was checked only by re-reading
+- [x] [Review][Defer] **11 untracked dotfiles sit at the repo root** (`.bashrc`, `.gitconfig`, `.idea`, `.mcp.json`, …) [repo root] — deferred, pre-existing environment artefacts. A live hazard given CLAUDE.md's "never `git add <directory>`" rule
+
+**Dismissed as noise (2).** *"Nothing establishes that #34/#35 exist"* — correct from the diff alone,
+refuted by the Auditor's `gh issue view`. *"The `deviation` / `gap` boundary is undefined"* — the
+verdict table defines it ("we knowingly do otherwise" versus "we do not do the thing").
+
 
 ## Dev Notes
 
@@ -256,11 +369,21 @@ was verified rather than assumed: per-chapter distinct counts are `8 · 4 · 1 �
 summing to **303**, which equals the whole-tree total — so no id appears in two chapters. The clause
 budget in Task 1 reconciled with **zero** unmatched ids across all seven families.
 
-**Coverage check, armed before trusted (Task 10).** Against `git show HEAD:` it reports **123**
-missing; against the finished file, **0 missing / 0 invented**. *The story predicted 123 as 124.*
-Exactly one clause, `tck-id-message-flow-edge-node-ncmd-subscribe`, was already cited at HEAD in the
-chapter-4 and chapter-6 notes pointing forward to this story — the prediction was off by that
-forward reference. Recorded in the matrix.
+**Coverage check, armed before trusted (Task 10) — and the task's own criterion was NOT met as
+written.** Task 10 says: *"confirm it reports **124 missing**. A check that has not been seen red is
+not a check."* It reports **123**. The intent was met — the check was seen red and it
+discriminates — but the letter was not, and the first draft of this record turned the shortfall into
+a compliment about cross-chapter pointers instead of recording it. Per `CLAUDE.md`, recorded here as
+**unmet as written**: exactly one of the 124,
+`tck-id-message-flow-edge-node-ncmd-subscribe`, was already cited at HEAD in the chapter-4 and
+chapter-6 forward references, so the reachable red figure was always 123. No issue opened — the
+criterion was mis-predicted at drafting time, not missed at implementation time, and the guard it
+exists to provide functioned.
+
+Against the finished file: **0 missing / 0 invented**. A **second** check was added at the code
+review, because the first proves only that an id is *mentioned* somewhere — not that it carries a
+verdict. It reports 88 clauses in a verdict row and 36 in a named collective block, `88 + 36 = 124`,
+which is what AC3 actually asks for.
 
 **The check caught failure mode 3 on its first run.** It reported 26 missing ids because three
 collective blocks used abbreviated forms (`` `-death-qos` ``, `` `-reordering-start` ``). Rewritten
@@ -357,9 +480,9 @@ audits and records; the fixes are Stories 4.4–4.10, 4.17, 4.19 and Epic 3.
 ### File List
 
 - `docs/sparkplug-conformance.md` — modified: Status table split per chapter; new chapter 1, 2, 3, 5
-  and 10 sections; 15 rows added to *Findings carried forward*; tallies for chapters 1, 2, 3, 5 and
-  10; *Whole-specification total*; *Gap ownership* (the AC2 walk); the chapter-5 mutation table; the
-  armed coverage check for chapters 1, 2, 3, 5 and 10
+  and 10 sections; **13** rows added to *Findings carried forward*; tallies for chapters 1, 2, 3, 5
+  and 10; *Whole-specification total*; *Gap ownership* (the AC2 walk); the chapter-5 mutation table;
+  the armed coverage check for chapters 1, 2, 3, 5 and 10
 - `docs/manual/chapters/04-mqtt-sparkplug-contract.tex` — modified: corrected the QoS-0 over-claim
   under *Delivery semantics*; added the will-QoS violation and the absent Primary Host support to
   *Known limitations*
@@ -376,4 +499,5 @@ audits and records; the fixes are Stories 4.4–4.10, 4.17, 4.19 and Epic 3.
 
 | Date | Change |
 | --- | --- |
-| 2026-07-28 | Story 4.3 implemented. 124 clauses audited across chapters 1, 2, 3, 5 and 10; `26 · 3 · 31 · 64 = 124`. Coverage check armed (123 missing at HEAD) and green (0/0). Eight mutations run, one of which corrected the row it tested. Issues #34 and #35 opened; #27 and #30 widened. Manual corrected. No production code changed. Status → review |
+| 2026-07-28 | Story 4.3 implemented. 124 clauses audited across chapters 1, 2, 3, 5 and 10; `26 + 3 + 31 + 64 = 124`. Coverage check armed (123 missing at HEAD) and green (0/0). Eight mutations run, one of which corrected the row it tested. Issues #34 and #35 opened; #27 and #30 widened. Manual corrected. No production code changed. Status → review |
+| 2026-07-28 | Code review (3 adversarial layers, fresh contexts). All three ACs PASS — the Auditor independently reproduced the enumeration, the coverage check, every tally, all 22 cited tests and the four issues. **27 patches applied; the defects were in evidence and description, not in verdicts.** Four factual errors corrected: `chaos_stale_on_death` does not SIGKILL (it aborts a tokio task), the NBIRTH carries **two** metrics not one (so both ordering clauses are live today, not latent), `chaos_sigterm_no_lie` does not observe the NBIRTH "before anything else" (`wait_for` discards non-matching messages), and the U+0000 probe showed a constructed topic rather than a published one. Six counts rectified, the largest being the gap split `39/13 → 38/14`. A ninth mutation added: the `-nbirth-qos` proof cell had **inherited** a mutation result from chapter 6 without running it — now run, red. A second coverage check added because the first proves an id is *mentioned*, not that it carries a verdict (88 rows + 36 block members = 124). **ADR 0015** ([#36](https://github.com/guycorbaz/smartme_mqtt/issues/36)) ratifies the language-type-invariant witness the pass had used without deciding it. The manual's two remaining over-claims removed. Verdicts and tallies unchanged |
