@@ -144,7 +144,21 @@ development_status:
   # DISCARDS what fails, so reusing it would show silence on a busy STATE topic and
   # produce a false "the host publishes no STATE". STATE payloads are JSON.
   # AC3 added — human-run gate, so every step must state what else could produce it.
-  4-4-primary-host-state-measure: ready-for-dev
+  # 2026-07-28 (paused mid-story, Tasks 5-6 remain — see the story's "RESUME HERE").
+  # AC1 met. Observed the production broker read-only, then captured an Ignition
+  # container restart live with two observers on distinct client ids.
+  # THE STEADY-STATE CONCLUSION WAS WRONG AND THE RESTART REFUTED IT: three careful
+  # passes found no `spBv1.0/STATE/...` and supported "an edge node implementing 3.0
+  # would never see this host's STATE". False. MQTT Engine v5.0.0-rc1 publishes the
+  # FULLY CONFORMANT 3.0 form ({"online":true,"timestamp":...}, retain, QoS 1) as
+  # well as a legacy ONLINE/OFFLINE form. A retained-message snapshot describes the
+  # broker's memory, not the host's behaviour — which is why AC1 said "across a
+  # restart". Host id proven to be `SCADA`; the other three ids are dead-client
+  # residue. Hazard that survives: the retained 3.0 STATE did not exist before the
+  # restart, so "wait for online before birthing" can hang forever.
+  # The raw record is committed at docs/primary-host-state-observation.md — it cost
+  # a production restart; DO NOT re-measure to recover it.
+  4-4-primary-host-state-measure: in-progress
   4-5-primary-host-state-decide: backlog
   4-6-ncmd-subscription-plumbing: backlog
   4-7-node-control-rebirth-answer: backlog
