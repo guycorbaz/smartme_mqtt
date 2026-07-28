@@ -100,7 +100,11 @@ development_status:
   # `audited, not complete` — 27 of its 70 clauses are recorded nowhere, deferred.
   # ADR 0013 (payload timestamp) and ADR 0014 (schema as evidence) written.
   4-2-conformance-matrix-payloads-metrics-datatypes: done
-  4-3-conformance-matrix-lifecycle-and-host-interaction: backlog
+  # 2026-07-28: contexted. Scope enlarged from "chapters 2 and 5" (103 clauses) to
+  # chapters 1, 2, 3, 5 and 10 (124) — mechanical enumeration showed 21 clauses were
+  # owned by no story in any epic, so the audit could have closed every chapter
+  # tally while leaving the specification 21 short. epics.md amended with AC3.
+  4-3-conformance-matrix-lifecycle-and-host-interaction: ready-for-dev
   4-4-primary-host-state-measure: backlog
   4-5-primary-host-state-decide: backlog
   4-6-ncmd-subscription-plumbing: backlog

@@ -816,6 +816,16 @@ So that the gaps we suspect are counted and the ones we do not suspect are found
 **When** Epic 4's remaining stories are reviewed against it
 **Then** any newly discovered `gap` is either scheduled into this epic or recorded with an issue and an owning epic — no gap is left unassigned.
 
+**Given** the **124 clauses** that no story owns after 4.1 (chapter 4) and 4.2 (chapter 6) — chapters **1, 2, 3, 5 and 10** — verified by mechanical enumeration to be the exact remainder of the vendored specification's **303** ids
+**When** the pass ends
+**Then** every one of them is accounted for by a row or by a collective block that **names its member ids**, and the arithmetic `conformant + deviation + gap + n/a = 124` is stated in the matrix
+**And** the matrix states the whole-specification total — `70 + 109 + 124 = 303` — so a reader can tell audited-in-full from audited-in-part
+**And** a clause satisfied by construction but exercised by no named test is recorded as `gap (unproven)`, not `conformant`
+**And** every `gap` carries an owning story, epic or issue
+**And** the Status table rows for chapters 1, 2, 3, 5 and 10 exist and are updated.
+
+*Added 2026-07-28 while contexting the story. This story was scoped to "chapters 2 and 5" — 103 clauses. The specification holds 303, chapters 4 and 6 account for 179, so **21 clauses (chapters 1, 3 and 10) were owned by nobody**: the chapter-1 identifier character and uniqueness rules that sit underneath chapter 4's topic grammar, and chapter 10's conformance profiles — the specification's own statement of what claiming conformance means, which is the direct input to NFR19's documented conformance scope. Leaving them out would have produced per-chapter tallies that all close over a clause set that does not, which is exactly the defect the Story 4.2 code review found in chapter 4. No ADR: this adds a completeness obligation, it reverses no position. The 124 and the 303 are measured counts; the enumeration command is in the story file.*
+
 ### Story 4.4: Primary Host / STATE — measure what the host actually does
 
 As the maintainer,
