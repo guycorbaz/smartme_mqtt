@@ -854,13 +854,15 @@ So that it stops being an omission and becomes a position.
 
 **Given** Story 4.4's findings
 **When** the decision is taken
-**Then** ADR 0012 records it, with the observed behaviour as evidence
+**Then** a new ADR recording the Primary Host / STATE decision is written, with the observed behaviour as evidence
 **And** if the decision is to implement, the ADR states what the bridge does when the primary host goes offline
 **And** if the decision is to rule out, the ADR states the conditions under which it would have to be revisited.
 
 **Given** the decision interacts with graceful shutdown
-**When** ADR 0012 is written
+**When** that ADR is written
 **Then** it states explicitly whether ADR 0011 (both deaths fire on SIGTERM) still holds unchanged — a primary host going offline may change *when* an edge node should stop publishing.
+
+*This AC named "ADR 0012" until 2026-07-28. That number was free when the epic was drafted and was taken since, by the quality-code decision. The ADR is now referenced by subject rather than by number: the story is far enough out that any number written here can be consumed before it runs — which is exactly what happened. Number it at writing time (0015 is next as of 2026-07-28).*
 
 ### Story 4.6: NCMD subscription — plumbing that ignores safely
 
@@ -904,6 +906,8 @@ So that I can resynchronise without waiting for the bridge to reconnect on its o
 **Given** the rebirth is answered
 **When** the `bdSeq` is inspected
 **Then** it is unchanged: a rebirth re-announces a session, it does not open one.
+
+*Unblocks a recorded deviation. `tck-id-principles-rbe-recommended` says data SHOULD NOT be published periodically; the bridge publishes on every poll, and one of the author's four meters is physically unplugged, so byte-identical content goes out for it roughly 17 000 times a day. Report-by-exception cannot be implemented before this story, because the periodic publish is what currently substitutes for the missing Rebirth — without it a late-joining consumer would never learn an unchanging meter's value. **When this story lands, re-examine the RBE deviation in `docs/sparkplug-conformance.md`** ([#32](https://github.com/guycorbaz/smartme_mqtt/issues/32)). Recorded 2026-07-28; the PRD and architecture were corrected then, having claimed report-by-exception the bridge has never done.*
 
 ### Story 4.8: Extend the Tier-3 gate to NCMD/Rebirth — close NFR17
 

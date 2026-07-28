@@ -129,7 +129,7 @@ These criteria operationalize the Executive Summary's guiding principle, **"neve
 
 ## User Journeys
 
-The sole human user is the author (Guy) across roles; the SCADA (Ignition) is a non-human consumer. Every journey carries a failure beat — *detect → understand → repair* — because the product exists to dissolve the anxiety of not knowing whether the numbers can be trusted. Guiding rule: **the web UI must reflect the truth the SCADA receives, not the truth the bridge hopes for** — every green indicator proves the final link (ACKed message, correct topic, correct identity).
+The sole human user is the author (Guy) across roles; the SCADA (Ignition) is a non-human consumer. Every journey carries a failure beat — *detect → understand → repair* — because the product exists to dissolve the anxiety of not knowing whether the numbers can be trusted. Guiding rule: **the web UI must reflect the truth the SCADA receives, not the truth the bridge hopes for** — every green indicator proves the final link (the message accepted for transmission, correct topic, correct identity).
 
 ### Journey 1 — First Run (Guy, the installer)
 **Happy path.** Guy copies the example `docker-compose.yml`, fills `.env` (smart-me credentials, broker), runs `docker compose up -d`. The container logs `Web UI ready → http://<host>:PORT`. He clicks **"Test connection"**; the UI auto-discovers all 4 meters by name + serial, shows per-meter live value (`3.42 kW`, `12876.5 kWh`), freshness age, and the exact MQTT topic — serial beside each so he can't cross-wire.
@@ -146,9 +146,9 @@ The sole human user is the author (Guy) across roles; the SCADA (Ignition) is a 
 *Reveals:* image-based update, config persistence across restarts, documented update+rollback procedure, LWT continuity, config-change consequence preview.
 
 ### Journey 4 — The SCADA consumer (Ignition) · machine journey
-On connect, the bridge emits **NBIRTH/DBIRTH** (self-describing metrics: units, serial, source timestamp) and Ignition auto-discovers the meters as tags with correct engineering units. **NDATA/DDATA** carry updates (report-by-exception). On bridge or device death, **NDEATH (via LWT) / DDEATH** make Ignition mark the affected tags **STALE automatically** — the native protocol guarantee behind "never lies".
-**Failure beat (source vs sink):** bridge up + broker unreachable at boot = fresh data from the API but nothing published. The UI must expose **two independent healths — "source (smart-me)" and "sink (MQTT)"** — and **"published ✓" appears only on broker ACK / successful NDATA publish**, never on API read; reconnection triggers a **rebirth (NBIRTH)** and backoff is visible and timestamped.
-*Reveals:* Sparkplug BIRTH/DATA/DEATH lifecycle, auto-discovery + engineering units, native STALE-on-DEATH, dual source/sink health, ACK-based publish confirmation, versioned Sparkplug/MQTT contract.
+On connect, the bridge emits **NBIRTH/DBIRTH** (self-describing metrics: units, serial, source timestamp) and Ignition auto-discovers the meters as tags with correct engineering units. **NDATA/DDATA** carry updates on every poll, changed or not — the bridge does **not** implement report-by-exception, and cannot safely do so until it answers NCMD/Rebirth (Stories 4.6–4.7), since a late-joining consumer would otherwise never learn the value of a meter whose reading never changes. On bridge or device death, **NDEATH (via LWT) / DDEATH** make Ignition mark the affected tags **STALE automatically** — the native protocol guarantee behind "never lies".
+**Failure beat (source vs sink):** bridge up + broker unreachable at boot = fresh data from the API but nothing published. The UI must expose **two independent healths — "source (smart-me)" and "sink (MQTT)"** — and **"published ✓" appears only once the NDATA has been accepted for transmission**, never on API read; reconnection triggers a **rebirth (NBIRTH)** and backoff is visible and timestamped. *(Corrected 2026-07-28 — read "broker ACK" until then, which FR20's own amendment had already ruled out: Sparkplug mandates QoS 0, at which no acknowledgement exists. As written it was an unimplementable UI requirement — see ADR 0010 and #33.)*
+*Reveals:* Sparkplug BIRTH/DATA/DEATH lifecycle, auto-discovery + engineering units, native STALE-on-DEATH, dual source/sink health, publish confirmation bounded by what QoS 0 can actually prove, versioned Sparkplug/MQTT contract.
 
 ### Journey 5 — The Cold Reopening (future-Guy, the returning stranger)
 **Opening.** Guy returns after eight months, tired, at 3am. Ignition shows nothing. A meter may have moved houses; the broker IP may have changed; or nothing changed and he simply forgot how his own tool breathes. His need is not information — it's **re-orientation** ("tell me what you believe is true so I can trust or contradict you").
@@ -158,7 +158,7 @@ On connect, the bridge emits **NBIRTH/DBIRTH** (self-describing metrics: units, 
 
 ### Journey Requirements Summary
 - **Onboarding/config:** example compose, `.env` config + persistent volume, connection test, meter auto-discovery, explicit **empty-config state**, **error taxonomy** (401/403/timeout/empty-list), default+editable topic mapping, **first-run mapping confirmation**, identity (serial) display.
-- **Publishing/contract:** Sparkplug B lifecycle (NBIRTH/DBIRTH/NDATA/DDATA/NDEATH/DDEATH), serial-bound identity, explicit kW/kWh units, source timestamp, per-meter quality (GOOD/STALE) via transport DEATH + app-level staleness, **publish confirmed only on broker ACK**.
+- **Publishing/contract:** Sparkplug B lifecycle (NBIRTH/DBIRTH/NDATA/DDATA/NDEATH/DDEATH), serial-bound identity, explicit kW/kWh units, source timestamp, per-meter quality (GOOD/STALE) via transport DEATH + app-level staleness, **publish confirmed only once accepted for transmission** *(corrected 2026-07-28, per FR20 and ADR 0010 — no ACK exists at QoS 0)*.
 - **Observability/diagnostics:** unified web UI (config+preview+diagnostics), **dual source/sink health**, per-meter last-success/last-error, **state screen with health timeline + broken-link localization + culprit classification + auto-written context line**, health endpoint, daily-rotated logs.
 - **Reliability:** automatic recovery (bounded backoff, visible + timestamped), per-meter staleness isolation, config persistence across restarts, **config-change consequence preview**.
 - **Lifecycle:** image-based update via Docker Hub, documented **update + rollback** procedure with post-update verification.
@@ -209,7 +209,7 @@ A cloud-API-client + Sparkplug-B-publisher service with a small embedded web UI.
 
 ### Downstream: Sparkplug B publisher (concrete `SparkplugPublisher`)
 - One EON node, a device per meter; metrics **power (kW)** + **energy (kWh)** with engineering units, measurement timestamp, serial-bound identity.
-- Lifecycle: NBIRTH/DBIRTH on connect; NDATA/DDATA (report-by-exception); NDEATH (LWT)/DDEATH on transport death; **responds to Ignition NCMD/Rebirth** with a fresh NBIRTH; monotonic `seq`/`bdSeq` with rebirth-on-gap.
+- Lifecycle: NBIRTH/DBIRTH on connect; NDATA/DDATA on every poll, changed or not — **not report-by-exception**; NDEATH (LWT)/DDEATH on transport death; **responds to Ignition NCMD/Rebirth** with a fresh NBIRTH; monotonic `seq`/`bdSeq` with rebirth-on-gap. *(Corrected 2026-07-28 — this line claimed report-by-exception, which the bridge has never done; no FR required it. See `tck-id-principles-rbe-recommended` and #32.)*
 - **Two-mechanism staleness (load-bearing):** transport DEATH **+** application-level `quality=STALE` when the cloud is unreachable while the node stays alive.
 - Consumed by Ignition MQTT Engine (Sparkplug mode). A **versioned Sparkplug/MQTT Contract** doc is the integration interface of record.
 

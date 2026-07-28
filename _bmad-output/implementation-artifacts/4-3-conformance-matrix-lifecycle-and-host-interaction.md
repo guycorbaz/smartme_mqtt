@@ -129,7 +129,7 @@ The epic scopes 4.3 to *"chapters 2 and 5"*. Mechanically that is **103** clause
 
 They are not filler. Chapter 1 carries the identifier character and uniqueness rules that sit underneath chapter 4's topic grammar; chapter 10 carries the **conformance profiles** — the specification's own statement of what it means to claim conformance, which is the direct input to NFR19's "documented conformance scope".
 
-**Decision: 4.3 owns all 124.** The alternative — a new story for the 21 — was rejected because the audit's whole value is a countable, closeable set, and a matrix that tallies each chapter while silently omitting three of them reproduces the exact defect the 4.2 code review found in chapter 4: per-chapter arithmetic that closes, over a clause set that does not. `epics.md` is amended with the same text; no ADR, because this adds a completeness obligation and reverses no position.
+**Decision: 4.3 owns all 124** (Guy, 2026-07-28; two split proposals were weighed and declined — by chapter into 103+21, and by role into 78+46). The alternative — a new story for the 21 — was rejected because the audit's whole value is a countable, closeable set, and a matrix that tallies each chapter while silently omitting three of them reproduces the exact defect the 4.2 code review found in chapter 4: per-chapter arithmetic that closes, over a clause set that does not. `epics.md` is amended with the same text; no ADR, because this adds a completeness obligation and reverses no position.
 
 ### Two defects found while drafting, and one clause that passes by luck
 
@@ -145,7 +145,13 @@ This is a `SHOULD NOT`, so it is a `deviation` if we keep the behaviour and a `g
 
 **And it interacts with the PRD in a way that must be stated rather than resolved here.** `prd.md:212` describes the downstream publisher as *"NDATA/DDATA (report-by-exception)"*. **No FR requires it** — the FR list (FR17–FR22) covers units, serial binding, timestamps, rebirth, delivery and outage policy, and none mentions RBE. So the accurate finding is narrow: *the PRD's prose says report-by-exception, no requirement obliges it, and the implementation does not do it.* Record that; do not upgrade it to "FR unmet", and do not quietly amend the PRD from inside an audit.
 
-There is a real argument for the current behaviour — a periodic publish is what makes staleness observable to a consumer that would otherwise not hear from a dead-but-connected bridge. That argument belongs in the row, and possibly in an ADR. It does not belong in a silent omission.
+**The verdict is decided: `deviation`, and the row must say that RBE is *blocked*, not rejected.** Guy took this on 2026-07-28. Three facts carry it, and the row should carry all three:
+
+1. **For active meters RBE would suppress almost nothing.** `crates/smart-me-client/fixtures/smartme_sample.json` publishes `CounterReading` to six decimals (`4843.822`, `6330.412207`). At the fixture's `0.754 kW`, energy advances ~`0.001 kWh` per 5-second poll — visible at the published precision. The values genuinely change every tick.
+2. **For a dead meter it suppresses everything, and that case is live.** Fixture meter `30000003` reads `0.0 kW` with a `ValueDate` of `2026-04-20` — the physically unplugged meter. The bridge republishes byte-identical content for it roughly **17 000 times a day**, indefinitely. This is precisely the case the clause addresses.
+3. **RBE cannot land before `Node Control/Rebirth`.** Sparkplug assumes a late-joining consumer issues a Rebirth to relearn state. The bridge does not answer one (Stories 4.6/4.7), so the periodic publish is currently *substituting* for the missing Rebirth. Implementing RBE first would mean a new consumer never learns the unplugged meter's value — a functional regression wearing conformance as a costume.
+
+So: `deviation` owned by **[#32](https://github.com/guycorbaz/smartme_mqtt/issues/32)**, rationale as above, and an explicit revisit condition — **when Story 4.7 lands, this deviation must be re-examined.** The PRD was corrected on 2026-07-28 (`prd.md:149`, `:212`) and `architecture.md:211` with it; all three claimed report-by-exception, which the bridge has never done. `docs/manual/chapters/04-mqtt-sparkplug-contract.tex:237` already recorded it correctly — the manual was right and the planning artifacts were wrong, which is worth noticing about which documents get maintained.
 
 #### 2. `tck-id-principles-persistence-clean-session-311` — satisfied by a dependency default we never set
 
