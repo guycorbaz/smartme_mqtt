@@ -136,7 +136,15 @@ development_status:
   # invariant witness the pass had used without deciding it — the same failure ADR 0014
   # was written to correct, committed again one chapter later.
   4-3-conformance-matrix-lifecycle-and-host-interaction: done
-  4-4-primary-host-state-measure: backlog
+  # 2026-07-28: contexted. Read-only measurement against the PRODUCTION broker —
+  # Ignition is live on it, so Task 4's restart needs Guy's explicit go and the
+  # story publishes nothing. Feeds the 11 Primary-Host clauses Story 4.3 filed as
+  # gap (unimplemented); AC4 added so 4.5 can rule on each without re-measuring.
+  # The trap that would sink it: `common::named_subscriber_on` decodes protobuf and
+  # DISCARDS what fails, so reusing it would show silence on a busy STATE topic and
+  # produce a false "the host publishes no STATE". STATE payloads are JSON.
+  # AC3 added — human-run gate, so every step must state what else could produce it.
+  4-4-primary-host-state-measure: ready-for-dev
   4-5-primary-host-state-decide: backlog
   4-6-ncmd-subscription-plumbing: backlog
   4-7-node-control-rebirth-answer: backlog

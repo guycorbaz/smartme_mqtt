@@ -862,7 +862,9 @@ So that it stops being an omission and becomes a position.
 **When** that ADR is written
 **Then** it states explicitly whether ADR 0011 (both deaths fire on SIGTERM) still holds unchanged — a primary host going offline may change *when* an edge node should stop publishing.
 
-*This AC named "ADR 0012" until 2026-07-28. That number was free when the epic was drafted and was taken since, by the quality-code decision. The ADR is now referenced by subject rather than by number: the story is far enough out that any number written here can be consumed before it runs — which is exactly what happened. Number it at writing time (0015 is next as of 2026-07-28).*
+*This AC named "ADR 0012" until 2026-07-28. That number was free when the epic was drafted and was taken since, by the quality-code decision. The ADR is now referenced by subject rather than by number: the story is far enough out that any number written here can be consumed before it runs — which is exactly what happened. Number it at writing time.*
+
+*And it happened **again, the same day**. This note read "0015 is next as of 2026-07-28" until the Story 4.3 code review consumed 0015 for the language-type-invariant witness a few hours later. **Next free is 0016 as of 2026-07-28** — but the pattern is now established twice, so treat any ADR number written in this file as stale on sight and check `docs/adr/` instead. Recording the second occurrence rather than quietly bumping the digit: a note that predicts a failure and then suffers it is evidence the mitigation (referencing by subject) is the right one and the parenthetical is not.*
 
 ### Story 4.6: NCMD subscription — plumbing that ignores safely
 
