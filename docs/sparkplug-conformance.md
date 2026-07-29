@@ -196,7 +196,7 @@ stated operationally; it carries the same verdict and the same owner, and is not
 **One thing the PRD said and the code never did.** `prd.md` and `architecture.md` described the
 downstream publisher as *"NDATA/DDATA (report-by-exception)"*, and **no FR requires it** — FR17–FR22
 cover units, serial binding, timestamps, rebirth, delivery and outage policy, and none mentions RBE.
-The planning artifacts were corrected on 2026-07-28; `docs/manual/chapters/04-mqtt-sparkplug-contract.tex:237`
+The planning artifacts were corrected on 2026-07-28; `docs/manual/chapters/05-mqtt-sparkplug-contract.tex:237`
 had recorded it correctly all along.
 
 *(Those two corrections were an **earlier commit** on 2026-07-28, not this audit's work; the first
@@ -364,17 +364,17 @@ do below.
 | `message-flow-edge-node-birth-publish-nbirth-qos` | MUST (QoS 0) | QoS 0 | `every_edge_node_message_is_qos_zero_and_never_retained` — **mutation-verified at the Story 4.3 review**: changing `qos_for` to return `AtLeastOnce` goes red, and both call sites (`:158` the will, `:278` every publish) derive from that one function | conformant |
 | `message-flow-edge-node-birth-publish-nbirth-retained` | MUST (false) | retain false | same, **plus an external witness**: `chaos_sigterm_no_lie:397-405` connects a late subscriber after the bridge is gone and asserts the broker replays nothing — and unlike the will, the NBIRTH is *certainly* published in that run, because the test waited for it | conformant |
 | `message-flow-edge-node-birth-publish-nbirth-payload-seq` | MUST (0–255) | a BIRTH resets the counter and takes `0`; `SeqCounter` is a `u8`, so the range is a type invariant | `birth_carries_seq_zero_and_the_session_number`, `prop_seq_stays_in_range_and_wraps_at_the_boundary`, `prop_rebirth_always_restarts_numbering_at_zero` | conformant |
-| `message-flow-edge-node-birth-publish-phid-wait` | MUST | **the bridge has no Primary Host Application configuration at all** | — | **gap (unimplemented)** (Stories 4.4–4.5) |
-| `message-flow-edge-node-birth-publish-phid-wait-id` | MUST | as above — no STATE topic is parsed | — | **gap (unimplemented)** (Stories 4.4–4.5) |
-| `message-flow-edge-node-birth-publish-phid-wait-online` | MUST | as above — no STATE payload is read | — | **gap (unimplemented)** (Stories 4.4–4.5) |
-| `message-flow-edge-node-birth-publish-phid-wait-timestamp` | MUST | as above — no STATE timestamp is compared | — | **gap (unimplemented)** (Stories 4.4–4.5) |
-| `message-flow-edge-node-birth-publish-phid-offline` | MUST | as above — nothing makes the bridge disconnect on an offline STATE | — | **gap (unimplemented)** (Story 4.5) |
+| `message-flow-edge-node-birth-publish-phid-wait` | MUST | **the bridge has no Primary Host Application configuration at all** | — | **gap (unimplemented)** (Stories 4.4–4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
+| `message-flow-edge-node-birth-publish-phid-wait-id` | MUST | as above — no STATE topic is parsed | — | **gap (unimplemented)** (Stories 4.4–4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
+| `message-flow-edge-node-birth-publish-phid-wait-online` | MUST | as above — no STATE payload is read | — | **gap (unimplemented)** (Stories 4.4–4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
+| `message-flow-edge-node-birth-publish-phid-wait-timestamp` | MUST | as above — no STATE timestamp is compared | — | **gap (unimplemented)** (Stories 4.4–4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant*, monotonicity undetermined |
+| `message-flow-edge-node-birth-publish-phid-offline` | MUST | as above — nothing makes the bridge disconnect on an offline STATE | — | **gap (unimplemented)** (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
 | `operational-behavior-edge-node-intentional-disconnect-ndeath` | MUST | the bridge publishes its own NDEATH before dropping the socket (`mqtt_driver.rs:240`) | `chaos_sigterm_no_lie` — and it proves the **explicit** death rather than the will, because it asserts `death_stamp > birth_stamp`, which a CONNECT-time will can never satisfy | conformant — **and it vindicates [ADR 0011](adr/0011-graceful-shutdown-requires-both-deaths.md)** |
 | `operational-behavior-edge-node-intentional-disconnect-packet` | MAY | the bridge **never** sends a DISCONNECT packet, deliberately: it would instruct the broker to discard the will, removing the fallback (ADR 0011) | `chaos_sigterm_no_lie` observes the will still firing after the explicit death | n/a — a permission declined, not an obligation missed |
-| `operational-behavior-edge-node-birth-sequence-wait` | MUST | the bridge births as soon as the broker answers; it waits for no STATE | — | **gap (unimplemented)** (Stories 4.4–4.5) |
-| `operational-behavior-edge-node-termination-host-offline` | MUST | nothing disconnects the bridge on an offline STATE | — | **gap (unimplemented)** (Story 4.5) |
-| `operational-behavior-edge-node-termination-host-offline-reconnect` | MUST | there is no server list to walk | — | **gap (unimplemented)** (Story 4.5) |
-| `operational-behavior-edge-node-termination-host-offline-timestamp` | MUST NOT | the anti-replay rule for a stale offline STATE — nothing implements it because nothing reads STATE | — | **gap (unimplemented)** (Story 4.5) |
+| `operational-behavior-edge-node-birth-sequence-wait` | MUST | the bridge births as soon as the broker answers; it waits for no STATE | — | **gap (unimplemented)** (Stories 4.4–4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant*, but which of two readings applies is undetermined |
+| `operational-behavior-edge-node-termination-host-offline` | MUST | nothing disconnects the bridge on an offline STATE | — | **gap (unimplemented)** (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
+| `operational-behavior-edge-node-termination-host-offline-reconnect` | MUST | there is no server list to walk | — | **gap (unimplemented)** (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *irrelevant* — one broker |
+| `operational-behavior-edge-node-termination-host-offline-timestamp` | MUST NOT | the anti-replay rule for a stale offline STATE — nothing implements it because nothing reads STATE | — | **gap (unimplemented)** (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant*, occurrence here undetermined |
 
 **Why `-nbirth-qos` is `conformant` on `qos_for` while `-will-message-will-retained` is a `gap` on
 the same function — a convention, made explicit at the code review of Story 4.3 because the rows
@@ -671,8 +671,8 @@ The three clauses that bind **us**:
 
 | tck-id | Level | Our behaviour | Proof | Verdict |
 | --- | --- | --- | --- | --- |
-| `operational-behavior-primary-application-state-with-multiple-servers-state-subs` | MUST | the clause binds both sides — *"all Edge Nodes configured with a Primary Host Application MUST subscribe to this STATE message"* (`:586-589`). The bridge issues no subscription of any kind | — | **gap (unimplemented)** (Stories 4.4, 4.6) |
-| `operational-behavior-primary-application-state-with-multiple-servers-walk` | MUST | *"the Edge Node MUST terminate its session with this MQTT Server and move to the next available MQTT Server"* (`:610-613`) — there is no server list and no STATE to trigger it | — | **gap (unimplemented)** (Story 4.5) |
+| `operational-behavior-primary-application-state-with-multiple-servers-state-subs` | MUST | the clause binds both sides — *"all Edge Nodes configured with a Primary Host Application MUST subscribe to this STATE message"* (`:586-589`). The bridge issues no subscription of any kind | — | **gap (unimplemented)** (Stories 4.4, 4.6) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* — the host half is satisfied, the edge-node half is not |
+| `operational-behavior-primary-application-state-with-multiple-servers-walk` | MUST | *"the Edge Node MUST terminate its session with this MQTT Server and move to the next available MQTT Server"* (`:610-613`) — there is no server list and no STATE to trigger it | — | **gap (unimplemented)** (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *irrelevant* — one broker |
 | `operational-behavior-primary-application-state-with-multiple-servers-single-server` | MUST NOT | *"The Edge Nodes MUST not connected to more than one server at any point in time"* (`:600-601`, typo the specification's). `MqttConfig` holds one `host` and one `port` and the driver builds one `AsyncClient` | — **correct by our own code shape, and nothing asserts it**; the guarantee dissolves the day Story 4.5 adds a server list, which is exactly when it would matter | **gap (unproven)** ([#35](https://github.com/guycorbaz/smartme_mqtt/issues/35), Story 4.10) |
 
 **Why `-single-server` is not `conformant`.** A second concurrent session is unreachable today, which
@@ -1580,7 +1580,7 @@ is left unowned or unnumbered.
 
 | Gaps | Count | Owner | Already existed? |
 | --- | ---: | --- | --- |
-| Primary Host STATE — `-phid-wait`, `-wait-id`, `-wait-online`, `-wait-timestamp`, `-phid-offline`, `-birth-sequence-wait`, `-termination-host-offline`, `-host-offline-reconnect`, `-host-offline-timestamp`, `-state-subs`, `-walk` | 11 | **Stories 4.4, 4.5** (4.6 for the subscription plumbing) | yes — this epic |
+| Primary Host STATE — `-phid-wait`, `-wait-id`, `-wait-online`, `-wait-timestamp`, `-phid-offline`, `-birth-sequence-wait`, `-termination-host-offline`, `-host-offline-reconnect`, `-host-offline-timestamp`, `-state-subs`, `-walk` | 11 | **Stories 4.4, 4.5** (4.6 for the subscription plumbing). Story 4.4 measured this deployment and ruled each **relevant / irrelevant** — 9 · 2, four with a named undetermined residue: [primary-host-state-observation.md](primary-host-state-observation.md#the-eleven-clauses-ruled). **The verdicts above are unchanged; 4.5 decides** | yes — this epic |
 | `Node Control/Rebirth` — NBIRTH metric, datatype, value, and the three receive-side actions | 6 | **Story 4.7** | yes — this epic |
 | NCMD subscription (QoS 1) | 1 | **Story 4.6**, [#23](https://github.com/guycorbaz/smartme_mqtt/issues/23) | yes |
 | The will's QoS 1 | 1 | **Story 4.17**, [#26](https://github.com/guycorbaz/smartme_mqtt/issues/26) | yes |

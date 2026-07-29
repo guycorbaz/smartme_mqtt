@@ -254,10 +254,22 @@ The two mechanisms are complementary rather than alternative: the will remains t
         name a host and change its behaviour with that host's \code{STATE}: wait for it
         before birthing, disconnect when it goes offline, walk to another broker. \prog
         implements none of this --- it births as soon as the broker answers, whether or
-        not any consumer is listening, and never reads a \code{STATE} topic. On a
-        single-broker installation with a permanently connected host this is invisible;
-        it matters in a redundant-broker topology, where an Edge Node can otherwise be
-        stranded on a broker its host cannot reach.
+        not any consumer is listening, and never reads a \code{STATE} topic.
+
+        \textbf{This is \emph{not} invisible on a single-broker installation, and an
+        earlier edition of this manual wrongly said it was.} The cost appears when the
+        host restarts. \prog's \code{NBIRTH} was published once, at QoS~0 and not
+        retained, so the broker keeps no copy for a returning consumer; \prog holds no
+        subscription, so it never learns the host came back and never re-births; and its
+        own broker session is untouched by the host restarting, so nothing prompts it to
+        reconnect. The protocol's remaining repair is an \code{NCMD}
+        \code{Node Control/Rebirth}, which \prog also does not implement. The consequence
+        is that \textbf{after a consumer restarts, it may keep receiving \code{NDATA} it
+        has no \code{NBIRTH} to interpret, and no mechanism in the protocol restores the
+        tag definitions} until \prog itself is restarted.
+
+        Redundant-broker stranding is a second, separate consequence, and it does require
+        a multi-broker topology.
   \item \textbf{\code{bdSeq} is fixed for the lifetime of one MQTT client}, not
         incremented per CONNECT as the specification would have it. The will is registered
         once, inside the first CONNECT, and cannot be updated afterwards; advancing the

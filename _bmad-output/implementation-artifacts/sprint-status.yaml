@@ -158,7 +158,24 @@ development_status:
   # restart, so "wait for online before birthing" can hang forever.
   # The raw record is committed at docs/primary-host-state-observation.md — it cost
   # a production restart; DO NOT re-measure to recover it.
-  4-4-primary-host-state-measure: in-progress
+  # 2026-07-29: Tasks 5-6 done from that record, no second observation, no broker.
+  # ALL FOUR ACs MET. AC2: ignoring STATE costs nothing while Ignition is up and
+  # costs total loss of tag recovery after an Ignition restart (unretained NBIRTH +
+  # no subscription + no Rebirth = no protocol path back). AND IT ARGUES AGAINST THE
+  # SPEC'S OWN MOTIVATION: PHID-wait without store-and-forward preserves no
+  # measurement, so STORY 4.7 (REBIRTH) IS THE HIGHER PRIORITY OF THE TWO.
+  # AC4: 9 relevant, 2 irrelevant, 0 wholly undetermined (4 with a named residue).
+  # Nine of the eleven are CONDITIONAL on configuring a Primary Host — "relevant"
+  # means the deployment supplies what the clause needs, not that we are in breach.
+  # -phid-wait-id is load-bearing: three retained decoy ids, one differing from the
+  # live SCADA only in case, so a loose match would mean the bridge NEVER births.
+  # -birth-sequence-wait is the one clause whose text (unconditional) and section
+  # context (multi-server) disagree here; 4.5 must choose a reading explicitly.
+  # Second restart declined: it buys a sample, not the answer. But the open question
+  # IS answerable from timestamps (a will is stamped at CONNECT) — the same
+  # discriminator chaos_sigterm_no_lie uses; unusable now because the death payload's
+  # timestamp was never transcribed. Recorded as the record's own gap.
+  4-4-primary-host-state-measure: review
   4-5-primary-host-state-decide: backlog
   4-6-ncmd-subscription-plumbing: backlog
   4-7-node-control-rebirth-answer: backlog
