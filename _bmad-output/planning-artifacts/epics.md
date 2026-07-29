@@ -212,6 +212,12 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 
 > **Execution order: 0 → 1 → 4 → 2 → 3 → 5 → 6 → 7 → 8.**
 >
+> **Inside Epic 4, stories 4.6 and 4.7 run before 4.5** — [ADR 0016](../../docs/adr/0016-rebirth-before-primary-host-wait.md),
+> [#37](https://github.com/guycorbaz/smartme_mqtt/issues/37). Story 4.4 measured that the
+> specification's motivation for waiting on a Primary Host is store-and-forward, which this bridge
+> does not have, so PHID-wait alone would preserve no measurement; Rebirth is what actually restores
+> a consumer's view. Story numbers, like epic numbers, are identifiers rather than sequence.
+>
 > Epic numbers are **identifiers, not sequence**. Epic 4 was pulled ahead of Epic 2 at the Epic 1 retrospective (2026-07-26) for three reasons: it owns the Sparkplug conformance audit, and Epic 1 demonstrated what stacking on an unverified channel costs; Epic 2 will define many oracle→quality mappings (AR16), which are cheaper to land on a settled publishing machine than to revisit after rebirth and anti-replay change republication semantics; and Epic 4 carries NFR3 / AC-LEAK-01, so a resource leak surfaces before two more epics are built on top of it.
 >
 > The epics were deliberately **not renumbered**: seventeen references to epic numbers live in Rust doc comments, plus the coverage map, the manual and the issue tracker. Renumbering would invalidate all of them for a cosmetic gain.
@@ -864,7 +870,7 @@ So that it stops being an omission and becomes a position.
 
 *This AC named "ADR 0012" until 2026-07-28. That number was free when the epic was drafted and was taken since, by the quality-code decision. The ADR is now referenced by subject rather than by number: the story is far enough out that any number written here can be consumed before it runs — which is exactly what happened. Number it at writing time.*
 
-*And it happened **again, the same day**. This note read "0015 is next as of 2026-07-28" until the Story 4.3 code review consumed 0015 for the language-type-invariant witness a few hours later. **Next free is 0016 as of 2026-07-28** — but the pattern is now established twice, so treat any ADR number written in this file as stale on sight and check `docs/adr/` instead. Recording the second occurrence rather than quietly bumping the digit: a note that predicts a failure and then suffers it is evidence the mitigation (referencing by subject) is the right one and the parenthetical is not.*
+*And it happened **again, the same day**. This note read "0015 is next as of 2026-07-28" until the Story 4.3 code review consumed 0015 for the language-type-invariant witness a few hours later. It was then amended to "next free is 0016" — and **0016 was consumed on 2026-07-29** by the Story 4.4 review, for the Rebirth-before-Primary-Host ordering. **Three occurrences, and the third was caused by writing the digit down for the second time.** No number is recorded here now, and none should be: reference an ADR **by subject** and read `docs/adr/` for the digit at the moment you write it. A note that predicted a failure, suffered it, and then suffered it again while documenting it is as strong an argument for the mitigation as this file is going to produce.*
 
 ### Story 4.6: NCMD subscription — plumbing that ignores safely
 
