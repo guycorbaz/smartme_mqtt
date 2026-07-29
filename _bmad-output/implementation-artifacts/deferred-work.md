@@ -174,11 +174,28 @@ Items deferred from reviews; each carries its origin and where it should be pick
   a genuine open problem worth an epic-level decision. **No owner yet; raise at the Epic 4
   retrospective.**
 
-- **Eleven untracked dotfiles sit at the repository root** (`.bashrc`, `.gitconfig`, `.idea`,
-  `.mcp.json`, `.vscode`, `.zshrc`, …). Environment artefacts of the working directory, not project
-  output, and present before Story 4.3. They are a live hazard given `CLAUDE.md`'s rule against
-  `git add <directory>`: a careless `git add .` commits a developer's shell configuration to a
-  **public** repository. Either `.gitignore` them or move the checkout out of the home directory.
+- ~~**Eleven untracked dotfiles sit at the repository root**~~ — **WITHDRAWN 2026-07-29. The finding
+  was false and there is nothing to do.** No such files exist. `ls -a` at the repository root shows
+  only `.cargo`, `.claude`, `.env`, `.env.example`, `.git`, `.github`, `.gitignore`, and
+  `git status` reports a clean working tree.
+
+  **What was actually being observed.** The agent's command sandbox hides certain paths by mounting
+  `/dev/null` over them. Inside the sandbox those paths therefore *appear to exist* — `ls -l` shows
+  `crw-rw-rw- … 1, 3`, a character device, and `git status` lists them as untracked. `cat` returns
+  "permission denied", which reads like a permissions quirk rather than the clue it is. Every tool
+  run inside the sandbox agrees with every other, so the observation is internally consistent and
+  entirely an artefact of the lens.
+
+  **How it was caught.** Not by looking harder inside the sandbox — three passes there would have
+  reported the same eleven files. It was caught by running the *same* `ls` with the sandbox disabled
+  and getting a different answer. The device numbers (`1, 3` = `/dev/null`) then explained why.
+
+  **This is the same failure shape as Story 4.4's retained-STATE snapshot**, and it is worth
+  noticing that the project produced two instances of it in one week: a measurement that is careful,
+  repeatable and consistent, taken through an instrument that silently alters what it reports.
+  Repeating a measurement with the *same* instrument cannot detect it. See
+  `docs/primary-host-state-observation.md` and `CLAUDE.md`'s falsification rule — the discipline
+  generalises beyond tests.
 
 ## Deferred from: code review of 4-4-primary-host-state-measure (2026-07-29)
 
