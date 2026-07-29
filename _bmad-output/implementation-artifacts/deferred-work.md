@@ -179,3 +179,22 @@ Items deferred from reviews; each carries its origin and where it should be pick
   output, and present before Story 4.3. They are a live hazard given `CLAUDE.md`'s rule against
   `git add <directory>`: a careless `git add .` commits a developer's shell configuration to a
   **public** repository. Either `.gitignore` them or move the checkout out of the home directory.
+
+## Deferred from: code review of 4-4-primary-host-state-measure (2026-07-29)
+
+- **The `epics.md` ADR-number note is a third instance of the pattern it documents.** It writes a
+  bold *"Next free is 0016 as of 2026-07-28"* directly beneath its own instruction to *"treat any ADR
+  number written in this file as stale on sight and check `docs/adr/` instead"*. If the remedy is
+  right the digit should go; if the digit is useful the remedy is overstated. Task 6 re-verified the
+  number against `docs/adr/` and it is currently correct, so this is presentational rather than
+  wrong. **Deferred; settle it the next time an ADR is numbered.**
+
+- **The new manual chapter has never been reviewed by anyone.**
+  `docs/manual/chapters/02-understanding-sparkplug.tex` — 732 lines, four TikZ figures, the
+  `git mv` renumbering of eight chapters (02→03 … 09→10) and the shared-style additions to
+  `preamble/style.tex` — was pushed in `150a57f` alongside Story 4.4 and was excluded from that
+  story's review by an explicit scope choice, to keep the adversarial pass on the conformance
+  argument. It builds (`latexmk` exit 0, 38 pages) and was verified page by page by its author, but
+  no independent layer has read it. Its § 3.11 *Where smartme_mqtt sits* ranks every mechanism
+  implemented / absent / deviation, which makes it exactly the kind of claim this project reviews.
+  **Deferred; owner unassigned.**

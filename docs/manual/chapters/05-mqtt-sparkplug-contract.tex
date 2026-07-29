@@ -260,13 +260,20 @@ The two mechanisms are complementary rather than alternative: the will remains t
         earlier edition of this manual wrongly said it was.} The cost appears when the
         host restarts. \prog's \code{NBIRTH} was published once, at QoS~0 and not
         retained, so the broker keeps no copy for a returning consumer; \prog holds no
-        subscription, so it never learns the host came back and never re-births; and its
-        own broker session is untouched by the host restarting, so nothing prompts it to
-        reconnect. The protocol's remaining repair is an \code{NCMD}
-        \code{Node Control/Rebirth}, which \prog also does not implement. The consequence
-        is that \textbf{after a consumer restarts, it may keep receiving \code{NDATA} it
-        has no \code{NBIRTH} to interpret, and no mechanism in the protocol restores the
-        tag definitions} until \prog itself is restarted.
+        subscription, so it never learns the host came back; and its own broker session is
+        untouched by the host restarting, so \emph{that} event prompts nothing. The
+        protocol's own repair for this is an \code{NCMD} \code{Node Control/Rebirth},
+        which \prog does not implement. The consequence is that \textbf{after a consumer
+        restarts, it may keep receiving \code{NDATA} it has no \code{NBIRTH} to
+        interpret.}
+
+        \textbf{What does restore the definitions is any reconnect on \prog's own side.}
+        A fresh \code{NBIRTH} is published on every successful MQTT connection, so a
+        broker restart, a network interruption or a keep-alive expiry all repair the
+        consumer's view --- see the first item in this list. Restarting \prog is therefore
+        the most direct remedy, but it is not the only one, and an earlier edition of this
+        paragraph wrongly said it was. What no event on the \emph{host} side can do is
+        prompt that reconnect by itself.
 
         Redundant-broker stranding is a second, separate consequence, and it does require
         a multi-broker topology.

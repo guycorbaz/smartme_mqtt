@@ -1,6 +1,6 @@
 # Story 4.4: Primary Host / STATE — measure what the host actually does
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -63,7 +63,7 @@ so that the decision rests on this deployment's behaviour rather than on a readi
   - [x] With the observer already connected and recording, have Guy restart Ignition.
   - [x] Record, in order and with timestamps: the offline STATE (if any), the reconnect, the online STATE. Note `retain` and `qos` on each.
   - [x] **Record whether an offline STATE appears at all.** A graceful stop may publish a death and then send a DISCONNECT — which instructs the broker to discard the will. A crash would produce the will instead. These are different observations and the write-up must say which one was made.
-  - [x] Compare the `timestamp` values across the offline/online pair against your own receive times. The specification expects birth and will timestamps to **match each other** and to be the CONNECT-time value — so a payload timestamp is not a publish time.
+  - [ ] **UNMET** — Compare the `timestamp` values across the offline/online pair against your own receive times. *Ticked in error until the 2026-07-29 review: the death payload's timestamp was never transcribed, so **no pair existed to compare**. Its sibling "record, in order and with timestamps" is also only half done — the Run 2 table carries no per-message times and does not record the reconnect, although the observer prints `+Nms` offsets. Recorded as unmet per `CLAUDE.md` rather than stretched. The residue is folded into AC1's named shortfalls; it needs no separate issue because the next observation is already required to paste the transcript verbatim.*
 
 - [x] **Task 5 — write the findings** (AC: 1, 2, 3, 4)
   - [x] New file `docs/primary-host-state-observation.md`, structured like `docs/ignition-contract-runbook.md`: *Before you start · Running it · What each step proves (and what else could produce it) · Record of runs · Interpreting the result · Clean-up*.
@@ -321,7 +321,12 @@ falsification that *was* available is the premise probe above, and it was run.
 
 ### Completion Notes List
 
-**Tasks 1 and 2 complete. Tasks 3–6 are blocked on a production action and are NOT claimed.**
+> **Header corrected 2026-07-29 by the review.** This section read *"Tasks 1 and 2 complete.
+> Tasks 3–6 are blocked on a production action and are NOT claimed."* — which was true when it was
+> written on 2026-07-28 and was contradicted by every section beneath it once Tasks 3–6 landed. It is
+> left visible rather than deleted, because a record that gets appended to without being reread is
+> the same failure mode as a manual whose consequences go unamended. **All six tasks are done; all
+> four ACs are met, AC1 with named shortfalls (see below).**
 
 - **Task 1 — done.** `crates/smartme-bridge/tests/observe_primary_host_state.rs`: `#[ignore]`d,
   env-gated, captures topic · raw bytes · `retain` · `qos` · receive time, prints the payload as
@@ -352,7 +357,10 @@ retain=true  qos=AtLeastOnce  STATE/ignition  "OFFLINE" (7 bytes)
 retain=true  qos=AtLeastOnce  STATE/SCADA     "ONLINE"  (6 bytes)
 ```
 
-**Two departures from the vendored norm, both measured:**
+**Two departures from the vendored norm, as this pass read them** — and **both descriptions are
+superseded by Task 4**, which found the conformant 3.0 form published *as well*. The host does not
+depart on topic or on payload; it publishes an additional legacy form alongside a conformant one.
+Left standing with this correction rather than rewritten, for the same reason the ⚠️ block below is:
 
 1. **Topic** — `STATE/<host_id>`, with **no `spBv1.0/` namespace element**. The specification requires
    *"'spBv1.0/STATE/sparkplug_host_id'"* (`tck-id-operational-behavior-host-application-connect-will-topic`,
@@ -389,9 +397,10 @@ character set could not be cited because that norm is not vendored either.
 
 **And which client owns which host id is undetermined.** Four ids, three OFFLINE and one ONLINE,
 two differing only in case (`scada` / `SCADA`). Retained messages outlive their publisher, so some
-are plausibly cruft from long-dead clients. **This makes the Ignition restart more valuable than the
-story originally scoped it**: it will show which id Ignition actually owns, and whether it
-republishes in the legacy or the 3.0 form.
+are plausibly cruft from long-dead clients. **This made the Ignition restart more valuable than the
+story originally scoped it**: it showed which id Ignition actually owns, and that it republishes in
+**both** the legacy and the 3.0 form. *(Future tense until the 2026-07-29 review — the restart had
+answered this the previous evening.)*
 
 **Task 4 — done. Guy restarted the Ignition container at ~20:25 local (2026-07-28) with two
 observers already listening on distinct client ids.** MQTT Engine module version, from Guy:
@@ -456,13 +465,43 @@ them needs an observer connected *before* the shutdown begins. Recorded as open 
    other. Fixed: `SMARTME_STATE_CLIENT_ID`. Watching both forms simultaneously is what caught the
    `spBv1.0` message appearing.
 
-**AC1 is met.** AC2, AC3 and AC4 remain — they are Task 5's write-up.
+**AC1 is met, with three named shortfalls** *(qualified by the 2026-07-29 review; it read simply
+"AC1 is met")*. AC1 asks for **topic, raw payload, retain flag and QoS** per message, plus three
+findings. What is missing:
 
-**One defect in the observer, found by using it.** The first run against the real broker hung: with
-no connection timeout, `ready_rx.await` parked forever and printed nothing. Fixed with a 15-second
-bounded wait and a four-point diagnostic. Worth recording because the failure would have burned a
-restart window that cannot be repeated cheaply — the tool was written for that window and would have
-been useless in it.
+1. **The death's topic and raw payload were never transcribed** — only a byte count and an elided
+   `{"online":false,…}`. It is the one message whose content bore on open question 1.
+2. **No per-message receive times** were transcribed for either run, although the observer prints
+   them.
+3. **AC1's third named finding — *"whether it expects edge nodes to react"* — is not addressed
+   anywhere** in the record. Nothing in the observation speaks to whether MQTT Engine is configured
+   to expect Edge Nodes to wait on STATE, and no evidence was gathered that would settle it.
+
+All three are **transcription and scope omissions, not tool limitations**. AC1 stands as met because
+the observation genuinely spans a restart and the `retain` discriminator was captured and used —
+which is the property the criterion exists to secure — but a reader must not take "met" to mean the
+record is complete. AC2, AC3 and AC4 remain — they are Task 5's write-up.
+
+*(A third paragraph repeating the connection-timeout defect as "one defect in the observer" was
+removed by the review — it duplicated item 1 above and contradicted its own count.)*
+
+**Seven further defects in the observer, found by the review rather than by using it.** All fixed in
+the same pass; the file's module docs now carry a section enumerating every way the instrument can
+lie. The one that matters: `Packet::SubAck(_)` discarded the broker's return codes, so a
+**subscription refused by an ACL** (`0x80`) was indistinguishable from a quiet topic — and the run
+then printed a checklist asking the operator to rule out, by hand, the very thing the discarded byte
+had just answered. Also fixed: a dead observer task and an elapsed window took the same path and both
+printed the full nominal window; `SMARTME_STATE_SECONDS` fell back to 90 on any typo; two unchecked
+time subtractions could panic *after* the observation and *before* the transcript was printed;
+`dup`/`pkid` were dropped, which is why "published twice" could not be told from a redelivery; an
+empty payload was reported as contradicting the specification when it is how MQTT *clears* a retained
+message; and a mid-window reconnect left no trace at all.
+
+**Not falsified, and that is stated rather than papered over.** The review added one assertion — the
+test now fails when the observation was incomplete. It cannot be run against deliberately broken code
+without a real broker, so `CLAUDE.md`'s falsification rule could not be applied to it. It is a guard
+against the instrument misreporting its own run, not an assertion about the system under test, which
+is the same position the story took for the observer as a whole.
 
 ### Tasks 5 and 6 — done 2026-07-29, from the committed record, with no second observation
 
@@ -486,7 +525,12 @@ re-birth; and the protocol's remaining recovery is an NCMD Rebirth
 > Implementing PHID-wait alone here would not preserve one measurement — it converts silent
 > publication into deliberate non-publication. Waiting is worth building for the clean re-birth it
 > enables, **not** on the grounds the specification gives, and 4.5 must not justify it that way.
-> It also reorders the epic: **Story 4.7 (Rebirth) is the higher priority of the two.**
+> It is also the evidence for reordering the epic so that **Story 4.7 (Rebirth) runs before Story
+> 4.5** — a decision this story does not get to make, and which is now recorded in
+> **[ADR 0016](../../docs/adr/0016-rebirth-before-primary-host-wait.md)** and
+> **[#37](https://github.com/guycorbaz/smartme_mqtt/issues/37)**. *(Until the 2026-07-29 review this
+> read "it reorders the epic", stated as a conclusion, in a story whose Dev Notes say it does not
+> decide.)*
 
 **The one inference in AC2 is labelled as one.** That Ignition's view of the edge node does not
 survive its own restart was *not* observed — no tag state was checked. It is inferred from the
@@ -503,14 +547,23 @@ so: the origin of the `OFFLINE`, and the one-sample caveat. Step 1's table is th
 it lists five candidate causes of silence, four eliminated, and names the fifth as *the one that was
 actually true*, which is what the first pass got wrong.
 
-**AC4 — 9 relevant · 2 irrelevant · 0 wholly undetermined**, four carrying a named undetermined
+**AC4 — 10 relevant · 1 irrelevant · 0 wholly undetermined** *(was `9 · 2`; the 2026-07-29 review
+moved `-termination-host-offline-reconnect` to relevant, because with one server the clause still
+binds and degenerates into reconnect-to-self, which the original cell itself said 4.5 must address.
+The review also found a **cold-start state no clause covers** — a retained `online:false` at bridge
+start-up — now ruled in the findings document. The four with a residue are
+`-phid-wait-timestamp`, `-birth-sequence-wait`, `-…-state-subs` and `-host-offline-timestamp`;
+`-phid-offline` was listed in error, it states a cost rather than an undetermined.)*, four carrying a named undetermined
 residue. Three things in that ruling are worth a reviewer's attention:
 
 - **Nine of the eleven clauses are conditional** — *"if the Edge Node is configured to wait for a
   Primary Host Application"*. Nothing forces the bridge to configure one. The ruling therefore says
   explicitly that "relevant" means *the deployment supplies what the clause needs*, not *the bridge
   is in breach today*. Reading them as unconditional obligations would misstate our position.
-- **`-phid-wait-id` is load-bearing here, not formal.** Three decoy host ids sit permanently
+- **`-phid-wait-id` — the "load-bearing" claim was withdrawn by the review.** The three decoys exist
+  **only** on the legacy `STATE/<id>` topic; the `spBv1.0/` namespace holds exactly one message, so a
+  bridge implementing the clause as written has nothing to collide with. The ruling stays *relevant*;
+  the justification below is superseded. Original text: Three decoy host ids sit permanently
   retained at `OFFLINE`, one of them (`scada`) differing from the live `SCADA` only in case. A
   case-insensitive match would bind the bridge to a dead client and **it would never birth**.
 - **`-birth-sequence-wait` is the one clause whose text and section context disagree.** It carries
@@ -529,6 +582,24 @@ performed the same way would buy a second timestamp sample and a live `retain=fa
 would **not** settle the question that matters — an explicit death and a broker will are
 indistinguishable on the wire whenever you subscribe. The sample should be taken opportunistically
 at the next unrelated Ignition restart.
+
+> **⚠️ THE PARAGRAPH BELOW IS WRONG, AND THE 2026-07-29 REVIEW REFUTED IT.**
+>
+> The discriminator it proposes cannot work. `-operational-behavior-host-application-death-payload`
+> (`:808-812`) describes *"The Death Certificate Payload **registered as the MQTT Will Message in the
+> MQTT CONNECT packet**"* — so a conformant host that publishes its death explicitly republishes the
+> **will payload**, with the same CONNECT-stamped timestamp. An explicit death and a broker-fired
+> will are therefore **byte-identical**, and the "later timestamp → explicit publish" branch does not
+> exist. `chaos_sigterm_no_lie` discriminates on **our** NDEATH only because `mqtt_driver.rs`
+> re-stamps it at shutdown — our implementation's choice, binding on nobody else.
+>
+> **So the untranscribed timestamp cost less than this claimed, and the open question is harder.**
+> Transcribing it would not have answered anything; the recorded remediation ("capture full payloads
+> next time") will not answer it either. What answers it is an observer **connected before the
+> shutdown begins**, which separates the two by *timing* rather than by content.
+>
+> Left standing because it is the second time in one story that a careful, well-cited argument turned
+> out to be wrong — and the first time is the thing this story is proudest of having caught.
 
 **But the open question turned out to be answerable, and this run had the means.** A Host
 Application's birth timestamp MUST *"match the timestamp value that was used in the immediately
@@ -555,6 +626,21 @@ correctly in one place while a descriptive sentence about its *consequences* wen
 shape as FR20's QoS-0 over-claim (#33) and the RBE passages. The manual was right about *what* is
 missing and wrong about *what it costs*.
 
+> **And the correction was itself a fourth instance — found by the 2026-07-29 review.** The
+> replacement text asserted that \prog *"never re-births"* and that nothing restores the tag
+> definitions *"until \prog itself is restarted"*. Both are false: `mqtt_driver.rs` emits
+> `Transport::Connected` on **every** `ConnAck` and publishes a full BIRTH on it, so a broker
+> restart, a network interruption or a keep-alive expiry all repair the consumer's view. The manual
+> even contradicted itself two bullets earlier, where the NCMD item already said *"reconnects still
+> rebirth on their own"*. The AC2 conclusion survives — an *Ignition* restart leaves the bridge's own
+> session untouched, so nothing on the host side prompts the reconnect — but the absolute phrasing
+> understated the operator's remedies. Corrected, with the over-claim named in the manual itself.
+>
+> **The lesson is sharper than the original one.** Writing "an earlier edition wrongly said X" is not
+> protection against writing a fresh over-claim in the same sentence. The pattern is not carelessness
+> about *corrections*; it is that consequence-sentences are never checked against the code, only
+> against the intent of the fix.
+
 **Task 6 — verdicts verified unchanged mechanically, not by inspection.** Every one of the eleven
 rows was edited by appending ` · [4.4 measured](…): relevance …` to the existing verdict cell.
 `git diff docs/sparkplug-conformance.md`, with everything from the `·` onward stripped, shows each
@@ -573,9 +659,26 @@ regression check only.
 - `docs/manual/chapters/05-mqtt-sparkplug-contract.tex` — modified: the *Known limitations* bullet on
   Primary Host said the gap is "invisible" on a single broker. AC2 refutes that; corrected, over-claim
   named. `latexmk` exits 0
-- `crates/smartme-bridge/tests/observe_primary_host_state.rs` — new: the read-only STATE observer
+- `crates/smartme-bridge/tests/observe_primary_host_state.rs` — new: the read-only STATE observer.
+  **Substantially revised by the 2026-07-29 review**: SubAck return codes are checked and a refused
+  subscription fails the run; a granted-QoS downgrade is reported; an early death of the observer
+  task is tracked and fails the test rather than printing a full window; `dup`/`pkid` are captured;
+  `SMARTME_STATE_SECONDS` refuses a malformed value instead of defaulting; two time subtractions are
+  saturating; an empty payload is reported as a retained-message *clear*; reconnects are counted. It
+  still publishes nothing — re-verified, grep returns 0
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` — modified: story status
 - `_bmad-output/implementation-artifacts/4-4-primary-host-state-measure.md` — modified: this record
+
+**Added by the 2026-07-29 review:**
+
+- `docs/adr/0016-rebirth-before-primary-host-wait.md` — **new**: the epic re-ordering this story had
+  decided in passing, now recorded as an architectural position with its evidence and its
+  alternatives. [#37](https://github.com/guycorbaz/smartme_mqtt/issues/37)
+- `_bmad-output/planning-artifacts/epics.md` — modified: the Epic 4 execution order now states that
+  4.6/4.7 precede 4.5 and points at ADR 0016; the ADR-numbering note records its **third** occurrence
+  and no longer writes a digit at all
+- `_bmad-output/implementation-artifacts/deferred-work.md` — modified: two items deferred by the
+  review, including the unreviewed manual chapter pushed alongside this story
 
 *(`_bmad-output/planning-artifacts/epics.md` — the Story 4.5 ADR-number amendment — was committed at
 story creation, `ac1ea16`, and is not part of this implementation's diff.)*
@@ -587,3 +690,73 @@ story creation, `ac1ea16`, and is not part of this implementation's diff.)*
 | 2026-07-28 | Tasks 1–2: read-only STATE observer built, armed and lint-clean. The story's premise — that the existing subscriber would silently drop STATE — was measured (protobuf decode rejects the JSON: "buffer underflow"). Observer publishes nothing (grep-verified 0 call sites). Tasks 3–6 blocked pending Guy's go-ahead on the production broker; AC1/AC2/AC4 unmet and recorded as unmet |
 | 2026-07-28 | Tasks 3–4 with Guy at the console: steady state recorded, then an Ignition container restart captured live by two observers on distinct client ids. **AC1 met.** MQTT Engine v5.0.0-rc1 recorded, closing the Story 1.15 residual. **The steady-state conclusion was WRONG and the restart refuted it** — Engine publishes the fully conformant Sparkplug 3.0 form (`spBv1.0/STATE/SCADA`, JSON, retain, QoS 1) *as well as* a legacy `ONLINE`/`OFFLINE` form; the earlier "an edge node would never see this host's STATE" was a snapshot generalised into a claim about behaviour. Host id proven to be `SCADA`; the other three are retained residue. Two observer defects found by using it: no connection timeout, hard-coded client id — both fixed. Record committed to `docs/primary-host-state-observation.md` first, because it cost a production restart and lived only in a temp directory. Tasks 5–6 and AC2/AC3/AC4 remain; story stays `in-progress` |
 | 2026-07-29 | Tasks 5–6, from the committed record with **no second observation** and no broker. **All four ACs met; status `review`.** AC2: ignoring STATE costs nothing while Ignition is up and costs total loss of tag recovery after an Ignition restart — and the argument runs *against* the specification's own motivation, because PHID-wait without store-and-forward preserves no measurement, which makes **Story 4.7 (Rebirth) the higher priority**. AC3: restructured to the runbook shape with per-step confounds; step 1 names five candidate causes of silence, four eliminated and the fifth being the one that was actually true. AC4: **9 relevant · 2 irrelevant · 0 wholly undetermined**, four with a named residue; nine of the eleven clauses are *conditional* on configuring a Primary Host, `-phid-wait-id` is load-bearing because three retained decoy ids differ from the live one only in case, and `-birth-sequence-wait` is the one clause whose text and section context disagree in a single-broker deployment. Second restart declined with reasoning: it would buy a sample, not the answer. **But the open question turned out answerable from timestamps** (a will is stamped at CONNECT, `-connect-birth-payload` `:779-783` — the same discriminator `chaos_sigterm_no_lie` uses) and could not be applied because the death payload's timestamp was never transcribed; recorded as the record's own gap. Task 6: eleven matrix rows point at the findings, verdicts verified unchanged by diff. `ci-local.sh --fast` exits 0, 148 tests, no Rust changed |
+| 2026-07-29 | **Adversarial review — three independent read-only layers, 33 patches applied, 2 deferred, 5 dismissed as noise.** The layers confirmed the load-bearing mechanical claims (verdicts unchanged, observer publishes nothing, all eleven `tck-id`s resolve, `-birth-sequence-wait`'s text-vs-section conflict exact) and refuted several of their own findings on verification. **The four that mattered:** (1) the observed **birth** was validated against the **will** clauses, which mandate `online: false` — re-cited to `-connect-birth-topic`/`-payload`; found independently by all three layers. (2) The manual correction this story made was **itself false** — it said the bridge never re-births until restarted, but `mqtt_driver.rs` births on every `ConnAck`; a fourth instance of the amend-the-consequences pattern, committed inside the fix for the third. (3) The will-vs-death timestamp discriminator **cannot work** — a conformant explicit death republishes the will payload byte-for-byte, so the untranscribed timestamp cost less than claimed and the question needs an observer connected *before* shutdown. (4) The observer discarded the SubAck return codes, so a **refused** subscription read as a quiet topic — the exact false negative the file exists to prevent. Also: AC4 moved to **10 · 1** (`-host-offline-reconnect` binds and loops on one server), a **cold-start state no clause covers** was ruled (retained `online:false` at start-up), the ACL confound's elimination was unsound and is replaced, `-host-reordering-rebirth` was the wrong clause, `tck-id-case-sensitivity-sparkplug-ids` does not govern host ids, and the epic re-ordering left this story for **ADR 0016** + **#37**. AC1 recorded as **met with three named shortfalls**; one Task 4 subtask **unticked as unmet**. Seven instrument defects fixed; `ci-local.sh` green |
+
+### Review Findings
+
+Adversarial review 2026-07-29, three independent layers (Blind Hunter — diff only, no project access;
+Edge Case Hunter — diff + repository + vendored spec; Acceptance Auditor — diff + story + spec). All
+three ran read-only; verified afterwards by re-hashing 97 files and by `git status`. Every finding
+below was re-verified by hand against the vendored specification or the code before being recorded —
+several layer findings were refuted and are not listed.
+
+**Per-AC verdict from the Acceptance Auditor:** AC1 partially met · AC2 partially met · AC3 partially
+met · AC4 met (two contestable rulings).
+
+**Verified sound, and worth recording as such:** no production code changed; the observer publishes
+nothing (grep returns 0, independently reproduced); `clean_session(true)` is explicit; all eleven
+conformance rows are appended-to with verdict tokens byte-identical (reproduced independently by two
+layers); all eleven `tck-id`s exist at the cited lines; the `-birth-sequence-wait` text-vs-section
+conflict is exactly as described; `1785263196684` really is 2026-07-28 18:26:36 UTC; the bridge holds
+no subscription, its NBIRTH is QoS 0 / not retained, and it has no store-and-forward.
+
+#### Decisions needed
+
+- [x] [Review][Decision] **AC1 has three shortfalls and is recorded as met** — the death's **topic and raw payload were never transcribed** (AC1 requires both; the record shows only `42 bytes — {"online":false,…}` with no topic), no per-message receive times were recorded although the tool prints them, and AC1's third named finding — *"whether it expects edge nodes to react"* — is not addressed anywhere. `CLAUDE.md` requires unmet criteria to be recorded as unmet. Met-with-named-shortfall, or unmet + issue?
+- [x] [Review][Decision] **`-termination-host-offline-reconnect` is ruled `irrelevant` against its own justification** — the same cell states that with one server a literal implementation degenerates into reconnect-to-self and *"4.5 must say what it does instead"*. A clause that binds, that this deployment can trigger, and that forces a decision is arguably relevant. Affects the `9 · 2` tally.
+- [x] [Review][Decision] **Cold start with the retained STATE present and `false` is never ruled on** — Finding 4 covers *absent* STATE. Present-and-`false` is a distinct state with a distinct outcome, and it is the one that actually existed on the broker for hours before the restart. Add a ruling, or hand to 4.5 as a named open question?
+- [x] [Review][Decision] **The epic re-prioritisation was decided inside a measuring story** — *"STORY 4.7 (REBIRTH) IS THE HIGHER PRIORITY OF THE TWO"* is propagated into `sprint-status.yaml` with no ADR and no issue, in a story whose Dev Notes say *"It measures. It does not decide."* Ratify with an ADR + issue, or demote to a recommendation for 4.5?
+- [x] [Review][Decision] **Public-repo disclosure not decided either way** — four host ids, *"Mosquitto broker on the LAN, no auth"*, and exact Ignition 8.3.7 / Engine v5.0.0-rc1 versions are committed. The story's own Dev Notes say *"If the observed host id is identifying, redact it in the findings **and say that you did**."* No redaction decision is recorded in either direction.
+
+#### Patches
+
+- [x] [Review][Patch] The observed **birth** is validated against the **will** clauses, and the will clause mandates `online: false` [`docs/primary-host-state-observation.md:163-164`] — cited `-connect-will-topic` (`:757-759`) and `-connect-will-payload` (`:760-764`); the latter reads *"one key MUST be 'online' and it's value is a boolean **'false'**"*, so the observed `{"online":true,…}` **fails the clause it is ticked against**. Correct clauses are `-connect-birth-topic` (`:776-778`) and `-connect-birth-payload` (`:779-783`) — already used correctly two rows below for retain and QoS. Found independently by all three layers; verified against the vendored text. This is the evidence for the headline *"the 3.0 form is fully conformant"*
+- [x] [Review][Patch] **The manual now states something false about the bridge** [`docs/manual/chapters/05-mqtt-sparkplug-contract.tex`] — the new text says \prog *"never re-births"* and that *"no mechanism in the protocol restores the tag definitions **until \prog itself is restarted**"*. `mqtt_driver.rs:257` emits `Transport::Connected` on **every** `ConnAck`, and `:175-189` publishes a full BIRTH on it — so any bridge-side reconnect (broker restart, keep-alive expiry, network blip) restores the tag definitions without restarting the bridge. The AC2 conclusion survives (an *Ignition* restart leaves the bridge's own session untouched), but the absolute phrasing is wrong and understates the operator's remedies. **This is a fresh instance of the very pattern the story diagnoses three paragraphs earlier**
+- [x] [Review][Patch] **AC3's ACL elimination is unsound and is contradicted twelve lines later** [`docs/primary-host-state-observation.md:60`, `:69-72`] — step 1 eliminates *"a broker ACL hiding the topic"* on the grounds that the `#` sweep returned 78 messages on 61 topics. ACLs are per-topic; traffic on 61 other topics says nothing about `spBv1.0/#`. Step 2 then states the opposite explicitly. The sound eliminator is already in the same file (*"Mosquitto broker on the LAN, no auth"*) and is not the one used. This is the centrepiece of AC3
+- [x] [Review][Patch] **`-host-reordering-rebirth` is the wrong clause** [`docs/primary-host-state-observation.md:230`, and the manual] — the clause (`:565-568`) is conditional: *"**If** a Sparkplug Host Application is configured with a 'reordering timeout' parameter and the Reorder Timeout elapses…"*. It is the out-of-order-sequence remedy, not the host-restart remedy, and it binds only hosts with that parameter configured. The applicable text (`:943-951`) is non-normative and says *"can"*, not MUST. The conclusion survives; the citation does not support the sentence
+- [x] [Review][Patch] **`tck-id-case-sensitivity-sparkplug-ids` does not govern host ids** [`docs/primary-host-state-observation.md:181`] — the clause (`:63-67`) reads *"**Edge Nodes** … SHOULD NOT have Sparkplug IDs (**Group, Edge Node, or Device IDs**) that when converted to lower case match"*. `sparkplug_host_id` is none of those; the host-id clause is `-host-application-host-id` (`:753-754`, uniqueness)
+- [x] [Review][Patch] **The `-phid-wait-id` "load-bearing" hazard cannot occur as described** [`docs/primary-host-state-observation.md:277`] — the ruling says a case-insensitive match *"would bind the bridge to a permanently-offline dead client and it would **never birth**"*. The document's own settled-state block shows the three decoys exist **only** on the legacy `STATE/<id>` topic; the `spBv1.0/` namespace holds exactly one message. A bridge matching the clause (*"the last token in the STATE message topic"*, i.e. `spBv1.0/STATE/…`) has nothing to collide with. The ruling may stand; its justification does not
+- [x] [Review][Patch] **The death-vs-will timestamp discriminator is unsound, so "the record's own gap" is not a gap** [`docs/primary-host-state-observation.md`, *Open questions*] — `-death-payload` (`:808-812`) describes *"The Death Certificate Payload **registered as the MQTT Will Message**"*, and `-connect-birth-payload` pins the birth to that same CONNECT-stamped value. A conformant explicit death therefore republishes the will payload unchanged and is **byte-identical** to the will. Transcribing the timestamp would not have answered the question, and the recorded remediation will not answer it next time. `chaos_sigterm_no_lie` works on *our* death only because `mqtt_driver.rs:240` re-stamps it — our implementation choice, not binding on Ignition
+- [x] [Review][Patch] **A Task 4 subtask is ticked and was not performed** — *"Compare the `timestamp` values across the offline/online pair"* is `[x]`, but the offline timestamp was never transcribed, so no pair existed. Its sibling *"Record, in order and with timestamps"* is also ticked while the Run 2 table carries **no per-message timestamps at all** and never records the reconnect
+- [x] [Review][Patch] **`-termination-host-offline-timestamp`'s evidence is a category error** [`docs/primary-host-state-observation.md:284`] — the ruling offers the three ids permanently retained at `OFFLINE` as an instance of the stale-death class. Those are legacy payloads carrying **no timestamp at all** (6/7 bytes), and the clause compares timestamp values, so it cannot fire on them
+- [x] [Review][Patch] **"two independent passes over `#` and `spBv1.0/#`" names a run that was never made** [`docs/primary-host-state-observation.md:197`] — Run 1 used `spBv1.0/STATE/#` (25 s), `#` (20 s) and `STATE/#` (8 s). **The conclusion holds** — `spBv1.0/STATE/#` covers the topic and a retained message would have arrived on subscribe — but the two passes named are not the two that were run
+- [x] [Review][Patch] **"Retained residue from clients long gone" is an inference stated as a measurement** [`docs/primary-host-state-observation.md:178-180`] — step 3's own confound table says this step *"cannot tell a live host from a client that died months ago"*. The restart proved Ignition owns `SCADA`; it did not prove the other three are dead. A second host that simply did not restart is observationally identical
+- [x] [Review][Patch] **Sentences above the retained ⚠️ correction block were not re-examined** — *"Two departures from the vendored norm, both measured"* is no longer true after Task 4 (the host publishes the conformant form **as well**), and *"This makes the Ignition restart more valuable … it **will** show which id Ignition actually owns"* is still in the future tense after the restart answered it. The findings document handles this correctly; the story record does not
+- [x] [Review][Patch] **The Completion Notes header contradicts its own body, and a paragraph is duplicated with a different count** — the header reads *"Tasks 1 and 2 complete. Tasks 3–6 are blocked … and are NOT claimed"* above four sections claiming Tasks 3–6 done. *"**Two** defects in the observer"* is followed four lines later by *"**One** defect in the observer"* describing the same connection-timeout defect
+- [x] [Review][Patch] **"four carrying a named undetermined residue" — the membership is wrong in both directions** — `-phid-offline` is listed but states a *cost*, not an undetermined; `-…-state-subs` carries a residue (*"its applicability turns on a reading 4.5 must fix"*) and is not listed. The count of four survives. **The sentence is replicated into `docs/sparkplug-conformance.md:1583` and `sprint-status.yaml`**, so the mislabel reaches two artefacts 4.5 will read
+- [x] [Review][Patch] **"Nine of the eleven are conditional on *if the Edge Node is configured to wait*" is not verbatim for two of the nine** — `-host-offline-reconnect` (`:368-371`) conditions on an **event**, `-state-subs` (`:586-589`) on a **topology**. The 9/2 arithmetic is consistent, but the document never names which two clauses are the exceptions, so a reader cannot reproduce the count
+- [x] [Review][Patch] **"Steps 1–3 above are measured" is false, and the inference label points at the wrong chain item** — chain item 3 (*"The bridge sees nothing … its own broker session is untouched"*) was never observed; nothing in the record shows the bridge was even running during either run. Indeed the `#` sweep found *"not one `spBv1.0/…` topic"*, which implies it was not. The proposition the label names actually lives in item 2, not item 4
+- [x] [Review][Patch] **The `retain` heuristic omits the MQTT rule it depends on** — MQTT 3.1.1 [MQTT-3.3.1-9] requires a broker to deliver a retained publish to an *already-subscribed* client with RETAIN **cleared**, so the live birth arriving `retain=false` is silent about how it was published. The conformance row *"Retain true ✅"* is scored from a different observation the reader must join up unaided. Note the same document correctly refuses to cite un-vendored MQTT elsewhere
+- [x] [Review][Patch] **Observed QoS 1 does not establish published QoS 1** — delivered QoS is bounded by the subscription, which was made at QoS 1, so the observation cannot distinguish a publisher using 1 from one using 2. The clause is a MUST on a specific value; the ✅ is one notch stronger than the measurement supports
+- [x] [Review][Patch] **The "Sparkplug Aware MQTT Server" behaviour is cited to the conformance-profile chapter** — `Sparkplug_10_Conformance.adoc:71-83` enumerates profiles; the retained-`$sparkplug`-republication behaviour has its own clauses with their own tck-ids. This option is offered to 4.5 as a third remedy, so it is decision-bearing
+- [x] [Review][Patch] **The transcript blocks are retyped, not pasted, and disagree with each other** — the story renders `qos=AtLeastOnce`, the findings document `qos=1`; the tool's format string emits `{:?}` on `rumqttc::QoS`, which is `AtLeastOnce` and never `1`. Separately *"78 messages, 61 distinct topics"* is not a figure the instrument computes — its SUMMARY prints retained, live and distinct host ids only
+- [x] [Review][Patch] **`sprint-status.yaml` points at a marker that does not exist** — the comment refers the reader to the story's *"RESUME HERE"*; the story contains no such string
+- [x] [Review][Patch] **The observer discards the SubAck return codes** [`crates/smartme-bridge/tests/observe_primary_host_state.rs:146-150`] — `Packet::SubAck(_)` throws away `return_codes`. A broker that **denies** the subscription by ACL returns `0x80`; the observer reports ready, waits the full window, receives nothing, and prints the *"rule out … broker ACL hiding the topic"* checklist that the SubAck it discarded had already answered. The same discard hides a granted-QoS downgrade, which would have silently falsified the `-connect-birth-qos` row. **This is the instrument's sharpest false-negative surface**
+- [x] [Review][Patch] **The observer task can die mid-window and `report()` prints the full window regardless** [`observe_primary_host_state.rs:289-306`, `:219-224`] — `Ok(None) => break` (all senders dropped, i.e. the task returned or panicked) shares its path with the window-elapsed branch, and `report()` prints `window: 900s` unconditionally. `.expect("subscribe")` at `:144` runs on every `ConnAck`, so a subscribe failure after a mid-window reconnect panics the task. The operator then reads a confident negative about a busy topic — the exact failure the file's own header exists to prevent
+- [x] [Review][Patch] **`SMARTME_STATE_SECONDS` silently falls back to 90** [`observe_primary_host_state.rs:269-272`] — `.parse().ok()` swallows any typo (`900s`, `9OO`, a trailing space), closing the window 13½ minutes early in a one-shot production run. Directly contradicts the discipline applied one line above to `SMARTME_STATE_BROKER`, which deliberately `expect`s rather than defaulting
+- [x] [Review][Patch] **Two unchecked time subtractions destroy the transcript at the end of an unrepeatable window** [`observe_primary_host_state.rs:206`, `:290`] — `m.received_at_ms - seen[0].received_at_ms` on `u128` wall-clock values panics on overflow in debug builds (which is what `cargo test` produces) after an NTP step backwards; `deadline - Instant::now()` panics if the deadline passes between the loop check and the subtraction. Both fire **after** the observation and **before** `report()`. `saturating_sub` / `checked_duration_since`
+- [x] [Review][Patch] **`dup` and `pkid` are not captured, so "published twice" is unsupported** [`observe_primary_host_state.rs:153-159`] — `rumqttc::Publish` carries both. At QoS 1 a redelivery is indistinguishable from two publishes without `dup`, and **no AC3 confound row covers the one anomaly in the transcript**. Found independently by all three layers
+- [x] [Review][Patch] **An empty payload is reported as a specification violation** [`observe_primary_host_state.rs:214-218`] — a zero-length retained publish is how MQTT **clears** a retained message. If Ignition clears `spBv1.0/STATE/SCADA`, the operator is told the host published a malformed STATE
+- [x] [Review][Patch] **A mid-window transport drop leaves no trace** [`observe_primary_host_state.rs:163-168`] — no counter, no marker in `seen`, nothing in the SUMMARY, and `[transport]` lines go to **stderr** while the transcript goes to stdout. With `clean_session(true)` anything published during the gap is lost, not queued. The default client id is shared, so two observers launched without `SMARTME_STATE_CLIENT_ID` evict each other in a reconnect loop and produce exactly this signature silently
+
+#### Deferred
+
+- [x] [Review][Defer] **The `epics.md` ADR-number note is itself a third instance of the pattern it documents** — it writes a bold *"Next free is 0016"* directly under an instruction to treat any ADR number in that file as stale. Task 6 did re-verify the digit, so it is currently correct — deferred, presentational
+- [x] [Review][Defer] **The new manual chapter has never been reviewed** — `docs/manual/chapters/02-understanding-sparkplug.tex` (732 lines), four TikZ figures, the `git mv` renumbering of eight chapters and the `style.tex` additions were pushed in `150a57f` alongside this story and were excluded from this pass by an explicit scope choice — deferred, separate deliverable
+
+#### Dismissed (recorded so they are not re-raised)
+
+- *"The File List is wrong to say `epics.md` is not in this diff"* — **refuted**: `epics.md` was changed in `ac1ea16` (story creation) and by neither implementation commit. The File List is correct; the file appeared only because the review range started before it.
+- *"The manual chapter rename is undocumented and `latexmk` unverifiable"* and *"the story file is listed as modified in a diff that creates it"* — both artefacts of the same review range, not defects.
+- *"Three mechanical checks are asserted with no output"* — the `grep` claims were independently reproduced by two layers and hold exactly as written.
+- *"Finding 4's hypothesis is entangled with its own open question"* — real tension, but the document already labels it *"a hypothesis, not a measurement"*.

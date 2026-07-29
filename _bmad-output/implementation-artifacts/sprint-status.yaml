@@ -37,7 +37,7 @@
 #   Ignition contract test (human action required — stays backlog until Guy runs it).
 
 generated: 2026-07-25
-last_updated: 2026-07-28
+last_updated: 2026-07-29
 project: smartme_mqtt
 project_key: NOKEY
 tracking_system: file-system
@@ -144,7 +144,7 @@ development_status:
   # DISCARDS what fails, so reusing it would show silence on a busy STATE topic and
   # produce a false "the host publishes no STATE". STATE payloads are JSON.
   # AC3 added — human-run gate, so every step must state what else could produce it.
-  # 2026-07-28 (paused mid-story, Tasks 5-6 remain — see the story's "RESUME HERE").
+  # 2026-07-28 (paused mid-story, Tasks 5-6 remain — see the story's Completion Notes).
   # AC1 met. Observed the production broker read-only, then captured an Ignition
   # container restart live with two observers on distinct client ids.
   # THE STEADY-STATE CONCLUSION WAS WRONG AND THE RESTART REFUTED IT: three careful
@@ -160,22 +160,37 @@ development_status:
   # a production restart; DO NOT re-measure to recover it.
   # 2026-07-29: Tasks 5-6 done from that record, no second observation, no broker.
   # ALL FOUR ACs MET. AC2: ignoring STATE costs nothing while Ignition is up and
-  # costs total loss of tag recovery after an Ignition restart (unretained NBIRTH +
-  # no subscription + no Rebirth = no protocol path back). AND IT ARGUES AGAINST THE
-  # SPEC'S OWN MOTIVATION: PHID-wait without store-and-forward preserves no
-  # measurement, so STORY 4.7 (REBIRTH) IS THE HIGHER PRIORITY OF THE TWO.
-  # AC4: 9 relevant, 2 irrelevant, 0 wholly undetermined (4 with a named residue).
-  # Nine of the eleven are CONDITIONAL on configuring a Primary Host — "relevant"
-  # means the deployment supplies what the clause needs, not that we are in breach.
-  # -phid-wait-id is load-bearing: three retained decoy ids, one differing from the
-  # live SCADA only in case, so a loose match would mean the bridge NEVER births.
+  # costs tag recovery after an Ignition restart (unretained NBIRTH + no
+  # subscription + no Rebirth = no HOST-INITIATED path back). AND IT ARGUES AGAINST
+  # THE SPEC'S OWN MOTIVATION: PHID-wait without store-and-forward preserves no
+  # measurement. The resulting re-ordering of 4.7 ahead of 4.5 is NOT decided here —
+  # see ADR 0016 and issue #37. This story measures; the ADR decides.
+  # AC4: 10 relevant, 1 irrelevant, 0 wholly undetermined (4 with a named residue).
+  # Nine of the eleven are CONDITIONAL (7 on configuring a Primary Host, 1 on an
+  # event, 1 on a topology) — "relevant" means the deployment supplies what the
+  # clause needs, not that we are in breach.
   # -birth-sequence-wait is the one clause whose text (unconditional) and section
   # context (multi-server) disagree here; 4.5 must choose a reading explicitly.
-  # Second restart declined: it buys a sample, not the answer. But the open question
-  # IS answerable from timestamps (a will is stamped at CONNECT) — the same
-  # discriminator chaos_sigterm_no_lie uses; unusable now because the death payload's
-  # timestamp was never transcribed. Recorded as the record's own gap.
-  4-4-primary-host-state-measure: review
+  # Second restart declined: performed the SAME WAY it buys a sample, not the answer.
+  #
+  # 2026-07-29 ADVERSARIAL REVIEW (3 layers, read-only) — 33 patches applied.
+  # Verdicts in the matrix still unchanged, verified again by diff. What moved:
+  #  - the observed BIRTH had been validated against the WILL clauses, which require
+  #    online:false. Re-cited to -connect-birth-topic/-payload. All 3 layers found it.
+  #  - the MANUAL had been corrected INTO a falsehood: it said the bridge "never
+  #    re-births ... until smartme_mqtt itself is restarted". It re-births on EVERY
+  #    reconnect (mqtt_driver.rs, Transport::Connected on every ConnAck).
+  #  - -termination-host-offline-reconnect moved irrelevant -> relevant, hence 10/1.
+  #  - -phid-wait-id is NOT load-bearing: the three decoy ids exist only on the
+  #    legacy STATE/<id> topic, and spBv1.0/ holds exactly one message.
+  #  - the will-vs-death timestamp discriminator DOES NOT WORK: a conformant explicit
+  #    death republishes the will payload (-death-payload :808-812), so the two are
+  #    byte-identical. Transcribing the timestamp would NOT have answered it. What
+  #    answers it is an observer connected BEFORE the shutdown begins.
+  #  - a cold-start state no clause covers: retained online:false at bridge start-up.
+  #  - the observer discarded the SubAck return codes, so a REFUSED subscription read
+  #    as a quiet topic. Fixed, plus dup/pkid capture and 5 other instrument fixes.
+  4-4-primary-host-state-measure: done
   4-5-primary-host-state-decide: backlog
   4-6-ncmd-subscription-plumbing: backlog
   4-7-node-control-rebirth-answer: backlog
