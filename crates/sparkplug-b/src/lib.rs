@@ -20,10 +20,17 @@
 //! **Implemented (continued):** device-level BIRTH/DATA/DEATH sharing the edge
 //! node's sequence numbering, and validated topic construction ([`EdgeNode`]).
 //!
+//! **Implemented (continued):** the NCMD topic form, via
+//! [`MessageType::NCmd`] — construction only. Subscribing to it, and the QoS 1
+//! that clause mandates, belong to whoever owns the transport.
+//!
 //! **Not implemented — a conformant node must supply these itself:** the
 //! `Node Control/Rebirth` metric and the command (N/DCMD) path that acts on it,
 //! host STATE handling, metric aliases, templates and datasets, and the QoS /
-//! retain flags of each publication (a caller owns its transport).
+//! retain flags of each publication (a caller owns its transport). `DCMD` has
+//! no [`MessageType`] variant at all: its subscribe clause is conditional on a
+//! device supporting writable outputs, so the topic form is added when a caller
+//! needs it rather than in advance.
 //!
 //! # Public dependency
 //!

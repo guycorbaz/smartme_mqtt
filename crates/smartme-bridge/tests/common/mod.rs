@@ -84,6 +84,39 @@ pub async fn start_broker() -> (ContainerAsync<GenericImage>, u16) {
     (container, port)
 }
 
+/// As [`start_broker`], but with `mosquitto -v`, so the broker records every
+/// control packet it receives.
+///
+/// This exists because one MQTT client cannot observe another client's
+/// SUBSCRIBE: subscriptions are between a client and the broker, and nothing is
+/// published when one is made. The broker's own log is therefore the only
+/// external oracle for the ordering
+/// `tck-id-message-flow-edge-node-ncmd-subscribe` requires — *"prior to sending
+/// an NBIRTH message"*. Verbose mosquitto writes, in receipt order:
+///
+/// ```text
+/// Received SUBSCRIBE from <client_id>
+///     spBv1.0/<group>/NCMD/<node> (QoS 1)
+/// Received PUBLISH from <client_id> (d0, q0, r0, m0, 'spBv1.0/<group>/NBIRTH/<node>', ...)
+/// ```
+///
+/// Kept separate from [`start_broker`] rather than switched on globally: the
+/// other chaos tests do not read the broker's log, and a container producing a
+/// line per packet would only make their failures harder to read.
+pub async fn start_verbose_broker() -> (ContainerAsync<GenericImage>, u16) {
+    let container = GenericImage::new("eclipse-mosquitto", "2")
+        .with_wait_for(WaitFor::message_on_stderr("mosquitto version 2"))
+        .with_cmd(vec!["mosquitto", "-c", "/mosquitto-no-auth.conf", "-v"])
+        .start()
+        .await
+        .expect("broker container starts");
+    let port = container
+        .get_host_port_ipv4(1883.tcp())
+        .await
+        .expect("broker port is mapped");
+    (container, port)
+}
+
 /// Subscribes to everything under the Sparkplug namespace and streams what
 /// arrives. This client has no relationship with the bridge beyond the broker.
 pub async fn independent_subscriber(port: u16) -> mpsc::Receiver<Seen> {

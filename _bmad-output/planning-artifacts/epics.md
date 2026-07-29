@@ -137,7 +137,7 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 - AR7: **Broker-down policy = traced-drop (no buffer).** `try_publish` non-blocking; on full/broker-down → per-device traced drop (`readings_dropped_total{meter,reason}` + WARN with source timestamp). No persistent buffer. Anti-replay invariant: every published Sparkplug timestamp == its source `ValueDate`, verified at the down→up reconnection instant.
 - AR8: **Config propagation = `ArcSwap<Config>`.** Non-structural fields (poll interval, log level, mapping labels) hot-swap per cycle; structural fields (broker host/port, meter count, secrets) are restart-required with a "pending restart" UI flag. Single-writer discipline on the config file.
 - AR9: **Atomic persistence.** `persist_atomic(path, &T)`: write-temp + `fsync(file)` + `fsync(parent_dir)` + rename. `bdSeq` + minimal Sparkplug session state persisted to TOML on a mounted volume; `bdSeq` written only by the mqtt-driver task.
-- AR10: **Sparkplug boot ordering.** `bdSeq → NDEATH serialized → LWT set in CONNECT → connect → NBIRTH`; reconnect triggers a rebirth. `sparkplug-b` exposes primitives (`publish_metric(name, value, timestamp_ms, quality)`) with a minimal `Quality { Good, Stale, Bad }` enum, `Measurement`-free.
+- AR10: **Sparkplug boot ordering.** `bdSeq → NDEATH serialized → LWT set in CONNECT → connect → SUBSCRIBE to NCMD → NBIRTH`; reconnect triggers a rebirth, and re-runs the subscribe with it. *(The NCMD step was added by Story 4.6: `tck-id-message-flow-edge-node-ncmd-subscribe`'s preamble requires the subscription **prior to sending an NBIRTH**, not merely in the same sequence. This entry was left at five steps when the code and the manual moved to six — corrected by the Story 4.6 code review, 2026-07-29.)* `sparkplug-b` exposes primitives (`publish_metric(name, value, timestamp_ms, quality)`) with a minimal `Quality { Good, Stale, Bad }` enum, `Measurement`-free.
 - AR11: **External-broker-only deployment behind Traefik.** `docker compose` runs the bridge alone; joins Traefik's `external: true` named network; `expose:` only (no host `ports:`); router labels for routing + TLS + optional auth middleware; no in-app auth. A commented `docker-compose.override.yml.example` gives a `ports:` fallback for non-Traefik users. Single-arch image, `restart: unless-stopped`.
 - AR12: **Liveness heartbeat healthcheck.** poll+publish loop updates `last_loop_tick` (monotonic `Instant`) at the top of every iteration before the network call; `GET /healthz` returns unhealthy only if `now − last_loop_tick > N × poll_interval` (N≈3). An honest STALE never triggers a restart; a wedged poller does.
 - AR13: **Graceful shutdown must not silence the DEATH.** On SIGTERM the bridge publishes an explicit NDEATH before exit **and** drops the connection abruptly (never a clean MQTT DISCONNECT, which instructs the broker to discard the will), so the LWT fires too. Resolved 2026-07-26 (was an either/or; see ADR 0011): both mechanisms are required, not alternatives. The explicit certificate is immediate; the will alone would leave the node showing as live until the broker notices the socket — up to 1.5× keep-alive if the connection is left half-open. Measured by `chaos_sigterm_no_lie`: the will carries the connect-time stamp, the explicit death the shutdown-time stamp ~1 s later, and a consumer sees both. **Confirmed against the author's own broker on 2026-07-26** via `chaos_sigterm_no_lie_against_an_external_broker` (`#[ignore]`d, no default target, refuses the default group — the author has one broker and it is production). The consumer half — whether Ignition tolerates the double NDEATH — belongs to Story 1.15.
@@ -887,14 +887,24 @@ So that an unknown command is never mistaken for a known one.
 
 *Amended 2026-07-29 at Story 4.6 creation, twice. The id was written `tck-id-...-edge-node-subscribe-ncmd`, which does not exist — the real one reverses the last two words. And the ordering read "as part of the same post-CONNACK sequence that publishes NBIRTH", which permits birth-then-subscribe; the clause's section preamble (`:155-156`) says **"Prior to sending an NBIRTH message"**, which does not. Both are the failure `CLAUDE.md` names: reading about the specification instead of reading it.*
 
+**Given** the SubAck arrives
+**When** the driver handles it
+**Then** a refused subscription (return code `0x80`) is traced at ERROR naming the topic, and a granted QoS lower than 1 is traced at WARN naming the granted value
+**And** neither aborts the session: publishing without a command path is strictly better than not publishing.
+
+*AC added 2026-07-29 at Story 4.6 creation and carried back here on completion. It exists because the Story 4.4 review found the STATE observer discarding exactly this byte, which made a refused subscription indistinguishable from a quiet topic — the same byte, the same mistake, one file away from the code this story writes.*
+
 **Given** an NCMD payload the bridge does not recognise
 **When** it arrives
 **Then** it is traced at INFO with the metric names it carried, and otherwise ignored
-**And** a malformed payload is traced at WARN and ignored — never a panic, never a partial application.
+**And** a malformed payload is traced at WARN and ignored — never a panic, never a partial application
+**And** a payload that decodes but carries no metrics is traced too, not silently dropped.
 
 **Given** the mqtt driver task
 **When** an NCMD is handled
 **Then** no quality or staleness decision is taken there: the confinement guard in `arch_purity` still holds.
+
+*Delivered 2026-07-29. The subscription and the SubAck check are proven by `chaos_ncmd_subscription`, which reads the ordering and the requested QoS out of the **broker's** verbose log — one MQTT client cannot observe another's SUBSCRIBE, so the broker is the only external witness available. `MessageType::NCmd` was added to the published `sparkplug-b` crate; `DCmd` deliberately was not, because `tck-id-message-flow-device-dcmd-subscribe` is conditional on a device supporting writable outputs and none here does. Two conformance rows moved: `-ncmd-subscribe` (ch. 5) and `topics-ncmd-topic` (ch. 4).*
 
 ### Story 4.7: `Node Control/Rebirth` — answer with a fresh birth (FR19)
 

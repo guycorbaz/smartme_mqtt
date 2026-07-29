@@ -82,7 +82,7 @@ Chaos matrix completed with the **broker DOWN→RECOVERY / cloud-fresh** transit
 
 ### Sparkplug state & boot ordering
 
-`bdSeq` (and alias map) is **stateful across restarts** — persisted. Boot order: `bdSeq → NDEATH serialized → LWT set in CONNECT → connect → NBIRTH`. Reconnect triggers a rebirth. `sparkplug-b` exposes **primitives, not a domain** (`publish_metric(name, value, timestamp_ms, quality)`) with quality as a **minimal enum (GOOD/STALE/BAD)**; the bridge translates its transient/fatal taxonomy into it. Keeps the crate `Measurement`-free and publishable.
+`bdSeq` (and alias map) is **stateful across restarts** — persisted. Boot order: `bdSeq → NDEATH serialized → LWT set in CONNECT → connect → SUBSCRIBE to NCMD → NBIRTH`. Reconnect triggers a rebirth, and re-runs the subscribe with it. *(The NCMD step was added by Story 4.6 — `tck-id-message-flow-edge-node-ncmd-subscribe` requires it **prior to** the NBIRTH. Corrected by the Story 4.6 code review, 2026-07-29, which found this line and `epics.md`'s AR10 still at five steps while the code and the manual had moved to six.)* `sparkplug-b` exposes **primitives, not a domain** (`publish_metric(name, value, timestamp_ms, quality)`) with quality as a **minimal enum (GOOD/STALE/BAD)**; the bridge translates its transient/fatal taxonomy into it. Keeps the crate `Measurement`-free and publishable.
 
 ### Observability — honesty must be *legible*, not just correct (UX-driven)
 

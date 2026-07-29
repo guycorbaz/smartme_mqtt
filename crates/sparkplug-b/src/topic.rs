@@ -53,6 +53,11 @@ impl fmt::Display for TopicError {
 impl std::error::Error for TopicError {}
 
 /// The message types this crate can address.
+///
+/// `DCMD` is deliberately absent. `tck-id-message-flow-device-dcmd-subscribe`
+/// (`Sparkplug_5_Operational_Behavior.adoc:403-407`) is conditional — *"if the
+/// Device supports writing to outputs"* — and an unused variant would invite a
+/// subscription nothing needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageType {
     /// Node birth certificate.
@@ -61,6 +66,11 @@ pub enum MessageType {
     NData,
     /// Node death certificate.
     NDeath,
+    /// Node command. INBOUND only: an Edge Node subscribes to this topic and
+    /// never publishes on it. Present so the subscription topic is built from
+    /// the same validated grammar as everything else
+    /// (`tck-id-message-flow-edge-node-ncmd-subscribe`).
+    NCmd,
     /// Device birth certificate.
     DBirth,
     /// Device data.
@@ -76,6 +86,7 @@ impl MessageType {
             MessageType::NBirth => "NBIRTH",
             MessageType::NData => "NDATA",
             MessageType::NDeath => "NDEATH",
+            MessageType::NCmd => "NCMD",
             MessageType::DBirth => "DBIRTH",
             MessageType::DData => "DDATA",
             MessageType::DDeath => "DDEATH",
@@ -247,5 +258,40 @@ mod tests {
     fn device_level_is_distinguishable() {
         assert!(MessageType::DData.is_device_level());
         assert!(!MessageType::NData.is_device_level());
+    }
+
+    /// Story 4.6 — the topic an Edge Node MUST subscribe to.
+    ///
+    /// `tck-id-message-flow-edge-node-ncmd-subscribe`
+    /// (`Sparkplug_5_Operational_Behavior.adoc:158-163`) fixes the shape:
+    /// *"a topic of the form 'spBv1.0/group_id/NCMD/edge_node_id'"*. The QoS it
+    /// also mandates is a transport concern and belongs to the caller.
+    ///
+    /// Falsified 2026-07-29: spelling the token `"NCOMMAND"` turns this red.
+    #[test]
+    fn the_ncmd_topic_follows_the_namespace_grammar() {
+        assert_eq!(
+            node().node_topic(MessageType::NCmd).unwrap(),
+            "spBv1.0/Site/NCMD/Bridge"
+        );
+        assert_eq!(MessageType::NCmd.token(), "NCMD");
+    }
+
+    /// `is_device_level` is a `matches!`, so a new variant falls through to
+    /// `false` and COMPILES SILENTLY — unlike `token()`, which is exhaustive and
+    /// fails the build. `false` happens to be the right answer for NCMD, which
+    /// is why it needs asserting rather than assuming: the next variant added
+    /// must not be decided by a fall-through nobody reviewed.
+    ///
+    /// Falsified 2026-07-29: adding `NCmd` to the `matches!` arm turns both
+    /// assertions red.
+    #[test]
+    fn ncmd_is_node_level_deliberately_and_not_by_fall_through() {
+        assert!(!MessageType::NCmd.is_device_level());
+        assert!(
+            node().device_topic(MessageType::NCmd, "30000001").is_err(),
+            "NCMD addresses the node, never a device — DCMD is a separate, \
+             conditional clause this bridge does not implement"
+        );
     }
 }

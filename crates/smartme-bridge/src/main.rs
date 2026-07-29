@@ -18,7 +18,26 @@ fn env(key: &str) -> Result<String, String> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
+    // INFO by default, and NOT `fmt::init()`.
+    //
+    // `tracing_subscriber::fmt::init()` resolves to `EnvFilter::from_default_env()`,
+    // whose default directive is `LevelFilter::ERROR`. With no `RUST_LOG` in the
+    // environment that drops every WARN and INFO — which is most of what this
+    // bridge exists to say: the ignored-NCMD traces, the QoS-downgrade warning
+    // on a subscription the specification requires at QoS 1, and every traced
+    // drop. The operator would see an empty log and read it as "nothing to
+    // report" rather than "nothing is being reported".
+    //
+    // Found by the Story 4.6 review: AC2 and AC3 are both written in terms of
+    // what an operator can see in the log, and both were dark by default.
+    // `RUST_LOG` still overrides this whenever it is set.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::builder()
+                .with_default_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .init();
 
     let credentials = Credentials::ClientCredentials {
         client_id: env("SMARTME_CLIENT_ID")?,

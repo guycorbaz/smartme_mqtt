@@ -207,14 +207,80 @@ connects:
   \item serialise the NDEATH certificate for that session;
   \item register it as the connection's last will \emph{inside} the CONNECT packet;
   \item connect;
+  \item subscribe to the node's \code{NCMD} topic;
   \item publish NBIRTH, then one DBIRTH per meter.
 \end{enumerate}
 
 Get this wrong and the broker holds no will while the node is alive: the bridge dies and
 nobody is told.
 
+Steps 5 and 6 are in that order because the specification requires it --- the subscription
+must exist \emph{before} the NBIRTH goes out, not merely in the same sequence. A consumer
+that answers a birth certificate with a command would otherwise be talking to a node that
+is not listening yet. Both steps run on \emph{every} connect, so the ordering holds after a
+reconnect as well as at boot.
+
 \code{bdSeq} is persisted across restarts through an atomic write (write-temp, fsync,
 rename), so a power loss mid-write cannot leave a corrupt session number.
+
+\subsection{Commands are received and ignored}
+\label{sec:contract-ncmd}
+
+\prog subscribes to
+
+\begin{center}\code{spBv1.0/<group>/NCMD/<node>}\end{center}
+
+\noindent at \textbf{QoS~1}, on every connect, before publishing its birth certificate.
+This is the one place where \prog uses a QoS other than~0; the rule that everything is
+published at QoS~0 governs \emph{publishing}, and a subscription QoS is a different setting
+travelling the other way.
+
+\textbf{Nothing acts on what arrives.} \prog implements no command at all --- not
+\code{Node Control/Rebirth}, not anything else. Every message received on that topic is
+logged and discarded:
+
+\begin{center}
+\begin{tabular}{@{}l p{8.6cm}@{}}
+\toprule
+\textbf{What arrives} & \textbf{What \prog does} \\
+\midrule
+A command naming metrics & Logs the metric \emph{names} at \code{INFO} and discards it.
+                           Names only --- a full payload dump would be noise and could
+                           carry values. \\
+Bytes that do not decode & Logs at \code{WARN} and discards. Anyone can publish to this
+                           topic, so a malformed payload is an ordinary event and never
+                           stops the bridge. \\
+A command with no metrics & Logged too, distinctly, so it cannot be confused with a
+                           command whose names were lost. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\prog also reads the broker's answer to its own subscription, and says so in the log. If
+the broker \emph{refuses} the subscription --- an ACL, typically --- that is logged at
+\code{ERROR} naming the topic; if it grants a QoS lower than~1, that is logged at
+\code{WARN}. Neither stops the bridge: publishing without a command path is better than
+not publishing. This matters because a refused subscription is not an error and not a
+disconnect; without this check it would look exactly like a topic nobody publishes on.
+
+There is a third, rarer outcome, and it is not the broker's doing. If \prog cannot even
+\emph{queue} the subscription --- its outbound request queue is full at the instant the
+connection is accepted --- it logs that at \code{ERROR} and then births anyway, running that
+session with no command path and without retrying. The choice is deliberate, and it is the
+same one as everywhere else in this chapter: a bridge that publishes is worth more than one
+that refuses to. But it means an \code{ERROR} line about the subscription is the only sign,
+and it is a different line from the broker's refusal. All log output requires no
+configuration: \prog logs at \code{INFO} and above by default, and \code{RUST\_LOG}
+overrides that if you want more or less.
+
+\begin{note}
+\textbf{Why subscribe at all if nothing is honoured?} Because the ignoring is the part that
+has to be safe. A subscription that silently fails, a payload that crashes the bridge, or a
+command applied by halves are each worse than no subscription; none of them are visible
+without the diagnostics above. The subscription is also mandatory in the specification
+regardless of what a node does with the messages. Command handling itself is planned
+work --- see \emph{Known limitations}.
+\end{note}
 
 \subsection{Shutdown --- both deaths fire}
 \label{sec:contract-shutdown}
@@ -245,9 +311,11 @@ The two mechanisms are complementary rather than alternative: the will remains t
 \label{sec:contract-limits}
 
 \begin{itemize}
-  \item \textbf{No NCMD subscription}, so \code{Node Control/Rebirth} cannot be honoured.
-        A consumer that requests a rebirth is ignored; reconnects still rebirth on their
-        own. \prog issues no MQTT subscription of any kind.
+  \item \textbf{No command is honoured}, \code{Node Control/Rebirth} included. \prog
+        \emph{does} subscribe to its \code{NCMD} topic and \emph{does} receive commands
+        --- see section~\ref{sec:contract-ncmd} --- but it acts on none of them: a consumer
+        that requests a rebirth gets a log line and nothing else. Reconnects still rebirth
+        on their own.
   \item \textbf{The registered will is QoS~0 where the specification requires QoS~1.}
         See the note under \emph{Delivery semantics}.
   \item \textbf{No \emph{Primary Host Application} support.} Sparkplug lets an Edge Node
@@ -259,11 +327,12 @@ The two mechanisms are complementary rather than alternative: the will remains t
         \textbf{This is \emph{not} invisible on a single-broker installation, and an
         earlier edition of this manual wrongly said it was.} The cost appears when the
         host restarts. \prog's \code{NBIRTH} was published once, at QoS~0 and not
-        retained, so the broker keeps no copy for a returning consumer; \prog holds no
-        subscription, so it never learns the host came back; and its own broker session is
-        untouched by the host restarting, so \emph{that} event prompts nothing. The
-        protocol's own repair for this is an \code{NCMD} \code{Node Control/Rebirth},
-        which \prog does not implement. The consequence is that \textbf{after a consumer
+        retained, so the broker keeps no copy for a returning consumer; \prog reads no
+        \code{STATE} topic, so it never learns the host came back; and its own broker
+        session is untouched by the host restarting, so \emph{that} event prompts nothing.
+        The protocol's own repair for this is an \code{NCMD} \code{Node Control/Rebirth},
+        which reaches \prog but which \prog does not implement --- so the repair is
+        unavailable for one reason now rather than two. The consequence is that \textbf{after a consumer
         restarts, it may keep receiving \code{NDATA} it has no \code{NBIRTH} to
         interpret.}
 

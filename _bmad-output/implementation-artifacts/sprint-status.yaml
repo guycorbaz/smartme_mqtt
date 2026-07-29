@@ -202,7 +202,39 @@ development_status:
   # a blocking send can stall the EventLoop and cost the keep-alive. And this story
   # falsifies ELEVEN sentences across six files that say the bridge subscribes to
   # nothing — the list is in the story, mechanical, and AC5 owns it.
-  4-6-ncmd-subscription-plumbing: ready-for-dev
+  # 2026-07-29: implemented. All 5 ACs met; 9 falsification mutations run, all red.
+  # The sharpest of them: mutation 7 (subscribe moved after the birth) first went red
+  # for the WRONG REASON — the broker log was read at the instant of the NBIRTH, so a
+  # LATE subscribe read as no subscribe at all. A settle was added because of the
+  # falsification run and the mutation re-run; the message now names the real cause.
+  # Proof for the ordering and the QoS comes from the BROKER's verbose log: one MQTT
+  # client cannot observe another's SUBSCRIBE, so mosquitto -v is the only external
+  # oracle there is. The load-bearing AC3 assertion is not a log line but the ABSENCE
+  # of a second NBIRTH after a real Node Control/Rebirth — answering it would have
+  # implemented Story 4.7 by accident.
+  # TWO verdicts moved, in two chapters: -ncmd-subscribe (ch.5) and topics-ncmd-topic
+  # (ch.4). Chapter tallies 22·2·26·49 -> 23·2·25·49 and 14·0·6·21 -> 15·0·5·21; total
+  # 70·8·52·144 -> 72·8·50·144. First story to MOVE a matrix verdict rather than record
+  # one. topics-dcmd-topic re-owned from 4.6 to 4.19 — DCmd was deliberately not added.
+  # AC5's "eleven sentences" were TWELVE (the grep found -state-subs, ch.5) and then
+  # THIRTEEN (topics-ncmd-topic said "not implemented", which no grep for "no
+  # subscription" could reach). A mechanical list is a floor, not a ceiling. Also found
+  # by following the change: every mqtt_driver.rs line citation in the matrix went
+  # stale, and chapter 2 of the manual still carried the false "until smartme_mqtt
+  # itself is restarted" sentence that the Story 4.4 review corrected in chapter 5 —
+  # the same falsehood, surviving by one chapter.
+  # The two load-bearing passages were RE-ARGUED, not re-worded: ADR 0016's decision
+  # stands (the cost rested on three facts, 4.6 removed one, and the MISSING REBIRTH
+  # HANDLER alone suffices — the review corrected "either survivor suffices", which was
+  # false: an unretained NBIRTH does not on its own imply no repair path, since a Rebirth
+  # handler repairs precisely BECAUSE births are unretained. This argument therefore
+  # EXPIRES when 4.7 lands; 4.5 must be re-weighed then, not inherited)
+  # and the case for 4.7 before 4.5 is STRONGER — a two-part absent mechanism is now a
+  # single missing handler behind a live subscription.
+  # HAZARD CREATED: the subscription is open on a broker where a live MQTT Engine sends
+  # real Rebirth requests. Until 4.7, every one is answered with a log line.
+  # Issue #23 is now half true and wants a comment; NOT done (outward action, unasked).
+  4-6-ncmd-subscription-plumbing: done
   4-7-node-control-rebirth-answer: backlog
   4-8-tier-3-gate-covers-ncmd-rebirth: backlog
   4-9-sigterm-discriminator-survives-per-connect-bdseq: backlog

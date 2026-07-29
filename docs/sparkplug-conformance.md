@@ -167,8 +167,8 @@ chose.
 | --- | --- | --- | --- | --- |
 | `principles-rbe-recommended` | SHOULD NOT | **the bridge publishes on every poll tick, changed or not** — `tokio::time::interval` (`poll_publish.rs:143`, 5 s default) and `step_once` publishes each outcome. There is no change detection anywhere in the tree | `poll_publish.rs::step_once`, `StateMachine::step` returns a verdict, never a publish decision (`core/state_machine.rs:82`) | **deviation** ([#32](https://github.com/guycorbaz/smartme_mqtt/issues/32)) — RBE is *blocked*, not rejected; see below |
 | `principles-birth-certificates-order` | MUST | `publish()` refuses before the birth (`Published::DroppedBeforeBirth`, `sparkplug_publisher.rs:306-308`); `birth()` emits the NBIRTH first | `a_drop_before_the_birth_is_reported_not_silent` (**remove the `Session::Live` guard and it goes red**) and `cold_start_birth_declares_tags_with_no_value_and_stale_quality`, which pins NBIRTH at `sink.emitted[0]`. `chaos_sigterm_no_lie` is **not** a witness for *first-ness* — see the bound below | conformant — see the bound below |
-| `principles-persistence-clean-session-311` | MUST | the flag **is** true — and nothing in this repository sets it | — **the guarantee is rumqttc's default**, verified in the registry source (`rumqttc-0.25.1/src/lib.rs:513`, `mqttbytes/v4/connect.rs:27`); `mqtt_driver.rs:156` never calls `set_clean_session`, and no test asserts the flag | **gap (unproven)** ([#35](https://github.com/guycorbaz/smartme_mqtt/issues/35), Story 4.10) |
-| `principles-persistence-clean-session-50` | MUST | the bridge speaks MQTT 3.1.1 | — | n/a — `rumqttc = "0.25"` (`Cargo.toml:42`) and the driver imports `rumqttc::{AsyncClient, …}`, **not** `rumqttc::v5::*` (`mqtt_driver.rs:43`) |
+| `principles-persistence-clean-session-311` | MUST | the flag **is** true — and nothing in this repository sets it | — **the guarantee is rumqttc's default**, verified in the registry source (`rumqttc-0.25.1/src/lib.rs:513`, `mqttbytes/v4/connect.rs:27`); `mqtt_driver.rs:293` never calls `set_clean_session`, and no test asserts the flag | **gap (unproven)** ([#35](https://github.com/guycorbaz/smartme_mqtt/issues/35), Story 4.10) |
+| `principles-persistence-clean-session-50` | MUST | the bridge speaks MQTT 3.1.1 | — | n/a — `rumqttc = "0.25"` (`Cargo.toml:42`) and the driver imports `rumqttc::{AsyncClient, …}`, **not** `rumqttc::v5::*` (`mqtt_driver.rs:66`) |
 
 **On RBE, the verdict is `deviation` and the row must say the behaviour is blocked rather than
 rejected.** The clause reads *"Because of the stateful nature of Sparkplug sessions, data SHOULD NOT
@@ -270,7 +270,7 @@ constraint; ideally the bridge refuses to start on a detectable collision. Issue
 | `topics-ndeath-topic` | MUST | `spBv1.0/{group}/NDEATH/{node}` | `node_topics_follow_the_namespace_grammar` | conformant |
 | `topics-ndata-topic` | MUST | topic construction supports it; **NDATA is never emitted** — the bridge carries no node-level measurement | — | n/a |
 | `topics-ndata-mqtt` | MUST | as above | — | n/a |
-| `topics-ncmd-topic` | MUST | **not implemented** — no NCMD subscription exists, and a subscriber must build this topic form too | — | **gap (unimplemented)** (Story 4.6, [#23](https://github.com/guycorbaz/smartme_mqtt/issues/23)) |
+| `topics-ncmd-topic` | MUST | `spBv1.0/{group}/NCMD/{node}` — built by `node_topic(MessageType::NCmd)` from the same validated grammar as every published topic, and used as the subscription filter (Story 4.6, `mqtt_driver.rs:270`) | `the_ncmd_topic_follows_the_namespace_grammar` pins the full literal; `chaos_ncmd_subscription` reads the filter back out of the **broker's** log, so the form is witnessed on the wire and not only at the call site | conformant — **moved from `gap (unimplemented)` by Story 4.6.** The clause is about the topic *form*, and the form now exists because something subscribes to it |
 | `topics-ncmd-mqtt` | MUST | a **publication** clause — see the note below | — | n/a |
 
 > **`topics-ndata-mqtt` settles a question that was got wrong twice.** It reads *"NDATA messages
@@ -289,7 +289,7 @@ constraint; ideally the bridge refuses to start on a detectable collision. Issue
 | `topics-ddata-mqtt` | MUST | QoS 0, retain false | `every_edge_node_message_is_qos_zero_and_never_retained` | conformant |
 | `topics-ddeath-topic` | MUST | topic construction supports it; **DDEATH is never emitted** | — | **gap (unimplemented)** (Epic 3 — with one meter a device only stops when its node does) |
 | `topics-ddeath-mqtt` | MUST | as above | — | **gap (unimplemented)** (Epic 3) |
-| `topics-dcmd-topic` | MUST | **not implemented** — no DCMD subscription, and a subscriber must build this topic form too | — | **gap (unimplemented)** (Story 4.6) |
+| `topics-dcmd-topic` | MUST | **not implemented** — no DCMD subscription, and a subscriber must build this topic form too | — | **gap (unimplemented)** (**Story 4.19**, re-owned) — Story 4.6 declined DCMD deliberately: `-device-dcmd-subscribe` is conditional on *"if the Device supports writing to outputs"* (`:403-407`) and no device here does. `MessageType` has no `DCmd` variant on purpose. See the criterion note below: this row probably belongs at `n/a` |
 | `topics-dcmd-mqtt` | MUST | a **publication** clause — see the note below | — | n/a |
 
 > **`topics-ncmd-mqtt` and `topics-dcmd-mqtt` are `n/a`, and they were `gap`s until the code review
@@ -350,18 +350,18 @@ do below.
 
 | tck-id | Level | Our behaviour | Proof | Verdict |
 | --- | --- | --- | --- | --- |
-| `message-flow-edge-node-ncmd-subscribe` | MUST (QoS 1) | **the bridge issues no MQTT subscription at all** — `grep -rn subscribe crates/smartme-bridge/src/` returns only prose and `tracing_subscriber` | — | **gap (unimplemented)** (Story 4.6, [#23](https://github.com/guycorbaz/smartme_mqtt/issues/23)) — see below |
-| `message-flow-edge-node-birth-publish-connect` | MUST | `publisher.birth(...)` is driven from `Transport::Connected`, which is raised only on `Packet::ConnAck` (`mqtt_driver.rs:175-178, 257`) | `chaos_sigterm_no_lie` observes the NBIRTH arriving on a real broker after a real CONNECT | conformant |
-| `message-flow-edge-node-birth-publish-will-message` | MUST | the will is registered in the CONNECT packet (`mqtt_driver.rs:159`), built **before** the client exists | `chaos_stale_on_death` — the bridge's task is aborted without a shutdown signal (`:68`), the socket drops, and an independent subscriber receives the certificate the broker was holding. An external witness against a real broker | conformant |
+| `message-flow-edge-node-ncmd-subscribe` | MUST (QoS 1) | the driver subscribes to `spBv1.0/{group}/NCMD/{node}` at **QoS 1**, and it does so **before** the birth publish, in the `Transport::Connected` arm — so the ordering holds on every reconnect, not only the first (`mqtt_driver.rs:321-330`, `subscribe_to_commands` at `:554`; topic built by `node_topic(MessageType::NCmd)` at `:270`) | `chaos_ncmd_subscription` reads the **broker's own verbose log**: `Received SUBSCRIBE from <node>` followed by `spBv1.0/…/NCMD/<node> (QoS 1)`, then `Received PUBLISH … '/NBIRTH/…'`. One MQTT client cannot observe another's SUBSCRIBE, so the broker is the only external witness there is. Falsified — moving the subscribe after the birth turns it red; and, added by the Story 4.6 review, hoisting the subscribe out of the `Transport::Connected` arm turns it red on the SECOND connect, which the test now forces by evicting the bridge's client id | conformant — **for the subscription only, and on one stated condition.** The clause's trailing bullet (*"mandatory as Edge Nodes MUST be able to respond to 'rebirth requests'"*) is not a `tck-id`; the responding is `-rebirth-action-1/2/3` below, still `gap` (Story 4.7). **The condition:** if `try_subscribe` itself fails — a full request channel at the CONNACK instant, or a closed client — the driver traces at ERROR and **births anyway** without retrying for the life of the session (`subscribe_to_commands` at `mqtt_driver.rs:554`). That is deliberate (publishing without a command path beats not publishing) but it is a path on which this row's clause is unmet, it is distinct from the broker *refusing* the subscription, and it is recorded in `deferred-work.md` |
+| `message-flow-edge-node-birth-publish-connect` | MUST | `publisher.birth(...)` is driven from `Transport::Connected`, which is raised only on `Packet::ConnAck` (`mqtt_driver.rs:321-330, 492`) | `chaos_sigterm_no_lie` observes the NBIRTH arriving on a real broker after a real CONNECT | conformant |
+| `message-flow-edge-node-birth-publish-will-message` | MUST | the will is registered in the CONNECT packet (`mqtt_driver.rs:296`), built **before** the client exists | `chaos_stale_on_death` — the bridge's task is aborted without a shutdown signal (`:68`), the socket drops, and an independent subscriber receives the certificate the broker was holding. An external witness against a real broker | conformant |
 | `message-flow-edge-node-birth-publish-will-message-topic` | MUST | `spBv1.0/{group}/NDEATH/{node}`, built by `node_topic` (`sparkplug_publisher.rs:206`) | `node_topics_follow_the_namespace_grammar` pins the full literal. `chaos_stale_on_death` is **not** a second witness for the grammar: it tests only `.contains("/NDEATH/")` (`:70-72`), which `foo/NDEATH/bar` would satisfy | conformant |
 | `message-flow-edge-node-birth-publish-will-message-payload` | MUST | the will payload is `encode(&payload)` — the vendored protobuf | `chaos_stale_on_death` decodes it from a real broker; `prop_every_numbered_payload_round_trips` | conformant |
 | `message-flow-edge-node-birth-publish-will-message-payload-bdSeq` | MUST | the metric is present, named `bdSeq`, INT64 — **but the value never increments per CONNECT** | `the_will_matches_the_session_before_and_after_the_birth`, `prop_will_birth_and_death_agree_on_bdseq_for_every_session_number` (both prove presence and pairing, neither the increment) | **deviation** (Story 4.10) — see below |
-| `message-flow-edge-node-birth-publish-will-message-qos` | MUST (QoS 1) | the will is registered at **QoS 0** — `qos_for` returns `AtMostOnce` for every type including `NDeath` (`mqtt_driver.rs:123-125, 158`) | — | **gap (unimplemented)** ([#26](https://github.com/guycorbaz/smartme_mqtt/issues/26), Story 4.17) |
+| `message-flow-edge-node-birth-publish-will-message-qos` | MUST (QoS 1) | the will is registered at **QoS 0** — `qos_for` returns `AtMostOnce` for every type including `NDeath` (`mqtt_driver.rs:146-148, 295`) | — | **gap (unimplemented)** ([#26](https://github.com/guycorbaz/smartme_mqtt/issues/26), Story 4.17) |
 | `message-flow-edge-node-birth-publish-will-message-will-retained` | MUST (false) | retain false, from the same `qos_for` | — **no test observes the registered will's retain flag**; identical to chapter 6's `payloads-ndeath-will-message-retain`, and downgraded for the same reason. See the convention note below — this row and `-nbirth-qos` treat the same derivation differently, on purpose | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
 | `message-flow-edge-node-birth-publish-nbirth-topic` | MUST | `spBv1.0/{group}/NBIRTH/{node}` | `node_topics_follow_the_namespace_grammar`; `cold_start_birth_declares_tags_with_no_value_and_stale_quality` pins the literal `spBv1.0/Site/NBIRTH/Bridge` | conformant |
 | `message-flow-edge-node-birth-publish-nbirth-payload` | MUST | protobuf, one encoder for every message type | `a_birth_is_self_describing`, `prop_every_numbered_payload_round_trips` | conformant |
 | `message-flow-edge-node-birth-publish-nbirth-payload-bdSeq` | MUST | the NBIRTH's `bdSeq` **is** the previous CONNECT's — both read the one `publisher.bd_seq()` | `the_will_matches_the_session_before_and_after_the_birth`, `prop_will_birth_and_death_agree_on_bdseq_for_every_session_number`, and `chaos_sigterm_no_lie` reads it off a real broker against a **seeded** number, so it is not a constant compared with itself | conformant — see below on why the vacuity is recorded on the other row |
-| `message-flow-edge-node-birth-publish-nbirth-qos` | MUST (QoS 0) | QoS 0 | `every_edge_node_message_is_qos_zero_and_never_retained` — **mutation-verified at the Story 4.3 review**: changing `qos_for` to return `AtLeastOnce` goes red, and both call sites (`:158` the will, `:278` every publish) derive from that one function | conformant |
+| `message-flow-edge-node-birth-publish-nbirth-qos` | MUST (QoS 0) | QoS 0 | `every_edge_node_message_is_qos_zero_and_never_retained` — **mutation-verified at the Story 4.3 review**: changing `qos_for` to return `AtLeastOnce` goes red, and both call sites (`:295` the will, `:572`, inside the `publish` helper, every publish) derive from that one function | conformant |
 | `message-flow-edge-node-birth-publish-nbirth-retained` | MUST (false) | retain false | same, **plus an external witness**: `chaos_sigterm_no_lie:397-405` connects a late subscriber after the bridge is gone and asserts the broker replays nothing — and unlike the will, the NBIRTH is *certainly* published in that run, because the test waited for it | conformant |
 | `message-flow-edge-node-birth-publish-nbirth-payload-seq` | MUST (0–255) | a BIRTH resets the counter and takes `0`; `SeqCounter` is a `u8`, so the range is a type invariant | `birth_carries_seq_zero_and_the_session_number`, `prop_seq_stays_in_range_and_wraps_at_the_boundary`, `prop_rebirth_always_restarts_numbering_at_zero` | conformant |
 | `message-flow-edge-node-birth-publish-phid-wait` | MUST | **the bridge has no Primary Host Application configuration at all** | — | **gap (unimplemented)** (Stories 4.4–4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
@@ -369,7 +369,7 @@ do below.
 | `message-flow-edge-node-birth-publish-phid-wait-online` | MUST | as above — no STATE payload is read | — | **gap (unimplemented)** (Stories 4.4–4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
 | `message-flow-edge-node-birth-publish-phid-wait-timestamp` | MUST | as above — no STATE timestamp is compared | — | **gap (unimplemented)** (Stories 4.4–4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant*, monotonicity undetermined |
 | `message-flow-edge-node-birth-publish-phid-offline` | MUST | as above — nothing makes the bridge disconnect on an offline STATE | — | **gap (unimplemented)** (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
-| `operational-behavior-edge-node-intentional-disconnect-ndeath` | MUST | the bridge publishes its own NDEATH before dropping the socket (`mqtt_driver.rs:240`) | `chaos_sigterm_no_lie` — and it proves the **explicit** death rather than the will, because it asserts `death_stamp > birth_stamp`, which a CONNECT-time will can never satisfy | conformant — **and it vindicates [ADR 0011](adr/0011-graceful-shutdown-requires-both-deaths.md)** |
+| `operational-behavior-edge-node-intentional-disconnect-ndeath` | MUST | the bridge publishes its own NDEATH before dropping the socket (`mqtt_driver.rs:466`) | `chaos_sigterm_no_lie` — and it proves the **explicit** death rather than the will, because it asserts `death_stamp > birth_stamp`, which a CONNECT-time will can never satisfy | conformant — **and it vindicates [ADR 0011](adr/0011-graceful-shutdown-requires-both-deaths.md)** |
 | `operational-behavior-edge-node-intentional-disconnect-packet` | MAY | the bridge **never** sends a DISCONNECT packet, deliberately: it would instruct the broker to discard the will, removing the fallback (ADR 0011) | `chaos_sigterm_no_lie` observes the will still firing after the explicit death | n/a — a permission declined, not an obligation missed |
 | `operational-behavior-edge-node-birth-sequence-wait` | MUST | the bridge births as soon as the broker answers; it waits for no STATE | — | **gap (unimplemented)** (Stories 4.4–4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant*, but which of two readings applies is undetermined |
 | `operational-behavior-edge-node-termination-host-offline` | MUST | nothing disconnects the bridge on an offline STATE | — | **gap (unimplemented)** (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
@@ -413,11 +413,41 @@ bridge owes on death is `-intentional-disconnect-ndeath` above, and it is confor
 home.** The code review of Story 4.2 moved chapter 4's `topics-ncmd-mqtt` and chapter 6's
 `payloads-ncmd-qos`/`-retain` to `n/a`, correctly: they bind whoever *publishes* an NCMD, and that
 is always a Host Application. But that reclassification left the obligation the bridge genuinely
-fails resting entirely on this clause — *"The MQTT client associated with the Edge Node MUST
+failed resting entirely on this clause — *"The MQTT client associated with the Edge Node MUST
 subscribe to a topic of the form 'spBv1.0/group\_id/NCMD/edge\_node\_id' … with a QoS of 1"*
 (`Sparkplug_5_Operational_Behavior.adoc:158-162`), followed by *"This subscription is mandatory as
-Edge Nodes MUST be able to respond to 'rebirth requests'"*. Story 4.6 must honour the **QoS 1**,
-which is easy to lose given `qos_for` returns `AtMostOnce` unconditionally.
+Edge Nodes MUST be able to respond to 'rebirth requests'"*.
+
+**Story 4.6 closed it, and the QoS trap it warned about was real but not where it looked.** The risk
+recorded here was that `qos_for` returns `AtMostOnce` unconditionally and the subscription would
+inherit it. It does not: `qos_for` governs what the edge node *publishes*, and the subscribe QoS is a
+different field in a different packet travelling the other way, so the two never meet. The clause is
+honoured with a literal `QoS::AtLeastOnce` in `subscribe_to_commands`, and the proof is taken from
+the broker's log rather than from that call site — a test reading our own constant back would assert
+nothing.
+
+The **ordering** turned out to be the harder half. The epic's wording (*"as part of the same
+post-CONNACK sequence that publishes NBIRTH"*) permits birth-then-subscribe; the specification's own
+section preamble (`:155-156`) does not — *"**Prior to sending an NBIRTH message**"* — and a host that
+answers a birth with a rebirth request would be talking to a node that is not yet listening. The row
+above is scored against the preamble.
+
+Three clauses in this chapter — `-rebirth-action-1/2/3` — remain `gap` after Story 4.6, and their
+verdicts are right, but **their wording was not**. `-rebirth-action-1` is about what happens *on
+receipt* (*"nothing receives a Rebirth Request"*), not about answering, so Story 4.6 made its evidence
+cell false and it has been amended; `-action-2/3` are about answering and needed no change.
+
+*Corrected by the Story 4.6 code review, 2026-07-29. The paragraph this replaces asserted that all
+three clauses "are about *answering* one" and certified them as still-right — while the story that
+wrote it was the story that falsified one of them. This is the fifth instance of the pattern the
+story's own Dev Notes catalogue: the claim gets corrected, the sentence describing its consequence
+gets read for intent instead of against the code. Recording it rather than quietly overwriting it,
+because the correction is the evidence that the mechanism AC5 asked for — a per-passage report — is
+not ceremony.*
+
+Story 4.6 built the plumbing and throws every command away on purpose, tracing the metric names it
+saw. Receiving without answering is not a half-measure — it is the state in which the ignoring can be
+shown to be safe before Story 4.7 gives any command meaning.
 
 **Why `-will-message-payload-bdSeq` is a deviation while `-nbirth-payload-bdSeq` is conformant, and
 why that is not the two chapters disagreeing.** The will clause carries the increment requirement in
@@ -425,7 +455,7 @@ its own text: *"the value MUST be incremented by one from the value in the previ
 packet unless the value would be greater than 255"* (`:178-182`). The bridge increments **per
 process start** — `load_bd_seq` → `NodeSession::start` → `store_bd_seq` before connecting — but
 never per *internal reconnect*: the will is serialised into `MqttOptions` once and `rumqttc` rebuilds
-every reconnect's CONNECT from that snapshot (`mqtt_driver.rs:29-38, 156-163`). So a Host Application
+every reconnect's CONNECT from that snapshot (`mqtt_driver.rs:50-61, 293-301`). So a Host Application
 cannot distinguish a current session from a superseded one after a transport blip. The NBIRTH clause
 asks only that the birth's `bdSeq` **match** the CONNECT's, which it does, provably. Chapter 6 folded
 both halves onto `payloads-nbirth-bdseq-repeat` because chapter 6 gives the increment no id of its
@@ -473,7 +503,7 @@ requires these to appear as gaps pointing at Stories 4.4–4.8, and they do.
 
 | tck-id | Level | Our behaviour | Proof | Verdict |
 | --- | --- | --- | --- | --- |
-| `operational-behavior-data-publish-nbirth` | MUST | the NBIRTH declares `Contract/Version`, and it is the only node-level metric the bridge ever publishes — **no NDATA is emitted anywhere** (`MessageType::NData` appears in the bridge only inside a test loop, `mqtt_driver.rs:299`) | `the_node_birth_publishes_the_contract_version` | conformant |
+| `operational-behavior-data-publish-nbirth` | MUST | the NBIRTH declares `Contract/Version`, and it is the only node-level metric the bridge ever publishes — **no NDATA is emitted anywhere** (`MessageType::NData` appears in the bridge only inside a test loop, `mqtt_driver.rs:604`) | `the_node_birth_publishes_the_contract_version` | conformant |
 | `operational-behavior-data-publish-nbirth-values` | MUST | `Contract/Version` carries its current value, an `Int64` compile-time constant | `the_node_birth_publishes_the_contract_version` asserts the value on the wire | conformant |
 | `operational-behavior-data-publish-nbirth-change` | SHOULD | NDATA is never published | — | n/a — consistent with chapter 6's NDATA block and its stated criterion |
 | `operational-behavior-data-publish-nbirth-order` | MUST | the NBIRTH carries **two** metrics — `build_birth` prepends `bdSeq` before `Contract/Version` (`encode.rs:180-182`) — both stamped with the same `timestamp_ms`, so the list is chronologically ordered | — nothing asserts the ordering. **This clause is live today, not latent**: two metrics is enough to be out of order | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
@@ -485,7 +515,7 @@ requires these to appear as gaps pointing at Stories 4.4–4.8, and they do.
 | `operational-behavior-data-commands-rebirth-datatype` | MUST | as above — the metric does not exist to have a datatype | — | **gap (unimplemented)** (Story 4.7) |
 | `operational-behavior-data-commands-rebirth-value` | MUST | as above | — | **gap (unimplemented)** (Story 4.7) |
 | `operational-behavior-data-commands-rebirth-name-aliases` | MUST NOT | conditional on aliases being used; `encode_metric` hard-codes `alias: None` (`encode.rs:241`), so the feature is unreachable | — | n/a — the condition never holds; consistent with chapter 6's three alias clauses |
-| `operational-behavior-data-commands-rebirth-action-1` | MUST | nothing receives a Rebirth Request, so nothing stops DATA on one | — | **gap (unimplemented)** (Story 4.7) |
+| `operational-behavior-data-commands-rebirth-action-1` | MUST | since Story 4.6 the request **is** received, decoded and traced — but nothing acts on it, so nothing stops DATA on one. The gap moved from *cannot hear* to *hears and does not answer* | — | **gap (unimplemented)** (Story 4.7) |
 | `operational-behavior-data-commands-rebirth-action-2` | MUST | `birth()` **can** already re-emit a full NBIRTH + DBIRTH sequence (`sparkplug_publisher.rs:251-259`) and does so on reconnect — but no NCMD can trigger it | `a_rebirth_redeclares_what_is_known_instead_of_blanking_it`, `prop_rebirth_always_restarts_numbering_at_zero` — the **mechanism** is built and tested; the trigger is missing | **gap (unimplemented)** (Story 4.7) — see below |
 | `operational-behavior-data-commands-rebirth-action-3` | MUST | a rebirth reuses the same `bdSeq` (no new MQTT session) | `the_will_matches_the_session_before_and_after_the_birth` proves the number is unchanged across a birth | **gap (unimplemented)** (Story 4.7) — the behaviour is right, but it is unreachable by the path the clause describes |
 | `operational-behavior-data-commands-ncmd-rebirth-verb` | MUST | a Rebirth **Request** is published by a Host Application | — | n/a |
@@ -522,9 +552,11 @@ in the six `-rebirth-*` rows, not hidden here.
 **`-rebirth-action-2` and `-action-3` are gaps whose *behaviour* is already correct, which is worth
 stating precisely so Story 4.7 is scoped right.** `SparkplugPublisher::birth` already re-emits the
 complete NBIRTH + DBIRTH sequence under the unchanged `bdSeq`, and two tests pin that. What is
-missing is only the **trigger**: an NCMD subscription and a handler. Story 4.7's work is a caller,
-not an encoder — the same shape as DDEATH in chapter 6, where the crate was conformant and the
-bridge never called it.
+missing is only the **trigger**. Story 4.6 has since supplied half of it — the NCMD subscription
+exists and inbound commands reach the driver, which traces their metric names and drops them — so
+what Story 4.7 still owes is the **handler**: recognising `Node Control/Rebirth` and calling
+`birth()`. Story 4.7's work is a caller, not an encoder — the same shape as DDEATH in chapter 6,
+where the crate was conformant and the bridge never called it.
 
 **The two ordering rows were wrong twice before they were right, and both corrections came from
 outside the author's reading.**
@@ -582,11 +614,13 @@ datum or the event that this message type exists to carry?*
   (`:163`). Every Edge Node has a session that can be reborn, including this one.
 
 **And the falsification condition:** the moment any device declares a writable metric,
-`-dcmd-subscribe` becomes `gap (unimplemented)` owned by Story 4.6, and the subscription must be
-**QoS 1**.
+`-dcmd-subscribe` becomes `gap (unimplemented)`, and the subscription must be **QoS 1**. The owner is
+no longer Story 4.6: that story landed and added an `NCmd` variant and no `DCmd` one, on the grounds
+that an unused variant invites a subscription nothing needs. A future writable output is a new
+story, not an unfinished part of this one.
 
 **One inconsistency this pass found and deliberately did not fix.** Chapter 4 records
-`topics-dcmd-topic` as `gap (unimplemented)` (Story 4.6) on the grounds that *"a subscriber must
+`topics-dcmd-topic` as `gap (unimplemented)` (now Story 4.19) on the grounds that *"a subscriber must
 build this topic form too"*. Under the criterion above that row should be `n/a` for the same reason
 as the row here. Re-deciding chapter-4 rows is outside Story 4.3's scope, so it is recorded in the
 findings for **Story 4.19** rather than changed here — but a reader comparing the two chapters
@@ -671,7 +705,7 @@ The three clauses that bind **us**:
 
 | tck-id | Level | Our behaviour | Proof | Verdict |
 | --- | --- | --- | --- | --- |
-| `operational-behavior-primary-application-state-with-multiple-servers-state-subs` | MUST | the clause binds both sides — *"all Edge Nodes configured with a Primary Host Application MUST subscribe to this STATE message"* (`:586-589`). The bridge issues no subscription of any kind | — | **gap (unimplemented)** (Stories 4.4, 4.6) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* — the host half is satisfied, the edge-node half is not |
+| `operational-behavior-primary-application-state-with-multiple-servers-state-subs` | MUST | the clause binds both sides — *"all Edge Nodes configured with a Primary Host Application MUST subscribe to this STATE message"* (`:586-589`). Since Story 4.6 the bridge does hold a subscription — to its own NCMD topic, and to that alone. It subscribes to no STATE topic, so this clause is unmet for the same reason as before, but the reason must now be stated precisely rather than as a blanket absence | — | **gap (unimplemented)** (Stories 4.4, 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* — the host half is satisfied, the edge-node half is not |
 | `operational-behavior-primary-application-state-with-multiple-servers-walk` | MUST | *"the Edge Node MUST terminate its session with this MQTT Server and move to the next available MQTT Server"* (`:610-613`) — there is no server list and no STATE to trigger it | — | **gap (unimplemented)** (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *irrelevant* — one broker |
 | `operational-behavior-primary-application-state-with-multiple-servers-single-server` | MUST NOT | *"The Edge Nodes MUST not connected to more than one server at any point in time"* (`:600-601`, typo the specification's). `MqttConfig` holds one `host` and one `port` and the driver builds one `AsyncClient` | — **correct by our own code shape, and nothing asserts it**; the guarantee dissolves the day Story 4.5 adds a server list, which is exactly when it would matter | **gap (unproven)** ([#35](https://github.com/guycorbaz/smartme_mqtt/issues/35), Story 4.10) |
 
@@ -848,7 +882,7 @@ is legal and is a deliberate choice — a consumer should never have to infer go
 | `payloads-metric-timestamp-in-UTC` | MUST | the metric timestamp is the reading's own `ValueDate`, carried through the same UTC pipeline | same proofs — **and the claim is bounded to the unit**: they prove no offset enters the `ValueDate` → epoch-millis conversion, which is what *"in UTC"* asks. That the field is *populated at all* is a separate obligation, and it is the `gap` on the row below | conformant |
 | `payloads-name-birth-data-requirement` | MUST | *(a timestamp clause — see the editorial note above)* `encode_metric` always sets the metric-level `timestamp` (`encode.rs:242`) | — **every timestamp assertion in the tree is payload-level**; nothing reads an encoded metric's `timestamp` field, and the mutation that drops it stays green | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
 | `payloads-name-cmd-requirement` | MAY | *(a timestamp clause)* governs metrics in NCMD/DCMD, which are Host-published | — | n/a — see the NCMD/DCMD note |
-| `payloads-nbirth-timestamp` | MUST | NBIRTH is stamped with `clock.wall()` (`mqtt_driver.rs:178`) — the publish instant, as the clause requires | — **the cited evidence is a presence check, not a value check**: `chaos_sigterm_no_lie:274` only unwraps `birth.payload.timestamp`, and `:331-332` bounds it from *above* via `death_stamp > birth_stamp`. Replace `clock.wall()` with a small constant and every test stays green — it passes more easily | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
+| `payloads-nbirth-timestamp` | MUST | NBIRTH is stamped with `clock.wall()` (`mqtt_driver.rs:330`) — the publish instant, as the clause requires | — **the cited evidence is a presence check, not a value check**: `chaos_sigterm_no_lie:274` only unwraps `birth.payload.timestamp`, and `:331-332` bounds it from *above* via `death_stamp > birth_stamp`. Replace `clock.wall()` with a small constant and every test stays green — it passes more easily | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
 | `payloads-dbirth-timestamp` | MUST | **cold start conforms** (stamped `now`); **a rebirth re-declaring a known reading is stamped with that reading's `ValueDate`** (`sparkplug_publisher.rs:277-280`) | `a_rebirth_redeclares_what_is_known_instead_of_blanking_it` asserts the deviating behaviour by name | **deviation** ([#29](https://github.com/guycorbaz/smartme_mqtt/issues/29)) |
 | `payloads-ddata-timestamp` | MUST | **the payload timestamp is the reading's `ValueDate`, not the publish instant** (`sparkplug_publisher.rs:315`) | `a_good_reading_carries_units_serial_and_the_source_timestamp`, `a_stale_verdict_never_publishes_a_fresh_looking_metric` — both assert it deliberately | **deviation** ([#29](https://github.com/guycorbaz/smartme_mqtt/issues/29)) |
 | `payloads-ndata-timestamp` | MUST | NDATA is never emitted | — | n/a |
@@ -901,7 +935,7 @@ out to be a restatement rather than a new requirement.
 value MUST match the bdSeq number value that was sent in the prior MQTT CONNECT packet WILL
 Message"* (`:1075`), and taken alone it is satisfied. But it is satisfied *vacuously*: the will is
 serialised into `MqttOptions` once at construction and `rumqttc` rebuilds every reconnect's CONNECT
-packet from that same snapshot (`mqtt_driver.rs:29-30, 156-163`), so the two values agree because
+packet from that same snapshot (`mqtt_driver.rs:50-51, 293-301`), so the two values agree because
 neither can move. The clause's own accompanying requirement — *"any new CONNECT packet must
 increment the bdSeq number in the payload compared to what was in the previous CONNECT packet"*
 (`:1521-1525`) — is therefore **violated on every internal reconnect**, and a Host Application
@@ -990,35 +1024,42 @@ obligation carried two verdicts in one document — `Sparkplug_4_Topics.adoc:344
 same publish-side requirement as the rows above. **Those two chapter-4 rows are now `n/a` as well**;
 see the note under chapter 4's device-messages table.
 
-**The unimplemented command path is not hidden by any of this.** It stays recorded at
-`topics-ncmd-topic`, `topics-dcmd-topic` and `payloads-nbirth-rebirth-req` (Stories 4.6 and 4.7),
-and the obligation we actually fail — that an Edge Node must **subscribe** — has its own clauses in
-chapter 5: `tck-id-message-flow-edge-node-ncmd-subscribe`
-(`Sparkplug_5_Operational_Behavior.adoc:158`) and `-device-dcmd-subscribe` (`:403`), owned by
-**Story 4.3**.
+**The unanswered command path is not hidden by any of this.** Since Story 4.6 the *subscribe*
+obligation — `tck-id-message-flow-edge-node-ncmd-subscribe`
+(`Sparkplug_5_Operational_Behavior.adoc:158`) — is met and `topics-ncmd-topic` is `conformant`. What
+remains recorded as unimplemented is the *answering*: `payloads-nbirth-rebirth-req` and the six
+`-rebirth-*` rows (**Story 4.7**), plus `topics-dcmd-topic` and `-device-dcmd-subscribe` (`:403`),
+which are the DCMD side and conditional on a capability no device here has.
 
-The receiving-side obligation these clauses imply — that once Story 4.6 lands the bridge must
+The receiving-side obligation these clauses imply — that once Story 4.6 landed the bridge must
 *tolerate* an NCMD carrying no `seq` — is the *same* clause read from the other side:
 `tck-id-payloads-ncmd-seq` (`:1417-1418`, *"Every NCMD message MUST NOT include a sequence
-number"*), the id filed `n/a` above. It is flagged here for Story 4.6 rather than given a second
+number"*), the id filed `n/a` above. It was flagged here for Story 4.6 rather than given a second
 row, because one clause gets one row.
+
+**Story 4.6 landed and the tolerance holds, for a structural reason rather than a handled case.**
+`seq` is `optional` in the vendored proto, so a payload without one decodes; `classify`
+(`mqtt_driver.rs:235`) reads only `metrics`, and nothing in the inbound path ever looks at `seq`.
+`a_recognisable_looking_command_is_still_unrecognised_in_this_story` builds its payload with
+`seq: None` and passes, so the absence is exercised rather than merely permitted. There is nothing
+here that could start requiring a `seq` without a deliberate edit.
 
 #### NDEATH
 
 | tck-id | Level | Our behaviour | Proof | Verdict |
 | --- | --- | --- | --- | --- |
-| `payloads-ndeath-will-message` | MUST | the will is registered in the CONNECT packet (`mqtt_driver.rs:159`) | `chaos_stale_on_death` — the bridge is **SIGKILLed** and an independent subscriber receives the certificate the broker was holding. An external witness, not a unit test | conformant |
+| `payloads-ndeath-will-message` | MUST | the will is registered in the CONNECT packet (`mqtt_driver.rs:296`) | `chaos_stale_on_death` — the bridge is **SIGKILLed** and an independent subscriber receives the certificate the broker was holding. An external witness, not a unit test | conformant |
 | `payloads-ndeath-will-message-qos` | MUST (QoS 1) | will registered at QoS 0 — `qos_for` returns `AtMostOnce` for every type including `NDeath` | — | **gap (unimplemented)** ([#26](https://github.com/guycorbaz/smartme_mqtt/issues/26), Story 4.17) |
-| `payloads-ndeath-will-message-retain` | MUST | will retain false (`mqtt_driver.rs:123-125,158`) | — **no test observes the registered will's retain flag.** `every_edge_node_message_is_qos_zero_and_never_retained` does not reach the will (the findings table says so); `chaos_stale_on_death`, the one test in which the broker actually publishes the will, asserts only `bdSeq` and `seq == None` (`:76-87`). See below | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
+| `payloads-ndeath-will-message-retain` | MUST | will retain false (`mqtt_driver.rs:146-148, 295`) | — **no test observes the registered will's retain flag.** `every_edge_node_message_is_qos_zero_and_never_retained` does not reach the will (the findings table says so); `chaos_stale_on_death`, the one test in which the broker actually publishes the will, asserts only `bdSeq` and `seq == None` (`:76-87`). See below | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
 | `payloads-ndeath-seq` | MUST NOT | `death_payload` sets `seq: None` (`encode.rs:219`) | `encode.rs::the_will_matches_the_birth_and_carries_no_sequence`, `sparkplug_publisher.rs::the_will_matches_the_session_before_and_after_the_birth` | conformant |
 | `payloads-ndeath-bdseq` | MUST | the death carries the birth's `bdSeq` | same, plus `prop_will_birth_and_death_agree_on_bdseq_for_every_session_number` and `chaos_stale_on_death` (asserted against a real broker) | conformant |
-| `payloads-ndeath-will-message-publisher` | SHOULD | the bridge publishes NDEATH itself before disconnecting (`mqtt_driver.rs:240`) | `chaos_sigterm_no_lie` — and it proves the *explicit* death rather than the will, because it asserts the death is stamped **later** than the birth, which a CONNECT-time will never can be | conformant — **and it vindicates [ADR 0011](adr/0011-graceful-shutdown-requires-both-deaths.md)**, which reached the same conclusion by reasoning before this clause was read |
+| `payloads-ndeath-will-message-publisher` | SHOULD | the bridge publishes NDEATH itself before disconnecting (`mqtt_driver.rs:466`) | `chaos_sigterm_no_lie` — and it proves the *explicit* death rather than the will, because it asserts the death is stamped **later** than the birth, which a CONNECT-time will never can be | conformant — **and it vindicates [ADR 0011](adr/0011-graceful-shutdown-requires-both-deaths.md)**, which reached the same conclusion by reasoning before this clause was read |
 | `payloads-ndeath-will-message-publisher-disconnect-mqtt311` | MUST | the bridge speaks MQTT 3.1.1 and **never sends a DISCONNECT packet** — it publishes the NDEATH and drops the socket (ADR 0011) | `chaos_sigterm_no_lie` | conformant — see below |
 | `payloads-ndeath-will-message-publisher-disconnect-mqtt50` | MUST | the bridge does not speak MQTT 5.0 | — | n/a |
 
 **The will's retain flag was `conformant` until the code review of Story 4.2, on two witnesses that
 do not reach the will.** The registered will is almost certainly retain-false — `qos_for`
-(`mqtt_driver.rs:123-125`) returns `(AtMostOnce, false)` and `:158` feeds it straight into
+(`mqtt_driver.rs:146-148`) returns `(AtMostOnce, false)` and `:295` feeds it straight into
 `MqttOptions::set_last_will`. But *almost certainly* is what this column is not for. There is a
 plausible third witness — `chaos_sigterm_no_lie`'s late-subscriber check (`:397-405`) would surface
 a retained will, since a retained anything on that topic tree fails it — and it is not enough
@@ -1028,7 +1069,7 @@ asserts. Caught-if-we-are-lucky is the same standard the array-size rows were do
 **A second thing `qos_for` costs us, worth naming while we are here.** Its parameter is `_message:
 MessageType` — ignored. So `every_edge_node_message_is_qos_zero_and_never_retained` loops six
 message types past a function that cannot tell them apart: one assertion repeated six times. The
-verdicts it supports still stand today, because both call sites (`:158` for the will, `:278` for
+verdicts it supports still stand today, because both call sites (`:295` for the will, `:572` for
 every publish) derive from that one function and mutating its return goes red. But the day `qos_for`
 grows a real `match`, five of the six retain verdicts silently revert to unproven with no test
 change to signal it.
@@ -1197,7 +1238,7 @@ manual's deployment prerequisites, not only here.
 | Will registered at QoS 0; the specification requires QoS 1 | 4, 6 | [#26](https://github.com/guycorbaz/smartme_mqtt/issues/26), Story 4.17 |
 | `every_edge_node_message_is_qos_zero_and_never_retained` asserts QoS 0 for all six types and claims the spec requires it uniformly — true for the six published types, false for the will | 4 | Story 4.17 |
 | No verification of edge-node-descriptor or device-id uniqueness | 4, 6 | [#27](https://github.com/guycorbaz/smartme_mqtt/issues/27) |
-| NCMD/DCMD not implemented — no subscription, and no `Node Control/Rebirth` metric to act on. The clause we actually fail is the *subscribe* one, `message-flow-edge-node-ncmd-subscribe` (ch. 5); the publish-side QoS/retain clauses are `n/a` in both chapters | 4, 5, 6 | Stories 4.6 / 4.7, and **4.3** for the chapter-5 subscribe clauses, [#23](https://github.com/guycorbaz/smartme_mqtt/issues/23) |
+| ~~NCMD/DCMD not implemented — no subscription~~ **NCMD is subscribed (Story 4.6) and every command is ignored on purpose; DCMD is `n/a`.** The subscribe clause `message-flow-edge-node-ncmd-subscribe` is now `conformant`. What remains is the *acting*: there is still no `Node Control/Rebirth` metric and nothing answers a command. The publish-side QoS/retain clauses stay `n/a` in both chapters | 4, 5, 6 | **Story 4.7** (the remainder); 4.6 closed the subscription, [#23](https://github.com/guycorbaz/smartme_mqtt/issues/23) |
 | DDEATH never emitted (the crate-side encoder is conformant and tested; the bridge never calls it) | 4, 6 | Epic 3 |
 | **`datatype` is sent on every DDATA metric; `-metric-datatype-not-req` says SHOULD NOT.** One encoder serves every message type, so the same line satisfies the BIRTH MUST and violates the DATA SHOULD NOT | 6 | [#28](https://github.com/guycorbaz/smartme_mqtt/issues/28) |
 | **The DDATA and re-declaring-DBIRTH payload timestamps are the reading's `ValueDate`, not the publish instant.** Deliberate — the anti-replay invariant — and contrary to two MUSTs. Recorded as [ADR 0013](adr/0013-payload-timestamp-is-acquisition-time.md) | 6 | [#29](https://github.com/guycorbaz/smartme_mqtt/issues/29) |
@@ -1211,8 +1252,8 @@ manual's deployment prerequisites, not only here.
 | **The MQTT specification is not vendored here**, so three `-chars` clauses cannot be audited in full against their own norm — only a demonstrated violation of them | 1 | [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34) — start by pinning the MQTT clause |
 | **`Clean Session` is true only because rumqttc defaults it that way** (`rumqttc-0.25.1/src/lib.rs:513`); `set_clean_session` is never called and no test asserts the flag. The first `gap (unproven)` whose guarantee comes from *outside* our code — a dependency default has none of the compile-time force [ADR 0014](adr/0014-schema-as-conformance-evidence.md) requires | 2 | [#35](https://github.com/guycorbaz/smartme_mqtt/issues/35), Story 4.10 |
 | **Nothing asserts that only one MQTT server is ever connected**; the guarantee is `MqttConfig`'s shape and dissolves the day Story 4.5 adds a server list | 5 | [#35](https://github.com/guycorbaz/smartme_mqtt/issues/35), Story 4.10 |
-| **The Primary Host / STATE mechanism is absent end to end** — no subscription, no STATE parsing, no birth-wait, no offline-disconnect, no server walk. **Eleven chapter-5 clauses**, and they are `gap` rather than `n/a` because the condition they turn on is a capability the bridge lacks, not a deployment fact | 5 | Stories 4.4, 4.5, 4.6 |
-| **`Node Control/Rebirth` is unanswerable, and the mechanism already exists.** `SparkplugPublisher::birth` re-emits the full NBIRTH + DBIRTH sequence under the unchanged `bdSeq` and two tests pin it; only the NCMD subscription and handler are missing. Story 4.7's work is a caller, not an encoder | 5 | Story 4.7 |
+| **The Primary Host / STATE mechanism is absent end to end** — no *STATE* subscription, no STATE parsing, no birth-wait, no offline-disconnect, no server walk. **Eleven chapter-5 clauses**, and they are `gap` rather than `n/a` because the condition they turn on is a capability the bridge lacks, not a deployment fact. Story 4.6 added an NCMD subscription and no STATE handling whatever, so all eleven stand unchanged | 5 | Stories 4.4, 4.5 |
+| **`Node Control/Rebirth` is unanswerable, and the mechanism already exists.** `SparkplugPublisher::birth` re-emits the full NBIRTH + DBIRTH sequence under the unchanged `bdSeq` and two tests pin it. Story 4.6 landed the subscription, so **only the handler is missing** — the request arrives, is decoded and is traced as unrecognised. Story 4.7's work is a caller, not an encoder, and it is now one piece of work rather than two | 5 | Story 4.7 |
 | **The per-CONNECT `bdSeq` increment is stated by chapter 5 in its own clause** (`-will-message-payload-bdSeq`), where chapter 6 could only fold it into `-nbirth-bdseq-repeat`. One defect, one owner, one row per chapter | 5, 6 | Story 4.10 |
 | **Two metric-ordering clauses are satisfied only by habit** — the NBIRTH's two metrics and the DBIRTH/DDATA's two share a timestamp because one line gives it to them, and a mutation proved a mis-ordered payload passes every test. Both are live today, neither is latent | 5 | [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30) |
 | **Metric names are three constants whose lower-cased forms happen to differ**, and nothing asserts it (`case-sensitivity-metric-names`) | 5 | [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30) — scope needs widening again |
@@ -1266,15 +1307,21 @@ flag ([#35](https://github.com/guycorbaz/smartme_mqtt/issues/35)).
 
 ## Tally for chapter 4
 
-**14 conformant · 0 deviations · 6 gaps · 21 n/a** (16 Host Application, 3 messages we do not emit,
+**15 conformant · 0 deviations · 5 gaps · 21 n/a** (16 Host Application, 3 messages we do not emit,
 2 command clauses that bind a Host Application publisher)
 
-`14 + 0 + 6 + 21 = 41` rows. **This corrects a miscount**: the tally read `17 · 0 · 8 · 21` until the
+`15 + 0 + 5 + 21 = 41` rows. **This corrects a miscount**: the tally read `17 · 0 · 8 · 21` until the
 code review of Story 4.2 recounted the rows mechanically — the conformant and n/a figures were
 over-stated, and two of the gaps (`topics-ncmd-mqtt`, `topics-dcmd-mqtt`) then became `n/a`.
 
-The 6 gaps are all `gap (unimplemented)`: two uniqueness checks ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27), Epic 3),
-two DDEATH topics (Epic 3), two command-topic subscriptions (Story 4.6).
+**It then read `14 · 0 · 6 · 21` until Story 4.6**, which moved `topics-ncmd-topic` to `conformant`:
+the bridge now builds that exact topic form and subscribes to it. This chapter was not in Story 4.6's
+scope and the row was not on its list of documents to amend — it was reached by re-running the
+story's own grep and following what the change made false.
+
+The 5 gaps are all `gap (unimplemented)`: two uniqueness checks ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27), Epic 3),
+two DDEATH topics (Epic 3), and `topics-dcmd-topic` (Story 4.19 — see the criterion note in
+chapter 5's device section; it probably belongs at `n/a`).
 
 **41 rows is not the chapter's clause set.** `Sparkplug_4_Topics.adoc` carries **70** `tck-id`s, so
 **29 are recorded nowhere**, and the shape of the 29 explains itself: **26 are `topics-*` clauses
@@ -1296,9 +1343,13 @@ Every chapter-4 `conformant` row names a test. No row is asserted from reading t
 
 ## Tally for chapter 5
 
-**22 conformant · 2 deviations · 26 gaps · 49 n/a**
+**23 conformant · 2 deviations · 25 gaps · 49 n/a**
 
-`22 + 2 + 26 + 49 = 99` — the enumerated clause set, with no remainder.
+`23 + 2 + 25 + 49 = 99` — the enumerated clause set, with no remainder.
+
+**This tally was `22 · 2 · 26 · 49` until Story 4.6.** One row moved: `-ncmd-subscribe`, from
+`gap (unimplemented)` to `conformant`. No other verdict changed — the story deliberately built the
+subscription and nothing that acts on what arrives, so `-rebirth-action-1/2/3` are untouched.
 
 **The 2 deviations** — the per-CONNECT `bdSeq` increment
 (`-will-message-payload-bdSeq`, Story 4.10) and periodic publishing instead of RBE
@@ -1306,24 +1357,33 @@ Every chapter-4 `conformant` row names a test. No row is asserted from reading t
 one defect stated twice across chapters, each pointing at the owner its twin already had — not two
 new defects.
 
-**The 26 gaps, split by kind:**
+**The 25 gaps, split by kind:**
 
-- **21 × `gap (unimplemented)`** — **eleven** Primary-Host/STATE clauses (Stories 4.4–4.6: the five
+- **20 × `gap (unimplemented)`** — **eleven** Primary-Host/STATE clauses (Stories 4.4 and 4.5 — *not*
+  4.6, which added an NCMD subscription and no STATE handling whatever; corrected by the Story 4.6
+  code review, which found the same eleven clauses assigned three different owner sets across this
+  document: the five
   `-phid-*` birth-wait clauses, the three `-termination-host-offline*` clauses,
   `-birth-sequence-wait`, `-state-subs` and `-walk`), six `Node Control/Rebirth` clauses
-  (Story 4.7), the NCMD subscription (Story 4.6,
-  [#23](https://github.com/guycorbaz/smartme_mqtt/issues/23)), the will's QoS
+  (Story 4.7), the will's QoS
   ([#26](https://github.com/guycorbaz/smartme_mqtt/issues/26), Story 4.17), DDEATH (Epic 3), and
   case-folded id collision ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)).
 - **5 × `gap (unproven)`** — the will's retain flag, the two metric-ordering clauses, metric-name
   case collision (all [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)), and the
   single-server rule ([#35](https://github.com/guycorbaz/smartme_mqtt/issues/35)).
 
-**Every gap carries an owning story, epic or issue**, and the shape of the 21 is the finding: this
+**Every gap carries an owning story, epic or issue**, and the shape of the 20 is the finding: this
 chapter's dominant defect is **missing behaviour**, not untested behaviour — the exact inverse of
 chapter 6, where the unproven half outnumbered the unimplemented one. Chapter 6 audits what the
 bridge *says*; chapter 5 audits what it *does*, and two whole mechanisms — command handling and
-Primary Host STATE — are simply absent.
+Primary Host STATE — were simply absent when this chapter was audited.
+
+**Story 4.6 changed half of one of them, and the half it changed is the smaller half.** The bridge
+now *receives* commands: it subscribes at QoS 1 before birthing and traces the metric names of
+everything that arrives. It still *acts* on none of them, so the six `Node Control/Rebirth` clauses
+are exactly where they were. Command handling is no longer absent; it is inert, which is a different
+state and a deliberate one — the plumbing has to be shown safe before Story 4.7 gives any command
+meaning. Primary Host STATE is untouched and still absent end to end.
 
 **The 49 n/a, broken down** — 30 Host Application role · 9 Host-published commands · 6 Host
 Application reactions to our own death certificates (the `-termination-host-action-*` ids, whose
@@ -1526,11 +1586,11 @@ conformance scope".
 | 1 — Introduction | 3 | 0 | 4 | 1 | 8 |
 | 2 — Principles | 1 | 1 | 1 | 1 | 4 |
 | 3 — Components | 0 | 0 | 0 | 1 | 1 |
-| 4 — Topics | 14 | 0 | 6 | 21 | **41 of 70** |
-| 5 — Operational behaviour | 22 | 2 | 26 | 49 | 99 |
+| 4 — Topics | 15 | 0 | 5 | 21 | **41 of 70** |
+| 5 — Operational behaviour | 23 | 2 | 25 | 49 | 99 |
 | 6 — Payloads | 30 | 5 | 15 | 59 | 109 |
 | 10 — Conformance | 0 | 0 | 0 | 12 | 12 |
-| **Total** | **70** | **8** | **52** | **144** | **274 of 303** |
+| **Total** | **72** | **8** | **50** | **144** | **274 of 303** |
 
 **`70 + 109 + 124 = 303`** is the whole-specification clause set: chapter 4 (Story 4.1), chapter 6
 (Story 4.2), and chapters 1, 2, 3, 5 and 10 (Story 4.3). Story 4.3's own arithmetic closes at
@@ -1549,10 +1609,21 @@ Story 4.10) and periodic publishing (chapters 2 and 5,
 reconcile against the norm; counting distinct defects gives **five**, and both numbers are stated
 here so neither reading is available to a hurried reader.
 
-**The 52 gaps split 38 unimplemented / 14 unproven**, and the balance moved sharply with chapter 5.
+**The 50 gaps split 36 unimplemented / 14 unproven**, and the balance moved sharply with chapter 5.
 Chapter 6 found a codebase whose dominant defect was behaviour nothing would notice losing; chapter 5
 found two whole mechanisms — command handling and Primary Host STATE — that were never built. Both
 are real, and they need different work: a test versus a feature.
+
+**Story 4.6 is the first story to move a verdict in this matrix rather than record one.** It closed
+two rows in two chapters — `-ncmd-subscribe` (ch. 5) and `topics-ncmd-topic` (ch. 4) — so 38
+unimplemented gaps became 36 and 70 conformant rows became 72. The audit stories (4.1–4.4) only ever
+described the code; from here the totals move as Epic 4 builds.
+
+The chapter-4 row is the one worth noticing: it was **not** on Story 4.6's list of documents to
+amend. That list was produced by grepping for *"no subscription"*, and this row said *"not
+implemented"* instead. Re-running the grep found a twelfth passage the list had missed
+(`-state-subs`, ch. 5) and reading around it found this one. A mechanical list is a floor, not a
+ceiling.
 
 ### The six ways this pass could have reported success without doing the work
 

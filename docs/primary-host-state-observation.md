@@ -290,12 +290,21 @@ absent.** "Wait for online" is not safe on its own.
 
 ### What an edge node that ignores STATE loses — in this deployment
 
-This is what the bridge does today: it holds **no MQTT subscription of any kind**. Verified
-mechanically — `grep -rn "subscribe" crates/smartme-bridge/src/` returns one `tracing_subscriber`
-initialiser and two comments, and no `AsyncClient::subscribe` call anywhere.
+This is what the bridge did **at the time of this observation (2026-07-29)**: it held **no MQTT
+subscription of any kind**. Verified mechanically at the time — `grep -rn "subscribe"
+crates/smartme-bridge/src/` returned one `tracing_subscriber` initialiser and two comments, and no
+`AsyncClient::subscribe` call anywhere.
 
-**It loses nothing at all while Ignition is up.** There is no command path to lose: the bridge
-accepts no NCMD/DCMD, and one broker means no server-walking and no stranding. For the ordinary
+> **Superseded the same day, by Story 4.6.** The bridge now subscribes to
+> `spBv1.0/{group}/NCMD/{node}` at QoS 1, before every birth. It subscribes to **no STATE topic**,
+> so nothing measured here is invalidated — but the blanket phrasing is, and the argument below
+> rests on it, so see *"What Story 4.6 changed in this argument"* at the end of this section before
+> using any of it.
+
+**It loses nothing at all while Ignition is up.** There is no command path to lose: the bridge *acts
+on* no NCMD and receives no DCMD at all, and one broker means no server-walking and no stranding.
+*(Reworded by the Story 4.6 code review, 2026-07-29: this said the bridge "accepts no NCMD/DCMD",
+which since 4.6 is only true if "accepts" means "acts on". It receives them.)* For the ordinary
 running case, STATE is an offer this deployment makes and the bridge declines at no cost.
 
 **What it loses is recovery after the host restarts — and the loss is total.** The chain is:
@@ -311,14 +320,17 @@ running case, STATE is an offer this deployment makes and the bridge declines at
    connected during the outage, or the host sent a clean DISCONNECT so the broker discarded the will
    (`-disconnect-intentional`, `:817-824`, explicitly permitted) — stays born and does not re-birth.
    The comparison baseline is therefore conditional on a step this chain used to leave unstated.
-3. The bridge sees nothing — it is not subscribed. **Measured** (`grep -rn "subscribe"`). Its own
+3. The bridge sees nothing — it is not subscribed **to STATE**. **Measured** (`grep -rn
+   "subscribe"`; at the time of measurement it was subscribed to nothing at all, and since Story 4.6
+   it is subscribed to its own NCMD topic and nothing else — either way it sees no STATE). Its own
    broker session is untouched by Ignition restarting, so **that event makes it neither reconnect nor
    re-birth**. **Inferred, not measured:** the session semantics are read from MQTT, and nothing in
    this record shows the bridge was even running during either run — indeed the `#` sweep found no
    `spBv1.0/…` topic at all, which suggests it was not.
 4. The protocol's own repair for a host that arrives without a BIRTH is an NCMD
-   `Node Control/Rebirth`. The bridge implements no Rebirth handling and could not receive the
-   request without a subscription anyway. *(No `tck-id` is cited here on purpose. The clause this
+   `Node Control/Rebirth`. The bridge implements no Rebirth handling. *(At the time of measurement
+   it could not have received the request either; since Story 4.6 it receives it, traces the metric
+   name and drops it — the repair is still unavailable, but for one reason now instead of two.)* *(No `tck-id` is cited here on purpose. The clause this
    chain used to name, `-operational-behavior-host-reordering-rebirth` (`:565-568`), is the
    **out-of-order-sequence** remedy and is conditional on the host being *"configured with a
    'reordering timeout' parameter"* — nothing measured says Ignition is. The text that actually
@@ -362,7 +374,9 @@ yet have it.*
 rather than a proposition about this deployment. Drawn correctly:
 
 - **Measured:** the bridge's NBIRTH is QoS 0 and unretained (step 1); the host re-births live on
-  `spBv1.0/STATE/SCADA` (step 2, first half); the bridge holds no subscription (step 3, first half).
+  `spBv1.0/STATE/SCADA` (step 2, first half); the bridge holds no subscription (step 3, first half —
+  true as measured; Story 4.6 later added an NCMD subscription and no STATE one, which changes the
+  sentence and not the boundary).
 - **Inferred:** that a conformant edge node re-births in response to the host's return (step 2,
   second half — it depends on having disconnected on the offline STATE first); that the bridge's own
   session is untouched by Ignition restarting (step 3, second half — read from MQTT semantics, and
@@ -381,6 +395,54 @@ and publishes a full BIRTH on it, so a broker restart, a network interruption or
 all repair the consumer's view without restarting the bridge. What no event on the *host* side can do
 is prompt that reconnect. The loss described above is therefore real but not permanent-until-restart,
 and the operator manual was corrected in the same pass for saying otherwise.
+
+### What Story 4.6 changed in this argument
+
+Added 2026-07-29, when Story 4.6 landed the NCMD subscription and made *"no MQTT subscription of any
+kind"* false. This section exists because the sentence was **evidence**, not decoration, and
+correcting a claim while leaving what it was holding up unexamined is the failure this project has
+now paid for four times.
+
+**The conclusion is unchanged. One of its three legs is gone.** The cost of ignoring STATE after an
+Ignition restart rested on there being no host-initiated path back to a correct tag tree, and that
+rested on three facts holding together:
+
+| Fact | Before 4.6 | After 4.6 |
+| --- | --- | --- |
+| The NBIRTH is unretained, so a returning host finds no copy | true | **unchanged** — Sparkplug forbids retain |
+| The bridge holds no NCMD subscription, so a Rebirth request cannot reach it | true | **false** — the request now arrives and is traced |
+| The bridge implements no `Node Control/Rebirth`, so a request changes nothing | true | **unchanged** — Story 4.7 |
+
+Two of three still hold, and **the third leg alone is sufficient** for the conclusion: a Rebirth request
+that arrives and is ignored repairs exactly as little as one that never arrives. So the cost stands,
+and so does the ranking in ADR 0016.
+
+*Corrected by the Story 4.6 code review, 2026-07-29. This sentence read "**either** one alone is
+sufficient", which is false and false in the direction that matters. The unretained NBIRTH does **not**
+on its own imply the absence of a host-initiated repair path — a working Rebirth handler repairs
+precisely **because** births are unretained; that is the mechanism Sparkplug provides for it. Only the
+missing handler is load-bearing, which is what the justification in the same sentence actually argues.
+The consequence of getting this wrong is dated: once Story 4.7 lands, leg three goes false, and anyone
+re-checking this section under the old rule would see leg one still standing and conclude the cost of
+ignoring STATE still stands — when it would not. **Read after 4.7 lands: this argument expires then,
+and 4.5 must be re-weighed rather than inherited.** The same false clause was copied into the story
+file's Completion Notes and `sprint-status.yaml`; both are corrected. ADR 0016's own wording was
+already right — it says the conclusion "needs both halves" — so it was left alone.*
+
+**But the argument for that ranking is now stronger, not weaker, and the difference is worth
+stating.** ADR 0016 sequenced Story 4.7 (Rebirth) ahead of Story 4.5 (Primary Host wait) partly
+because the bridge could not even *receive* a Rebirth. That premise has gone — and what replaces it
+is sharper. The bridge now sits in a state where a live MQTT Engine on this broker can send it a
+`Node Control/Rebirth`, the request is delivered, and the answer is a log line. Exactly one piece of
+work stands between the deployment and a host-initiated repair, and it is Story 4.7. Before 4.6 that
+gap was two pieces wide and could be described as a whole absent mechanism; now it is a single
+handler, which is the cheapest it will ever be to close and the most conspicuous it will ever be to
+leave open.
+
+**Nothing here re-opens the measurement.** No STATE topic is subscribed, no STATE payload is parsed,
+and no observation in *Record of runs* depended on the bridge's subscription state — the bridge was
+almost certainly not even running during either run (step 3). This section revises what the
+observation *means*, not what it saw.
 
 ### The eleven clauses, ruled
 
@@ -411,7 +473,7 @@ are not conditional at all** are `-birth-sequence-wait` (`:615-617`) and `-…-m
 | `-termination-host-offline` | **relevant** | Same evidence as `-phid-offline`: a real offline payload and real timestamps both exist. Same cost |
 | `-termination-host-offline-reconnect` | **relevant** *(was `irrelevant`; changed by the Story 4.4 review)* | One broker; `MqttConfig` holds one `host` and one `port` and there is no connection list to walk — which is why this was first ruled irrelevant. That was wrong: the clause reads *"it MUST attempt to connect to the next MQTT Server in its connection list"*, and with one server **the clause still binds and produces a harmful outcome** — *"the next available MQTT Server"* is the same server, so a literal implementation degenerates into reconnect-to-self, a hot loop for as long as the host is offline. A clause that binds, that this deployment can trigger, and that forces 4.5 to specify an alternative is relevant by this table's own definition. The original cell already said *"4.5 must say what it does instead"*, which is not something an irrelevant clause requires |
 | `-termination-host-offline-timestamp` | **relevant**; whether the hazard **occurs** here is undetermined | The guard is implementable on the `spBv1.0/` form (finding 3) and cheap. Whether this deployment actually delivers a stale death after a new session was not observed in one restart. *(An earlier edition offered the three ids permanently retained at `OFFLINE` as a real instance of the same failure class. That is a category error and is withdrawn: those are **legacy** payloads — the bare literal `OFFLINE`, 7 bytes — carrying **no timestamp at all**, and this clause compares timestamp values, so it cannot fire on them.)* |
-| `-…-multiple-servers-state-subs` | **relevant** | The host half is satisfied — a STATE birth certificate is published, retained, QoS 1, even with one server. The edge-node half binds us and is unmet: the bridge issues no subscription at all. Its preamble says *"when using multiple MQTT Servers"*, so like `-birth-sequence-wait` its applicability turns on a reading 4.5 must fix |
+| `-…-multiple-servers-state-subs` | **relevant** | The host half is satisfied — a STATE birth certificate is published, retained, QoS 1, even with one server. The edge-node half binds us and is unmet: the bridge subscribes to no STATE topic. *(As measured it subscribed to nothing at all; Story 4.6 added an NCMD subscription and no STATE handling, so the ruling stands and only its wording changes.)* Its preamble says *"when using multiple MQTT Servers"*, so like `-birth-sequence-wait` its applicability turns on a reading 4.5 must fix |
 | `-…-multiple-servers-walk` | **irrelevant** | One broker, no next server — *"one broker, so server-walking cannot arise"*. Same degenerate-reconnect caveat as `-host-offline-reconnect` |
 
 **Tally: 10 relevant · 1 irrelevant · 0 wholly undetermined.** None is left open as a whole, which is

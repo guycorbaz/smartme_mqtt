@@ -215,3 +215,59 @@ Items deferred from reviews; each carries its origin and where it should be pick
   no independent layer has read it. Its § 3.11 *Where smartme_mqtt sits* ranks every mechanism
   implemented / absent / deviation, which makes it exactly the kind of claim this project reviews.
   **Deferred; owner unassigned.**
+
+## Deferred from: code review of 4-6-ncmd-subscription-plumbing (2026-07-29)
+
+- **A SubAck that never arrives is indistinguishable from a granted subscription.**
+  `mqtt_driver.rs:342-377` handles refusal, downgrade and an empty answer, but there is no deadline,
+  no pending-subscribe state and no absence check. The comment claims *"the operator learns which it
+  is from the log alone — no broker access needed"*; on this path the log is silent, and below INFO
+  a healthy grant is silent too. **Deferred:** it needs its own mechanism and it interacts with the
+  deliberate decision (taken at drafting time) not to block on the SubAck before birthing.
+
+- **`Transport::Subscribed` is delivered by a blocking `send().await` on `pump_transport`.**
+  Four lines below, the inbound-command arm carries the rule this task must obey — *"`try_send`,
+  never `send().await`. THIS task is what answers PINGREQ"* (`mqtt_driver.rs:511-515`). The rule is a
+  property of the task, not of the channel, so it applies to the 8-slot `transport_tx` too.
+  **Deferred:** pre-existing shape shared with `Connected` and `Lost`; this story adds one more
+  instance rather than the hazard. It becomes live the day an arm of the main `select!` awaits
+  anything longer than the keep-alive — which is exactly what Story 4.5's *wait for the Primary Host
+  before birthing* is.
+
+- **The chaos test's fixed two-second settle guards a diagnostic property, on one validation.**
+  `chaos_ncmd_subscription.rs` sleeps two seconds before reading the broker log once, so that a late
+  SUBSCRIBE is reported as *late* rather than *absent*. The file already owns the right tool —
+  `wait_for_log` polls until a needle appears — and uses it everywhere else. Under a loaded CI
+  (`jobs=2` plus testcontainers) the constant could expire and send the reader to the harness instead
+  of the ordering bug. **No false green is possible** (an unflushed log panics), so this is
+  diagnostic quality, not correctness. **Deferred; settle it the next time the chaos suite is
+  touched.**
+
+- **An inbound publish whose topic does not match `ncmd_topic` is discarded with no trace.**
+  `mqtt_driver.rs:508-510` falls through to `Ok(_) => {}` at `:521`, in a driver where every other
+  drop is traced and the phrase *"never silently"* appears three times in the new code. **Deferred:**
+  unreachable until a second subscription exists — which is Story 4.5.
+
+- **A failed `try_subscribe` is never retried for the life of the session.**
+  `mqtt_driver.rs:554-566` traces at ERROR and returns; the caller births regardless, which is the
+  behaviour AC2 asked for. What is unhandled is the residual: nothing re-attempts on any later
+  transport event, so the session runs unsubscribed until the next reconnect. **Deferred:** pairs
+  with the packet-size decision item on the same story, and both are cheap to settle together.
+
+- **An inbound MQTT packet above 10 KiB tears down the session and fires the will.**
+  `rumqttc` defaults `max_incoming_packet_size` to 10 KiB and rejects the frame in
+  `mqttbytes/mod.rs:181-183`, *before* `mqtt_driver.rs:508`'s topic guard is evaluated; the socket
+  drops ungracefully, the broker publishes the will, and the host is told the node died while it was
+  alive. Before Story 4.6 the bridge held no subscription, so no PUBLISH could reach its socket at
+  all — **the subscription creates the path**. **Deferred by decision (Guy, 2026-07-29): the vector
+  is strictly weaker than a capability the unauthenticated broker already offers, and the correct
+  control is broker-side.** (a) It is a *disruption*, not a lie: the session genuinely dies, the
+  death certificate is correct, and the bridge re-births ~1 s later. (b) No legitimate NCMD for this
+  bridge approaches 10 KiB, so the default is correctly sized; raising it moves the cliff at the cost
+  of the bounded memory AC-LEAK-01 protects. (c) The bridge cannot drop the packet and keep the
+  session — that is rumqttc's deliberate behaviour. (d) **Any client on this broker can already
+  publish a forged NDEATH on `spBv1.0/<group>/NDEATH/<node>`**, which lies immediately and needs no
+  provocation. Mitigations belong to deployment: Mosquitto's `message_size_limit` (one line, and it
+  protects Ignition too) and broker ACLs — Epics 5/7. **Unmeasured residue:** a sustained attack
+  would churn death/birth at roughly 1 Hz on the host; hand that observation to **Story 4.13**
+  (chaos broker recovery) rather than reasoning about it further.

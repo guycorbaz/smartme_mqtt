@@ -677,8 +677,11 @@ Metric properties (quality, units) & implemented & Quality codes \textbf{deviate
 Report by exception & \textbf{absent} & Publishes on a fixed interval. Recorded as a
                                 deviation; it is blocked by the missing rebirth, because
                                 periodic publishing currently substitutes for it. \\
-\code{Node Control/Rebirth} & \textbf{absent} & \prog issues no MQTT subscription of any
-                                kind, so no command can reach it. \\
+\code{NCMD} subscription & implemented & \code{spBv1.0/<group>/NCMD/<node>} at QoS~1, on
+                                every connect, before the birth. Commands are logged and
+                                discarded --- see chapter~\ref{ch:contract}. \\
+\code{Node Control/Rebirth} & \textbf{absent} & The request reaches \prog and is ignored:
+                                nothing acts on any command yet. \\
 Primary Host / \code{STATE} & \textbf{absent} & Not read, not waited for. \\
 Aliases, Templates, DataSets & \textbf{absent} & Out of scope; metric names are published in
                                 full. \\
@@ -689,18 +692,28 @@ Multiple brokers & \textbf{absent} & One broker is configured; server-walking ca
 
 \begin{warning}
 \textbf{The two missing mechanisms compound, and the cost is concrete.} \prog's NBIRTH is
-published once, at QoS~0 and not retained --- so the broker keeps no copy. It holds no
-subscription, so it never learns that a host has restarted and never re-births on its own.
-Its own broker session is untouched by a host restarting, so nothing prompts it to
-reconnect. And the protocol's remaining repair --- a rebirth request --- cannot reach it.
+published once, at QoS~0 and not retained --- so the broker keeps no copy. It reads no
+\code{STATE} topic, so it never learns that a host has restarted and never re-births on
+that account. Its own broker session is untouched by a host restarting, so nothing prompts
+it to reconnect. And the protocol's remaining repair --- a rebirth request --- reaches
+\prog but is ignored.
 
 The consequence is that \textbf{after Ignition restarts, it may keep receiving data it has
-no birth certificate to interpret}, with no mechanism in the protocol to restore the tag
-definitions until \prog itself is restarted. A \emph{Sparkplug Aware} broker would close
-this gap by replaying the stored births; Mosquitto is not one.
+no birth certificate to interpret}. A \emph{Sparkplug Aware} broker would close this gap by
+replaying the stored births; Mosquitto is not one.
 
-This is why the missing rebirth is the more urgent of the two gaps, and it is the reason
-the \code{STATE} mechanism was measured on the live installation before being designed for.
+\textbf{What does restore the definitions is any reconnect on \prog's own side}, since a
+fresh NBIRTH is published on every successful MQTT connection --- a broker restart, a
+network interruption or a keep-alive expiry all repair the consumer's view. What no event on
+the \emph{host} side can do is prompt that reconnect. (An earlier edition of this paragraph
+said the definitions could not be restored \emph{until \prog itself is restarted}. That was
+false. The same sentence was corrected in chapter~\ref{ch:contract} first, and this copy of
+it survived the correction by a chapter.)
+
+This is why the missing rebirth handling is the more urgent of the two gaps --- more so now
+than when this was written, because the subscription exists and only the handler is
+missing --- and it is the reason the \code{STATE} mechanism was measured on the live
+installation before being designed for.
 \end{warning}
 
 \section{Reading the specification yourself}
