@@ -882,8 +882,10 @@ So that an unknown command is never mistaken for a known one.
 
 **Given** a connected session
 **When** the driver subscribes
-**Then** it subscribes to the node's NCMD topic **at QoS 1**, as the specification requires (`tck-id-...-edge-node-subscribe-ncmd`: "It MUST subscribe on this topic with a QoS of 1"), as part of the same post-CONNACK sequence that publishes NBIRTH
+**Then** it subscribes to the node's NCMD topic **at QoS 1**, as the specification requires (`tck-id-message-flow-edge-node-ncmd-subscribe`, `Sparkplug_5_Operational_Behavior.adoc:158-163`: *"It MUST subscribe on this topic with a QoS of 1"*), and it does so **before** the NBIRTH is published
 **And** the subscription is re-established on every reconnect.
+
+*Amended 2026-07-29 at Story 4.6 creation, twice. The id was written `tck-id-...-edge-node-subscribe-ncmd`, which does not exist — the real one reverses the last two words. And the ordering read "as part of the same post-CONNACK sequence that publishes NBIRTH", which permits birth-then-subscribe; the clause's section preamble (`:155-156`) says **"Prior to sending an NBIRTH message"**, which does not. Both are the failure `CLAUDE.md` names: reading about the specification instead of reading it.*
 
 **Given** an NCMD payload the bridge does not recognise
 **When** it arrives

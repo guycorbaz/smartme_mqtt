@@ -192,7 +192,17 @@ development_status:
   #    as a quiet topic. Fixed, plus dup/pkid capture and 5 other instrument fixes.
   4-4-primary-host-state-measure: done
   4-5-primary-host-state-decide: backlog
-  4-6-ncmd-subscription-plumbing: backlog
+  # 2026-07-29: contexted. ADR 0016 sequences 4.6/4.7 AHEAD of 4.5. Two errors in
+  # the epic's AC1 fixed at creation: the tck-id was written -subscribe-ncmd (the
+  # real one is tck-id-message-flow-edge-node-ncmd-subscribe) and the ordering said
+  # "same post-CONNACK sequence" where the norm says "PRIOR to sending an NBIRTH".
+  # MessageType has no NCmd variant — the published crate changes. token() is an
+  # exhaustive match (compiler catches it); is_device_level() uses matches! and
+  # returns false SILENTLY. Routing NCMD through the 8-slot transport channel with
+  # a blocking send can stall the EventLoop and cost the keep-alive. And this story
+  # falsifies ELEVEN sentences across six files that say the bridge subscribes to
+  # nothing — the list is in the story, mechanical, and AC5 owns it.
+  4-6-ncmd-subscription-plumbing: ready-for-dev
   4-7-node-control-rebirth-answer: backlog
   4-8-tier-3-gate-covers-ncmd-rebirth: backlog
   4-9-sigterm-discriminator-survives-per-connect-bdseq: backlog
