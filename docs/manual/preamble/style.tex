@@ -65,6 +65,37 @@
   left=7pt, right=7pt, top=5pt, bottom=5pt, title=Tip,
   fonttitle=\sffamily\bfseries\small, coltitle=white}
 
+% ---- Diagrams ------------------------------------------------------------
+% TikZ/pgf ships with every TeX Live installation that already provides KOMA
+% and tcolorbox (tcolorbox is itself built on pgf), so this adds no package
+% that was not already being pulled in. Used for the protocol figures in the
+% "Understanding MQTT and Sparkplug B" chapter.
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, calc, fit, backgrounds}
+
+% Shared styles for the sequence/topology figures, so every diagram in the
+% manual reads with one visual vocabulary rather than each inventing its own.
+\tikzset{
+  actor/.style   = {draw=accentdark, fill=accent!8, rounded corners=2pt,
+                    font=\sffamily\small, inner sep=5pt, minimum height=7mm,
+                    align=center},
+  lifeline/.style= {draw=muted, dashed, thin},
+  msg/.style     = {-{Stealth[length=2mm]}, draw=accent, thick,
+                    font=\ttfamily\scriptsize},
+  msgback/.style = {-{Stealth[length=2mm]}, draw=muted, thick,
+                    font=\ttfamily\scriptsize},
+  msgdead/.style = {-{Stealth[length=2mm]}, draw=warncol, thick,
+                    font=\ttfamily\scriptsize},
+  brokeract/.style={draw=muted, fill=slate!5, rounded corners=2pt,
+                    font=\sffamily\small, inner sep=5pt, minimum height=7mm,
+                    align=center},
+  annot/.style   = {font=\sffamily\scriptsize\itshape, color=muted,
+                    fill=white, inner sep=2pt},
+  % message label: white-filled so it masks the lifeline it crosses
+  mlbl/.style    = {above, fill=white, inner sep=1.5pt,
+                    font=\ttfamily\scriptsize},
+}
+
 % ---- Code listings -------------------------------------------------------
 \usepackage{listings}
 \lstdefinestyle{modern}{

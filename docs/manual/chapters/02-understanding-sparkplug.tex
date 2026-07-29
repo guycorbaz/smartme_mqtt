@@ -1,0 +1,732 @@
+\chapter{Understanding MQTT and Sparkplug~B}
+\label{ch:understanding}
+
+This chapter explains \emph{how Sparkplug~B works}, for a reader who has not necessarily
+worked with MQTT before. It is background, not product documentation: it describes the
+protocol, so that the rest of this manual --- and the topics you will see on your broker
+--- read as a coherent design rather than as a list of conventions.
+
+\begin{note}
+\textbf{This chapter describes the specification. Chapter~\ref{ch:contract} describes
+\prog.} The two are deliberately kept apart, because conflating them is how a manual comes
+to describe capabilities a product does not have. Wherever this chapter mentions \prog it
+says so explicitly, and section~\ref{sec:sp-where-we-sit} at the end maps every mechanism
+onto what is implemented, what is not, and where \prog knowingly departs from the norm.
+
+The authority for \prog's behaviour is chapter~\ref{ch:contract} and the clause-by-clause
+audit in \code{docs/sparkplug-conformance.md}; the authority for the protocol is the
+specification itself, vendored in this repository (see
+section~\ref{sec:sp-reading-the-norm}).
+\end{note}
+
+\section{MQTT, in the terms Sparkplug needs}
+
+Sparkplug is not a replacement for MQTT --- it is a set of conventions \emph{on top of}
+MQTT. Almost every Sparkplug mechanism is built out of one of five MQTT features, so those
+five are worth understanding first. Everything else about MQTT can wait.
+
+\subsection{Publish/subscribe, and the broker in the middle}
+
+MQTT clients never talk to each other. They connect to a \textbf{broker} (the
+specification calls it an \emph{MQTT Server}) and either \textbf{publish} messages to a
+\emph{topic}, or \textbf{subscribe} to topics and receive whatever anyone publishes there.
+
+\begin{center}
+\begin{tikzpicture}[node distance=9mm]
+  \node[actor] (edge) {Publisher\\ \scriptsize(e.g.\ \prog)};
+  \node[brokeract, right=22mm of edge] (broker) {MQTT broker};
+  \node[actor, right=22mm of broker, yshift=9mm]  (h1) {Subscriber\\ \scriptsize(Ignition)};
+  \node[actor, right=22mm of broker, yshift=-11mm] (h2) {Subscriber\\ \scriptsize(anything else)};
+  \draw[msg] (edge) -- node[above, font=\sffamily\scriptsize] {publish} (broker);
+  \draw[msg] (broker) -- node[above, font=\sffamily\scriptsize, pos=0.55] {} (h1);
+  \draw[msg] (broker) -- node[below, font=\sffamily\scriptsize, pos=0.55] {} (h2);
+  \node[annot, below=7mm of broker, align=center]
+       {the publisher does not know who is listening,\\ or whether anyone is at all};
+\end{tikzpicture}
+\end{center}
+
+That decoupling is the point, and it is also the difficulty Sparkplug exists to solve. A
+publisher gets no answer, so it cannot tell a healthy silence (nothing has changed) from a
+broken one (it is disconnected, or the consumer is gone). There is no request/response and
+no polling.
+
+\subsection{Topics and wildcards}
+
+A topic is a UTF-8 string cut into levels by forward slashes, e.g.\
+\code{spBv1.0/Site/NDATA/Bridge}. Subscribers may use two wildcards:
+
+\begin{center}
+\begin{tabular}{@{}>{\ttfamily}c l p{7.6cm}@{}}
+\toprule
+\normalfont\textbf{Wildcard} & \textbf{Matches} & \textbf{Example} \\
+\midrule
++ & exactly one level  & \code{spBv1.0/+/NDATA/+} --- every node's data, any group \\
+\# & all remaining levels & \code{spBv1.0/\#} --- the whole Sparkplug namespace \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+This is why Sparkplug forbids the characters \code{+}, \code{/} and \code{\#} inside any
+identifier you choose (group, node or device): they would either split a level in two or
+turn a name into a wildcard. Topics are also \textbf{case-sensitive} --- \code{a/b} and
+\code{A/b} are different topics --- and Sparkplug inherits that, for metric names as well.
+The specification recommends against identifiers that differ only in case, because many
+host applications and most databases cannot tell them apart.
+
+\subsection{Quality of Service: 0, 1 and 2}
+
+Every publish carries a QoS level, which is a promise about \emph{delivery attempts}, not
+about correctness:
+
+\begin{center}
+\begin{tabular}{@{}c l p{8.2cm}@{}}
+\toprule
+\textbf{QoS} & \textbf{Promise} & \textbf{Cost and consequence} \\
+\midrule
+0 & at most once  & Fire and forget. No acknowledgement, no retry, no queueing. The
+                    publisher learns only that the message was handed to the transport. \\
+1 & at least once & Acknowledged and retried until confirmed, so a message may arrive
+                    \emph{twice}. The receiver must tolerate duplicates. \\
+2 & exactly once  & A four-packet handshake. Slowest, and rarely used in Sparkplug. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Sparkplug requires \textbf{QoS~0} for the data-carrying messages (birth and data), on the
+grounds that a stale value retried later is worth less than a fresh one, and \textbf{QoS~1}
+for the death certificate registered with the broker --- the one message whose loss is
+never acceptable.
+
+\begin{warning}
+\textbf{At QoS~0 an application cannot honestly claim a message was \emph{delivered}.}
+There is no acknowledgement to observe. It can only claim the transport accepted it for
+transmission. That distinction is not pedantry --- it is the difference between a screen
+that reports what happened and one that reports what was hoped for, and it is why
+\prog's own delivery wording is worded the way it is (chapter~\ref{ch:contract}).
+\end{warning}
+
+\subsection{Retained messages --- the broker's memory}
+
+A published message normally reaches only clients subscribed \emph{at that moment}. Set
+the \textbf{retain} flag and the broker stores it instead: the last retained message on a
+topic is delivered immediately to every future subscriber, for as long as the broker
+lives.
+
+\begin{warning}
+\textbf{A retained message outlives its publisher, indefinitely.} It says what was last
+published on a topic, not what is true now, and not that the publisher still exists. A
+client that connected once and died years ago leaves its last retained message behind
+forever.
+
+This project has already paid for that distinction. An observation of the production
+broker found four host identifiers with retained state; three of them turned out to be
+residue from long-dead clients, and a careful reading of the retained set alone produced a
+confident conclusion that a single restart then destroyed. \textbf{A snapshot of retained
+messages describes the broker's memory, not any participant's behaviour} --- the full
+record is in \code{docs/primary-host-state-observation.md}.
+\end{warning}
+
+Sparkplug uses retain for exactly one thing --- the host application's \code{STATE}
+(section~\ref{sec:sp-primary-host}) --- and forbids it everywhere else, because a retained
+measurement is a value replayed to a future subscriber with no way to judge its age.
+
+\subsection{The Last Will and Testament}
+
+This is the feature Sparkplug is built around. When a client connects it may hand the
+broker a complete message --- topic, payload, QoS, retain flag --- inside the CONNECT
+packet itself, with the instruction: \emph{if I disappear without saying goodbye, publish
+this on my behalf.}
+
+The will fires when the broker decides the client is gone: the socket closed, or the
+keep-alive elapsed with no traffic. It does \textbf{not} fire if the client sends a clean
+MQTT DISCONNECT packet --- that tells the broker the departure was intentional, and the
+broker discards the will.
+
+\begin{center}
+\begin{tikzpicture}
+  \node[actor]     (n) at (0,0)    {Edge Node};
+  \node[brokeract] (b) at (5.0,0)  {Broker};
+  \node[actor]     (h) at (10.0,0) {Host};
+  \draw[lifeline] (n) -- (0,-3.1);
+  \draw[lifeline] (b) -- (5.0,-3.1);
+  \draw[lifeline] (h) -- (10.0,-3.1);
+
+  \draw[msg]     (0,-0.9) -- node[mlbl]{CONNECT (will = NDEATH)} (5.0,-0.9);
+  \node[annot]   at (2.5,-1.6) {\dots\ the node vanishes without a DISCONNECT \dots};
+  \draw[msgdead] (5.0,-2.3) -- node[mlbl]{NDEATH} (10.0,-2.3);
+  \node[annot, align=center] at (5.0,-2.95)
+       {the broker publishes the certificate the node registered\\ before it had anything to report};
+\end{tikzpicture}
+\end{center}
+
+\subsection{Keep-alive, and the half-open connection}
+
+The client and broker agree a \textbf{keep-alive} interval at CONNECT. If the broker sees
+no traffic for one and a half times that interval, it declares the client dead and fires
+the will.
+
+This bounds --- but does not eliminate --- the time a dead node can be displayed as live.
+A socket closed cleanly is noticed at once. A \emph{half-open} connection is not: a
+container network torn down without a FIN, or a firewall silently dropping a flow, leaves
+the broker holding a connection that no longer exists until the keep-alive elapses. With a
+30-second keep-alive that is up to 45 seconds of a dead node shown as healthy. It is the
+reason a well-behaved node publishes its \emph{own} death certificate before a planned
+stop instead of relying on the will alone.
+
+\subsection{Clean session}
+
+MQTT can remember a client between connections --- its subscriptions, and messages queued
+while it was away. Sparkplug requires the opposite: an edge node MUST connect with
+\textbf{clean session true} (MQTT~3.1.1), or clean start with a session expiry of zero
+(MQTT~5.0). Session state is Sparkplug's own job, carried explicitly in birth and death
+certificates, and a broker replaying a backlog of stale measurements after a reconnect
+would undermine it.
+
+\section{The problem Sparkplug solves}
+
+Plain MQTT is stateless from the consumer's point of view. A SCADA system needs the
+opposite: for every point on screen it must know not only the last value but
+\textbf{whether that value is still current}. Legacy SCADA protocols get this from polling
+--- \emph{I ask, I get an answer, therefore I know the state; and I must ask again,
+because it may have changed.} Polling is exactly what MQTT was designed to avoid.
+
+Sparkplug's answer has three parts, and they only work together:
+
+\begin{enumerate}
+  \item \textbf{Session state made explicit.} Every node announces itself with a
+        \emph{birth certificate} and is guaranteed to be announced dead by a \emph{death
+        certificate} --- registered as the MQTT will, so it arrives even if the node
+        vanishes without warning.
+  \item \textbf{Report by exception.} Because the consumer can trust that the session is
+        alive, the node need only publish values \emph{when they change}. Silence becomes
+        meaningful: it means nothing has changed, not that something is broken.
+  \item \textbf{Self-describing payloads.} The birth carries the complete set of metrics
+        with names, datatypes and current values, so a consumer needs no prior
+        configuration to interpret what follows.
+\end{enumerate}
+
+\begin{note}
+Point~2 is why the specification says data \emph{should not} be published periodically
+(\code{tck-id-principles-rbe-recommended}). \prog does publish periodically today, and
+records it as a deviation --- see section~\ref{sec:sp-where-we-sit}.
+\end{note}
+
+\section{The pieces of a Sparkplug infrastructure}
+
+\begin{center}
+\begin{tabular}{@{}l p{9.4cm}@{}}
+\toprule
+\textbf{Component} & \textbf{What it is} \\
+\midrule
+MQTT Server & An ordinary MQTT broker meeting a modest subset of the MQTT
+              specification: QoS~0 and~1, full will-message support, full retain
+              support. \\
+Edge Node   & An MQTT client that manages a Sparkplug session and speaks for itself and
+              for the devices beneath it. \textbf{This is \prog's role.} \\
+Device      & A physical or logical thing behind an edge node --- a PLC, a sensor, a
+              meter. It has no MQTT connection of its own; the node publishes on its
+              behalf. \\
+Host Application & Any client consuming Sparkplug messages. It must publish
+              \code{STATE} messages announcing whether it is online. \\
+Primary Host Application & A host application that a \emph{given edge node} has been
+              configured to treat as decisive: the node changes its own behaviour
+              depending on whether that host is online. The relationship is declared at
+              the node, not at the host. \\
+Sparkplug Aware MQTT Server & A broker that additionally stores every NBIRTH and DBIRTH
+              passing through it and republishes them as retained messages on
+              \code{\$sparkplug} topics, so a consumer arriving late can still collect
+              them. A distinct and stronger conformance profile. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{note}
+In this installation \prog is the Edge Node, each smart-me meter is a Device, Ignition
+with MQTT~Engine is the Host Application, and the broker is Mosquitto --- which is
+\emph{Sparkplug Compliant} but \textbf{not Sparkplug Aware}. That last point has a real
+consequence, drawn out in section~\ref{sec:sp-where-we-sit}.
+\end{note}
+
+\section{The topic namespace}
+
+Every Sparkplug topic has the same shape:
+
+\begin{center}
+\code{namespace/group\_id/message\_type/edge\_node\_id/[device\_id]}
+\end{center}
+
+\begin{itemize}
+  \item \textbf{namespace} is the fixed string \code{spBv1.0}. It declares both the topic
+        grammar and the payload encoding.
+  \item \textbf{group\_id} logically groups edge nodes --- a site, a production line, a
+        pipeline segment.
+  \item \textbf{message\_type} is one of the nine verbs below.
+  \item \textbf{edge\_node\_id} identifies the node. The pair
+        \code{group\_id/edge\_node\_id} must be unique across the whole infrastructure.
+  \item \textbf{device\_id} identifies a device beneath the node. It is present on exactly
+        four of the nine verbs and forbidden on the rest.
+\end{itemize}
+
+Group, node and device identifiers may be any UTF-8 string \emph{except} that they may not
+contain \code{+}, \code{/} or \code{\#}. Device identifiers must be unique within their
+node, but may repeat across different nodes.
+
+\subsection{The nine verbs}
+
+\begin{center}
+\begin{tabular}{@{}>{\ttfamily}l c l p{6.3cm}@{}}
+\toprule
+\normalfont\textbf{Verb} & \textbf{Device?} & \textbf{Direction} & \textbf{Meaning} \\
+\midrule
+NBIRTH & no  & node $\rightarrow$ host & Node birth certificate. Declares every metric the
+                                         node owns, with datatypes and current values. \\
+NDEATH & no  & node $\rightarrow$ host & Node death certificate. Registered as the MQTT
+                                         will; may also be published explicitly. \\
+DBIRTH & yes & node $\rightarrow$ host & Device birth certificate, one per device. \\
+DDEATH & yes & node $\rightarrow$ host & A device has stopped reporting, while the node
+                                         itself is still alive. \\
+NDATA  & no  & node $\rightarrow$ host & Node-level measurements. \\
+DDATA  & yes & node $\rightarrow$ host & Device-level measurements. \\
+NCMD   & no  & host $\rightarrow$ node & Command to the node. Includes the mandatory
+                                         rebirth request. \\
+DCMD   & yes & host $\rightarrow$ node & Command to a device --- typically writing an
+                                         output. \\
+STATE  & \multicolumn{2}{l}{\emph{host, own topic}} & The host application's own
+                                         online/offline announcement. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{STATE} is the exception to every rule here: its topic is
+\code{spBv1.0/STATE/sparkplug\_host\_id} --- no group, no verb position in the usual sense
+--- and its payload is not a Sparkplug payload at all. It is covered in
+section~\ref{sec:sp-primary-host}.
+
+\section{The payload}
+
+With the single exception of \code{STATE}, every Sparkplug~B payload is a
+\textbf{Google Protocol Buffers} message: a compact binary encoding, not human-readable on
+the wire. You cannot read it with \code{mosquitto\_sub} alone; you need a decoder.
+
+\subsection{The envelope}
+
+\begin{center}
+\begin{tabular}{@{}>{\ttfamily}l l p{7.9cm}@{}}
+\toprule
+\normalfont\textbf{Field} & \textbf{Type} & \textbf{Meaning} \\
+\midrule
+timestamp & uint64 & Milliseconds since the Unix epoch, \textbf{UTC}, for the message
+                     as a whole. \\
+seq       & uint64 & Sequence number, 0--255, used by the consumer to detect a gap.
+                     See below. \\
+metrics   & array  & The measurements and declarations --- the substance. \\
+uuid      & string & Optional; identifies a schema or encoding for the \code{body}. \\
+body      & bytes  & Optional; arbitrary binary data, rarely used. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{The sequence number, and what it is for}
+
+Every message from an edge node carries \code{seq} --- \emph{except} NDEATH, which
+deliberately does not, because the broker may publish it long after the node stopped
+counting.
+
+The NBIRTH sets a starting value between 0 and 255. Every subsequent message increments it
+by one, wrapping from 255 back to 0. A consumer that receives 41, 42, 44 knows message 43
+existed and did not arrive, and can ask for a rebirth rather than silently carrying a hole
+in its data. \textbf{That is the whole purpose:} the number is not a timestamp and not an
+identifier, it is a gap detector.
+
+\subsection{bdSeq --- pairing a death to its birth}
+
+\code{bdSeq} (``birth/death sequence'') is a metric, not an envelope field, and it appears
+in exactly two places: the birth certificate and the death certificate of the same
+session. They carry the \emph{same} value; the next MQTT CONNECT uses the next value,
+wrapping 255 to 0.
+
+It exists because MQTT gives no ordering guarantee \emph{between} sessions. A death
+certificate from a session that ended can be delivered after the next session's birth ---
+and a consumer that acted on it would mark a healthy node dead. Matching \code{bdSeq}
+makes that impossible to get wrong: a death whose number does not match the current birth
+is stale and must be ignored.
+
+\begin{note}
+Because of this, a consumer must \textbf{not} use the NDEATH's timestamp to pair it with a
+birth. The specification says so explicitly: the will's payload was built before the
+CONNECT, so its timestamp is the connect time, not the death time. \code{bdSeq} is the
+only correct pairing key.
+\end{note}
+
+\subsection{Metrics}
+
+A metric is Sparkplug's equivalent of a SCADA tag:
+
+\begin{center}
+\begin{tabular}{@{}>{\ttfamily}l p{10.0cm}@{}}
+\toprule
+\normalfont\textbf{Field} & \textbf{Meaning} \\
+\midrule
+name       & A slash-delimited UTF-8 name, where slashes denote folders:
+             \code{Node Control/Rebirth} is metric \code{Rebirth} in folder
+             \code{Node Control}. Required, unless aliases are in use. \\
+alias      & An optional unsigned integer standing in for the name. Declared alongside
+             the name in a birth, then used \emph{instead of} the name in data messages
+             to save bandwidth. \\
+timestamp  & When this metric's value was \textbf{captured} --- not when it was
+             published. UTC, milliseconds. \\
+datatype   & One of the enumerated Sparkplug types. Required in births, and deliberately
+             omitted from data messages, because the birth already established it. \\
+is\_null      & Explicitly marks the value as null, rather than omitting it ambiguously. \\
+is\_historical & Marks a value as \emph{not} a current reading --- replayed from a store,
+             or backfilled after an outage. A consumer must not treat it as live. \\
+is\_transient & Of interest on screen, but should not be written to a historian. \\
+properties & A set of custom key/value pairs attached to the metric. \textbf{This is where
+             quality and engineering units travel.} \\
+metadata   & Descriptive information for complex or binary types. \\
+value      & The value itself, in one of the types below. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Datatypes}
+
+Sparkplug enumerates its types by number, and the number --- not the name --- is what
+travels on the wire.
+
+\begin{center}
+\begin{tabular}{@{}l p{9.3cm}@{}}
+\toprule
+\textbf{Group} & \textbf{Types (with their wire codes)} \\
+\midrule
+Integers & \code{Int8}~1, \code{Int16}~2, \code{Int32}~3, \code{Int64}~4,
+           \code{UInt8}~5, \code{UInt16}~6, \code{UInt32}~7, \code{UInt64}~8 \\
+Reals    & \code{Float}~9, \code{Double}~10 \\
+Other basics & \code{Boolean}~11, \code{String}~12, \code{DateTime}~13, \code{Text}~14 \\
+Structured & \code{UUID}~15, \code{DataSet}~16, \code{Bytes}~17, \code{File}~18,
+             \code{Template}~19 \\
+Property-only & \code{PropertySet}~20, \code{PropertySetList}~21 \\
+Arrays   & \code{Int8Array}~22 \dots \code{DateTimeArray}~34 \\
+\midrule
+\code{Unknown}~0 & A placeholder for future expansion --- never a valid published type. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Two of the structured types are worth naming even though \prog uses neither:
+a \textbf{DataSet} carries a table --- named, typed columns and rows --- in a single
+metric, and a \textbf{Template} defines a reusable composite type (a ``UDT''), so that a
+pump with six attributes can be declared once and instantiated many times.
+
+\section{The session, as a state machine}
+\label{sec:sp-session}
+
+This is the heart of Sparkplug. The order of operations is not a style preference --- each
+step exists because a failure at that exact moment would otherwise go unreported.
+
+\subsection{Establishing a session}
+
+\begin{enumerate}
+  \item \textbf{Choose the session number.} Take the next \code{bdSeq}.
+  \item \textbf{Build the death certificate first.} Serialise the NDEATH for the session
+        that has not yet started.
+  \item \textbf{Register it as the will, inside the CONNECT packet.} Not after connecting
+        --- inside. There must be no instant in which the node is connected and the broker
+        holds no certificate for it.
+  \item \textbf{Connect} (clean session, QoS~1 will, retain false on the will).
+  \item \textbf{Publish NBIRTH} --- the first message, always. It declares every node-level
+        metric with its datatype and current value, carries \code{seq} and the session's
+        \code{bdSeq}, and must include the \code{Node Control/Rebirth} command metric.
+  \item \textbf{Publish one DBIRTH per device}, each declaring that device's metrics.
+  \item \textbf{Publish data} as values change, incrementing \code{seq} each time.
+\end{enumerate}
+
+\begin{center}
+\begin{tikzpicture}[node distance=0mm]
+  % lifelines
+  \node[actor] (n) at (0,0) {Edge Node};
+  \node[brokeract] (b) at (5.0,0) {Broker};
+  \node[actor] (h) at (10.0,0) {Host};
+  \draw[lifeline] (n) -- (0,-6.6);
+  \draw[lifeline] (b) -- (5.0,-6.6);
+  \draw[lifeline] (h) -- (10.0,-6.6);
+
+  \draw[msg] (0,-0.9) -- node[mlbl]{CONNECT (will = NDEATH, QoS 1)} (5.0,-0.9);
+  \draw[msg] (0,-1.7) -- (5.0,-1.7) node[midway, mlbl]{NBIRTH (seq 0, bdSeq n)};
+  \draw[msg] (5.0,-1.7) -- (10.0,-1.7);
+  \draw[msg] (0,-2.5) -- (5.0,-2.5) node[midway, mlbl]{DBIRTH (seq 1)};
+  \draw[msg] (5.0,-2.5) -- (10.0,-2.5);
+  \draw[msg] (0,-3.3) -- (5.0,-3.3) node[midway, mlbl]{DDATA (seq 2)};
+  \draw[msg] (5.0,-3.3) -- (10.0,-3.3);
+  \node[annot] at (5.0,-3.9) {\dots\ values only when they change \dots};
+
+  \draw[msgdead] (0,-4.7) -- (5.0,-4.7) node[midway, mlbl]{NDEATH (explicit, planned stop)};
+  \draw[msgdead] (5.0,-4.7) -- (10.0,-4.7);
+  \node[annot, align=left] at (2.5,-5.35) {socket drops --- no DISCONNECT sent};
+  \draw[msgdead] (5.0,-5.9) -- (10.0,-5.9) node[midway, mlbl]{NDEATH (the will, from the broker)};
+  \node[annot, align=left] at (7.5,-6.45) {same bdSeq --- a second death is idempotent};
+\end{tikzpicture}
+\end{center}
+
+\subsection{Ending a session}
+
+There are two ways a session ends, and a well-behaved node arranges for both to be
+visible:
+
+\begin{itemize}
+  \item \textbf{A planned stop.} The node publishes its own NDEATH, so the host is told
+        immediately instead of waiting out the keep-alive. The specification says a node
+        \emph{should} do this.
+  \item \textbf{A hard death} --- crash, power loss, severed network. Nothing runs on the
+        node, and the broker publishes the registered will.
+\end{itemize}
+
+The subtlety is that these are not alternatives. If a node publishes an explicit death and
+then sends a clean MQTT DISCONNECT, the broker \textbf{discards the will} --- and any
+future failure of that same connection goes unannounced. A node that wants both
+protections publishes its death and then simply drops the connection, which produces
+\textbf{two} death certificates carrying the same \code{bdSeq}. A consumer that has already
+marked the node down ignores the second; there is no harm in it.
+
+\section{Report by exception}
+
+Because session state is explicit and guaranteed, a node does not need to repeat itself.
+The births carry every current value; afterwards, only changes are published. The
+specification puts it as a \emph{should not}: data should not be published periodically.
+
+This matters more than it first appears. Under report-by-exception, an unchanged value and
+a broken publisher look different --- the first produces silence with a live session, the
+second produces a death certificate. Under periodic publishing they look the same, and the
+consumer loses the ability to tell them apart from the data stream alone.
+
+\section{Commands, and the rebirth handshake}
+\label{sec:sp-rebirth}
+
+Commands travel the other way: a host publishes \code{NCMD} to a node, or \code{DCMD} to a
+device, typically to write an output.
+
+One command is mandatory for \emph{every} Sparkplug edge node --- \textbf{Node
+Control/Rebirth}. It exists to solve a problem that is otherwise unsolvable: a host that
+connects \emph{after} a node has already birthed receives data messages it has no birth
+certificate to interpret. It knows a value arrived; it does not know the metric's name,
+type or unit. Births are published with retain false, so the broker has kept no copy.
+
+The handshake:
+
+\begin{enumerate}
+  \item The node's NBIRTH declares a metric named \code{Node Control/Rebirth}, of type
+        \code{Boolean}, with the value \code{false}. If the node uses aliases, this metric
+        must \emph{not} have one --- a host that has never seen the birth could not know
+        the alias.
+  \item The host publishes an NCMD containing that metric with the value \code{true}.
+  \item The node immediately \textbf{stops sending data}, publishes a complete birth
+        sequence (NBIRTH, then every DBIRTH), and only then resumes.
+  \item The rebirth reuses the \textbf{same} \code{bdSeq}: no new MQTT session was
+        established, so the session number has not changed.
+\end{enumerate}
+
+A host also sends a rebirth request when it detects a sequence-number gap that does not
+resolve within its configured \emph{reorder timeout} --- the mechanism from
+section~\ref{sec:sp-session} feeding directly into this one.
+
+\begin{warning}
+An edge node that does not implement \code{Node Control/Rebirth} cannot be repaired by the
+host. This is a real gap in \prog today; its practical consequences on this installation
+are set out in section~\ref{sec:sp-where-we-sit} and chapter~\ref{ch:contract}.
+\end{warning}
+
+\section{The Primary Host and STATE}
+\label{sec:sp-primary-host}
+
+A host application announces its own availability, using the same birth/death machinery as
+an edge node but on its own topic and in a different format.
+
+\begin{center}
+\begin{tabular}{@{}l p{9.6cm}@{}}
+\toprule
+\textbf{Topic}   & \code{spBv1.0/STATE/sparkplug\_host\_id} \\
+\textbf{Payload} & JSON UTF-8 --- not protobuf --- with exactly two keys:
+                   \code{online} (a boolean) and \code{timestamp} (UTC milliseconds). \\
+\textbf{QoS}     & 1 \\
+\textbf{Retain}  & \textbf{true} --- the one place Sparkplug requires retain, so that a
+                   node connecting later immediately learns the host's state. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The host registers the \code{online: false} version as its \emph{will} in its CONNECT
+packet, then --- after subscribing to its own STATE topic --- publishes the
+\code{online: true} version. Both carry the \textbf{same} timestamp: the one built at
+connect time. So the timestamp identifies the \emph{session}; it is not the moment the
+message was published.
+
+\begin{tip}
+That equality is a usable diagnostic. If you observe an \code{online: false} whose
+timestamp equals the preceding \code{online: true}, it is the \emph{will} --- the broker
+published it. If the timestamp is later, the host published it deliberately on its way
+out. The two are otherwise indistinguishable on the wire.
+\end{tip}
+
+\subsection{What an edge node does with it}
+
+An edge node may be \emph{configured} to treat one host as primary. Nothing forces it to;
+Sparkplug explicitly allows a node to have no primary host. But if it is so configured:
+
+\begin{itemize}
+  \item it must \textbf{wait} for an \code{online: true} STATE from that host before
+        publishing its births;
+  \item it must match the host id as the last topic token against its configured value;
+  \item it must check that \code{online} really is boolean \code{true};
+  \item it must check the timestamp is not older than the last STATE it accepted --- an
+        anti-replay rule, because a delayed will from an old session can arrive after a
+        new session has started;
+  \item and on a valid \code{online: false} it must publish its NDEATH, disconnect, and
+        begin session establishment again.
+\end{itemize}
+
+\subsection{Why this exists: stranding}
+
+The mechanism looks heavy for a single broker, and it is --- it was designed for
+redundancy. With two or more brokers, a node can be perfectly connected to broker~A while
+the host has lost \emph{its} connection to broker~A and is happily using broker~B. The
+node is publishing into a void and has no way to know. This is called \textbf{stranding},
+and STATE is the cure: the node sees the host go offline \emph{on this broker} and walks
+to the next one.
+
+\begin{center}
+\begin{tikzpicture}[node distance=8mm]
+  \node[actor] (n) {Edge Node};
+  \node[brokeract, right=20mm of n, yshift=10mm]  (b1) {Broker A};
+  \node[brokeract, right=20mm of n, yshift=-12mm] (b2) {Broker B};
+  \node[actor, right=20mm of b1, yshift=-11mm] (h) {Host};
+  \draw[msg] (n) -- node[above, font=\sffamily\scriptsize, sloped]{connected} (b1);
+  \draw[msgdead] (b1) -- node[above, font=\sffamily\scriptsize, sloped]{\emph{lost}} (h);
+  \draw[msgback] (b2) -- node[below, font=\sffamily\scriptsize, sloped]{connected} (h);
+  \node[annot, below=11mm of n, align=center]
+       {without STATE the node keeps publishing to Broker~A\\ and nobody is listening --- \emph{stranded}};
+\end{tikzpicture}
+\end{center}
+
+\begin{note}
+\textbf{On this installation there is one broker, so stranding cannot arise} --- but the
+\emph{other} half of the mechanism still bites, because a host restart is a state
+transition whether or not there is redundancy. That is measured, not assumed; see
+\code{docs/primary-host-state-observation.md} and section~\ref{sec:sp-where-we-sit}.
+\end{note}
+
+\section{Conformance profiles}
+
+The specification defines four target roles, and an implementation normally claims exactly
+one:
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.7cm} p{8.4cm}@{}}
+\toprule
+\textbf{Profile} & \textbf{What it must do} \\
+\midrule
+Sparkplug Edge Node & Manage the session and namespace described above.
+                      \textbf{\prog's profile.} \\
+Sparkplug Host Application & Consume edge-node messages, and publish its own \code{STATE}
+                      birth and death certificates. \textbf{Ignition's profile.} \\
+Sparkplug Compliant MQTT Server & Support publish/subscribe at QoS~0 and~1, will messages
+                      in full (including retain and QoS~1), and the retain flag in full.
+                      Any complete MQTT 3.1.1 or 5.0 broker qualifies. \\
+Sparkplug Aware MQTT Server & All of the above, \emph{plus} storing the most recent NBIRTH
+                      and DBIRTH of every node and republishing them as retained messages
+                      on \code{\$sparkplug} topics. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{note}
+The \emph{Aware} profile is the standard's own answer to the late-joining consumer: births
+that are otherwise unretained become collectable. Mosquitto is Compliant but not Aware, so
+on this installation that safety net is absent and the rebirth command
+(section~\ref{sec:sp-rebirth}) is the only repair mechanism available.
+\end{note}
+
+\section{Where \prog sits}
+\label{sec:sp-where-we-sit}
+
+Everything above describes the protocol. This table maps it onto what \prog actually does,
+so that nothing in this chapter can be mistaken for a claim about the product.
+Chapter~\ref{ch:contract} is the authority, and \code{docs/sparkplug-conformance.md} holds
+the clause-by-clause audit --- 303 requirements, each with a verdict and its evidence.
+
+\begin{center}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.3cm} l p{6.6cm}@{}}
+\toprule
+\textbf{Mechanism} & \textbf{Status} & \textbf{Notes} \\
+\midrule
+Topic namespace, device level & implemented & One node, one device per meter, keyed on the
+                                meter's serial number. \\
+NBIRTH / DBIRTH / DDATA / NDEATH & implemented & \code{NDATA} and \code{DDEATH} are not
+                                emitted --- see chapter~\ref{ch:contract}. \\
+Will registered inside CONNECT & implemented & At \textbf{QoS~0}, where the specification
+                                requires QoS~1. A known deviation. \\
+Explicit death on a planned stop & implemented & Both certificates fire; a consumer sees
+                                two NDEATHs per graceful stop. \\
+\code{seq} numbering and wrap & implemented & \\
+\code{bdSeq} pairing & implemented & \textbf{Fixed per MQTT client}, not incremented per
+                                CONNECT. A deliberate trade, explained in
+                                chapter~\ref{ch:contract}. \\
+Metric properties (quality, units) & implemented & Quality codes \textbf{deviate
+                                deliberately} from the specification's enumeration, because
+                                the specified codes were measured to display as
+                                \emph{good} on Ignition. See chapter~\ref{ch:contract}. \\
+Report by exception & \textbf{absent} & Publishes on a fixed interval. Recorded as a
+                                deviation; it is blocked by the missing rebirth, because
+                                periodic publishing currently substitutes for it. \\
+\code{Node Control/Rebirth} & \textbf{absent} & \prog issues no MQTT subscription of any
+                                kind, so no command can reach it. \\
+Primary Host / \code{STATE} & \textbf{absent} & Not read, not waited for. \\
+Aliases, Templates, DataSets & \textbf{absent} & Out of scope; metric names are published in
+                                full. \\
+Multiple brokers & \textbf{absent} & One broker is configured; server-walking cannot arise. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{warning}
+\textbf{The two missing mechanisms compound, and the cost is concrete.} \prog's NBIRTH is
+published once, at QoS~0 and not retained --- so the broker keeps no copy. It holds no
+subscription, so it never learns that a host has restarted and never re-births on its own.
+Its own broker session is untouched by a host restarting, so nothing prompts it to
+reconnect. And the protocol's remaining repair --- a rebirth request --- cannot reach it.
+
+The consequence is that \textbf{after Ignition restarts, it may keep receiving data it has
+no birth certificate to interpret}, with no mechanism in the protocol to restore the tag
+definitions until \prog itself is restarted. A \emph{Sparkplug Aware} broker would close
+this gap by replaying the stored births; Mosquitto is not one.
+
+This is why the missing rebirth is the more urgent of the two gaps, and it is the reason
+the \code{STATE} mechanism was measured on the live installation before being designed for.
+\end{warning}
+
+\section{Reading the specification yourself}
+\label{sec:sp-reading-the-norm}
+
+The Sparkplug~B specification is vendored in this repository, at
+
+\begin{center}\code{docs/spec/sparkplug-b-3.0.0/}\end{center}
+
+\noindent release tag v3.0.0, EPL-2.0. Vendoring it means it can be grepped and cited
+without a network connection, and that it cannot drift underneath the audit that
+references it.
+
+Each testable requirement carries an identifier of the form
+
+\begin{center}\code{tck-id-payloads-ndeath-will-message-qos}\end{center}
+
+\noindent Citing that identifier, rather than paraphrasing the prose around it, is the
+convention used throughout this project's documentation and issue tracker.
+
+\begin{warning}
+\textbf{This project's standing rule: read the norm, not a summary of it.} Both of the
+worst defects found so far came from trusting a secondary source --- a vendor
+documentation page and a plausible recollection --- rather than the specification text.
+One published quality codes that a real host displayed as \emph{good}, which is precisely
+the failure this bridge exists to prevent; the other rejected a legal design as a
+``specification violation'' on the strength of a requirement the specification does not
+contain.
+\end{warning}
