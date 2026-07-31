@@ -311,7 +311,25 @@ development_status:
   # target, not the test. ci-local.sh EXIT=0 read from the file -- the harness
   # reported "exit code 0" on a run whose log said clippy had failed.
   4-7-node-control-rebirth-answer: done
-  4-8-tier-3-gate-covers-ncmd-rebirth: backlog
+  # 2026-07-31, contexted. SCOPE CHANGED by Guy before drafting: the Tier-3 gate is
+  # RE-AIMED at the bridge binary, not extended in place. Two findings forced it.
+  # (1) The epic's AC1 names crates/sparkplug-b/tests/ignition_contract.rs, which never
+  # subscribes and declares no Node Control/Rebirth -- a publish-only scripted session
+  # cannot answer a rebirth.
+  # (2) THE GATE STOPPED TESTING THE PRODUCT. 43912b5 creates the test; 57914bf is the
+  # last commit touching it; fce148f moves the crate's quality codes to Ignition's (the
+  # v1->v2 fix, and the "v2 Pass" run happens after it); d28bb02 (ADR 0012) moves the
+  # crate BACK to the spec's 0/192/500 without touching the test. So it publishes
+  # Stale=500 -- the exact code proved to display as Good(500) -- while the bridge
+  # publishes 0x8000_0000|516. Step 4, marked "<- the critical one", is GUARANTEED to
+  # fail today, and ADR 0012's deviation is verified by nothing.
+  # 8 ACs (2 amended, 6 added). Hypotheses A (does Engine offer a Rebirth control for a
+  # node that declared the metric?) and B (does it send 'Rebirth' or the spec's own
+  # 'Refresh' slip at Sparkplug_5:950?) are MEASUREMENTS this run makes -- and A is the
+  # input STORY 4.5 IS WAITING ON.
+  # Reuse chaos_ncmd_rebirth.rs's in-process harness; do NOT build a second one.
+  # ONE DECISION LEFT FOR GUY: the crate test's disposition (Task 4).
+  4-8-tier-3-gate-covers-ncmd-rebirth: ready-for-dev
   4-9-sigterm-discriminator-survives-per-connect-bdseq: backlog
   4-10-own-the-reconnect-loop-bdseq-per-connect: backlog
   4-11-broker-outage-traced-drop-exhaustive: backlog
