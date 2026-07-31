@@ -284,3 +284,43 @@ Items deferred from reviews; each carries its origin and where it should be pick
   pre-date this work. **Recorded rather than deleted, for the lesson: `latexmk` exiting 0 says nothing
   about whether the page is right, and this repository already has a rule about exit codes describing
   something other than what was measured.**
+
+## Noted from: the Story 4.8 field probe (2026-07-31) — DEPLOYMENT, not this project's code
+
+- **MQTT Engine's JSON namespace is subscribed to a topic that carries plain text, and it has been
+  failing every 30 seconds for hours.** Nothing to do with `smartme_mqtt`; recorded here because Guy
+  asked to look at it later, and because it makes the Tier-3 gate's *"check the Ignition logs"* step
+  unreadable — see the runbook's step 5.
+
+  **Diagnosis, read out of the exported `.idb`:**
+
+  ```
+  logger : com.cirruslink.mqtt.engine.gateway.json.JsonPayloadHandler
+  message: Error handling payload
+  cause  : com.fasterxml.jackson.core.JsonParseException:
+           Unrecognized token 'off': was expecting (JSON String, Number, Array, Object
+           or token 'null', 'true' or 'false')
+    at JsonPayloadHandler.handlePayload(JsonPayloadHandler.java:157)
+    at EngineCallback.lambda$messageArrived$0(EngineCallback.java:314)
+  ```
+
+  384 occurrences in one export, **exactly 30 s apart**, spanning its whole range (17:30 → 20:42) —
+  so it long predates the probe.
+
+  **What it means.** Some device publishes the bare payload `off` on a topic that Engine's JSON
+  namespace subscribes to. `off` is not valid JSON — `"off"` would be — so Jackson rejects it, every
+  time, forever. The Ignition tag tree shows a `shellies` folder alongside `chirpstack` and `victron`,
+  and plain `on`/`off` payloads are exactly what Shelly relays publish; that is the most likely
+  source, and it is a hypothesis, not a measurement.
+
+  **Where to look:** MQTT Engine's namespace configuration — the JSON/custom namespace's subscription
+  filter is almost certainly broader than the topics that actually carry JSON. Narrow the filter, or
+  disable the JSON namespace if nothing uses it. Nothing in this repository publishes JSON, so no
+  change here can fix or cause it.
+
+  **To re-check without touching Ignition**, export the Gateway log and query the `.idb`:
+
+  ```sql
+  SELECT level_string, COUNT(*) FROM logging_event
+   WHERE logger_name LIKE '%mqtt.engine%' GROUP BY 1;
+  ```

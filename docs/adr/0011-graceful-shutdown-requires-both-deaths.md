@@ -64,6 +64,29 @@ Architecture item ⑧ is resolved: **both, not either.**
   are idempotent for a consumer that has already marked the node down, but this is a real,
   observable behaviour of the wire format and it is not obvious from the code. Story 1.15's
   Ignition contract test should confirm Ignition treats it benignly.
+
+  > **✅ CONFIRMED against a real Ignition, 2026-07-31** (8.3.7, MQTT Engine 5.0.0-rc1), during the
+  > Story 4.8 probe. Ignition tolerates it: `Node Info → Death Count` moved `0 → 2`, the node and its
+  > device were marked offline, and — read out of a queried log export rather than a scrolled viewer —
+  > the Engine module emitted **exactly two INFO lines in three hours of logs and no Sparkplug-side
+  > WARN or ERROR at any point**:
+  >
+  > ```
+  > 20:34:56.751  INFO  …sparkplug.SparkplugPayloadHandler  Handling LWT message for Edge Node …
+  > 20:34:58.752  INFO  …sparkplug.SparkplugPayloadHandler  Handling LWT message for Edge Node …
+  > ```
+  >
+  > One millisecond after each death reached it. No duplicate-session complaint, no error.
+  >
+  > **And one thing this ADR did not anticipate: Ignition calls BOTH of them an "LWT message",
+  > through a single handler.** It does not distinguish an edge node's explicit certificate from the
+  > broker's will — to this consumer, an NDEATH is an NDEATH. So the distinction this ADR is built on
+  > is **invisible on the consumer side**. The decision stands and the two seconds of advance notice
+  > are real on the wire (Engine processes the first at `:56`), but the second death overwrites
+  > `Offline DateTime` with `:58`, so the immediacy the ADR claims is not observable in Ignition's own
+  > record of when the node died. The benefit is narrower than the wording above implies, and anyone
+  > citing "the explicit certificate is immediate" should cite it as a property of the wire, not of
+  > what the host reports.
 - **Confirmed against the real broker (2026-07-26).** AR13 asked for confirmation against
   *the author's broker*, and a containerised Mosquitto is a close but not identical proxy.
   `chaos_sigterm_no_lie_against_an_external_broker` — `#[ignore]`d, with no default target
