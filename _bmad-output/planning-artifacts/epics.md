@@ -868,9 +868,22 @@ So that it stops being an omission and becomes a position.
 **When** that ADR is written
 **Then** it states explicitly whether ADR 0011 (both deaths fire on SIGTERM) still holds unchanged — a primary host going offline may change *when* an edge node should stop publishing.
 
+> **✅ DELIVERED 2026-07-31 — [ADR 0018](../../docs/adr/0018-no-primary-host-state-the-repair-is-host-initiated.md), *Primary Host / STATE is ruled out; the repair path is host-initiated*.** Both acceptance
+> criteria are met by that document: it records the decision with Story 4.4's measurements as
+> evidence, states three revisit conditions, and answers the ADR 0011 question explicitly (unchanged,
+> and *why* — ruling STATE out removes the host-driven shutdown path before it exists, which is the
+> thing that would have forced an amendment).
+>
+> The four grounds, none of which depends on a future measurement: the specification says *"Specifying
+> a Primary Host is not required"*; without store-and-forward the wait preserves **zero** readings;
+> one broker means the stranding it guards against cannot occur; and implementing it would introduce
+> a **never-births** state that the observation record shows was the real broker state on 2026-07-28.
+>
+> ADR 0016's ordering argument is thereby formally spent — this is the re-weighing it asked for.
+
 *This AC named "ADR 0012" until 2026-07-28. That number was free when the epic was drafted and was taken since, by the quality-code decision. The ADR is now referenced by subject rather than by number: the story is far enough out that any number written here can be consumed before it runs — which is exactly what happened. Number it at writing time.*
 
-*And it happened **again, the same day**. This note read "0015 is next as of 2026-07-28" until the Story 4.3 code review consumed 0015 for the language-type-invariant witness a few hours later. It was then amended to "next free is 0016" — and **0016 was consumed on 2026-07-29** by the Story 4.4 review, for the Rebirth-before-Primary-Host ordering. **Three occurrences, and the third was caused by writing the digit down for the second time.** No number is recorded here now, and none should be: reference an ADR **by subject** and read `docs/adr/` for the digit at the moment you write it. A note that predicted a failure, suffered it, and then suffered it again while documenting it is as strong an argument for the mitigation as this file is going to produce.*
+*And it happened **again, the same day**. This note read "0015 is next as of 2026-07-28" until the Story 4.3 code review consumed 0015 for the language-type-invariant witness a few hours later. It was then amended to "next free is 0016" — and **0016 was consumed on 2026-07-29** by the Story 4.4 review, for the Rebirth-before-Primary-Host ordering. **Three occurrences, and the third was caused by writing the digit down for the second time.** No number is recorded here now, and none should be: reference an ADR **by subject** and read `docs/adr/` for the digit at the moment you write it. **The prediction held a fourth time:** when this story's ADR was finally written on 2026-07-31 the next free number was **0018** — 0017 having been consumed hours earlier by the retained-NCMD decision from the Story 4.7 code review. A note that predicted a failure, suffered it, and then suffered it again while documenting it is as strong an argument for the mitigation as this file is going to produce.*
 
 ### Story 4.6: NCMD subscription — plumbing that ignores safely
 

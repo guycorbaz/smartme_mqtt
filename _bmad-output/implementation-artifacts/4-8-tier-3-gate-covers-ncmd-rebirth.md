@@ -160,18 +160,19 @@ already flags that its absence is a defect.
         warns *"If Ignition still shows these as good, the whole guarantee fails here"*. The crate
         publishes `500`. Ignition shows `500` as `Good`. **The step cannot pass, and it fails for a
         reason ADR 0012 chose.**
-  - [ ] **Recommendation, to confirm with Guy:** keep the file, re-scope it in its module docs to
-        *"the crate's codec against the specification, and a demonstration that the specification's
-        quality codes are misread by Ignition"*, and rewrite step 4's checklist to expect
-        `Good(500)` — turning a broken gate into the standing evidence for ADR 0012. Retiring it
-        loses the only external proof the deviation was necessary.
+  - [x] **DECIDED by Guy, 2026-07-31: keep it.** Re-scope its module docs to *"the crate's codec
+        against the specification, and a demonstration that the specification's quality codes are
+        misread by Ignition"*, and rewrite step 4's checklist to **expect `Good(500)`** — turning a
+        broken gate into the standing external evidence that ADR 0012's deviation was necessary.
+        Retiring it would lose the only external proof of that. Recorded on
+        [#40](https://github.com/guycorbaz/smartme_mqtt/issues/40).
   - [ ] Whatever is chosen, `CLAUDE.md` forbids leaving it undecided.
 
 - [ ] **Task 5 — the record** (AC: 2, 8)
   - [ ] Annotate the v2 row **in place**; add a v3 row after the run. Include the **MQTT Engine
         module version** — the runbook already records its absence as a defect.
-  - [ ] Open a GitHub issue for the drift, citing `fce148f` → `d28bb02` and the guaranteed step-4
-        failure. **Opening an issue is an outward action — ask Guy first.**
+  - [x] **[#40](https://github.com/guycorbaz/smartme_mqtt/issues/40) opened 2026-07-31** — the
+        drift, its window (`fce148f` → `d28bb02`), and the guaranteed step-4 failure.
   - [ ] `epics.md:114` (NFR17) and Story 4.8's own entry: carry the amended ACs back, as 4.6 and 4.7
         did.
   - [ ] `docs/sparkplug-conformance.md` — check whether any row cites the Tier-3 gate as evidence.
@@ -374,6 +375,36 @@ two-second window failed. **Export the log and query it** — the `.idb` is plai
 *(Unrelated to this project, noted as a courtesy: 384 of the Engine module's log lines are
 `JsonPayloadHandler :: Error handling payload`, firing every 30 seconds for hours before the probe
 began. Engine's JSON namespace, not Sparkplug.)*
+
+## The batched pre-production question list
+
+**Why it is a list.** Every question below needs an Ignition restart or a live production session, and
+Guy declined to restart on 2026-07-31 — *"je risque la perte de données"*. That is the right call, and
+the right response is to **batch**: the 2026-07-28 restart produced a large amount of information
+precisely because it was a transition, and one interruption with six questions prepared beats six
+interruptions. Written now, while the questions are fresh, so the run does not have to re-derive them.
+
+**None of these blocks a decision.** ADR 0018 (Primary Host / STATE) was taken without them, on
+grounds that do not depend on any answer here — `CLAUDE.md` forbids deferring a decision to an
+artifact that does not exist, and AR13 sat unmade for a whole epic for exactly that reason. What these
+answers refine is a **revisit condition** and the gate's own coverage.
+
+| # | Question | Why it matters | How to tell |
+| ---: | --- | --- | --- |
+| 1 | **Does MQTT Engine request a rebirth on its OWN** when it receives DATA from a node whose BIRTH it never saw? | **ADR 0018's revisit condition 3.** It is the one inferred link in the host-initiated repair chain; steps 1 and 4 are measured. | Leave the bridge running, restart Ignition, click nothing. The bridge logs `Rebirth Request accepted`; Ignition's `Rebirth (Last) Cause` shows something other than `Triggered by user`. |
+| 2 | **What values does `Rebirth (Last) Cause` take?** | The label's existence is the entire evidence for question 1's premise. Its vocabulary is the answer. | Read the tag after each rebirth of any origin. |
+| 3 | **Step 4 of the gate — `Good` then `Stale`, against the product.** | **Never exercised.** The 2026-07-31 probe published no `Good` value, so `Bad_Stale` after the death was indistinguishable from `Bad_Stale` before it. This is the step that guards against the silent lie. | The gate this story builds: publish `Good`, degrade to `Stale`, then die — in that order. |
+| 4 | **Does Engine consume `$sparkplug`?** | A *Sparkplug Aware* MQTT Server stores BIRTHs and replays them retained (`Sparkplug_10:71-83`) — a **third** remedy neither ADR 0016 nor ADR 0018 weighed, because Mosquitto is not one. Story 4.4 noted it is cheap to check. | Subscribe to `$sparkplug/#` and watch, or read Engine's namespace configuration. |
+| 5 | **Does an out-of-order `seq` provoke a rebirth?** | `tck-id-operational-behavior-host-reordering-rebirth` (`Sparkplug_5:565-568`) is conditional on the host being *"configured with a 'reordering timeout' parameter"*, and **nothing measured says Ignition is**. | Publish a DDATA with a deliberately skipped `seq` from a disposable node and watch for an NCMD. |
+| 6 | **Do the two STATE forms move together across a transition?** | Engine publishes both a legacy `STATE/<id>` = `ONLINE`/`OFFLINE` and the conformant `spBv1.0/STATE/SCADA` JSON (Story 4.4). Whether both track a real transition is unmeasured, and it bears on any future STATE work. | Subscribe to both before the restart; compare. |
+
+**Two rules the run must carry**, both learned the hard way:
+
+- **A snapshot at rest is not behaviour.** Three careful passes concluded this host did not speak
+  Sparkplug 3.0; one restart refuted it. Subscribe *before* the transition, never sample after it.
+  (The same error was made again on 2026-07-31 — see the correction above.)
+- **Export the log and query the `.idb`.** The viewer is unusable here: an unrelated MQTT Transmission
+  retry loop emits ~200 lines a minute. The runbook carries the SQL.
 
 ## Dev Agent Record
 

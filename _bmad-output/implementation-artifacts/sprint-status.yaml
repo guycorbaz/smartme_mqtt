@@ -191,7 +191,24 @@ development_status:
   #  - the observer discarded the SubAck return codes, so a REFUSED subscription read
   #    as a quiet topic. Fixed, plus dup/pkid capture and 5 other instrument fixes.
   4-4-primary-host-state-measure: done
-  4-5-primary-host-state-decide: backlog
+  # 2026-07-31: DELIVERED as ADR 0018 -- "Primary Host / STATE is ruled out; the
+  # repair path is host-initiated". Both ACs met by that document; no code was
+  # required, because the story's whole deliverable is a decision.
+  # Re-weighed on its own evidence as ADR 0016 instructed, that ADR's ordering
+  # argument having been spent by Story 4.7. Four grounds, none depending on a
+  # future measurement: the norm says "Specifying a Primary Host is not required";
+  # without store-and-forward the wait preserves ZERO readings; one broker means the
+  # stranding it guards cannot occur; and implementing it introduces a NEVER-BIRTHS
+  # state -- which the observation record shows was the real broker state on
+  # 2026-07-28, since no retained spBv1.0/STATE existed before the Ignition restart.
+  # ADR 0011 explicitly confirmed UNCHANGED, with the reason: ruling STATE out
+  # removes the host-driven shutdown path before it exists.
+  # The one inferred link -- does Engine ask for a rebirth on its OWN? -- bears on a
+  # REVISIT CONDITION, not on the decision, and is question 1 on Story 4.8's batched
+  # pre-production list. Deferring the decision to that run would have repeated AR13.
+  # LEFT FOR THE MATRIX OWNER: the five -phid-* rows are `gap (unimplemented)`, which
+  # over-declares if the clauses do not bind. Moving them would move two tallies.
+  4-5-primary-host-state-decide: review
   # 2026-07-29: contexted. ADR 0016 sequences 4.6/4.7 AHEAD of 4.5. Two errors in
   # the epic's AC1 fixed at creation: the tck-id was written -subscribe-ncmd (the
   # real one is tck-id-message-flow-edge-node-ncmd-subscribe) and the ordering said
