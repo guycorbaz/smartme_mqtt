@@ -1,0 +1,27 @@
+# Keep the build context small and the image reproducible.
+#
+# `target/` alone is several GB and would be copied into the builder only to be
+# ignored — and worse, a host-built `target/` can shadow the container's own
+# artifacts and produce an image built from stale objects.
+target/
+.git/
+.github/
+
+# Secrets never enter the build context, even though the Dockerfile does not
+# copy them: a `.env` in an image layer is a `.env` published to Docker Hub.
+.env
+.env.*
+!.env.example
+
+# Documentation, planning artifacts and the vendored specification are ~50 MB
+# and none of it is compiled.
+docs/
+_bmad-output/
+_bmad/
+.claude/
+
+# Editor and OS noise.
+.idea/
+.vscode/
+*.swp
+.DS_Store

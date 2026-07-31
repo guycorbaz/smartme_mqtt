@@ -1,0 +1,130 @@
+name: Docker image
+
+# Two jobs on purpose, and the split is the point.
+#
+#   `build`  runs on every push and pull request. It builds the image and pushes
+#            NOTHING. Without it the Dockerfile rots invisibly — it is not
+#            exercised by `ci.yml`, so a dependency that stops compiling under
+#            `--locked`, or an apt package that disappears from bookworm, would
+#            only surface on release day.
+#
+#   `publish` runs on a `v*` tag and pushes to Docker Hub.
+#
+# Publishing on every push to main was rejected: it would make `latest` a moving
+# target that no deployment could name, and this project's whole discipline is
+# that a version is what a claim attaches to.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+env:
+  IMAGE: docker.io/gcorbaz/smartme_mqtt
+
+jobs:
+  build:
+    name: build (no push)
+    if: startsWith(github.ref, 'refs/tags/v') == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: smartme_mqtt:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A built image that cannot start is not a built image. This is the same
+      # smoke test the Dockerfile's own comments promise, run where a regression
+      # would otherwise reach Docker Hub unnoticed.
+      - name: Smoke — runs as non-root
+        run: |
+          id_line=$(docker run --rm --entrypoint id smartme_mqtt:ci)
+          echo "$id_line"
+          echo "$id_line" | grep -q 'uid=10002' \
+            || { echo "::error::image does not run as uid 10002"; exit 1; }
+
+      - name: Smoke — a CA bundle is present
+        run: |
+          docker run --rm --entrypoint ls smartme_mqtt:ci \
+            /etc/ssl/certs/ca-certificates.crt \
+            || { echo "::error::no CA bundle — every HTTPS call to the smart-me cloud would fail, and the bridge would publish a permanent, honest STALE that looks exactly like a cloud outage"; exit 1; }
+
+      - name: Smoke — refuses to start without a Sparkplug identity
+        run: |
+          # No default for SMARTME_GROUP_ID / _NODE_ID is a deliberate guard:
+          # a Sparkplug host persists what it discovers, so publishing into the
+          # wrong namespace is not undone by restarting with better settings.
+          out=$(docker run --rm \
+            -e SMARTME_CLIENT_ID=x -e SMARTME_CLIENT_SECRET=x \
+            -e SMARTME_METER_ID=m -e SMARTME_DEVICE_ID=d -e SMARTME_SERIAL=9 \
+            -e SMARTME_BROKER_HOST=broker.invalid \
+            smartme_mqtt:ci 2>&1 || true)
+          echo "$out"
+          echo "$out" | grep -q 'SMARTME_GROUP_ID' \
+            || { echo "::error::the image started without a group id; the guard is gone"; exit 1; }
+
+  publish:
+    name: publish to Docker Hub
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # A tag that disagrees with the crate version produces an image whose name
+      # lies about what is inside it. Caught here rather than by whoever deploys
+      # it: `docker.io/gcorbaz/smartme_mqtt:0.2.0` reporting version 0.1.0 in its
+      # logs is the kind of thing that costs an afternoon.
+      - name: The git tag must match the workspace version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "tag=$tag  Cargo.toml=$crate"
+          [ "$tag" = "$crate" ] \
+            || { echo "::error::tag v$tag does not match the workspace version $crate — bump Cargo.toml or retag"; exit 1; }
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # `latest` moves only for a final release. A pre-release tag (v0.2.0-rc1)
+      # publishes under its own name and leaves `latest` where it was, so a
+      # compose file pinned to `latest` never picks up a release candidate by
+      # surprise.
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      # Single-arch, per the architecture note: "single-arch target = a
+      # Dockerfile line, not an architectural decision". `linux/amd64` matches
+      # `.cargo/config.toml`, which sets the mold linker for
+      # x86_64-unknown-linux-gnu only — building arm64 would need that section
+      # extended before this line changes.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
