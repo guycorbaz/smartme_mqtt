@@ -531,8 +531,12 @@ section~\ref{sec:sp-session} feeding directly into this one.
 
 \begin{warning}
 An edge node that does not implement \code{Node Control/Rebirth} cannot be repaired by the
-host. This is a real gap in \prog today; its practical consequences on this installation
-are set out in section~\ref{sec:sp-where-we-sit} and chapter~\ref{ch:contract}.
+host. This was a real gap in \prog until recently; it is now closed --- \prog declares the
+metric in every birth certificate and answers a request with a complete birth sequence.
+What remains open is the \emph{other} half of the repair: \prog reads no \code{STATE}
+topic, so it never learns a host has returned and will not volunteer a birth. The repair
+works when the host asks, and only then. See section~\ref{sec:sp-where-we-sit} and
+chapter~\ref{ch:contract}.
 \end{warning}
 
 \section{The Primary Host and STATE}
@@ -642,7 +646,9 @@ Sparkplug Aware MQTT Server & All of the above, \emph{plus} storing the most rec
 The \emph{Aware} profile is the standard's own answer to the late-joining consumer: births
 that are otherwise unretained become collectable. Mosquitto is Compliant but not Aware, so
 on this installation that safety net is absent and the rebirth command
-(section~\ref{sec:sp-rebirth}) is the only repair mechanism available.
+(section~\ref{sec:sp-rebirth}) is the only repair mechanism available. \prog does implement
+that command, so the mechanism exists --- but it has to be exercised by the host, which the
+Aware profile would not have required.
 \end{note}
 
 \section{Where \prog sits}
@@ -675,13 +681,21 @@ Metric properties (quality, units) & implemented & Quality codes \textbf{deviate
                                 the specified codes were measured to display as
                                 \emph{good} on Ignition. See chapter~\ref{ch:contract}. \\
 Report by exception & \textbf{absent} & Publishes on a fixed interval. Recorded as a
-                                deviation; it is blocked by the missing rebirth, because
-                                periodic publishing currently substitutes for it. \\
+                                deviation. It \emph{was} blocked by the missing rebirth,
+                                because periodic publishing substituted for it; that
+                                blocker has lifted, and the deviation is now a decision
+                                still to be taken rather than one that cannot be. \\
 \code{NCMD} subscription & implemented & \code{spBv1.0/<group>/NCMD/<node>} at QoS~1, on
-                                every connect, before the birth. Commands are logged and
-                                discarded --- see chapter~\ref{ch:contract}. \\
-\code{Node Control/Rebirth} & \textbf{absent} & The request reaches \prog and is ignored:
-                                nothing acts on any command yet. \\
+                                every connect, before the birth. Commands other than the
+                                one below are logged and discarded --- see
+                                chapter~\ref{ch:contract}. \\
+\code{Node Control/Rebirth} & implemented & Declared in every \code{NBIRTH}, and answered
+                                with a complete birth sequence under an unchanged
+                                \code{bdSeq}. Recognised on the name \emph{and} the boolean
+                                value \code{true}; any other value is refused and logged
+                                with what arrived. \\
+\code{DCMD} (writing to outputs) & \textbf{absent} & No device here has a writable output
+                                today, so the topic form is not implemented. Planned. \\
 Primary Host / \code{STATE} & \textbf{absent} & Not read, not waited for. \\
 Aliases, Templates, DataSets & \textbf{absent} & Out of scope; metric names are published in
                                 full. \\
@@ -691,29 +705,43 @@ Multiple brokers & \textbf{absent} & One broker is configured; server-walking ca
 \end{center}
 
 \begin{warning}
-\textbf{The two missing mechanisms compound, and the cost is concrete.} \prog's NBIRTH is
-published once, at QoS~0 and not retained --- so the broker keeps no copy. It reads no
+\textbf{One of the two gaps is now closed, and the argument has to be re-run rather than
+re-worded.}
+
+The situation this box described was a compound one. \prog's NBIRTH is published once, at
+QoS~0 and not retained, so the broker keeps no copy for a returning consumer. It reads no
 \code{STATE} topic, so it never learns that a host has restarted and never re-births on
 that account. Its own broker session is untouched by a host restarting, so nothing prompts
-it to reconnect. And the protocol's remaining repair --- a rebirth request --- reaches
-\prog but is ignored.
+it to reconnect. And --- the leg that has changed --- the protocol's remaining repair, a
+rebirth request, reached \prog and was ignored.
 
-The consequence is that \textbf{after Ignition restarts, it may keep receiving data it has
-no birth certificate to interpret}. A \emph{Sparkplug Aware} broker would close this gap by
-replaying the stored births; Mosquitto is not one.
+\textbf{It is no longer ignored.} \prog declares \code{Node Control/Rebirth} in every birth
+certificate and answers a conformant request with a complete birth sequence. So there is now
+a host-initiated path back, and Ignition's MQTT Engine takes it on its own: receiving data
+from a node whose birth it never saw is exactly the condition under which it issues a
+rebirth request.
 
-\textbf{What does restore the definitions is any reconnect on \prog's own side}, since a
-fresh NBIRTH is published on every successful MQTT connection --- a broker restart, a
-network interruption or a keep-alive expiry all repair the consumer's view. What no event on
-the \emph{host} side can do is prompt that reconnect. (An earlier edition of this paragraph
+\textbf{What still does not exist is a \prog-initiated path.} The bridge cannot notice that
+a host has returned, because it reads no \code{STATE}. If a host does not ask, nothing
+happens. The remaining exposure is therefore narrower and differently shaped: not \emph{no
+repair exists}, but \emph{the repair depends on the consumer asking for it}. A
+\emph{Sparkplug Aware} broker would have removed that dependency by replaying the stored
+births; Mosquitto is not one.
+
+\textbf{Any reconnect on \prog's own side also restores the definitions}, since a fresh
+NBIRTH is published on every successful MQTT connection --- a broker restart, a network
+interruption or a keep-alive expiry all repair the consumer's view. What no event on the
+\emph{host} side can do is prompt that reconnect. (An earlier edition of this paragraph
 said the definitions could not be restored \emph{until \prog itself is restarted}. That was
 false. The same sentence was corrected in chapter~\ref{ch:contract} first, and this copy of
 it survived the correction by a chapter.)
 
-This is why the missing rebirth handling is the more urgent of the two gaps --- more so now
-than when this was written, because the subscription exists and only the handler is
-missing --- and it is the reason the \code{STATE} mechanism was measured on the live
-installation before being designed for.
+\textbf{The consequence for planning:} the rebirth handling was ranked ahead of the
+\code{STATE} work because it was the cheaper and more load-bearing of the two. That
+reasoning has now been spent, and the \code{STATE} decision has to be weighed on its own
+evidence rather than inheriting a ranking that was argued from a gap which no longer
+exists. The measurement it will be weighed against was taken on the live installation
+before anything was designed.
 \end{warning}
 
 \section{Reading the specification yourself}

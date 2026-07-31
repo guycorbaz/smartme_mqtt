@@ -30,13 +30,40 @@ use crate::domain::{Measurement, Serial, UtcMillis};
 /// to the topic grammar, to a metric name or unit, or to the meaning of a
 /// published quality code.
 ///
-/// - **2** — quality codes changed from the specification's `0`/`192`/`500` to
-///   Ignition's `QualityCode` encoding. A Tier-3 run showed Ignition reading
-///   `500` as `Good(500)` and `0` as `Good_Unspecified`, so a v1 consumer was
-///   told an unusable value was trustworthy. A deliberate deviation from the
-///   specification — see [`ignition_quality_code`] and ADR 0012.
+/// # Additive and breaking changes both bump, and the number does not say which
+///
+/// The rule above admits no exception, and that is deliberate: a consumer must
+/// be able to see that the contract moved. But the two kinds of move are not
+/// the same kind of problem, and the version alone cannot tell them apart, so
+/// each entry below says which it was.
+///
+/// - An **additive** change adds a tag. Nothing a consumer already holds becomes
+///   wrong; a browse tree gains a node and history keeps its meaning. Version 3
+///   is one of these.
+/// - A **breaking** change alters what something already published MEANS.
+///   Version 2 is one of these: a quality code a consumer had recorded as good
+///   was, from that release on, not good. Historised values from either side of
+///   the boundary cannot be compared without knowing which side they are on.
+///
+/// This distinction is written down because it had to be re-derived at Story
+/// 4.7. The Tier-3 runbook's run table is indexed by this constant
+/// (`docs/ignition-contract-runbook.md`), so two runs sharing a version number
+/// attest to the same tag set — which is the property the bump protects, and it
+/// holds for additive changes too.
+///
+/// - **3** — *additive*. The NBIRTH now declares
+///   [`METRIC_NODE_CONTROL_REBIRTH`] — boolean, `false`. A consumer sees a new
+///   tag in its browse tree, and — the point of the exercise — a host gains a
+///   declared endpoint it can use to request a rebirth (Story 4.7, FR19).
+///   Nothing was removed or renamed.
+/// - **2** — *breaking*. Quality codes changed from the specification's
+///   `0`/`192`/`500` to Ignition's `QualityCode` encoding. A Tier-3 run showed
+///   Ignition reading `500` as `Good(500)` and `0` as `Good_Unspecified`, so a
+///   v1 consumer was told an unusable value was trustworthy. A deliberate
+///   deviation from the specification — see [`ignition_quality_code`] and ADR
+///   0012.
 /// - **1** — initial contract, with the specification's quality codes.
-pub const CONTRACT_VERSION: i64 = 2;
+pub const CONTRACT_VERSION: i64 = 3;
 
 /// The quality code this bridge publishes for `quality`.
 ///
@@ -74,6 +101,15 @@ pub const fn ignition_quality_code(quality: Quality) -> u32 {
 
 /// Metric under which [`CONTRACT_VERSION`] is published in the node BIRTH.
 pub const METRIC_CONTRACT_VERSION: &str = "Contract/Version";
+/// The command endpoint every conformant NBIRTH must declare.
+///
+/// The name is fixed by the specification and is not ours to choose: a host
+/// addresses it by this exact string. Five MUST clauses in three chapters
+/// require it — `tck-id-topics-nbirth-rebirth-metric`,
+/// `tck-id-payloads-nbirth-rebirth-req`, and
+/// `tck-id-operational-behavior-data-commands-rebirth-name`, `-datatype`,
+/// `-value`.
+pub const METRIC_NODE_CONTROL_REBIRTH: &str = "Node Control/Rebirth";
 /// Metric name for instantaneous power.
 pub const METRIC_POWER: &str = "Power";
 /// Engineering unit published with [`METRIC_POWER`].
@@ -240,7 +276,7 @@ impl SparkplugPublisher {
         let timestamp = millis(now);
         let mut live = match std::mem::replace(&mut self.session, Session::Moving) {
             Session::Pending(pending) => {
-                let (live, payload) = pending.birth(timestamp, vec![contract_metric(timestamp)]);
+                let (live, payload) = pending.birth(timestamp, node_metrics(timestamp));
                 sink.emit(Outbound {
                     topic: node_topic(&self.node, MessageType::NBirth),
                     payload: encode(&payload),
@@ -249,7 +285,7 @@ impl SparkplugPublisher {
                 live
             }
             Session::Live(mut live) => {
-                let payload = live.rebirth(timestamp, vec![contract_metric(timestamp)]);
+                let payload = live.rebirth(timestamp, node_metrics(timestamp));
                 sink.emit(Outbound {
                     topic: node_topic(&self.node, MessageType::NBirth),
                     payload: encode(&payload),
@@ -331,6 +367,62 @@ impl SparkplugPublisher {
 fn node_topic(node: &EdgeNode, message: MessageType) -> String {
     node.node_topic(message)
         .unwrap_or_else(|_| unreachable!("node message types address node topics"))
+}
+
+/// Everything the NODE birth declares about itself, for both session arms.
+///
+/// # Why one function and not two call sites
+///
+/// `birth()` has two arms — `Session::Pending` for the first birth and
+/// `Session::Live` for every reconnect and every rebirth answer — and both
+/// publish an NBIRTH. `tck-id-payloads-nbirth-rebirth-req` binds *"Every
+/// NBIRTH"*, so a metric added to one arm only yields a clause that holds on the
+/// first birth and fails on every later one: conformant at start-up, silently
+/// non-conformant for the rest of the process's life, and visible in no log.
+///
+/// Building the list once removes the omission rather than testing for it.
+/// `every_node_birth_declares_the_rebirth_command` still asserts both arms —
+/// the shape is what makes the property true today, and the test is what keeps
+/// it true after someone splits this back apart.
+fn node_metrics(timestamp_ms: u64) -> Vec<Metric> {
+    vec![contract_metric(timestamp_ms), rebirth_metric(timestamp_ms)]
+}
+
+/// The rebirth command endpoint, declared in every node BIRTH.
+///
+/// Five MUST clauses in three chapters converge on one metric:
+/// `tck-id-topics-nbirth-rebirth-metric` (`Sparkplug_4_Topics.adoc:215-217`),
+/// `tck-id-payloads-nbirth-rebirth-req` (`Sparkplug_6_Payloads.adoc:1082-1084`)
+/// and `tck-id-operational-behavior-data-commands-rebirth-name`, `-datatype`,
+/// `-value` (`Sparkplug_5_Operational_Behavior.adoc:955-965`). Name exactly
+/// `Node Control/Rebirth`, datatype `Boolean`, value `false`.
+///
+/// **`Boolean(false)`, never `Null(DataType::Boolean)`.** A null metric declares
+/// the type a tag WOULD have and carries no value; the clause is a MUST on the
+/// value `false`. The null form would satisfy `-rebirth-datatype` and fail
+/// `-rebirth-value`, and the two are easy to conflate because both mention
+/// `Boolean`.
+///
+/// **No alias, and that is load-bearing rather than incidental.**
+/// `encode_metric` hard-codes `alias: None` for every metric this bridge sends,
+/// which satisfies `-rebirth-name-aliases` by construction — so the clause
+/// stays `n/a` in the conformance matrix, alongside the three chapter-6 alias
+/// clauses, rather than becoming `conformant`. The reason the norm forbids an
+/// alias here is that a host must be able to request a rebirth *"without
+/// knowledge of any potential alias"*, which is also why the handler in
+/// `mqtt_driver.rs` matches on the name alone.
+///
+/// `Good`, for `contract_metric`'s reason and not by copying it: this is a fact
+/// about the running software rather than a reading of the world. There is no
+/// cloud call behind it and no clock that can make it old, so there is no state
+/// in which the bridge holds it and cannot vouch for it.
+fn rebirth_metric(timestamp_ms: u64) -> Metric {
+    Metric::new(
+        METRIC_NODE_CONTROL_REBIRTH,
+        MetricValue::Boolean(false),
+        timestamp_ms,
+    )
+    .with_quality_code(ignition_quality_code(Quality::Good))
 }
 
 /// The contract version, declared in the node BIRTH so a consumer can SEE a
@@ -570,6 +662,126 @@ mod tests {
             "a consumer can SEE the contract version, not infer it"
         );
         assert_eq!(quality_of(m), ignition_quality_code(Quality::Good));
+    }
+
+    /// Story 4.7 / AC1 — EVERY node BIRTH declares the rebirth command.
+    ///
+    /// Five MUST clauses, in three chapters, say the same thing:
+    /// `tck-id-topics-nbirth-rebirth-metric`,
+    /// `tck-id-payloads-nbirth-rebirth-req` (*"EVERY NBIRTH"*), and
+    /// `tck-id-operational-behavior-data-commands-rebirth-name`, `-datatype`
+    /// and `-value`. Without it a host has no declared endpoint to address, so
+    /// the handler this story adds is unreachable by a conformant host.
+    ///
+    /// Both births are asserted because `birth()` has TWO arms —
+    /// `Session::Pending` for the first and `Session::Live` for every later one
+    /// — and adding the metric to one of them yields a clause that holds on the
+    /// first birth and fails on every reconnect and every rebirth. `-rebirth-req`
+    /// says *"Every NBIRTH"*, so one arm is not conformance.
+    ///
+    /// Asserted against the DECODED payload, never against the builder's own
+    /// expression: [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)
+    /// lists eight invariants currently "proved" by comparing production code
+    /// with itself.
+    ///
+    /// Falsified 2026-07-30: see the story's falsification table (mutations 1
+    /// and 2 — omitting the metric from either arm turns this red, and the
+    /// `Session::Live` omission is red ONLY on the second birth, which is the
+    /// case a single-birth test would have missed).
+    #[test]
+    fn every_node_birth_declares_the_rebirth_command() {
+        let mut p = publisher();
+        let mut sink = RecordingSink::default();
+        // First birth: the `Session::Pending` arm.
+        p.birth(UtcMillis(1_000), &[Serial::new(SERIAL)], &mut sink)
+            .expect("valid topics");
+        // Second: the `Session::Live` arm — a reconnect or a rebirth answer.
+        p.birth(UtcMillis(2_000), &[Serial::new(SERIAL)], &mut sink)
+            .expect("valid topics");
+
+        let births: Vec<&Outbound> = sink
+            .emitted
+            .iter()
+            .filter(|o| o.message == MessageType::NBirth)
+            .collect();
+        assert_eq!(
+            births.len(),
+            2,
+            "this test needs both the Pending and the Live arm to have run"
+        );
+
+        // The NAME the norm requires, spelled out ONCE, here, as a literal.
+        //
+        // Everything else in this test locates the metric with
+        // `METRIC_NODE_CONTROL_REBIRTH` — which is the same constant the producer
+        // uses, so it cannot witness the string itself. Rename the constant to
+        // `"Node Control/Reburth"` and every assertion below still passes while
+        // three chapters are violated and no conformant host can address the
+        // endpoint. The Story 4.7 code review found the only fast witnesses of the
+        // literal were incidental (a near-miss TRACE test in `mqtt_driver`), with
+        // the rest behind Docker-gated chaos tests that `--fast` skips.
+        //
+        // `tck-id-operational-behavior-data-commands-rebirth-name` (`:955-956`),
+        // `tck-id-topics-nbirth-rebirth-metric` (`Sparkplug_4_Topics.adoc:215-217`)
+        // and `tck-id-payloads-nbirth-rebirth-req`
+        // (`Sparkplug_6_Payloads.adoc:1082-1084`) all spell it this way.
+        //
+        // Falsified 2026-07-30: changing the constant's value turns THIS assertion
+        // red and leaves every other assertion in the test green.
+        assert_eq!(
+            METRIC_NODE_CONTROL_REBIRTH, "Node Control/Rebirth",
+            "the metric name is fixed by the specification, not by us: a host \
+             addresses this exact string and cannot be asked to guess another"
+        );
+
+        for (nth, out) in births.iter().enumerate() {
+            let nbirth = decode(out);
+            // Not the `metric` helper: its `expect("metric present")` names
+            // neither the metric nor WHICH birth lacked it, and the failure
+            // that matters here is specifically "the second one". A test that
+            // fails is not automatically a test that says what broke.
+            let m = nbirth
+                .metrics
+                .iter()
+                .find(|m| m.name.as_deref() == Some(METRIC_NODE_CONTROL_REBIRTH))
+                .unwrap_or_else(|| {
+                    let present: Vec<&str> = nbirth
+                        .metrics
+                        .iter()
+                        .filter_map(|m| m.name.as_deref())
+                        .collect();
+                    panic!(
+                        "NBIRTH #{nth} (0 = the first birth, 1 = the rebirth) declares \
+                         no {METRIC_NODE_CONTROL_REBIRTH} metric; it carries {present:?}. \
+                         tck-id-payloads-nbirth-rebirth-req binds EVERY NBIRTH, so a \
+                         metric present only on #0 is not conformance — and it is \
+                         invisible in production, where #0 happens once and #1 happens \
+                         on every reconnect."
+                    )
+                });
+            assert_eq!(
+                m.datatype,
+                Some(DataType::Boolean.code()),
+                "NBIRTH #{nth}: -rebirth-datatype is a MUST on Boolean (code 11)"
+            );
+            assert_eq!(
+                m.value,
+                Some(payload::metric::Value::BooleanValue(false)),
+                "NBIRTH #{nth}: -rebirth-value is a MUST on the value false"
+            );
+            assert_ne!(
+                m.is_null,
+                Some(true),
+                "NBIRTH #{nth}: a null metric is the ABSENCE of a value, and the \
+                 clause requires the value false — Null(Boolean) would satisfy \
+                 the datatype clause while failing the value one"
+            );
+            assert_eq!(
+                m.alias, None,
+                "NBIRTH #{nth}: -rebirth-name-aliases forbids an alias here so \
+                 that a host can request a rebirth without knowing one"
+            );
+        }
     }
 
     #[test]

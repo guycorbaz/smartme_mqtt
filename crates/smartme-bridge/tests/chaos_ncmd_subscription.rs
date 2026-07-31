@@ -1,7 +1,16 @@
-//! Story 4.6 — the command subscription exists, is answered, and every command
-//! is thrown away safely.
+//! Stories 4.6 and 4.7 — the command subscription exists, is answered, one
+//! command is honoured, and every other is thrown away safely.
 //!
-//! Three properties, and each is asserted against a source OUTSIDE the bridge
+//! **This header said *"every command is thrown away safely"* and *"three
+//! properties"* until the Story 4.7 code review.** Story 4.7 added a fifth
+//! property that asserts a conformant command IS answered, and re-aimed three
+//! assertions — while these four lines, four lines above the ones it amended, went
+//! on describing the opposite. That is the sixth consecutive instance in this
+//! project of a claim being corrected and the sentences that depend on it being
+//! left alone, and the first one to happen inside a test file rather than a
+//! document.
+//!
+//! Six properties, and each is asserted against a source OUTSIDE the bridge
 //! wherever one exists:
 //!
 //! 1. **The SUBSCRIBE reaches the broker before the NBIRTH.** Asserted from the
@@ -14,15 +23,32 @@
 //!    whole point is that this must be legible *without* broker access, so the
 //!    bridge's own log is the right oracle here — and the broker log
 //!    independently confirms a SUBACK was sent.
-//! 3. **An unrecognised command changes nothing.** Asserted two ways: the IGNORE
-//!    trace (and, separately, that it names the metric), and — the load-bearing
-//!    half — that NO second NBIRTH follows a `Node Control/Rebirth`. This bridge
-//!    does not implement Rebirth (Story 4.7 does); a node that re-birthed here
-//!    would have implemented it by accident.
-//! 4. **The subscription is re-established on the SECOND connect too.** AC1's
+//! 3. **A command this bridge does not implement changes nothing.** Asserted two
+//!    ways: the IGNORE trace (and, separately, that it names the metric), and —
+//!    the load-bearing half — that NO NBIRTH follows any of the four payloads
+//!    sent, none of which is a conformant Rebirth Request.
+//!
+//!    **Story 4.7 re-aimed this rather than deleting it, and it is stronger
+//!    now.** It used to fire on a `Node Control/Rebirth` and assert that nothing
+//!    answered it, on the grounds that Rebirth was not implemented. Rebirth IS
+//!    implemented, so the assertion is pointed at the near miss instead: a
+//!    valueless rebirth metric, which `-ncmd-rebirth-value` says is not a
+//!    request. A matcher that birthed on the metric NAME alone now goes red
+//!    here — and under the old helper, which gave every metric `value: None`,
+//!    that same mutation left this file green.
+//! 4. **A conformant Rebirth Request IS answered** (Story 4.7), asserted at the
+//!    very end of the run for the ordering reason recorded at its call site. The
+//!    conformance evidence for the answer itself lives in
+//!    `chaos_ncmd_rebirth.rs`.
+//! 5. **The subscription is re-established on the SECOND connect too.** AC1's
 //!    third clause binds every session, not the first. The reconnect is forced by
 //!    connecting a second client under the bridge's own client id, so the BROKER
 //!    evicts it — no container stop/start, which would remap the port.
+//! 6. **A RETAINED Rebirth Request is a replay and is NOT answered** (ADR 0017,
+//!    added by the Story 4.7 code review). `tck-id-payloads-ncmd-retain` forbids a
+//!    host from retaining an NCMD, so one that arrives retained was replayed by the
+//!    broker rather than sent by anyone — and answering it would make the bridge
+//!    re-announce on every reconnect for as long as the retained message lives.
 //!
 //! # Why a unit test cannot do this
 //!
@@ -44,7 +70,7 @@
 //! - *The bridge reconnects mid-test and re-births.* Then the "no second
 //!   NBIRTH" check fires. That is a real failure of the assertion's premise, not
 //!   a false one — but it would be reported as a Rebirth that never happened, so
-//!   the message says so. (The DELIBERATE reconnect for property 4 happens after
+//!   the message says so. (The DELIBERATE reconnect for property 5 happens after
 //!   that check, for exactly this reason.)
 //! - *The ignore traces appear without a command being received.* They cannot:
 //!   every one of them is emitted only from the inbound-command arm.
@@ -55,13 +81,51 @@
 //!   It could, and it did — this was found by the Story 4.6 review. The needle
 //!   was the metric name, which a Story 4.7 handler would print on the acting
 //!   path too. The load-bearing assertion is now the phrase emitted only by the
-//!   arm that throws the command away; the name is checked separately.
+//!   arm that throws the command away; the name is checked separately, and the
+//!   metric it names is one this bridge does NOT implement.
+//! - *The "no NBIRTH" assertion holds because nothing it sent was ever a
+//!   request.* **This was true of this file for the whole of Story 4.6, and it
+//!   was the single most dangerous thing in it.** `command_payload` built
+//!   metrics with `..Default::default()`, so `value: None`; under
+//!   `tck-id-operational-behavior-data-commands-ncmd-rebirth-value` a valueless
+//!   `Node Control/Rebirth` is not a Rebirth Request. So `rebirth.is_none()`
+//!   stayed green after a perfect implementation AND after a completely broken
+//!   one — it could not distinguish them, while its failure message warned about
+//!   answering too eagerly and pointed the reader away from the real bug. The
+//!   value is a parameter now, both shapes are sent, and they assert opposite
+//!   things: the valueless one must NOT birth, the boolean-`true` one MUST.
+//! - *The INFO assertions pass because the test set the log level itself.* They
+//!   used to: this run set `RUST_LOG=info`, so it could never have noticed that
+//!   the shipped default was ERROR and every one of these criteria was dark in a
+//!   real deployment (the Story 4.6 review's finding D1). `RUST_LOG` is now
+//!   removed from the child's environment, so these assertions ride on the
+//!   default directive `main.rs` sets, and a regression there turns them red.
+//! - *The conformant rebirth is sent early and shifts the broker-log indices.*
+//!   It would: the second-connect checks index `births[1]` / `subscribes[1]` by
+//!   ordinal, and an extra NBIRTH before them makes the ordering assertion
+//!   compare two unrelated packets and fail for a reason its message does not
+//!   describe. It is sent last, after those checks, and the comment at the call
+//!   site says so.
 //! - *The bridge's DRIVER TASK dies but the process survives.* It can:
 //!   `supervisor.rs` only awaits the mqtt task after shutdown, so
 //!   `try_wait().is_none()` stays true and "no second NBIRTH" becomes trivially
 //!   true — a dead driver publishes nothing. Also found by the review. A fourth
 //!   command is sent AFTER those checks and its trace is required, which only a
 //!   driver still in its loop can produce.
+//! - *The retained-NCMD check passes because the retain flag never arrives.*
+//!   **The first version of property 6 failed for exactly this reason, and the
+//!   production code was right.** Under MQTT 3.1.1 a broker sets the retain flag on
+//!   DELIVERY only when the message is sent in answer to a new subscription; an
+//!   ordinary live delivery to an already-subscribed client carries `retain = 0`
+//!   whatever the publisher asked for. Publishing retained and asserting
+//!   immediately therefore exercises the live path, where the flag is legitimately
+//!   absent, and reads the resulting (correct) answer as a defect. The property is
+//!   now provoked the way the real exposure is: publish retained, force a
+//!   reconnect, and let the SUBSCRIBE draw the replay.
+//! - *The retained check passes because a reconnect birth is counted as an
+//!   answer.* It cannot: a reconnect legitimately produces an NBIRTH, so the
+//!   assertion is on the COUNT of the answer's own trace not growing, never on the
+//!   absence of an NBIRTH.
 //!
 //! # Falsification — run against deliberately broken code
 //!
@@ -70,8 +134,11 @@
 //! | `subscribe_to_commands` moved to AFTER the birth publish | RED — *"published its NBIRTH before subscribing"*, SUBSCRIBE at line 30, NBIRTH at 26 |
 //! | the `Packet::SubAck` arm deleted, back to `Ok(_) => {}` | RED — *"never reported what the broker granted"* |
 //! | the inbound-publish guard forced to `false` | RED — *"did not trace the command as IGNORED"* |
-//! | `subscribe_to_commands` hoisted OUT of the `Transport::Connected` arm to a one-shot before the loop | RED — *"issued only 1 SUBSCRIBE in the whole run"* (added 2026-07-29 by the review; this mutation left the whole suite GREEN before property 4 existed) |
+//! | `subscribe_to_commands` hoisted OUT of the `Transport::Connected` arm to a one-shot before the loop | RED — *"issued only 1 SUBSCRIBE in the whole run"* (added 2026-07-29 by the review; this mutation left the whole suite GREEN before property 5 existed) |
 //! | the inbound-command `select!` arm made to `break` after the first command | RED — the liveness probe produces no trace (added 2026-07-29; this left the suite green before) |
+//! | `classify` widened to match `Node Control/Rebirth` on the NAME ALONE | RED — *"a Node Control/Rebirth carrying no value was not reported as a near miss"*. **Not the assertion this table first predicted:** the near-miss trace check sits earlier in the run than the "no NBIRTH" one and fires first. Both would have caught it; the recorded result is the one that actually ran. (added 2026-07-30; under the old `..Default::default()` helper this mutation left the file GREEN) |
+//! | the `Inbound::Rebirth` arm of the command branch deleted | RED — *"a conformant Node Control/Rebirth (boolean true) produced no NBIRTH"* (added 2026-07-30) |
+//! | `main.rs`'s default directive reverted to `tracing_subscriber::fmt::init()` (default ERROR) | RED — at the FIRST INFO assertion, *"the bridge never reported what the broker granted"*, because the run no longer sets `RUST_LOG`. Before Story 4.7 this mutation left the file green. (added 2026-07-30) |
 //!
 //! The first mutation is why the two-second settle above exists. Without it the
 //! run went red for the wrong reason — it reported that the bridge issues no
@@ -143,13 +210,68 @@ async fn commander(port: u16) -> AsyncClient {
     client
 }
 
-/// A Sparkplug payload naming `metrics`, encoded exactly as a Host Application
-/// would send it.
-fn command_payload(metrics: &[&str]) -> Vec<u8> {
+/// A Sparkplug payload naming `metrics` with their values, encoded exactly as a
+/// Host Application would send it.
+///
+/// # Why the value became a parameter (Story 4.7)
+///
+/// It used to build every metric with `..Default::default()`, so `value: None`.
+/// That was invisible while nothing acted on any command, and it became the most
+/// dangerous thing in this file the moment something did.
+///
+/// `tck-id-operational-behavior-data-commands-ncmd-rebirth-value` defines a
+/// Rebirth Request as carrying the boolean value `true`, and this bridge
+/// implements that reading. So a valueless `Node Control/Rebirth` is NOT a
+/// request and must not be answered — which means the old `rebirth.is_none()`
+/// assertion below stayed green after a perfect implementation *and* after a
+/// completely broken one. It could not tell them apart, and its failure message
+/// warned about answering too eagerly, pointing the next reader in the opposite
+/// direction from the bug. A dev reading the green suite as validation would
+/// have shipped a bridge that answers nothing.
+///
+/// Both shapes are now sent, on purpose, and they assert opposite things.
+///
+/// # The datatype is DERIVED from the value, not from its presence
+///
+/// The first version of this helper wrote
+/// `datatype: value.as_ref().map(|_| DataType::Boolean.code())` — hard-coding
+/// Boolean for whatever it was handed. Under a doc claiming the payload is
+/// *"encoded exactly as a Host Application would send it"*, any caller passing a
+/// non-boolean would silently get a metric whose DECLARED datatype contradicts its
+/// value: the exact near-miss shape this story exists to detect, manufactured by
+/// the helper meant to reproduce a conformant host. That is the same class of trap
+/// as the `..Default::default()` one documented above, and the Story 4.7 code
+/// review found it in the file that had just spent forty lines on the first.
+fn command_payload(
+    metrics: &[(&str, Option<sparkplug_b::protobuf::payload::metric::Value>)],
+) -> Vec<u8> {
+    use sparkplug_b::protobuf::payload::metric::Value;
     let metrics = metrics
         .iter()
-        .map(|name| sparkplug_b::protobuf::payload::Metric {
+        .map(|(name, value)| sparkplug_b::protobuf::payload::Metric {
             name: Some((*name).to_string()),
+            datatype: value.as_ref().map(|v| {
+                match v {
+                    Value::BooleanValue(_) => sparkplug_b::DataType::Boolean,
+                    Value::IntValue(_) => sparkplug_b::DataType::Int32,
+                    Value::LongValue(_) => sparkplug_b::DataType::Int64,
+                    Value::FloatValue(_) => sparkplug_b::DataType::Float,
+                    Value::DoubleValue(_) => sparkplug_b::DataType::Double,
+                    Value::StringValue(_) => sparkplug_b::DataType::String,
+                    // Deliberately loud rather than defaulted: a caller reaching
+                    // for a variant this helper cannot honestly type must decide
+                    // what the host would declare, not inherit Boolean by
+                    // accident.
+                    other => panic!(
+                        "command_payload cannot infer a datatype for {other:?}; add \
+                         the mapping rather than letting the metric declare a type \
+                         it does not carry"
+                    ),
+                }
+                .code()
+            }),
+            is_null: value.is_none().then_some(true),
+            value: value.clone(),
             ..Default::default()
         })
         .collect();
@@ -160,6 +282,85 @@ fn command_payload(metrics: &[&str]) -> Vec<u8> {
         uuid: None,
         body: None,
     })
+}
+
+/// The one command this bridge implements, in its conformant form.
+fn rebirth_request() -> Vec<u8> {
+    command_payload(&[(
+        "Node Control/Rebirth",
+        Some(sparkplug_b::protobuf::payload::metric::Value::BooleanValue(
+            true,
+        )),
+    )])
+}
+
+/// Forces the broker to evict the bridge, so it reconnects and RE-SUBSCRIBES.
+///
+/// Connecting a second client under the bridge's own client id (its node id,
+/// `supervisor.rs:104`) makes the broker take the session away, per MQTT. The
+/// container keeps its port mapping, which a stop/start would not.
+///
+/// Both halves of the teardown matter, and the abort is the one that does.
+/// Dropping the client alone does NOT stop the eviction: the spawned task still
+/// owns the `EventLoop` and `rumqttc` reconnects internally, so it goes on
+/// re-taking the bridge's id roughly once a second for the rest of the run. That
+/// was invisible while this test ended immediately afterwards, and stopped being
+/// invisible when Story 4.7 put a command at the end of it.
+async fn evict_and_wait_for_resubscribe(port: u16) {
+    let (evictor, evictor_loop) = {
+        let mut options = MqttOptions::new(NODE_ID, "127.0.0.1", port);
+        options.set_keep_alive(Duration::from_secs(5));
+        let (client, mut eventloop) = AsyncClient::new(options, 8);
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let mut ready_tx = Some(ready_tx);
+            loop {
+                match eventloop.poll().await {
+                    Ok(Event::Incoming(Packet::ConnAck(_))) => {
+                        if let Some(tx) = ready_tx.take() {
+                            let _ = tx.send(());
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+                }
+            }
+        });
+        ready_rx.await.expect("the evictor connected");
+        (client, handle)
+    };
+    // Let the broker complete the takeover, then step aside so the bridge's own
+    // reconnect can succeed under its id.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    drop(evictor);
+    evictor_loop.abort();
+    // And let the bridge settle back onto its id before anything is sent to it.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+}
+
+/// Polls `condition` until it holds, or gives up.
+///
+/// For properties about a COUNT rather than a phrase, where `wait_for_log`'s
+/// substring search cannot express what is being waited for.
+async fn wait_for(timeout: Duration, condition: impl Fn() -> bool) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        if condition() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    condition()
+}
+
+/// How many times `needle` appears in the bridge's log.
+///
+/// Presence is not enough where a run legitimately produces the line more than
+/// once: the retained-NCMD assertion needs to know the count did NOT grow.
+fn count_in_log(path: &Path, needle: &str) -> usize {
+    std::fs::read_to_string(path)
+        .map(|log| log.matches(needle).count())
+        .unwrap_or(0)
 }
 
 /// Waits until the bridge's own log contains `needle`, or gives up.
@@ -214,10 +415,22 @@ async fn chaos_ncmd_subscribed_before_the_birth_and_every_command_ignored() {
         .env("SMARTME_BROKER_HOST", "127.0.0.1")
         .env("SMARTME_BROKER_PORT", port.to_string())
         .env("SMARTME_STATE_DIR", state_dir.0.display().to_string())
-        // The traces below ARE the acceptance criteria; a default filter that
-        // dropped INFO would make this test assert the level, not the
-        // behaviour.
-        .env("RUST_LOG", "info")
+        // NO `RUST_LOG`, deliberately, and it is removed from the inherited
+        // environment so an ambient one cannot leak in (Story 4.7).
+        //
+        // It used to be set to `info` here, with a comment explaining that the
+        // traces below ARE the acceptance criteria. That was right about the
+        // criteria and wrong about how to test them: a run that sets the filter
+        // itself asserts what an operator would see *if they configured it*,
+        // and the Story 4.6 review's finding D1 was that they would not — the
+        // default was ERROR, so every criterion written in terms of an INFO
+        // trace was dark in a real deployment while this file was green.
+        //
+        // `main.rs` now sets an explicit INFO default directive. Letting this
+        // test depend on it is what CONFIRMS that, every run, instead of
+        // assuming it: if the default regresses, the INFO assertions below go
+        // red. That is the only way this file can notice.
+        .env_remove("RUST_LOG")
         .env_remove("HTTPS_PROXY")
         .env_remove("https_proxy")
         .env_remove("ALL_PROXY")
@@ -330,14 +543,18 @@ async fn chaos_ncmd_subscribed_before_the_birth_and_every_command_ignored() {
     // ---------------------------------------------------------------- AC3 ---
     let commander = commander(port).await;
 
-    // The one command a live MQTT Engine actually sends. It must be IGNORED
-    // here: Story 4.7 owns Rebirth.
+    // A command this bridge genuinely does not implement.
+    //
+    // This used to be `Node Control/Rebirth`, which is no longer unrecognised —
+    // Story 4.7 implements it. The needle below is emitted only by the arm that
+    // throws a command away, so it now needs a command that is actually thrown
+    // away, or it would be asserting nothing.
     commander
         .publish(
             ncmd_topic(),
             QoS::AtLeastOnce,
             false,
-            command_payload(&["Node Control/Rebirth"]),
+            command_payload(&[("Node Control/Next Server", None)]),
         )
         .await
         .expect("the command is queued");
@@ -354,6 +571,20 @@ async fn chaos_ncmd_subscribed_before_the_birth_and_every_command_ignored() {
         .publish(ncmd_topic(), QoS::AtLeastOnce, false, command_payload(&[]))
         .await
         .expect("the empty command is queued");
+
+    // The NEAR MISS (Story 4.7 / AC6): the rebirth metric by name, with no
+    // value — the exact payload `..Default::default()` used to build silently.
+    // `-ncmd-rebirth-value` requires the boolean value `true`, so this is not a
+    // Rebirth Request and must NOT produce a birth.
+    commander
+        .publish(
+            ncmd_topic(),
+            QoS::AtLeastOnce,
+            false,
+            command_payload(&[("Node Control/Rebirth", None)]),
+        )
+        .await
+        .expect("the valueless rebirth is queued");
 
     // Assert the IGNORE TRACE, not the metric name.
     //
@@ -376,8 +607,18 @@ async fn chaos_ncmd_subscribed_before_the_birth_and_every_command_ignored() {
         log_tail(&log_path)
     );
     // And the trace names what arrived: AC3 requires the metric NAMES.
+    //
+    // The needle was `Node Control/Rebirth` until Story 4.7, and it is no longer
+    // discriminating: the ANSWER trace names that metric too, so this assertion
+    // would now pass on a bridge that acted on every command. It is aimed at the
+    // command that is genuinely ignored instead.
     assert!(
-        wait_for_log(&log_path, "Node Control/Rebirth", Duration::from_secs(5)).await,
+        wait_for_log(
+            &log_path,
+            "Node Control/Next Server",
+            Duration::from_secs(5)
+        )
+        .await,
         "the ignore trace did not name the metric it saw, so the operator cannot \
          tell WHICH command was ignored.\n{}",
         log_tail(&log_path)
@@ -404,19 +645,52 @@ async fn chaos_ncmd_subscribed_before_the_birth_and_every_command_ignored() {
         log_tail(&log_path)
     );
 
-    // The load-bearing half of "ignored": nothing happened. A Rebirth request
-    // that produced an NBIRTH would mean Story 4.7 had been implemented here by
-    // accident, with none of the evidence that story is going to require.
-    let rebirth = common::wait_for(&mut seen, Duration::from_secs(5), |s| {
+    // Story 4.7 / AC6 — the NEAR MISS is traced with what actually arrived.
+    //
+    // This is the whole mitigation for implementing the norm's reading
+    // literally. A strict matcher that is wrong about the encoding never fires,
+    // SILENTLY, and the bridge then reports FR19 as implemented with nothing
+    // observably wrong. The datatype and value in this line are what make such a
+    // failure diagnosable in one grep instead of invisible.
+    assert!(
+        wait_for_log(
+            &log_path,
+            "is not a Rebirth Request",
+            Duration::from_secs(15)
+        )
+        .await,
+        "a Node Control/Rebirth carrying no value was not reported as a near miss. \
+         Either it was answered — which -ncmd-rebirth-value forbids — or it was \
+         swallowed into the ordinary ignore path, where a host whose encoding this \
+         bridge does not accept looks exactly like a host that never asked.\n{}",
+        log_tail(&log_path)
+    );
+
+    // The load-bearing half of "ignored", RE-AIMED rather than deleted.
+    //
+    // It used to guard "this story implements no command", and a Rebirth request
+    // was what it fired on. Story 4.7 implements that command, so the assertion
+    // is now pointed at the four payloads above — none of which is a conformant
+    // Rebirth Request — and it has become STRONGER than it was.
+    //
+    // The reason is the trap this file used to contain: `command_payload` built
+    // metrics with no value, so the rebirth it published was never a request in
+    // the first place. The old assertion therefore held whatever the bridge did,
+    // and confirmed nothing. It now says something a broken bridge can violate:
+    // a matcher that answers on the NAME ALONE would birth here and go red, and
+    // that is exactly the liberal reading this project decided against.
+    let birth_on_a_non_request = common::wait_for(&mut seen, Duration::from_secs(5), |s| {
         s.topic.contains("/NBIRTH/")
     })
     .await;
     assert!(
-        rebirth.is_none(),
-        "a second NBIRTH followed the Node Control/Rebirth command. This story \
-         builds plumbing that ignores every command; answering one here means the \
-         behaviour exists without the conformance evidence Story 4.7 owns. (A \
-         reconnect would also produce this, and would be worth knowing about too.)"
+        birth_on_a_non_request.is_none(),
+        "an NBIRTH followed a command that is not a Rebirth Request. \
+         tck-id-operational-behavior-data-commands-ncmd-rebirth-value defines a \
+         request as carrying the boolean value true; a bridge that births on the \
+         metric NAME alone would re-announce every time a host echoed our own \
+         declaration back at us. (A reconnect would also produce this, and would be \
+         worth knowing about too.)"
     );
 
     // And the bridge is still alive after all three: no panic, no exit.
@@ -445,7 +719,7 @@ async fn chaos_ncmd_subscribed_before_the_birth_and_every_command_ignored() {
             ncmd_topic(),
             QoS::AtLeastOnce,
             false,
-            command_payload(&["Chaos/Liveness Probe"]),
+            command_payload(&[("Chaos/Liveness Probe", None)]),
         )
         .await
         .expect("the liveness probe is queued");
@@ -472,32 +746,7 @@ async fn chaos_ncmd_subscribed_before_the_birth_and_every_command_ignored() {
     // the broker to evict the older session, so the bridge is disconnected by the
     // broker rather than by anything the test does to the container — and the
     // container keeps its port mapping, which a stop/start would not.
-    let evictor = {
-        let mut options = MqttOptions::new(NODE_ID, "127.0.0.1", port);
-        options.set_keep_alive(Duration::from_secs(5));
-        let (client, mut eventloop) = AsyncClient::new(options, 8);
-        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
-            let mut ready_tx = Some(ready_tx);
-            loop {
-                match eventloop.poll().await {
-                    Ok(Event::Incoming(Packet::ConnAck(_))) => {
-                        if let Some(tx) = ready_tx.take() {
-                            let _ = tx.send(());
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
-                }
-            }
-        });
-        ready_rx.await.expect("the evictor connected");
-        client
-    };
-    // Let the broker complete the takeover, then step aside so the bridge's own
-    // reconnect can succeed under its id.
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    drop(evictor);
+    evict_and_wait_for_resubscribe(port).await;
 
     // The bridge must come back, and the SECOND birth is the marker.
     let reborn = common::wait_for(&mut seen, Duration::from_secs(30), |s| {
@@ -559,6 +808,166 @@ async fn chaos_ncmd_subscribed_before_the_birth_and_every_command_ignored() {
         subscribes[1],
         births[1]
     );
+
+    // ------------------------------------------------- Story 4.7, inverted ---
+    // The assertion this file used to make in reverse.
+    //
+    // A CONFORMANT Rebirth Request — the name AND the boolean value `true` — must
+    // now produce a birth. `tck-id-operational-behavior-data-commands-rebirth-\
+    // action-2` requires a complete BIRTH sequence on receipt.
+    //
+    // It is sent HERE, last, and not next to the other commands, for a reason
+    // that is easy to get wrong: the second-connect assertions above index into
+    // the broker's log by ordinal (`births[1]`, `subscribes[1]`) to prove the
+    // SUBSCRIBE preceded the NBIRTH on the reconnect. An extra NBIRTH published
+    // before that point would shift those indices and the ordering check would
+    // compare the rebirth's birth against the reconnect's subscribe — failing,
+    // and failing with a message about packet ordering that has nothing to do
+    // with the actual cause.
+    //
+    // The end-to-end conformance evidence for the answer (complete sequence,
+    // seq restart, unchanged bdSeq, no DATA interleaved) lives in
+    // `chaos_ncmd_rebirth.rs`, which owns AC2/AC3/AC5. What is asserted here is
+    // narrower and still worth having: the same binary, on a connection that has
+    // already reconnected once, still answers.
+    // DRAIN FIRST, and this is not tidiness.
+    //
+    // The run has just forced a broker eviction to prove property 5, so the
+    // receiver holds the RECONNECT birth — an NBIRTH that has nothing to do with
+    // any command. `wait_for` accepts the first match it finds, so without this
+    // drain the assertion below would be satisfied by that leftover, and by any
+    // further reconnect during its 20-second window. Found by the Story 4.7 code
+    // review: an assertion that accepts *any* NBIRTH cannot distinguish an answer
+    // from a reconnect, which is the one distinction it exists to make.
+    common::drain(&mut seen).await;
+
+    commander
+        .publish(ncmd_topic(), QoS::AtLeastOnce, false, rebirth_request())
+        .await
+        .expect("the conformant rebirth request is queued");
+
+    // The ANSWER's own trace, not the classification's.
+    //
+    // `"Rebirth Request accepted"` is emitted by `trace_command_outcome`, which
+    // runs BEFORE `announce` is called — so it proves only that the bytes were
+    // understood. It stays green if the `Inbound::Rebirth` arm is deleted, and if
+    // `announce` refuses to birth and publishes nothing. The Story 4.7 code review
+    // found this file resting on that needle plus an any-NBIRTH check, neither of
+    // which witnesses the answer. `announce`'s own line is emitted only after the
+    // whole sequence has been queued.
+    assert!(
+        wait_for_log(
+            &log_path,
+            "node re-announced on a Rebirth Request",
+            Duration::from_secs(10)
+        )
+        .await,
+        "the bridge never traced an ANSWER. Note what this does NOT accept: the \
+         classification trace (\"Rebirth Request accepted\") fires before the birth \
+         is attempted, so it proves the bytes were read and nothing more. An \
+         operator reading this log must be able to tell a host-requested \
+         re-announcement from a reconnect, and those have entirely different causes \
+         to go looking for. (No RUST_LOG is set in this run, so this also confirms \
+         the INFO default in main.rs is still in force.)\n{}",
+        log_tail(&log_path)
+    );
+    let answered = common::wait_for(&mut seen, Duration::from_secs(20), |s| {
+        s.topic.contains("/NBIRTH/")
+    })
+    .await;
+    assert!(
+        answered.is_some(),
+        "a conformant Node Control/Rebirth (boolean true) produced no NBIRTH on the \
+         wire. The subscription is live on a broker where MQTT Engine sends real \
+         Rebirth requests, so a request that is received, classified and then \
+         dropped is the failure FR19 exists to fix — and it is invisible from the \
+         host's side, which cannot distinguish it from a node that never heard.\n{}",
+        log_tail(&log_path)
+    );
+
+    // ------------------------------------------------------- property 6 ---
+    // A RETAINED conformant request is a REPLAY and must not be answered
+    // (ADR 0017).
+    //
+    // # The delivery has to be provoked, and getting this wrong is instructive
+    //
+    // The first version of this block published the request with `retain = true`
+    // and asserted immediately. It failed — and the production code was right.
+    // Under MQTT 3.1.1 the broker sets the retain flag on DELIVERY only when the
+    // message is sent in response to a new subscription; an ordinary live delivery
+    // to an already-subscribed client carries `retain = 0`, whatever the publisher
+    // asked for. So that test exercised the live path, where the flag is
+    // legitimately absent, and read the resulting answer as a defect.
+    //
+    // The dangerous path is the replay, and it is reached by making the bridge
+    // SUBSCRIBE again. That is also the real attack: publish once, walk away, and
+    // every future session of the bridge is handed the request at connect time,
+    // for as long as the retained message exists.
+    //
+    // `tck-id-payloads-ncmd-retain` (`Sparkplug_6_Payloads.adoc:1421`) — *"NCMD
+    // messages MUST be published with the MQTT retain flag set to false"* — is what
+    // makes rejecting it free: no conformant Host Application sends one.
+    // # The same bytes are answered once and refused once, and that is the point
+    //
+    // Publishing with `retain = true` does TWO things: it delivers the message to
+    // current subscribers, and it stores it for future ones. The live delivery
+    // reaches the bridge with `retain = 0` — see above — so it is a request like
+    // any other and IS answered. Correctly: someone published it just now.
+    //
+    // The stored copy is the exposure, and it is drawn out by the reconnect below.
+    // So the count is snapshotted AFTER the live answer has landed, and what must
+    // not grow is the count across the REPLAY. Getting this wrong is how the first
+    // version of this block failed: it snapshotted before the live delivery and
+    // then blamed the bridge for answering a request that had genuinely been sent.
+    let answers_at_start = count_in_log(&log_path, "node re-announced on a Rebirth Request");
+    commander
+        .publish(ncmd_topic(), QoS::AtLeastOnce, true, rebirth_request())
+        .await
+        .expect("the retained rebirth request is queued");
+    assert!(
+        wait_for(Duration::from_secs(20), || {
+            count_in_log(&log_path, "node re-announced on a Rebirth Request") > answers_at_start
+        })
+        .await,
+        "the LIVE delivery of the retained publish was not answered. It arrives with \
+         retain=0 (the broker sets the flag only on a subscription replay), so it is \
+         an ordinary request and refusing it would be over-broad.\n{}",
+        log_tail(&log_path)
+    );
+    let answers_before_replay = count_in_log(&log_path, "node re-announced on a Rebirth Request");
+
+    evict_and_wait_for_resubscribe(port).await;
+
+    assert!(
+        wait_for_log(&log_path, "RETAIN flag set", Duration::from_secs(30)).await,
+        "the bridge re-subscribed, the broker replayed the retained \
+         Node Control/Rebirth, and nothing said so. If it is silently answered \
+         instead, one publish by any client on this unauthenticated broker makes \
+         every future session answer a request nobody is sending — with no attacker \
+         present and nothing in the log to distinguish it from a real host.\n{}",
+        log_tail(&log_path)
+    );
+    // The count, not the presence: a reconnect legitimately produces an NBIRTH, so
+    // "no NBIRTH" cannot be asserted across one. What must not have happened is
+    // another ANSWER.
+    assert_eq!(
+        count_in_log(&log_path, "node re-announced on a Rebirth Request"),
+        answers_before_replay,
+        "a REPLAYED Node Control/Rebirth was answered. The broker hands a retained \
+         message to every subscriber on every SUBSCRIBE, so answering one is \
+         self-sustaining: it fires again on the next reconnect, and the one after \
+         that, indefinitely.\n{}",
+        log_tail(&log_path)
+    );
+    // Clear it. The container dies with the test, so this is hygiene rather than
+    // necessity — but a retained command left on a broker is exactly the state
+    // this property exists to warn about, and leaving one behind in a test that
+    // teaches its danger would be poor form. An empty payload is how MQTT deletes
+    // a retained message.
+    commander
+        .publish(ncmd_topic(), QoS::AtLeastOnce, true, Vec::new())
+        .await
+        .expect("the retained message is cleared");
 
     // Stop it the way a container runtime does, so the run leaves nothing behind.
     let _ = Command::new("kill")

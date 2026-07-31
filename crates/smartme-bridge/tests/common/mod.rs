@@ -180,6 +180,19 @@ pub async fn named_subscriber_on(host: &str, port: u16, client_id: &str) -> mpsc
     rx
 }
 
+/// Discards everything already buffered, so a later `wait_for` cannot be
+/// satisfied by a message that arrived before the thing it is waiting on.
+///
+/// Added by the Story 4.7 code review. `wait_for` accepts the FIRST match it
+/// finds, which makes it structurally unable to distinguish "the event I provoked"
+/// from "an event of the same shape that was already in the queue" — and
+/// `chaos_ncmd_subscription` forces a broker eviction, and therefore a reconnect
+/// BIRTH, shortly before asserting that a command produced a BIRTH. Draining is
+/// what makes that assertion about the command.
+pub async fn drain(rx: &mut mpsc::Receiver<Seen>) {
+    while rx.try_recv().is_ok() {}
+}
+
 /// Waits for the first message matching `predicate`, or gives up.
 pub async fn wait_for(
     rx: &mut mpsc::Receiver<Seen>,

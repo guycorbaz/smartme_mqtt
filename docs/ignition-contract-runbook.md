@@ -122,6 +122,17 @@ Check the Ignition logs, not just the tag values.
 
 A pass is only meaningful against a stated version, so add a row rather than editing one.
 
+> **The contract is now v3 and no run has been recorded against it** (Story 4.7, 2026-07-30). The
+> change is **additive**: the NBIRTH declares one new metric, `Node Control/Rebirth` — boolean,
+> `false` — which a consumer sees as a new tag in its browse tree. Nothing was removed or renamed, so
+> every expectation in the steps above still holds; the two rows below remain valid for what they
+> attest.
+>
+> This is the reason the version was bumped at all rather than left at 2 on the grounds that the norm
+> mandates the metric. **This table is indexed by the contract version**, so without the bump two
+> rows both reading `v2` would attest to two different tag sets — and the run that finally exercises
+> a rebirth (Story 4.8) would be indistinguishable from the 2026-07-26 one.
+
 > The MQTT Engine **module** version is not recorded above and should be, next time: it is the
 > component that decodes Sparkplug, so it governs conformance more directly than the Ignition
 > platform version does. Note also that Cirrus Link's published documentation for these modules

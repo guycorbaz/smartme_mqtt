@@ -58,9 +58,11 @@ Recorded here because the decision rests on a mixture and the mixture should be 
 
 - The bridge holds **no MQTT subscription of any kind** — one `tracing_subscriber` initialiser and
   two comments are the only hits. **Superseded 2026-07-29 by Story 4.6**, which added a QoS 1
-  subscription to `spBv1.0/{group}/NCMD/{node}`, issued before every birth. The bridge still holds no
-  STATE subscription and still answers no command; see *What Story 4.6 changed* below, which was
-  written rather than the line simply corrected, because this line is a premise of the decision.
+  subscription to `spBv1.0/{group}/NCMD/{node}`, issued before every birth. **Superseded again
+  2026-07-30 by Story 4.7**, which answers `Node Control/Rebirth` with a complete birth sequence.
+  The bridge still holds no STATE subscription. See *What Story 4.6 changed* and *What Story 4.7
+  changed* below, both written rather than the line simply corrected, because this line is a premise
+  of the decision.
 - Its NBIRTH is published at **QoS 0 with `retain=false`**, so the broker keeps no copy.
 - It has **no store-and-forward**; a full outbound queue is a traced drop.
 - MQTT Engine v5.0.0-rc1 publishes a **fully conformant** `spBv1.0/STATE/SCADA` birth — checked
@@ -97,6 +99,10 @@ there being no *host-initiated* route back to a correct tag tree, and that needs
 receive and answer. Story 4.6 built the first and deliberately not the second. A Rebirth that arrives
 and is ignored repairs exactly as much as one that never arrives: nothing.
 
+> **⏹ The sentence immediately above is SUPERSEDED as of Story 4.7 (2026-07-30).** The bridge now
+> answers. It is left in place because it is the reasoning that produced this decision, not because
+> it still describes the system — see *What Story 4.7 changed* below before citing it.
+
 **Why the case for 4.7 is now stronger.** Before 4.6, "the bridge cannot be reborn by its host" named
 an absent mechanism — two pieces of work, easy to defer as a unit. After 4.6 it names a **single
 missing handler** sitting behind a subscription that is already live in production-shaped conditions.
@@ -108,6 +114,45 @@ Host Application sends Rebirth requests. Until 4.7 lands, every one of them is a
 line. That is safe — Story 4.6 exists to make the ignoring safe rather than silent — but it is a
 state with a cost that grows the longer it lasts, which is another reason not to re-order 4.5 ahead.
 
+## What Story 4.7 changed — and why this ADR's argument is now SPENT
+
+Added 2026-07-30, when Story 4.7 landed. This section is not a correction of wording. The decision
+recorded above was an *order*, and the reason for that order has now been consumed by carrying it
+out. Saying so is the point of writing it down.
+
+**The load-bearing premise is gone.** *"A Rebirth that arrives and is ignored repairs exactly as much
+as one that never arrives: nothing."* That sentence was true when written and is now false. A Rebirth
+request published on this broker reaches the driver, is recognised by name and boolean value, and is
+answered with a complete NBIRTH + DBIRTH sequence under an unchanged `bdSeq`. Seven conformance rows
+moved from `gap (unimplemented)` to `conformant`.
+
+**So there is now a host-initiated route back to a correct tag tree**, which is precisely the thing
+this ADR said did not exist and used as its reason for sequencing 4.7 first. The reason has been
+spent by being acted on. That is the normal life of a sequencing argument, and it is worth being
+explicit about because a spent argument left in place reads exactly like a live one.
+
+**Story 4.5 must therefore be re-weighed, not inherited.** The instruction to 4.5 above — that it
+justify itself rather than lean on this ADR — was written for this moment. What 4.5 now has to
+answer is a narrower and harder question than the one it would have faced before 4.7:
+
+- The repair exists but is **host-initiated**. It works if and only if the host asks. Ignition's MQTT
+  Engine does ask on its own when it receives data from a node whose birth it never saw, which is the
+  main case — but that is a fact about one host, and it is *reasoned*, not measured (see the
+  hypothesis below).
+- A Primary-Host wait would give a **node-initiated** path instead. The Story 4.4 measurement already
+  found that PHID-wait without store-and-forward preserves no measurement, which argues against it on
+  its own merits and is untouched by anything 4.7 did.
+- So the case for 4.5 is not "there is no repair path" — that is settled — but "is a host-initiated
+  path sufficient, given a host that may not ask?" **Neither this ADR nor Story 4.7 answers that.**
+
+**A hypothesis for Story 4.8 to settle, recorded as reasoning and not as a finding.** MQTT Engine may
+render a Rebirth control only for a node that *declared* the metric. Until Story 4.7 this bridge
+declared none. If that is how it works, then the sentence above — *"a real Host Application sends
+Rebirth requests \[and\] every one of them is answered with a log line"* — describes a flow that has
+**never actually occurred**, and the hazard 4.6 created was theoretical. That would not change the
+decision, which was right for other reasons, but it would change what the pre-production run is
+expected to show. It is measurable in Story 4.8 and is not measured here.
+
 ## Consequences
 
 - `epics.md` records the Epic 4 execution order with 4.6/4.7 ahead of 4.5, pointing here.
@@ -115,6 +160,13 @@ state with a cost that grows the longer it lasts, which is another reason not to
 - Story 4.5, when drafted, carries the instruction above about its justification.
 - Story 4.7 carries the existing instruction from [#32](https://github.com/guycorbaz/smartme_mqtt/issues/32)
   to re-examine RBE once Rebirth lands, since the periodic publish currently substitutes for it.
+  **Discharged 2026-07-30, without implementing RBE**: the blocker has lifted and the deviation's
+  verdict is unchanged, but its *reason* moved from "cannot safely be changed" to "has not been
+  decided". Recorded in the matrix under `principles-rbe-recommended`; the decision itself belongs
+  to #32's own story.
+- **This ADR's own argument is spent as of Story 4.7** (see the section above). Story 4.5 is to be
+  decided on its own evidence. Any future document citing this ADR for *"there is no host-initiated
+  repair path"* is citing a premise that no longer holds.
 
 ## Alternatives considered
 

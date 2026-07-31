@@ -37,7 +37,7 @@
 #   Ignition contract test (human action required — stays backlog until Guy runs it).
 
 generated: 2026-07-25
-last_updated: 2026-07-29
+last_updated: 2026-07-31
 project: smartme_mqtt
 project_key: NOKEY
 tracking_system: file-system
@@ -232,10 +232,85 @@ development_status:
   # and the case for 4.7 before 4.5 is STRONGER — a two-part absent mechanism is now a
   # single missing handler behind a live subscription.
   # HAZARD CREATED: the subscription is open on a broker where a live MQTT Engine sends
-  # real Rebirth requests. Until 4.7, every one is answered with a log line.
+  # real Rebirth requests. Until 4.7 landed, every one was answered with a log line;
+  # 4.7 answers them for real. (Tense corrected by the 4.7 code review: the sentence
+  # was left in the present tense in the file 4.7 itself edited.)
   # Issue #23 is now half true and wants a comment; NOT done (outward action, unasked).
   4-6-ncmd-subscription-plumbing: done
-  4-7-node-control-rebirth-answer: backlog
+  # 2026-07-30: implemented. All 7 ACs met; 17 falsification mutations, all red.
+  # CONTRACT_VERSION 2 -> 3 (ADDITIVE: the NBIRTH gained Node Control/Rebirth).
+  # The runbook's run table is indexed by that number, so without the bump two
+  # rows reading v2 would attest to two different tag sets.
+  # Seven conformance rows moved gap -> conformant (6 in ch.5, 1 in ch.6); three
+  # tallies recomputed; 274 of 303 UNCHANGED because verdicts moved and no row
+  # was added. Chapter 4's own copy of the clause deliberately left alone --
+  # topics-nbirth-rebirth-metric has no row and belongs to Story 4.19.
+  #
+  # AC3 was the assertion at risk of being VACUOUS and it needed a different test
+  # design. Every other chaos test points the bridge at TEST-NET-1, so no reading
+  # is ever fetched and NO DDATA IS EVER PUBLISHED: "no DATA interleaves the birth
+  # sequence" would have held over an empty stream, green forever and green against
+  # every mutation that breaks the clause. chaos_ncmd_rebirth therefore drives the
+  # driver in-process with a real 20 ms reading stream, asserts the stream is
+  # flowing BEFORE asserting what is absent from it, and observes from a real
+  # broker + independent subscriber. Mutation 13 (answer deferred behind a flag)
+  # puts exactly 1 DDATA in the window and turns it red.
+  #
+  # THE 4.6 CHAOS TRAP WAS REAL: command_payload built metrics with
+  # ..Default::default(), so value: None -- and a valueless Node Control/Rebirth is
+  # not a request. rebirth.is_none() therefore held after a PERFECT implementation
+  # and after a COMPLETELY BROKEN one, while its failure message warned about
+  # answering too eagerly. Helper now takes a value; both shapes are sent and they
+  # assert opposite things. RUST_LOG=info also REMOVED from that run (4.6 review
+  # finding D1): the INFO assertions now ride on main.rs's default directive, and
+  # reverting it turns them red.
+  #
+  # Found by following the change rather than the list: (a) the manual announced
+  # "Currently 2" in two places and had no row for the new metric -- wrong by
+  # silence, which no grep for a false sentence reaches; (b) a THIRD copy of the
+  # "answers no command" premise at conformance:187; (c) all 14 mqtt_driver.rs line
+  # citations went stale AGAIN, exactly as the 4.6 review found, and again after
+  # cargo fmt moved them a second time; (d) chaos_ncmd_subscription's evictor task
+  # survived drop(evictor) and re-took the bridge's client id ~1/s for the rest of
+  # the run -- invisible until this story added a command at the end, and caught by
+  # the "Rebirth Request accepted" TRACE assertion, not by the presence of an
+  # NBIRTH, which could not tell an answer from a reconnect.
+  #
+  # ADR 0016's SEQUENCING ARGUMENT IS SPENT. Its load-bearing premise -- "a Rebirth
+  # that arrives and is ignored repairs exactly as much as one that never arrives"
+  # -- is now false, in both copies (the ADR and primary-host-state-observation.md,
+  # which had PREDICTED this moment and said to read it after 4.7 lands).
+  # STORY 4.5 MUST BE RE-WEIGHED, NOT INHERITED: the question is no longer "is
+  # there a repair path" but "is a HOST-INITIATED path sufficient, given a host
+  # that may not ask".
+  # RBE (#32) deliberately NOT implemented: blocker lifted, verdict unchanged, and
+  # its reason moved from "cannot safely be changed" to "has not been decided".
+  # DCMD n/a verdicts annotated as TIME-LIMITED (#38), not re-verdicted.
+  # 4.7 claims conformance to the norm, NOT compatibility with Ignition -- no real
+  # MQTT Engine request has been observed or answered. Story 4.8 owns that, with a
+  # hypothesis to settle: Engine may only offer a Rebirth control for a node that
+  # DECLARED the metric, in which case the flow ADR 0016 described never occurred.
+  # 2026-07-31, code review (3 adversarial layers, fresh contexts, all read-only --
+  # verified byte-identical by sha256sum over 43 source files). 33 patches applied,
+  # 6 decisions taken, 1 deferred item closed by BUILDING it, 3 dismissed.
+  # ADR 0017 + issue #39: a RETAINED NCMD was honoured. One publish on this
+  # unauthenticated broker would have made every future session answer a request
+  # nobody was sending -- self-sustaining, and identical in the log to a real host.
+  # The near-miss detector was NARROWER than the matcher it guards: a name missing by
+  # case, whitespace, or the SPEC'S OWN 'Node Control/Refresh' slip
+  # (Sparkplug_5:950, contradicting every tck-id in its own section) vanished into
+  # the unrecognised path. The story's whole residual-risk argument rested on it.
+  # AC7 FAILED A SIXTH TIME: a fourth tally still read 50 gaps against a table saying
+  # 43; five NBIRTH metric-count statements; an evidence cell naming a test the story
+  # deleted; and the module doc of the test file the story REWROTE still said "every
+  # command is thrown away safely". All 41 code citations re-pointed and each verified
+  # by printing the line it names.
+  # A falsification record was not reproducible: log.contains('3') was satisfied by
+  # the log's own RFC-3339 timestamp, so AC6's datatype half had never been falsified.
+  # 13 review mutations run; one is recorded GREEN because the MUTATION missed its
+  # target, not the test. ci-local.sh EXIT=0 read from the file -- the harness
+  # reported "exit code 0" on a run whose log said clippy had failed.
+  4-7-node-control-rebirth-answer: done
   4-8-tier-3-gate-covers-ncmd-rebirth: backlog
   4-9-sigterm-discriminator-survives-per-connect-bdseq: backlog
   4-10-own-the-reconnect-loop-bdseq-per-connect: backlog

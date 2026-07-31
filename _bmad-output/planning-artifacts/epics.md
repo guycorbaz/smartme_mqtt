@@ -914,20 +914,55 @@ So that I can resynchronise without waiting for the bridge to reconnect on its o
 
 **Acceptance Criteria:**
 
-**Given** an NCMD carrying `Node Control/Rebirth` set true
+*Three criteria were written here at drafting. **Two were amended and four added** when the story was
+contexted (2026-07-30) and carried back here after implementation. The reasons are recorded in the
+story file under* Dev Notes → What the epic gets wrong, and what it leaves out; *the two that matter
+most are that the epic never mentioned the metric five MUST clauses require in every NBIRTH, and
+that its cloud-unreachable criterion, implemented literally, would have destroyed true history.*
+
+**AC1 — the NBIRTH declares the command** *(added)*
+**Given** any NBIRTH — first birth, reconnect birth, or rebirth answer
+**Then** it carries a metric named exactly `Node Control/Rebirth`, datatype `Boolean`, value `false`, and **no alias**
+**And** it is on *every* NBIRTH, not only the first.
+*Five MUSTs in three chapters, all unmet before this story: `tck-id-topics-nbirth-rebirth-metric`, `tck-id-payloads-nbirth-rebirth-req`, and `-rebirth-name` / `-rebirth-datatype` / `-rebirth-value`. Without the metric a host has no declared endpoint to address, so the handler is unreachable by a conformant host.*
+
+**AC2 — a request is answered with a complete BIRTH sequence**
+**Given** an NCMD carrying `Node Control/Rebirth` with boolean value `true`
 **When** the driver handles it
-**Then** it republishes NBIRTH followed by one DBIRTH per meter, with `seq` reset per the specification
-**And** the re-announced readings follow the existing degradation rule — `Good` becomes `Stale`, never the reverse — and carry the reading's own `ValueDate`, never `now`.
+**Then** it republishes NBIRTH followed by one DBIRTH per meter, `seq` reset to 0 and continuing 1, 2, …
+**And** the answer is traced at **INFO**, naming the topic — visible under the default log filter, with no `RUST_LOG` set.
 
-**Given** a rebirth request while the cloud is unreachable
-**When** the bridge answers
-**Then** the declared metrics carry no value and quality `Stale`, exactly as at cold start — a rebirth never invents a reading.
+**AC3 — DATA stops on receipt and does not resume until the sequence is out** *(added)*
+**Then** no DATA message is published between the request and the last DBIRTH
+**And** the property is asserted by a test that would go red if a DATA could interleave — not argued from the shape of the loop.
+*`-rebirth-action-1` is a MUST the epic omitted entirely. The bridge satisfies it by construction, which is exactly why it needed an assertion.*
 
-**Given** the rebirth is answered
-**When** the `bdSeq` is inspected
-**Then** it is unchanged: a rebirth re-announces a session, it does not open one.
+**AC4 — the answer re-announces what is known, and never invents a reading** *(amended)*
+**Given** a meter that has **never** produced a reading
+**Then** its DBIRTH metrics are valueless (`Null(Double)`) with quality `Stale`, stamped with the birth's own timestamp — identical to cold start.
+**Given** a meter that **has** a reading, however old
+**Then** it is re-declared with its **own `ValueDate`** as the payload timestamp, never `now`, and its quality is degraded, never upgraded.
+*The epic said a rebirth during a cloud outage yields metrics "with no value and quality `Stale`, exactly as at cold start". That is right for the first case and **wrong** for the second: blanking a value the bridge can account for destroys true history on the grounds that the cloud is currently down, which has no bearing on whether the last reading was real. It would also have turned an existing, correct test red.*
 
-*Unblocks a recorded deviation. `tck-id-principles-rbe-recommended` says data SHOULD NOT be published periodically; the bridge publishes on every poll, and one of the author's four meters is physically unplugged, so byte-identical content goes out for it roughly 17 000 times a day. Report-by-exception cannot be implemented before this story, because the periodic publish is what currently substitutes for the missing Rebirth — without it a late-joining consumer would never learn an unchanging meter's value. **When this story lands, re-examine the RBE deviation in `docs/sparkplug-conformance.md`** ([#32](https://github.com/guycorbaz/smartme_mqtt/issues/32)). Recorded 2026-07-28; the PRD and architecture were corrected then, having claimed report-by-exception the bridge has never done.*
+**AC5 — a rebirth re-announces a session, it does not open one** *(amended)*
+**Given** a rebirth is answered
+**Then** the NBIRTH's `bdSeq` is unchanged from the will registered at CONNECT
+**And** the assertion is made **through the NCMD path**, not through the reconnect path that already has coverage.
+*`-rebirth-action-3`. Concretely: `new_session()` must not be called on this path.*
+
+**AC6 — the norm's reading, and a trace that records what actually arrived** *(added)*
+**Given** `Node Control/Rebirth` whose value is boolean `false`, non-boolean, or absent
+**Then** it is **not** answered — `-ncmd-rebirth-value` defines the request as carrying `true`
+**And** it is traced distinctly from both an unrecognised command and an answered one, recording the metric's **datatype and value exactly as received**
+**And** an alias-addressed metric with no name is not treated as a request.
+*A strict matcher's failure mode is that it never fires, silently. The trace is the whole mitigation, and it is what lets the Story 4.8 run diagnose itself.*
+
+**AC7 — every document and test that says the bridge answers no command is corrected** *(added)*
+**Then** each falsified passage is amended or explicitly confirmed still-true with its reason, reported as a **per-passage table**
+**And** the seven conformance rows this story owns move off `gap (unimplemented)`, with three tallies recomputed
+**And** `chaos_ncmd_subscription`'s inverted assertions are re-aimed rather than deleted.
+
+*Unblocks a recorded deviation. `tck-id-principles-rbe-recommended` says data SHOULD NOT be published periodically; the bridge publishes on every poll, and one of the author's four meters is physically unplugged, so byte-identical content goes out for it roughly 17 000 times a day. Report-by-exception could not be implemented before this story, because the periodic publish is what substituted for the missing Rebirth — without it a late-joining consumer would never learn an unchanging meter's value. **Discharged 2026-07-30 without implementing RBE:** the blocker has lifted, the deviation's verdict is unchanged, and its *reason* moved from "cannot safely be changed" to "has not been decided". The residual question — a host that never asks never learns — belongs to [#32](https://github.com/guycorbaz/smartme_mqtt/issues/32) and its own story. Recorded 2026-07-28; the PRD and architecture were corrected then, having claimed report-by-exception the bridge has never done.*
 
 ### Story 4.8: Extend the Tier-3 gate to NCMD/Rebirth — close NFR17
 

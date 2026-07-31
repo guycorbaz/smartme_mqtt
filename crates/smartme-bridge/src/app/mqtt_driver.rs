@@ -17,6 +17,22 @@
 //! node dies and nobody is told, which is the silent lie this project exists to
 //! prevent.
 //!
+//! # The seventh path: a BIRTH that follows no CONNACK (Story 4.7)
+//!
+//! The six steps above are the only way a session STARTS, and reading them as
+//! the only way a BIRTH is published would be wrong. A Host Application can send
+//! a `Node Control/Rebirth` request at any time, and the answer is step 6 alone:
+//! a complete NBIRTH + DBIRTH sequence, published without steps 1–5 having run
+//! again.
+//!
+//! Everything the first six steps establish stays as it was. In particular the
+//! session number does NOT advance —
+//! `tck-id-operational-behavior-data-commands-rebirth-action-3` requires the
+//! rebirth's NBIRTH to carry the same `bdSeq` as the will registered at CONNECT,
+//! because no new MQTT session is being established. The will the broker holds
+//! is still the right certificate for the session that is running; a rebirth
+//! re-announces it rather than replacing it. See [`announce`].
+//!
 //! # Why step 5 precedes step 6 (Story 4.6)
 //!
 //! `tck-id-message-flow-edge-node-ncmd-subscribe` and the section preamble that
@@ -184,6 +200,15 @@ enum Transport {
 struct Command {
     topic: String,
     payload: Vec<u8>,
+    /// The MQTT retain flag as it arrived.
+    ///
+    /// Carried rather than discarded because it changes what the payload MEANS.
+    /// `tck-id-payloads-ncmd-retain` (`Sparkplug_6_Payloads.adoc:1421`): *"NCMD
+    /// messages MUST be published with the MQTT retain flag set to false"* — so a
+    /// retained NCMD is not something a conformant Host Application can have
+    /// sent, and acting on one is acting on a message nobody sent now. See
+    /// [`classify`].
+    retained: bool,
 }
 
 /// Bound of the inbound-command queue.
@@ -191,6 +216,23 @@ struct Command {
 /// Small on purpose, and paired with a traced drop rather than a block — see
 /// [`pump_transport`]. Unbounded would trade a stall for unbounded memory.
 const COMMAND_QUEUE: usize = 8;
+
+/// Bound on an inbound MQTT packet, in bytes.
+///
+/// The same value `rumqttc` defaults to, set EXPLICITLY. A bound that
+/// `AC-LEAK-01` relies on for bounded memory must not be able to change under a
+/// dependency bump with nothing failing, and a reader must be able to find it in
+/// this repository rather than in a vendor's `Default` impl. See where it is
+/// applied in [`run`] for the exposure it does and does not close.
+const MAX_INCOMING_PACKET: usize = 10 * 1024;
+
+/// Bound on an outbound MQTT packet, in bytes.
+///
+/// Generous by a wide margin: the largest thing this bridge publishes is a DBIRTH
+/// carrying two metrics. Stated for the same reason as [`MAX_INCOMING_PACKET`] —
+/// so that the day a payload grows toward it, the limit is somewhere a grep can
+/// find.
+const MAX_OUTGOING_PACKET: usize = 10 * 1024;
 
 /// What the broker granted, distilled from the SubAck return codes.
 ///
@@ -244,20 +286,235 @@ fn granted(codes: &[SubscribeReasonCode]) -> Granted {
     }
 }
 
+/// The name of the one command this bridge implements.
+///
+/// Re-exported from the publisher rather than spelled again: the string a host
+/// addresses is the same string the NBIRTH declares, and two copies can drift
+/// apart with nothing failing — the handler would simply stop matching what the
+/// birth advertises, silently.
+use crate::adapters::sparkplug_publisher::METRIC_NODE_CONTROL_REBIRTH;
+
 /// How an inbound command payload was understood.
 ///
-/// The bridge recognises NO command yet — `Node Control/Rebirth` is Story 4.7 —
-/// so every well-formed payload lands in `Unrecognised` and is dropped. Nothing
-/// here is a quality or staleness verdict: this classifies bytes for a log line,
-/// and the driver still decides no truth.
+/// This classifies BYTES for a log line and for one decision. It is deliberately
+/// not the action: `classify` recognises, [`trace_command_outcome`] says what
+/// arrived, and the driver's command arm acts. Keeping the three apart is what
+/// lets the next command — a meter relay, which switches physical hardware — add
+/// an authorisation step between the second and the third without restructuring
+/// anything. Do not fuse recognition and action into one match arm because there
+/// is currently only one command.
+///
+/// Nothing here is a quality or staleness verdict: the driver still decides no
+/// truth.
 #[derive(Debug, PartialEq, Eq)]
 enum Inbound {
     /// The bytes are not a Sparkplug payload. Expected input, not a bug.
     Undecodable(String),
     /// It decoded and carried nothing to act on.
     NoMetrics,
+    /// A conformant Rebirth Request: a metric named `Node Control/Rebirth`
+    /// carrying the boolean value `true`
+    /// (`tck-id-operational-behavior-data-commands-ncmd-rebirth-name` and
+    /// `-rebirth-value`).
+    Rebirth {
+        /// Any OTHER metrics the same payload carried, which are ignored.
+        ///
+        /// Ignored is not the same as unseen. This arm used to return before the
+        /// name list was built, so a payload of
+        /// `["Node Control/Next Server", "Node Control/Rebirth"=true]` was
+        /// answered and the host was told nothing about the command that was
+        /// discarded — while the module advertises that nothing is ignored
+        /// silently. Found by the Story 4.7 code review. Capped at
+        /// [`MAX_TRACED_METRICS`].
+        ignored_alongside: Vec<String>,
+    },
+    /// Something addressed the rebirth endpoint and is NOT a Rebirth Request —
+    /// the near miss, and the reason this variant exists at all.
+    ///
+    /// `-ncmd-rebirth-value` defines a request as carrying `true`, and this
+    /// bridge implements the norm's reading. The failure mode of a strict
+    /// matcher is that it never fires, SILENTLY, if a live host encodes the
+    /// request some other way: the bridge would then report FR19 as implemented
+    /// with nothing observably wrong anywhere. That is this project's signature
+    /// failure shape — the contract-v1 quality codes, the four Epic 1 tests, the
+    /// `bdSeq` tautology.
+    ///
+    /// So a near miss is recorded with the exact bytes that missed. It is not a
+    /// courtesy: it is the whole mitigation, and it is what makes the
+    /// pre-production Ignition run (Story 4.8) diagnose itself in one log line
+    /// instead of presenting as silence.
+    ///
+    /// # The detection net is WIDER than the action, deliberately
+    ///
+    /// [`NearMiss`] carries which way it missed. The action requires an exact
+    /// name and boolean `true`; detection also catches a name that only nearly
+    /// matches, and a retained message. A detector no wider than the matcher it
+    /// guards cannot report the matcher's own blind spot — which was the whole
+    /// point of having one. Added by the Story 4.7 code review.
+    RebirthNearMiss {
+        /// Which clause it missed.
+        reason: NearMiss,
+        /// The offending metrics, capped at [`MAX_TRACED_METRICS`].
+        received: Vec<RebirthAsReceived>,
+        /// How many matched in total, before the cap.
+        total: usize,
+    },
     /// It decoded and named metrics, none of which this bridge implements.
-    Unrecognised(Vec<String>),
+    Unrecognised {
+        /// The names, capped at [`MAX_TRACED_METRICS`].
+        names: Vec<String>,
+        /// How many metrics the payload carried, before the cap.
+        total: usize,
+    },
+}
+
+/// Which way a near miss missed.
+///
+/// One variant per clause, because the diagnosis differs: a `false` value is a
+/// host doing something deliberate, a nearly-right name is a host built against
+/// a different spelling, and a retained message is not a live request at all.
+/// Three distinct traces, and `an_answered_a_missed_and_an_unknown_command_do_not_read_alike`
+/// holds them apart.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum NearMiss {
+    /// The name matched exactly and the value was not boolean `true`.
+    /// `tck-id-operational-behavior-data-commands-ncmd-rebirth-value`.
+    ValueNotTrue,
+    /// The name only NEARLY matched — case, surrounding whitespace, or the
+    /// specification's own `Node Control/Refresh` slip. See [`nearly_rebirth`].
+    NameOnlyNearly,
+    /// It arrived with the MQTT retain flag set, so it is not a request a
+    /// conformant host can have sent. `tck-id-payloads-ncmd-retain`.
+    Retained,
+}
+
+/// A metric that addressed the rebirth endpoint, exactly as it came off the wire.
+///
+/// Every field is what ARRIVED, never what was expected — a trace that renders
+/// the expectation instead of the observation cannot diagnose a mismatch, which
+/// is the only thing it is here to do.
+#[derive(Debug, PartialEq, Eq)]
+struct RebirthAsReceived {
+    /// The name as received. Load-bearing for [`NearMiss::NameOnlyNearly`],
+    /// where the spelling IS the diagnosis, and worth having on the other arms
+    /// so one trace shape serves all three.
+    name: String,
+    /// The declared datatype code, or `None` if the metric declared none.
+    /// `Boolean` is 11.
+    datatype: Option<u32>,
+    /// The value, rendered from the decoded wire variant.
+    value: String,
+}
+
+/// Bound on how many metrics any one command trace renders.
+///
+/// The per-field cap ([`MAX_TRACED_CHARS`]) bounds one metric; this bounds the
+/// LINE. Without it a ~10 KB NCMD carrying thousands of minimal metrics renders
+/// ~13× its own size into the log — synchronously, on the task that also
+/// publishes DATA — so the count achieves exactly the disk-fill the per-field cap
+/// was written to prevent. Found by the Story 4.7 code review; the cap that
+/// shipped bounded only the value.
+const MAX_TRACED_METRICS: usize = 8;
+
+/// Bound on how many characters any one rendered field carries.
+const MAX_TRACED_CHARS: usize = 200;
+
+/// Caps one rendered field, and SAYS when it capped: a line that has been
+/// shortened must not read like a complete one.
+fn cap_chars(text: &str) -> String {
+    let count = text.chars().count();
+    if count <= MAX_TRACED_CHARS {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(MAX_TRACED_CHARS).collect();
+    format!("{head}… <truncated from {count} chars>")
+}
+
+/// Renders a metric value for the near-miss trace.
+///
+/// The protobuf variant name is kept (`BooleanValue`, `IntValue`, …) because it
+/// IS the diagnosis: a host that encodes the request as `IntValue(1)` rather
+/// than `BooleanValue(true)` is the case this trace exists to make visible, and
+/// a renderer that printed only `1` would hide exactly that.
+///
+/// # The two places it does not reproduce the bytes
+///
+/// The broker is unauthenticated, so anyone on the LAN can publish an NCMD, and
+/// a string or bytes value has no bound. Those two variants are shortened BEFORE
+/// they are formatted: `format!("{value:?}")` on a hostile 10 KB string would
+/// materialise the whole thing — with Debug escaping able to multiply it — and a
+/// cap applied afterwards has already paid the cost it exists to avoid. Every
+/// other variant is small by construction, so it is rendered and then capped.
+fn describe_value(value: Option<&sparkplug_b::protobuf::payload::metric::Value>) -> String {
+    use sparkplug_b::protobuf::payload::metric::Value;
+
+    let Some(value) = value else {
+        // NO value field at all. Note what this does NOT cover: `is_null` is a
+        // SEPARATE field on the metric, and a payload may legally set
+        // `is_null: true` while also carrying a value. This function never sees
+        // `is_null`, so `classify` is where that combination is judged — a
+        // metric carrying `BooleanValue(true)` is a request whatever `is_null`
+        // says, because the value is what -ncmd-rebirth-value constrains.
+        // (The comment here previously claimed both cases landed in this branch,
+        // which was false; corrected by the Story 4.7 code review.)
+        return "<no value>".to_string();
+    };
+    match value {
+        Value::StringValue(text) if text.chars().count() > MAX_TRACED_CHARS => {
+            let head: String = text.chars().take(MAX_TRACED_CHARS).collect();
+            format!(
+                "StringValue({head:?}… <truncated from {} chars>)",
+                text.chars().count()
+            )
+        }
+        Value::BytesValue(bytes) if bytes.len() > MAX_TRACED_CHARS => {
+            format!(
+                "BytesValue(<{} bytes, first {MAX_TRACED_CHARS}: {:?}>)",
+                bytes.len(),
+                &bytes[..MAX_TRACED_CHARS]
+            )
+        }
+        other => cap_chars(&format!("{other:?}")),
+    }
+}
+
+/// Whether a name is the exact metric the norm names.
+///
+/// The ACTION requires this and nothing looser: three chapters spell
+/// `Node Control/Rebirth`, and answering a different spelling would be inventing
+/// a contract no host is bound by.
+fn is_rebirth(name: &str) -> bool {
+    name == METRIC_NODE_CONTROL_REBIRTH
+}
+
+/// Whether a name only NEARLY matches — for DETECTION, never for the action.
+///
+/// Three shapes, each a real host mistake rather than a hypothetical:
+///
+/// - **Case and surrounding whitespace.** A host that lower-cases its tag names,
+///   or emits a trailing space, produces a name this bridge must not answer and
+///   an operator must be able to see.
+/// - **`Node Control/Refresh`.** The specification contradicts itself:
+///   `Sparkplug_5_Operational_Behavior.adoc:950` says a host *"can send a
+///   'Rebirth Request' using the 'Node Control/Refresh' metric"*, while every
+///   `tck-id` in that same section — `-rebirth-name` at `:956`, `-ncmd-rebirth-name`
+///   at `:973` — says `Node Control/Rebirth`. The tck-ids govern, so `Refresh` is
+///   NOT answered; but a host built by someone reading the prose would send it,
+///   and that is precisely the silent never-fires this detector exists to catch.
+///
+/// Returns false for the exact name: [`classify`] tests exactness first, and a
+/// predicate that matched both would make the two arms ambiguous.
+fn nearly_rebirth(name: &str) -> bool {
+    /// The name the specification's own prose uses once, contradicting its
+    /// tck-ids. Detected, never answered.
+    const SPEC_PROSE_SLIP: &str = "Node Control/Refresh";
+
+    if is_rebirth(name) {
+        return false;
+    }
+    let trimmed = name.trim();
+    trimmed.eq_ignore_ascii_case(METRIC_NODE_CONTROL_REBIRTH)
+        || trimmed.eq_ignore_ascii_case(SPEC_PROSE_SLIP)
 }
 
 /// How a metric identified itself, for the trace.
@@ -274,10 +531,32 @@ enum Inbound {
 /// implements Story 4.7 that matching on the name alone is not sufficient.
 fn metric_label(metric: &sparkplug_b::protobuf::payload::Metric) -> String {
     match (&metric.name, metric.alias) {
-        (Some(name), _) => name.clone(),
+        // Capped: a name is attacker-supplied and has no bound on the wire.
+        (Some(name), _) => cap_chars(name),
         (None, Some(alias)) => format!("<alias {alias}>"),
         (None, None) => "<neither name nor alias>".to_string(),
     }
+}
+
+/// Renders the rebirth-addressed metrics for the trace, capped, with the true
+/// total alongside so a capped line cannot be mistaken for a complete one.
+fn as_received(
+    metrics: &[&sparkplug_b::protobuf::payload::Metric],
+) -> (Vec<RebirthAsReceived>, usize) {
+    let rendered = metrics
+        .iter()
+        .take(MAX_TRACED_METRICS)
+        .map(|m| RebirthAsReceived {
+            name: m.name.as_deref().map(cap_chars).unwrap_or_else(|| {
+                m.alias
+                    .map(|a| format!("<alias {a}>"))
+                    .unwrap_or_else(|| "<neither name nor alias>".to_string())
+            }),
+            datatype: m.datatype,
+            value: describe_value(m.value.as_ref()),
+        })
+        .collect();
+    (rendered, metrics.len())
 }
 
 /// Classifies an inbound command payload for the trace.
@@ -285,11 +564,119 @@ fn metric_label(metric: &sparkplug_b::protobuf::payload::Metric) -> String {
 /// Never panics: `decode` returns a `Result` and it is matched, because a
 /// malformed payload arriving from the network is an ordinary event that must
 /// not take the bridge down.
-fn classify(payload: &[u8]) -> Inbound {
-    match sparkplug_b::decode(payload) {
-        Err(error) => Inbound::Undecodable(error.to_string()),
-        Ok(decoded) if decoded.metrics.is_empty() => Inbound::NoMetrics,
-        Ok(decoded) => Inbound::Unrecognised(decoded.metrics.iter().map(metric_label).collect()),
+/// # What makes a Rebirth Request, and what only looks like one
+///
+/// `tck-id-operational-behavior-data-commands-ncmd-rebirth-name` and
+/// `-ncmd-rebirth-value` (`Sparkplug_5_Operational_Behavior.adoc:970-975`)
+/// define it as a metric named `Node Control/Rebirth` carrying the value
+/// `true`. Both halves are required here. The name alone is NOT enough, and the
+/// difference is not pedantic: `false` is the value this bridge's own NBIRTH
+/// declares, so a host echoing our declaration back would otherwise trigger a
+/// birth on every round trip.
+///
+/// The match is on the NAME, never on an alias. `-rebirth-name-aliases` exists
+/// so that a host can request a rebirth *"without knowledge of any potential
+/// alias"*; this bridge publishes `alias: None` on everything, so no host can
+/// legitimately hold one for our metrics, and honouring an alias would add both
+/// a path no conformant host can exercise and a way for an unrelated number to
+/// trigger a birth. `metric_label` renders such a metric as `<alias N>` for the
+/// trace, but the decision above never consults it — a display function is not
+/// a place to keep a semantic rule.
+///
+/// A payload carrying several metrics of which one is the request is still a
+/// request: the clause says the request MUST include the metric, not that it
+/// must be alone.
+///
+/// # A retained NCMD is never a request
+///
+/// `tck-id-payloads-ncmd-retain` (`Sparkplug_6_Payloads.adoc:1421`): *"NCMD
+/// messages MUST be published with the MQTT retain flag set to false."* So a
+/// retained NCMD cannot have come from a conformant Host Application, and acting
+/// on one means acting on a message nobody is sending now: the broker replays it
+/// on every SUBSCRIBE, so one publish by any client on this unauthenticated
+/// broker would make every future session answer a request that no longer exists
+/// — indefinitely, with nobody present, and looking in the log exactly like a
+/// real host asking. It is rejected here and reported as a near miss, so the
+/// replay is visible rather than silent. See ADR 0017.
+fn classify(payload: &[u8], retained: bool) -> Inbound {
+    use sparkplug_b::protobuf::payload::metric::Value;
+
+    let decoded = match sparkplug_b::decode(payload) {
+        Err(error) => return Inbound::Undecodable(error.to_string()),
+        Ok(decoded) => decoded,
+    };
+    if decoded.metrics.is_empty() {
+        return Inbound::NoMetrics;
+    }
+
+    let exact: Vec<_> = decoded
+        .metrics
+        .iter()
+        .filter(|m| m.name.as_deref().is_some_and(is_rebirth))
+        .collect();
+
+    if exact
+        .iter()
+        .any(|m| m.value == Some(Value::BooleanValue(true)))
+    {
+        // Conformant in every respect but one: the retain flag. Reported rather
+        // than answered, and reported with the bytes, because a rejection nobody
+        // can see is the same failure as a match that never fires.
+        let (received, total) = as_received(&exact);
+        return if retained {
+            Inbound::RebirthNearMiss {
+                reason: NearMiss::Retained,
+                received,
+                total,
+            }
+        } else {
+            Inbound::Rebirth {
+                ignored_alongside: decoded
+                    .metrics
+                    .iter()
+                    .filter(|m| !m.name.as_deref().is_some_and(is_rebirth))
+                    .take(MAX_TRACED_METRICS)
+                    .map(metric_label)
+                    .collect(),
+            }
+        };
+    }
+    if !exact.is_empty() {
+        let (received, total) = as_received(&exact);
+        return Inbound::RebirthNearMiss {
+            reason: NearMiss::ValueNotTrue,
+            received,
+            total,
+        };
+    }
+
+    // DETECTION ONLY, and wider than the action on purpose — see `nearly_rebirth`.
+    // A name that misses by case, by whitespace, or by the specification's own
+    // `Node Control/Refresh` slip is the most likely way a real host's request
+    // fails to match, so it must not fall into the low-signal unrecognised path
+    // with no datatype and no value.
+    let nearly: Vec<_> = decoded
+        .metrics
+        .iter()
+        .filter(|m| m.name.as_deref().is_some_and(nearly_rebirth))
+        .collect();
+    if !nearly.is_empty() {
+        let (received, total) = as_received(&nearly);
+        return Inbound::RebirthNearMiss {
+            reason: NearMiss::NameOnlyNearly,
+            received,
+            total,
+        };
+    }
+
+    Inbound::Unrecognised {
+        names: decoded
+            .metrics
+            .iter()
+            .take(MAX_TRACED_METRICS)
+            .map(metric_label)
+            .collect(),
+        total: decoded.metrics.len(),
     }
 }
 
@@ -355,7 +742,7 @@ fn trace_subscription_outcome(topic: &str, outcome: Granted) {
 /// Extracted for the same reason as [`trace_subscription_outcome`]: AC3 says an
 /// unrecognised command is ignored *loudly*, so the loudness is the property and
 /// it needs a test that is not a broker.
-fn trace_command_outcome(topic: &str, inbound: Inbound) {
+fn trace_command_outcome(topic: &str, inbound: &Inbound) {
     match inbound {
         Inbound::Undecodable(error) => {
             tracing::warn!(
@@ -370,13 +757,107 @@ fn trace_command_outcome(topic: &str, inbound: Inbound) {
                 "an NCMD carrying no metric was ignored (never silently)"
             );
         }
-        Inbound::Unrecognised(names) => {
+        Inbound::Rebirth { ignored_alongside } => {
+            // INFO, and it must stay at INFO: `main.rs` sets INFO as the default
+            // directive, so this is the highest level that is guaranteed visible
+            // with no `RUST_LOG` set. AC2 is written in terms of what an
+            // operator sees, and a criterion nobody can observe is not met.
+            //
+            // It does NOT contain the word "ignored". The Story 4.6 chaos test
+            // greps for the ignore phrase, and a handler that acted on a command
+            // while logging that it had thrown it away would keep that assertion
+            // green while doing the opposite of what it asserts.
+            //
+            // This line reports RECOGNITION, not the answer. `announce` traces
+            // the answer itself, and the two must not be conflated: a test that
+            // greps for this line proves the bytes were understood, and stays
+            // green if the action is deleted or fails. The Story 4.7 code review
+            // found `chaos_ncmd_subscription` doing exactly that.
+            tracing::info!(
+                %topic,
+                metric = METRIC_NODE_CONTROL_REBIRTH,
+                "Rebirth Request accepted; re-announcing the node and its devices"
+            );
+            if !ignored_alongside.is_empty() {
+                // Rare, and silent until the Story 4.7 review: a request may ride
+                // alongside commands this bridge does not implement, and those
+                // were discarded with nothing said.
+                tracing::info!(
+                    %topic,
+                    ?ignored_alongside,
+                    "the same NCMD carried other metrics, which are ignored; this \
+                     bridge implements Node Control/Rebirth and no other command"
+                );
+            }
+        }
+        Inbound::RebirthNearMiss {
+            reason,
+            received,
+            total,
+        } => {
+            // WARN, not INFO. This is the near-miss detector: it fires when
+            // something addressed the rebirth endpoint and did not match the
+            // norm's definition of a request. Nothing in normal operation sends
+            // one, so it is rare by construction and worth finding — and if a
+            // live host encodes the request in a way this bridge does not
+            // accept, THIS is the line that says so, with the bytes.
+            //
+            // `?received` is not decoration. Without the name, datatype and value
+            // exactly as they arrived, a strict matcher that never fires is
+            // indistinguishable from a host that never asked, which is the one
+            // failure mode of implementing the norm's reading literally.
+            //
+            // One message per clause missed. A shared message would make the
+            // three indistinguishable in a log, and the whole value of the
+            // detector is telling an operator WHICH way the request missed.
+            let clause = match reason {
+                NearMiss::ValueNotTrue => {
+                    "tck-id-operational-behavior-data-commands-ncmd-rebirth-value \
+                     requires the boolean value true, and this metric does not carry \
+                     it. If a Host Application meant to request a rebirth, the \
+                     datatype and value above are what it actually sent"
+                }
+                NearMiss::NameOnlyNearly => {
+                    "the name only NEARLY matches Node Control/Rebirth — it differs \
+                     by case, by surrounding whitespace, or it is the \
+                     'Node Control/Refresh' spelling that the specification's own \
+                     prose uses at Sparkplug_5_Operational_Behavior.adoc:950 while \
+                     every tck-id in that section says 'Rebirth'. The tck-ids \
+                     govern, so this was NOT answered; the name above is what \
+                     arrived, and it is what a host would have to change"
+                }
+                NearMiss::Retained => {
+                    "it arrived with the MQTT RETAIN flag set, and \
+                     tck-id-payloads-ncmd-retain requires NCMD to be published with \
+                     retain false — so this is a message the broker replayed, not a \
+                     request a host is making now. Answering it would re-announce \
+                     the node on every reconnect for as long as the retained \
+                     message exists. Clear it by publishing an empty retained \
+                     payload to this topic. See ADR 0017"
+                }
+            };
+            tracing::warn!(
+                %topic,
+                metric = METRIC_NODE_CONTROL_REBIRTH,
+                ?reason,
+                ?received,
+                total,
+                shown = received.len(),
+                "an NCMD addressed the rebirth endpoint but is not a Rebirth \
+                 Request and was ignored: {clause}"
+            );
+        }
+        Inbound::Unrecognised { names, total } => {
             // The NAMES, not the payload: a name list is diagnostic, a full dump
-            // is noise and may carry values.
+            // is noise and may carry values. Capped in count and per name, with
+            // `total` alongside so a capped line cannot read as a complete one.
             tracing::info!(
                 %topic,
                 ?names,
-                "unrecognised NCMD ignored; this bridge implements no command yet"
+                total,
+                shown = names.len(),
+                "unrecognised NCMD ignored; this bridge implements Node \
+                 Control/Rebirth and no other command"
             );
         }
     }
@@ -423,6 +904,29 @@ pub async fn run(
     // 3. ...and register it IN the CONNECT packet, before connecting.
     let mut options = MqttOptions::new(&config.client_id, &config.host, config.port);
     options.set_keep_alive(config.keep_alive);
+    // The incoming packet bound is OURS, stated, not inherited.
+    //
+    // `rumqttc` defaults `max_incoming_packet_size` to 10 KiB and rejects a larger
+    // frame inside `poll()`, which returns `Err` — so the socket drops
+    // UNGRACEFULLY and the broker fires our will. The host is told the node died
+    // while it was alive. The bridge cannot drop the frame and keep the session;
+    // that is rumqttc's deliberate behaviour, and the correct control is
+    // broker-side (`message_size_limit` in Mosquitto, plus ACLs — Epics 5/7).
+    //
+    // The value is set here anyway, at the same size, for two reasons the Story 4.7
+    // review made concrete. It is a limit `AC-LEAK-01` depends on for bounded
+    // memory, so it must not change silently under a dependency bump. And no
+    // legitimate NCMD for this bridge approaches it: the one command it implements
+    // is a single boolean metric. Raising it would only move the cliff, at the cost
+    // of the bound.
+    //
+    // The residual exposure is recorded in `deferred-work.md` (deferred by
+    // decision, 2026-07-29) and re-examined by the Story 4.7 review: `retain`
+    // removes that deferral's assumption of a SUSTAINED attacker, because a
+    // retained oversized frame is redelivered on every reconnect. `classify`
+    // rejects a retained NCMD, but that runs after decode and this frame never
+    // decodes — so the two are separate problems and only one of them is closed.
+    options.set_max_packet_size(MAX_INCOMING_PACKET, MAX_OUTGOING_PACKET);
     let (qos, retain) = qos_for(MessageType::NDeath);
     options.set_last_will(rumqttc::LastWill::new(
         will.topic.clone(),
@@ -457,18 +961,13 @@ pub async fn run(
                             subscribe_to_commands(&client, topic);
                         }
                         // 6. Then publish the BIRTH.
-                        let mut queue = Queue::default();
-                        match publisher.birth(clock.wall(), &meters, &mut queue) {
-                            Ok(()) => {
-                                for message in queue.pending.drain(..) {
-                                    publish(&client, message);
-                                }
-                                tracing::info!(bd_seq = publisher.bd_seq().value(), "session born");
-                            }
-                            Err(error) => {
-                                tracing::error!(%error, "refusing to birth: nothing was published");
-                            }
-                        }
+                        announce(
+                            &client,
+                            &mut publisher,
+                            clock.wall(),
+                            &meters,
+                            BirthReason::Connected,
+                        );
                     }
                     Some(Transport::Subscribed(codes)) => {
                         let topic = ncmd_topic.as_deref().unwrap_or("<none>");
@@ -493,9 +992,52 @@ pub async fn run(
                     tracing::error!("transport task ended; stopping");
                     break;
                 };
-                // Nothing is applied, so nothing can be applied by halves: this
-                // story builds the plumbing and Story 4.7 gives it meaning.
-                trace_command_outcome(&command.topic, classify(&command.payload));
+                // Recognise, then say what arrived, then act — three steps, in
+                // that order, and deliberately not fused. The next command this
+                // bridge implements is a meter relay, which switches physical
+                // hardware; it will need an authorisation step between the
+                // second and the third, and this shape is where it goes.
+                let inbound = classify(&command.payload, command.retained);
+                trace_command_outcome(&command.topic, &inbound);
+                if matches!(inbound, Inbound::Rebirth { .. }) {
+                    // INLINE AND SYNCHRONOUS, and that is the whole of AC3.
+                    //
+                    // `tck-id-operational-behavior-data-commands-rebirth-action-1`
+                    // requires the node to IMMEDIATELY stop sending DATA on
+                    // receipt. `select!` runs one branch to completion before
+                    // polling the others, so between this line and the last
+                    // DBIRTH the `inbox` branch cannot run and no DATA can
+                    // interleave. Nothing here enforces that — the SHAPE does.
+                    //
+                    // So: do not `tokio::spawn` this, do not set a flag consumed
+                    // on a later iteration, do not push it through a channel.
+                    // Any of the three would satisfy `-rebirth-action-2` (a
+                    // birth does go out) while breaking `-rebirth-action-1`,
+                    // with no test, no log line and no wire symptom to notice
+                    // it by. `chaos_ncmd_rebirth_answered` asserts the absence
+                    // of a DDATA across that window precisely because the
+                    // property lives in the shape rather than in a check.
+                    //
+                    // NO RATE LIMIT AND NO COALESCING, decided rather than
+                    // deferred. A host may burst — Ignition resends — and the
+                    // command channel is 8 slots with a traced drop
+                    // (`COMMAND_QUEUE`), so a burst already degrades to some
+                    // answers plus visible drops and never to a stall. A birth
+                    // here is 1 NBIRTH + N DBIRTHs for a single configured
+                    // meter, so the answer is cheap; suppressing a request is
+                    // the exact failure this handler exists to fix; and a
+                    // suppressed answer is INVISIBLE to the host, which cannot
+                    // tell it from a node that never heard. If a burst ever
+                    // proves costly, Story 4.13 is where it is measured, not
+                    // guessed.
+                    announce(
+                        &client,
+                        &mut publisher,
+                        clock.wall(),
+                        &meters,
+                        BirthReason::RebirthRequested,
+                    );
+                }
             }
             update = inbox.recv() => {
                 let Some(update) = update else {
@@ -589,6 +1131,11 @@ async fn pump_transport(
                 let command = Command {
                     topic: publish.topic.clone(),
                     payload: publish.payload.to_vec(),
+                    // Carried, not discarded: `tck-id-payloads-ncmd-retain`
+                    // forbids a host from retaining an NCMD, so this flag decides
+                    // whether the bytes are a request or a replay. It was dropped
+                    // here until the Story 4.7 code review — see `classify`.
+                    retained: publish.retain,
                 };
                 match commands.try_send(command) {
                     Ok(()) => {}
@@ -603,13 +1150,155 @@ async fn pump_transport(
             }
             Ok(_) => {}
             Err(error) => {
-                tracing::warn!(%error, "transport error");
+                // The command topic is in the line ON PURPOSE, and it is the only
+                // route from this symptom to one of its causes. A PUBLISH larger
+                // than `MAX_INCOMING_PACKET` on that topic is rejected by
+                // `poll()` before any of this bridge's code sees it, so it
+                // presents here — as a bare transport error — and nowhere else.
+                // Without the topic an operator cannot tell an oversized NCMD from
+                // an ordinary broker drop. Added by the Story 4.7 code review.
+                tracing::warn!(
+                    %error,
+                    command_topic = ncmd_topic.as_deref().unwrap_or("<none>"),
+                    max_incoming_bytes = MAX_INCOMING_PACKET,
+                    "transport error; if this repeats, check whether something is \
+                     publishing an oversized payload to the command topic — such a \
+                     packet is rejected before it can be classified, and it drops \
+                     the session ungracefully, which fires the will"
+                );
                 if events.send(Transport::Lost).await.is_err() {
                     return;
                 }
                 // rumqttc has no internal backoff: this sleep IS the backoff.
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
+        }
+    }
+}
+
+/// Why the node is announcing itself.
+///
+/// The two paths publish the SAME bytes; only the trace differs. That is not an
+/// oversight to be tidied away — an operator reading a log needs to know whether
+/// a node re-announced because its transport reconnected or because a host asked
+/// it to, and those have entirely different causes to go looking for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BirthReason {
+    /// The broker accepted a connection (first connect or reconnect).
+    Connected,
+    /// A Host Application sent a conformant Rebirth Request.
+    RebirthRequested,
+}
+
+/// Publishes the complete BIRTH sequence: one NBIRTH, then one DBIRTH per meter.
+///
+/// # Why the rebirth answer and the connect birth are the same three lines
+///
+/// `tck-id-operational-behavior-data-commands-rebirth-action-2` requires *"a
+/// complete BIRTH sequence including the NBIRTH and DBIRTH(s)"* — which is
+/// exactly what a connect already publishes. Two copies of that would be two
+/// things to keep conformant, and the copy exercised once a day would be the one
+/// that rots.
+///
+/// # The function this must NOT call
+///
+/// [`SparkplugPublisher::new_session`] advances `bdSeq`, and
+/// `-rebirth-action-3` forbids that here: *"The NBIRTH MUST include the same
+/// bdSeq metric with the same value it had included in the Will Message of the
+/// previous MQTT CONNECT packet … Because a new MQTT Session is not being
+/// established, there is no reason to update the bdSeq number."*
+///
+/// A rebirth RE-ANNOUNCES a session; it does not open one. Advancing the number
+/// would leave the broker holding a will for a session number the live node no
+/// longer claims, so the death that eventually fires would be discarded by any
+/// consumer that pairs death to birth by `bdSeq` — the node would die and its
+/// tags would stay green. Nothing calls `new_session` today: it is reachable,
+/// wrong on this path, and the compiler will not stop anyone.
+///
+/// # A birth is never REPORTED complete unless it was
+///
+/// Two ways a birth can come out half-emitted. The first is closed by
+/// construction: `birth()` validates every topic before emitting anything, so a
+/// `TopicError` means the queue is empty and the session is untouched.
+///
+/// The second was open, and silent, until the Story 4.7 code review found it.
+/// This drains the queue message by message and [`publish`] turns a full request
+/// channel into a WARN and continues, so the NBIRTH could be queued and the DBIRTH
+/// dropped — during the pump's one-second error-arm backoff, under TCP
+/// back-pressure, or under the request burst this handler deliberately permits.
+/// The host then resets its view of the node on an NBIRTH and never receives the
+/// DBIRTH re-declaring the device, while the publisher has already committed
+/// `Session::Live` and goes on emitting DDATA for a device the host regards as
+/// undeclared.
+///
+/// **What was worse than the gap: the trace called that sequence *complete*.** So
+/// the count of failures is now carried out of the drain and the success line is
+/// emitted only if it is zero; otherwise this is an ERROR naming what the host now
+/// believes.
+///
+/// # Why this is not an all-or-nothing drain, which is what the review asked for
+///
+/// It cannot be, against `rumqttc` 0.25. Refusing to publish anything unless the
+/// whole sequence fits requires knowing how many slots are free, and there is no
+/// public way to ask: `AsyncClient` wraps a private `flume::Sender` and exposes no
+/// `capacity()`, `EventLoop::requests_tx` is `pub(crate)`, and there is no
+/// constructor that takes a receiver we made ourselves. Nor can the drain simply
+/// `await` its way to completeness: blocking here would hold the driver's `select!`
+/// across an arbitrary broker outage, and the shutdown branch with it.
+///
+/// The residual gap is bounded and now self-healing. For the sequence not to fit,
+/// 63 of 64 slots must be backed up, which means the broker is not draining and
+/// the will is about to fire regardless — and a host that receives an NBIRTH
+/// without its DBIRTH is exactly the condition that makes it send a Rebirth
+/// Request, which this bridge now answers. Recorded rather than hidden: a
+/// misreported birth was the defect, and that is fixed; an unlikely partial birth
+/// is a known, logged, recoverable state.
+fn announce(
+    client: &AsyncClient,
+    publisher: &mut SparkplugPublisher,
+    now: crate::domain::UtcMillis,
+    meters: &[Serial],
+    reason: BirthReason,
+) {
+    let mut queue = Queue::default();
+    match publisher.birth(now, meters, &mut queue) {
+        Ok(()) => {
+            let queued = queue.pending.len();
+            let dropped = publish_all(client, &mut queue);
+            if dropped > 0 {
+                tracing::error!(
+                    dropped,
+                    queued,
+                    ?reason,
+                    "the BIRTH sequence was only PARTLY published: the outbound \
+                     queue rejected part of it. The host may have reset its view of \
+                     this node on an NBIRTH without receiving the DBIRTH that \
+                     re-declares its device, so it will treat subsequent DDATA as \
+                     belonging to an undeclared device until it requests a rebirth"
+                );
+                return;
+            }
+            let bd_seq = publisher.bd_seq().value();
+            match reason {
+                BirthReason::Connected => {
+                    tracing::info!(bd_seq, "session born");
+                }
+                BirthReason::RebirthRequested => {
+                    // The `bdSeq` is in the line ON PURPOSE: it is the field
+                    // -rebirth-action-3 constrains, and printing it next to the
+                    // connect birth's identical value is how an operator sees
+                    // that a rebirth did not open a session.
+                    tracing::info!(
+                        bd_seq,
+                        "node re-announced on a Rebirth Request: complete BIRTH \
+                         sequence republished under the SAME bdSeq, because a \
+                         rebirth re-announces a session rather than opening one"
+                    );
+                }
+            }
+        }
+        Err(error) => {
+            tracing::error!(%error, ?reason, "refusing to birth: nothing was published");
         }
     }
 }
@@ -643,15 +1332,38 @@ fn subscribe_to_commands(client: &AsyncClient, topic: &str) {
 
 /// Queues one message. A full queue is a traced drop, never a block: a blocked
 /// driver stops draining the inbox, and then NOTHING is published.
-fn publish(client: &AsyncClient, message: Outbound) {
+///
+/// Returns whether the message was queued, so a caller that emits a SEQUENCE can
+/// tell whether the sequence is intact. `announce` is the one that needs it: a
+/// birth whose DBIRTH was dropped must not be reported as complete.
+fn publish(client: &AsyncClient, message: Outbound) -> bool {
     let (qos, retain) = qos_for(message.message);
-    if let Err(error) = client.try_publish(message.topic.clone(), qos, retain, message.payload) {
-        tracing::warn!(
-            topic = %message.topic,
-            %error,
-            "outbound queue full; message dropped (never silently)"
-        );
+    match client.try_publish(message.topic.clone(), qos, retain, message.payload) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(
+                topic = %message.topic,
+                %error,
+                "outbound queue full; message dropped (never silently)"
+            );
+            false
+        }
     }
+}
+
+/// Drains a queue to the client and returns how many messages were DROPPED.
+///
+/// Every message is attempted: stopping at the first failure would leave the rest
+/// in the sink with nothing said about them, and the count is what lets the caller
+/// distinguish a complete sequence from a partial one.
+fn publish_all(client: &AsyncClient, queue: &mut Queue) -> usize {
+    let mut dropped = 0;
+    for message in queue.pending.drain(..) {
+        if !publish(client, message) {
+            dropped += 1;
+        }
+    }
+    dropped
 }
 
 #[cfg(test)]
@@ -868,13 +1580,16 @@ mod tests {
         let unrecognised = captured(|| {
             trace_command_outcome(
                 "t",
-                Inbound::Unrecognised(vec!["Node Control/Rebirth".to_string()]),
+                &Inbound::Unrecognised {
+                    names: vec!["Node Control/Rebirth".to_string()],
+                    total: 1,
+                },
             );
         });
         let undecodable = captured(|| {
-            trace_command_outcome("t", Inbound::Undecodable("bad varint".to_string()));
+            trace_command_outcome("t", &Inbound::Undecodable("bad varint".to_string()));
         });
-        let empty = captured(|| trace_command_outcome("t", Inbound::NoMetrics));
+        let empty = captured(|| trace_command_outcome("t", &Inbound::NoMetrics));
 
         for log in [&unrecognised, &undecodable, &empty] {
             assert!(
@@ -937,31 +1652,594 @@ mod tests {
         // by any reading.
         let garbage = [0xffu8; 11];
         assert!(
-            matches!(classify(&garbage), Inbound::Undecodable(_)),
+            matches!(classify(&garbage, false), Inbound::Undecodable(_)),
             "malformed bytes must produce a verdict, not a panic"
         );
     }
 
-    /// Story 4.6 / AC3 — every command is unrecognised in this story, and the
-    /// trace names what arrived.
+    /// An NCMD payload built from `(name, datatype, value)` triples, exactly as
+    /// a Host Application would encode it.
     ///
-    /// `Node Control/Rebirth` is used as the sample deliberately: it is the one
-    /// command a live MQTT Engine actually sends, and Story 4.7 — not this one —
-    /// is where it acquires meaning. Seeing it here as `Unrecognised` is the
-    /// correct answer today.
+    /// The value is a parameter and NOT defaulted, which is the whole point.
+    /// `command_payload` above builds metrics with `..Default::default()`, so
+    /// `value: None` — and under `-ncmd-rebirth-value` a valueless
+    /// `Node Control/Rebirth` is not a request. A test that reached for the
+    /// convenient helper would assert the strict matcher's behaviour on a
+    /// payload no conformant host ever sends, and would stay green against an
+    /// implementation that answers nothing at all.
+    fn command_payload_valued(
+        metrics: &[(
+            &str,
+            Option<u32>,
+            Option<sparkplug_b::protobuf::payload::metric::Value>,
+        )],
+    ) -> Vec<u8> {
+        let metrics = metrics
+            .iter()
+            .map(
+                |(name, datatype, value)| sparkplug_b::protobuf::payload::Metric {
+                    name: Some((*name).to_string()),
+                    datatype: *datatype,
+                    is_null: value.is_none().then_some(true),
+                    value: value.clone(),
+                    ..Default::default()
+                },
+            )
+            .collect();
+        sparkplug_b::encode(&sparkplug_b::protobuf::Payload {
+            timestamp: Some(1_700_000_000_000),
+            metrics,
+            seq: None,
+            uuid: None,
+            body: None,
+        })
+    }
+
+    /// The conformant Rebirth Request, as `-ncmd-rebirth-name` and
+    /// `-ncmd-rebirth-value` define it.
+    fn a_real_rebirth_request() -> Vec<u8> {
+        command_payload_valued(&[(
+            METRIC_NODE_CONTROL_REBIRTH,
+            Some(sparkplug_b::DataType::Boolean.code()),
+            Some(sparkplug_b::protobuf::payload::metric::Value::BooleanValue(
+                true,
+            )),
+        )])
+    }
+
+    /// Story 4.7 / AC6 — a Rebirth Request is the name AND the value, and the
+    /// four near misses are each recognised as near misses rather than as
+    /// requests or as ordinary unknown commands.
     ///
-    /// Falsified 2026-07-29: making `classify` return `Inbound::NoMetrics` for
-    /// every decoded payload turns both assertions red.
+    /// `tck-id-operational-behavior-data-commands-ncmd-rebirth-value`
+    /// (`Sparkplug_5_Operational_Behavior.adoc:974-975`) is explicit: *"A
+    /// Rebirth Request MUST include a metric value of true."* This bridge
+    /// implements the norm's reading rather than a liberal one; the residual
+    /// risk of a host that encodes it differently is carried by the near-miss
+    /// trace, which `the_near_miss_records_the_datatype_and_value_as_received`
+    /// asserts separately, and by the Story 4.8 pre-production run.
+    ///
+    /// Falsified 2026-07-30: dropping the value check from `classify` — matching
+    /// on the name alone — turns the `false`, valueless and `IntValue` cases red
+    /// while leaving the `true` case green. That asymmetry is the point: a test
+    /// that only checked the `true` case would pass against a matcher with no
+    /// value check at all.
     #[test]
-    fn a_recognisable_looking_command_is_still_unrecognised_in_this_story() {
-        let bytes = command_payload(&["Node Control/Rebirth", "Node Control/Next Server"]);
+    fn a_rebirth_request_is_the_name_and_the_value_never_the_name_alone() {
+        use sparkplug_b::protobuf::payload::metric::Value;
+        let boolean = Some(sparkplug_b::DataType::Boolean.code());
+
         assert_eq!(
-            classify(&bytes),
-            Inbound::Unrecognised(vec![
-                "Node Control/Rebirth".to_string(),
-                "Node Control/Next Server".to_string(),
-            ])
+            classify(&a_real_rebirth_request(), false),
+            Inbound::Rebirth {
+                ignored_alongside: vec![]
+            },
+            "name + boolean true is exactly what -ncmd-rebirth-value defines"
         );
+
+        // `false` is the value our OWN NBIRTH declares. A host that echoes the
+        // birth back at us is not asking for anything, and answering it would
+        // make every declaration a self-inflicted rebirth.
+        assert_eq!(
+            classify(
+                &command_payload_valued(&[(
+                    METRIC_NODE_CONTROL_REBIRTH,
+                    boolean,
+                    Some(Value::BooleanValue(false)),
+                )]),
+                false
+            ),
+            Inbound::RebirthNearMiss {
+                reason: NearMiss::ValueNotTrue,
+                received: vec![RebirthAsReceived {
+                    name: METRIC_NODE_CONTROL_REBIRTH.to_string(),
+                    datatype: boolean,
+                    value: "BooleanValue(false)".to_string(),
+                }],
+                total: 1,
+            },
+            "boolean false is not a request"
+        );
+
+        // No value at all — the shape `..Default::default()` produces, and the
+        // shape that made the Story 4.6 chaos assertion undiscriminating.
+        assert_eq!(
+            classify(
+                &command_payload_valued(&[(METRIC_NODE_CONTROL_REBIRTH, boolean, None,)]),
+                false
+            ),
+            Inbound::RebirthNearMiss {
+                reason: NearMiss::ValueNotTrue,
+                received: vec![RebirthAsReceived {
+                    name: METRIC_NODE_CONTROL_REBIRTH.to_string(),
+                    datatype: boolean,
+                    value: "<no value>".to_string(),
+                }],
+                total: 1,
+            },
+            "a metric with no value declares nothing to act on"
+        );
+
+        // Non-boolean: the encoding a host might plausibly use, and therefore
+        // the near miss most worth having in the log.
+        assert_eq!(
+            classify(
+                &command_payload_valued(&[(
+                    METRIC_NODE_CONTROL_REBIRTH,
+                    Some(sparkplug_b::DataType::Int32.code()),
+                    Some(Value::IntValue(1)),
+                )]),
+                false
+            ),
+            Inbound::RebirthNearMiss {
+                reason: NearMiss::ValueNotTrue,
+                received: vec![RebirthAsReceived {
+                    name: METRIC_NODE_CONTROL_REBIRTH.to_string(),
+                    datatype: Some(sparkplug_b::DataType::Int32.code()),
+                    value: "IntValue(1)".to_string(),
+                }],
+                total: 1,
+            },
+            "IntValue(1) is not BooleanValue(true), and the trace must say so \
+             rather than the matcher quietly declining"
+        );
+    }
+
+    /// Story 4.7 code review / ADR 0017 — a RETAINED NCMD is never answered.
+    ///
+    /// `tck-id-payloads-ncmd-retain` (`Sparkplug_6_Payloads.adoc:1421`): *"NCMD
+    /// messages MUST be published with the MQTT retain flag set to false."* So a
+    /// retained NCMD is not something a conformant Host Application sent, and it
+    /// is not a request anyone is making NOW — the broker replays it to every
+    /// subscriber, so honouring one would make the bridge re-announce itself on
+    /// every connect for as long as the retained message exists, with nobody
+    /// present and nothing in the log to distinguish it from a real host asking.
+    ///
+    /// The payload is byte-identical to `a_real_rebirth_request` on purpose: the
+    /// ONLY difference between the answered case above and this one is the
+    /// transport flag, which is exactly the property under test.
+    ///
+    /// Falsified 2026-07-30: dropping the `retained` argument from `classify`'s
+    /// `true`-value branch — going back to what shipped — turns this red and
+    /// leaves every other classification test green, because no other test
+    /// varies the flag.
+    #[test]
+    fn a_retained_ncmd_is_a_replay_and_never_a_rebirth_request() {
+        let conformant_but_retained = classify(&a_real_rebirth_request(), true);
+        assert_eq!(
+            conformant_but_retained,
+            Inbound::RebirthNearMiss {
+                reason: NearMiss::Retained,
+                received: vec![RebirthAsReceived {
+                    name: METRIC_NODE_CONTROL_REBIRTH.to_string(),
+                    datatype: Some(sparkplug_b::DataType::Boolean.code()),
+                    value: "BooleanValue(true)".to_string(),
+                }],
+                total: 1,
+            },
+            "a retained NCMD must be reported as a replay, not answered"
+        );
+        // And the same bytes, unretained, ARE a request — otherwise this test
+        // would pass against a matcher that answers nothing at all.
+        assert!(matches!(
+            classify(&a_real_rebirth_request(), false),
+            Inbound::Rebirth { .. }
+        ));
+    }
+
+    /// Story 4.7 code review / AC6 — the detection net is WIDER than the action.
+    ///
+    /// The action requires the exact name; detection must also catch the ways a
+    /// real host misses it, or the strict matcher's one failure mode — never
+    /// firing, silently — is exactly what the detector cannot see. Three shapes:
+    ///
+    /// - **Case**, for a host that normalises tag names.
+    /// - **Trailing whitespace**, for a host that concatenates.
+    /// - **`Node Control/Refresh`**, because the specification contradicts
+    ///   itself: `Sparkplug_5_Operational_Behavior.adoc:950` says a host *"can
+    ///   send a 'Rebirth Request' using the 'Node Control/Refresh' metric"* while
+    ///   `-rebirth-name` (`:956`) and `-ncmd-rebirth-name` (`:973`) both say
+    ///   `Rebirth`. A host built from the prose sends `Refresh`.
+    ///
+    /// None of them is ANSWERED — the tck-ids govern — and every one of them is
+    /// now in the log with its name, datatype and value.
+    ///
+    /// Falsified 2026-07-30: removing the `nearly` branch from `classify` turns
+    /// all three red, and each lands in `Unrecognised` — which is precisely the
+    /// low-signal path this test exists to keep them out of.
+    #[test]
+    fn a_name_that_only_nearly_matches_is_a_near_miss_not_an_unknown_command() {
+        use sparkplug_b::protobuf::payload::metric::Value;
+        let boolean = Some(sparkplug_b::DataType::Boolean.code());
+
+        for name in [
+            "node control/rebirth",
+            "NODE CONTROL/REBIRTH",
+            "Node Control/Rebirth ",
+            "Node Control/Refresh",
+        ] {
+            let classified = classify(
+                &command_payload_valued(&[(name, boolean, Some(Value::BooleanValue(true)))]),
+                false,
+            );
+            assert_eq!(
+                classified,
+                Inbound::RebirthNearMiss {
+                    reason: NearMiss::NameOnlyNearly,
+                    received: vec![RebirthAsReceived {
+                        name: name.to_string(),
+                        datatype: boolean,
+                        value: "BooleanValue(true)".to_string(),
+                    }],
+                    total: 1,
+                },
+                "{name:?} must be DETECTED as a near miss — it is not answered, \
+                 but a request that missed by a spelling is the one a strict \
+                 matcher hides"
+            );
+        }
+
+        // And the exact name is still not a near miss, or the two arms would be
+        // ambiguous and the answered case would stop being reachable.
+        assert!(!nearly_rebirth(METRIC_NODE_CONTROL_REBIRTH));
+    }
+
+    /// Story 4.7 code review — one NCMD cannot render an unbounded log line.
+    ///
+    /// The cap that shipped bounded one VALUE at 200 characters, under a comment
+    /// claiming *"a hostile payload cannot fill a disk one command at a time"*.
+    /// It bounded the wrong axis: the number of metrics was unbounded, so a ~10 KB
+    /// NCMD carrying thousands of them rendered ~13× its own size into the log —
+    /// at INFO, which `main.rs` makes visible by default, written synchronously
+    /// on the task that also publishes DATA.
+    ///
+    /// Falsified 2026-07-30: removing `.take(MAX_TRACED_METRICS)` from either
+    /// `as_received` or the `Unrecognised` arm turns the matching assertion red.
+    #[test]
+    fn a_hostile_metric_count_is_capped_and_the_line_says_it_capped() {
+        use sparkplug_b::protobuf::payload::metric::Value;
+        let boolean = Some(sparkplug_b::DataType::Boolean.code());
+        let many = MAX_TRACED_METRICS * 5;
+
+        // Many near misses: capped, with the true total still reported.
+        let near: Vec<_> = (0..many)
+            .map(|_| {
+                (
+                    METRIC_NODE_CONTROL_REBIRTH,
+                    boolean,
+                    Some(Value::BooleanValue(false)),
+                )
+            })
+            .collect();
+        match classify(&command_payload_valued(&near), false) {
+            Inbound::RebirthNearMiss {
+                received, total, ..
+            } => {
+                assert_eq!(received.len(), MAX_TRACED_METRICS);
+                assert_eq!(total, many, "the TRUE count must survive the cap");
+            }
+            other => panic!("expected a near miss; got {other:?}"),
+        }
+
+        // Many unknown names: same bound, same honesty.
+        let unknown: Vec<_> = (0..many).map(|_| "Node Control/Whatever").collect();
+        match classify(&command_payload(&unknown), false) {
+            Inbound::Unrecognised { names, total } => {
+                assert_eq!(names.len(), MAX_TRACED_METRICS);
+                assert_eq!(total, many);
+            }
+            other => panic!("expected an unknown command; got {other:?}"),
+        }
+
+        // And one hostile VALUE is still capped, and still says so.
+        let huge = "x".repeat(MAX_TRACED_CHARS * 10);
+        let rendered = describe_value(Some(&Value::StringValue(huge)));
+        assert!(
+            rendered.contains("truncated from"),
+            "a shortened rendering must not read like a complete one; got: {rendered}"
+        );
+        assert!(
+            rendered.chars().count() < MAX_TRACED_CHARS * 2,
+            "the cap must bound the OUTPUT, not merely annotate it; got {} chars",
+            rendered.chars().count()
+        );
+    }
+
+    /// Story 4.7 / AC6 — an ALIAS-addressed metric is never a Rebirth Request.
+    ///
+    /// `-rebirth-name-aliases` forbids an NBIRTH from aliasing this metric
+    /// precisely so that a host can request a rebirth *"without knowledge of
+    /// any potential alias"*. This bridge publishes `alias: None` on
+    /// everything, so no host can legitimately hold an alias for our metrics —
+    /// and matching one would add a path no conformant host can exercise plus a
+    /// way for an unrelated number to trigger a birth.
+    ///
+    /// Falsified 2026-07-30 (mutation 9): widening `classify`'s filter to
+    /// `name == METRIC_NODE_CONTROL_REBIRTH || m.alias.is_some()` turns this
+    /// red — and also turns
+    /// `a_command_addressed_by_alias_is_not_reported_as_nameless` red, which is
+    /// the Story 4.6 assertion that says an alias keeps its identity in the
+    /// trace. The two guard the same boundary from opposite sides.
+    #[test]
+    fn an_alias_addressed_metric_is_never_a_rebirth_request() {
+        let by_alias = sparkplug_b::encode(&sparkplug_b::protobuf::Payload {
+            timestamp: Some(1_700_000_000_000),
+            metrics: vec![sparkplug_b::protobuf::payload::Metric {
+                name: None,
+                alias: Some(7),
+                datatype: Some(sparkplug_b::DataType::Boolean.code()),
+                value: Some(sparkplug_b::protobuf::payload::metric::Value::BooleanValue(
+                    true,
+                )),
+                ..Default::default()
+            }],
+            seq: None,
+            uuid: None,
+            body: None,
+        });
+        assert_eq!(
+            classify(&by_alias, false),
+            Inbound::Unrecognised {
+                names: vec!["<alias 7>".to_string()],
+                total: 1,
+            },
+            "a numeric alias this bridge never published must not be able to \
+             trigger a birth; it is an unknown command, and not even a near miss"
+        );
+    }
+
+    /// Story 4.7 / AC6 — a request is still a request in company.
+    ///
+    /// `-ncmd-rebirth-name` requires the payload to INCLUDE the metric; it does
+    /// not require it to be alone. A matcher that demanded a single-metric
+    /// payload would decline a legal request, and would decline it silently.
+    ///
+    /// Falsified 2026-07-30: changing `classify` to require
+    /// `decoded.metrics.len() == 1` before returning `Rebirth` turns this red
+    /// and leaves every other classification test green.
+    ///
+    /// Extended by the Story 4.7 code review: the co-travelling metrics used to be
+    /// discarded with NOTHING said, in a module whose other three arms all
+    /// advertise that nothing is ignored silently. Answering the request is
+    /// correct; saying nothing about `Node Control/Next Server` was not.
+    /// Falsified 2026-07-30: dropping `ignored_alongside` from the `Rebirth` arm
+    /// turns the second assertion red while the first stays green — which is why
+    /// it is asserted separately.
+    #[test]
+    fn a_rebirth_request_carried_alongside_other_metrics_is_still_a_request() {
+        use sparkplug_b::protobuf::payload::metric::Value;
+        let bytes = command_payload_valued(&[
+            ("Node Control/Next Server", None, None),
+            (
+                METRIC_NODE_CONTROL_REBIRTH,
+                Some(sparkplug_b::DataType::Boolean.code()),
+                Some(Value::BooleanValue(true)),
+            ),
+        ]);
+        let classified = classify(&bytes, false);
+        assert_eq!(
+            classified,
+            Inbound::Rebirth {
+                ignored_alongside: vec!["Node Control/Next Server".to_string()],
+            },
+            "the request is answered, AND the command that rode with it is named"
+        );
+
+        let log = captured(|| trace_command_outcome("t", &classified));
+        assert!(
+            log.contains("Node Control/Next Server"),
+            "a discarded command must appear in the log even when a recognised \
+             one travelled with it; got: {log}"
+        );
+    }
+
+    /// Story 4.7 / AC6 — the near-miss trace carries the datatype and the value
+    /// AS RECEIVED, and this is asserted on its own.
+    ///
+    /// It needs its own test because the classification tests above stay green
+    /// when the two fields are dropped from the log line: `classify` would still
+    /// return the right variant, and the operator would still be told nothing.
+    /// The whole mitigation for the strict matcher is that a request which
+    /// missed leaves the exact bytes that missed behind it — a trace saying only
+    /// *"a rebirth-named metric was not answered"* discards precisely what makes
+    /// the Story 4.8 run self-diagnosing.
+    ///
+    /// Falsified 2026-07-30: removing the `?received` field from the near-miss
+    /// arm of `trace_command_outcome` turns all three field assertions red while
+    /// `a_rebirth_request_is_the_name_and_the_value_never_the_name_alone` stays
+    /// green.
+    ///
+    /// # The datatype needle, and why it was worthless
+    ///
+    /// This asserted `log.contains('3')`. `captured` builds
+    /// `tracing_subscriber::fmt()` without `.without_time()`, so every captured
+    /// line carries a full RFC-3339 timestamp — and a one-digit needle is
+    /// satisfied by the clock. The datatype half of AC6 was therefore never
+    /// falsified: the recorded RED came from the `IntValue(1)` assertion alone,
+    /// which is why the mutation that removed BOTH fields looked decisive.
+    /// Found by the Story 4.7 code review. The needle is now the rendered field,
+    /// which nothing else in the line can produce.
+    ///
+    /// Falsified 2026-07-30, independently of the value: rendering the near-miss
+    /// field as values only — `received = ?received.iter().map(|r| &r.value)` —
+    /// turns the datatype and name assertions red while the value one stays green.
+    /// The failure output is its own evidence for why the old needle was
+    /// worthless; the captured line began
+    /// `2026-07-30T12:00:33.211428Z WARN …`, which contains three `3`s before the
+    /// message even starts.
+    ///
+    /// (A first attempt at this mutation removed `datatype` inside `as_received`
+    /// and left the test GREEN — correctly, because this test builds its `Inbound`
+    /// directly and never calls `as_received`. Recorded because a mutation that
+    /// misses its target proves nothing about the assertion, and reporting it as a
+    /// falsification would have been the very defect this comment is about.)
+    #[test]
+    fn the_near_miss_records_the_datatype_and_value_as_received() {
+        let log = captured(|| {
+            trace_command_outcome(
+                "spBv1.0/G/NCMD/N",
+                &Inbound::RebirthNearMiss {
+                    reason: NearMiss::ValueNotTrue,
+                    received: vec![RebirthAsReceived {
+                        name: METRIC_NODE_CONTROL_REBIRTH.to_string(),
+                        datatype: Some(sparkplug_b::DataType::Int32.code()),
+                        value: "IntValue(1)".to_string(),
+                    }],
+                    total: 1,
+                },
+            );
+        });
+        assert!(
+            log.contains("IntValue(1)"),
+            "the VALUE that arrived must be in the log, or a host encoding the \
+             request differently is indistinguishable from a host that sent \
+             nothing; got: {log}"
+        );
+        assert!(
+            log.contains("datatype: Some(3)"),
+            "the DATATYPE that arrived must be in the log as a datatype (Int32 is \
+             3) — not merely as a digit the timestamp also supplies; got: {log}"
+        );
+        assert!(
+            log.contains(METRIC_NODE_CONTROL_REBIRTH),
+            "and the NAME as received, which is the whole diagnosis when a host \
+             misses by a spelling; got: {log}"
+        );
+        assert!(
+            log.contains("spBv1.0/G/NCMD/N"),
+            "and the topic, so the operator knows which node; got: {log}"
+        );
+    }
+
+    /// Story 4.7 / AC6 — the near miss reads as neither an answered rebirth nor
+    /// an ordinary unknown command.
+    ///
+    /// The Story 4.6 review's sharpest finding was that swapping two arms'
+    /// BODIES left every test green: the log line is the observable the
+    /// criterion is written in. Three outcomes that collapse into one another
+    /// in the log are one outcome as far as an operator is concerned.
+    ///
+    /// Falsified 2026-07-30: giving the `Rebirth`, `RebirthNearMiss` and
+    /// `Unrecognised` arms the same message turns the distinctness assertions
+    /// red.
+    ///
+    /// Extended by the Story 4.7 code review: there are now THREE ways to miss,
+    /// and they must not read alike either. An operator who cannot tell a `false`
+    /// value from a misspelt name from a retained replay has three different
+    /// repairs and one log line. Falsified 2026-07-30: collapsing the `clause`
+    /// match in `trace_command_outcome` to a single string turns the near-miss
+    /// distinctness assertions red while every classification test stays green.
+    #[test]
+    fn an_answered_a_missed_and_an_unknown_command_do_not_read_alike() {
+        let near_miss = |reason: NearMiss, name: &str| {
+            let name = name.to_string();
+            captured(move || {
+                trace_command_outcome(
+                    "t",
+                    &Inbound::RebirthNearMiss {
+                        reason,
+                        received: vec![RebirthAsReceived {
+                            name: name.clone(),
+                            datatype: None,
+                            value: "<no value>".to_string(),
+                        }],
+                        total: 1,
+                    },
+                )
+            })
+        };
+
+        let answered = captured(|| {
+            trace_command_outcome(
+                "t",
+                &Inbound::Rebirth {
+                    ignored_alongside: vec![],
+                },
+            )
+        });
+        let missed = near_miss(NearMiss::ValueNotTrue, METRIC_NODE_CONTROL_REBIRTH);
+        let misspelt = near_miss(NearMiss::NameOnlyNearly, "Node Control/Refresh");
+        let replayed = near_miss(NearMiss::Retained, METRIC_NODE_CONTROL_REBIRTH);
+        let unknown = captured(|| {
+            trace_command_outcome(
+                "t",
+                &Inbound::Unrecognised {
+                    names: vec!["Whatever".to_string()],
+                    total: 1,
+                },
+            )
+        });
+
+        assert!(
+            answered.contains("INFO"),
+            "AC2 requires the answer to be visible under the default filter, \
+             which starts at INFO; got: {answered}"
+        );
+        assert!(
+            !answered.contains("ignored"),
+            "an ANSWERED command must not say it was ignored — that is the \
+             sentence the Story 4.6 chaos test greps for; got: {answered}"
+        );
+        for log in [&missed, &misspelt, &replayed, &unknown] {
+            assert!(
+                log.contains("ignored"),
+                "a command that was not acted on must say so; got: {log}"
+            );
+        }
+        assert!(
+            missed.contains("Node Control/Rebirth"),
+            "a near miss must name the metric it nearly matched; got: {missed}"
+        );
+        assert!(
+            misspelt.contains("Node Control/Refresh"),
+            "a name-only near miss must show the SPELLING that arrived, because \
+             that is the whole repair; got: {misspelt}"
+        );
+        assert!(
+            replayed.contains("RETAIN") || replayed.contains("retain"),
+            "a replayed command must say it was retained, or the operator looks \
+             for a host that is not there; got: {replayed}"
+        );
+
+        // Every pair must be distinguishable, including the three near misses
+        // from one another.
+        let all = [
+            ("answered", &answered),
+            ("value-not-true", &missed),
+            ("name-only", &misspelt),
+            ("retained", &replayed),
+            ("unknown", &unknown),
+        ];
+        for (i, (name_a, a)) in all.iter().enumerate() {
+            for (name_b, b) in all.iter().skip(i + 1) {
+                assert_ne!(
+                    a.split_whitespace().collect::<Vec<_>>(),
+                    b.split_whitespace().collect::<Vec<_>>(),
+                    "{name_a} and {name_b} read alike, and two outcomes that read \
+                     alike are one outcome to an operator"
+                );
+            }
+        }
     }
 
     /// Story 4.6 / AC3 — a metric addressed by ALIAS still identifies itself.
@@ -1001,11 +2279,14 @@ mod tests {
             body: None,
         });
         assert_eq!(
-            classify(&by_alias),
-            Inbound::Unrecognised(vec![
-                "<alias 7>".to_string(),
-                "<neither name nor alias>".to_string(),
-            ]),
+            classify(&by_alias, false),
+            Inbound::Unrecognised {
+                names: vec![
+                    "<alias 7>".to_string(),
+                    "<neither name nor alias>".to_string(),
+                ],
+                total: 2,
+            },
             "an alias is an identity; collapsing it to <unnamed> throws away the \
              only thing that says which command arrived"
         );
@@ -1021,7 +2302,53 @@ mod tests {
     /// return `Unrecognised([])` and the test goes red.
     #[test]
     fn a_command_carrying_no_metric_is_not_silently_dropped() {
-        assert_eq!(classify(&command_payload(&[])), Inbound::NoMetrics);
+        assert_eq!(classify(&command_payload(&[]), false), Inbound::NoMetrics);
+    }
+
+    /// Story 4.7 code review — a birth that was only PARTLY published is counted,
+    /// so it cannot be reported as complete.
+    ///
+    /// `publish` turns a full request channel into a WARN and continues, so the
+    /// NBIRTH could be queued and the DBIRTH dropped. That gap is bounded (see
+    /// `announce`) and now self-healing, but the trace called such a sequence
+    /// *"complete BIRTH sequence republished"* — a log that says the opposite of
+    /// what happened is worse than the gap it hides. `announce` gates that line on
+    /// this count being zero, so the count is the property.
+    ///
+    /// No runtime and no broker: the `EventLoop` is created and never polled, so
+    /// nothing drains the request channel and it fills after one message.
+    ///
+    /// Falsified 2026-07-30: replacing the body of the loop with
+    /// `let _ = publish(client, message);` — dropping the count, which is what
+    /// shipped — turns this red. Before this test the same mutation left the whole
+    /// suite green, which is why `announce`'s misreport survived review-by-reading.
+    #[test]
+    fn a_partly_published_birth_is_counted_and_never_reported_complete() {
+        let options = MqttOptions::new("falsify", "127.0.0.1", 1883);
+        // Capacity 1, and the EventLoop is dropped on the floor: the single slot
+        // is the only one there will ever be.
+        let (client, _never_polled) = AsyncClient::new(options, 1);
+
+        let message = |topic: &str| Outbound {
+            topic: topic.to_string(),
+            payload: vec![1, 2, 3],
+            message: MessageType::NBirth,
+        };
+        let mut queue = Queue {
+            pending: vec![message("a"), message("b"), message("c")],
+        };
+
+        let dropped = publish_all(&client, &mut queue);
+        assert_eq!(
+            dropped, 2,
+            "one slot means one message queued and two dropped; a caller that \
+             cannot see the two has no way to know the sequence was broken"
+        );
+        assert!(
+            queue.pending.is_empty(),
+            "every message must be ATTEMPTED — stopping at the first failure \
+             would leave the rest in the sink with nothing said about them"
+        );
     }
 
     fn temp(name: &str) -> PathBuf {

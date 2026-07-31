@@ -301,10 +301,11 @@ crates/smartme-bridge/src/` returned one `tracing_subscriber` initialiser and tw
 > rests on it, so see *"What Story 4.6 changed in this argument"* at the end of this section before
 > using any of it.
 
-**It loses nothing at all while Ignition is up.** There is no command path to lose: the bridge *acts
-on* no NCMD and receives no DCMD at all, and one broker means no server-walking and no stranding.
-*(Reworded by the Story 4.6 code review, 2026-07-29: this said the bridge "accepts no NCMD/DCMD",
-which since 4.6 is only true if "accepts" means "acts on". It receives them.)* For the ordinary
+**It loses nothing at all while Ignition is up.** One broker means no server-walking and no
+stranding, and the command path is not what STATE would have given us.
+*(Reworded twice. The Story 4.6 code review, 2026-07-29, corrected "accepts no NCMD/DCMD" — since 4.6
+the bridge receives them. Story 4.7, 2026-07-30, removed "the bridge acts on no NCMD" outright: it
+now acts on `Node Control/Rebirth`. The clause about DCMD stands — none is received.)* For the ordinary
 running case, STATE is an offer this deployment makes and the bridge declines at no cost.
 
 **What it loses is recovery after the host restarts — and the loss is total.** The chain is:
@@ -328,9 +329,11 @@ running case, STATE is an offer this deployment makes and the bridge declines at
    this record shows the bridge was even running during either run — indeed the `#` sweep found no
    `spBv1.0/…` topic at all, which suggests it was not.
 4. The protocol's own repair for a host that arrives without a BIRTH is an NCMD
-   `Node Control/Rebirth`. The bridge implements no Rebirth handling. *(At the time of measurement
-   it could not have received the request either; since Story 4.6 it receives it, traces the metric
-   name and drops it — the repair is still unavailable, but for one reason now instead of two.)* *(No `tck-id` is cited here on purpose. The clause this
+   `Node Control/Rebirth`. The bridge implemented no Rebirth handling. *(At the time of measurement
+   it could not have received the request either; Story 4.6 made it receive and trace one; **Story
+   4.7, 2026-07-30, made it answer one — so this leg of the chain is now FALSE and the repair is
+   available.** The measurement is unaffected: it recorded the state on 2026-07-28 and that record
+   stands. What changes is the argument built on it — see the dated section at the end.)* *(No `tck-id` is cited here on purpose. The clause this
    chain used to name, `-operational-behavior-host-reordering-rebirth` (`:565-568`), is the
    **out-of-order-sequence** remedy and is conditional on the host being *"configured with a
    'reordering timeout' parameter"* — nothing measured says Ignition is. The text that actually
@@ -338,8 +341,11 @@ running case, STATE is an offer this deployment makes and the bridge declines at
    rebirth request, not that it must. Either way the bridge could not receive it, so the conclusion
    stands on the bridge's own missing subscription rather than on an obligation of the host's.)*
 
-**So the two gaps compound: no STATE-wait *and* no Rebirth means that after an Ignition restart, no
-*host-initiated* mechanism can re-establish the bridge's tags.** The DATA keeps arriving at a host
+**So the two gaps compounded: no STATE-wait *and* no Rebirth meant that after an Ignition restart, no
+*host-initiated* mechanism could re-establish the bridge's tags.** *(Past tense as of Story 4.7: the
+Rebirth half is closed and a host-initiated mechanism now exists. The paragraph is kept in its
+original shape because it is the reasoning that produced ADR 0016, and rewriting it would hide why
+the ordering was chosen. What it concluded is superseded at the end of this section.)* The DATA keeps arriving at a host
 that has no BIRTH to interpret it against, until something makes the bridge reconnect. That is the
 deployment-specific evidence behind ranking **Story 4.7** (`Node Control/Rebirth`, the gap recorded
 at `-rebirth-action-1/2/3`) above Story 4.5 — a re-ordering that is **decided in
@@ -417,6 +423,25 @@ Two of three still hold, and **the third leg alone is sufficient** for the concl
 that arrives and is ignored repairs exactly as little as one that never arrives. So the cost stands,
 and so does the ranking in ADR 0016.
 
+> **⏹ EXPIRED 2026-07-30, exactly as the note below said it would.** Story 4.7 landed. Leg three is
+> now **false**: the bridge implements `Node Control/Rebirth` and answers a conformant request with a
+> complete birth sequence. All three legs of the table are therefore resolved —
+>
+> | Fact | After 4.7 |
+> | --- | --- |
+> | The NBIRTH is unretained | **unchanged** — Sparkplug forbids retain |
+> | The bridge holds no NCMD subscription | **false** since 4.6 |
+> | The bridge implements no `Node Control/Rebirth` | **false** since 4.7 |
+>
+> — and since only leg three was load-bearing, **the conclusion it supported does not stand.** A
+> host-initiated path back to a correct tag tree now exists. The cost of ignoring STATE is not zero,
+> but it is no longer *"total loss of recovery"*: it is *"recovery depends on the host asking"*.
+>
+> **The ranking in ADR 0016 has been carried out and its argument is spent.** Story 4.5 must be
+> re-weighed on its own evidence — chiefly the finding recorded elsewhere in this document that
+> PHID-wait without store-and-forward preserves no measurement, which 4.7 does not touch. Nothing in
+> this paragraph should be cited as a live reason for or against 4.5.
+
 *Corrected by the Story 4.6 code review, 2026-07-29. This sentence read "**either** one alone is
 sufficient", which is false and false in the direction that matters. The unretained NBIRTH does **not**
 on its own imply the absence of a host-initiated repair path — a working Rebirth handler repairs
@@ -430,7 +455,8 @@ file's Completion Notes and `sprint-status.yaml`; both are corrected. ADR 0016's
 already right — it says the conclusion "needs both halves" — so it was left alone.*
 
 **But the argument for that ranking is now stronger, not weaker, and the difference is worth
-stating.** ADR 0016 sequenced Story 4.7 (Rebirth) ahead of Story 4.5 (Primary Host wait) partly
+stating.** *(Written at Story 4.6; superseded by the expiry box above. Kept because it records what
+was believed when the ordering was acted on.)* ADR 0016 sequenced Story 4.7 (Rebirth) ahead of Story 4.5 (Primary Host wait) partly
 because the bridge could not even *receive* a Rebirth. That premise has gone — and what replaces it
 is sharper. The bridge now sits in a state where a live MQTT Engine on this broker can send it a
 `Node Control/Rebirth`, the request is delivered, and the answer is a log line. Exactly one piece of

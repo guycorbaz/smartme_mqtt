@@ -32,6 +32,18 @@
 //! device supporting writable outputs, so the topic form is added when a caller
 //! needs it rather than in advance.
 //!
+//! **Re-checked and CONFIRMED unchanged (2026-07-30), which is the interesting
+//! part.** A downstream application has since implemented the
+//! `Node Control/Rebirth` metric and the handler that answers a rebirth request
+//! — and it needed no change here at all. The
+//! list above is a statement about what THIS CRATE supplies, and the answer is
+//! still "not those": the metric is an application-level declaration assembled
+//! from [`Metric`] and [`MetricValue::Boolean`], and the handler that acts on it
+//! belongs to whoever owns the transport. A caller that wants a conformant node
+//! still has to supply both. Recorded rather than silently left alone, because
+//! "this sentence is still true" and "nobody re-read this sentence" look
+//! identical in a diff.
+//!
 //! # Public dependency
 //!
 //! The payload type returned by the builders is `prost`-generated and re-exported

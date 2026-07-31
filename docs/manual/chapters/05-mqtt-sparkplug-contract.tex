@@ -7,25 +7,36 @@ lifecycle (NBIRTH/NDATA/NDEATH).
 
 \begin{note}
 Everything in this chapter describes behaviour that is \emph{implemented and tested} as of
-Epic~1. Where the bridge does not yet do something the Sparkplug specification allows, it
+Epic~4. Where the bridge does not yet do something the Sparkplug specification allows, it
 is listed in section~\ref{sec:contract-limits} rather than described as though it worked.
 \end{note}
 
 \section{Contract version}
 
 The node BIRTH carries a metric \code{Contract/Version} (\code{Int64}), currently
-\textbf{2}. It is incremented on any breaking change to the topic grammar, to a metric name
-or unit, or to the meaning of a published quality code. Publishing it means a consumer can
+\textbf{3}. It is incremented on \emph{any} change to the topic grammar, to a metric name or
+unit, or to the meaning of a published quality code. Publishing it means a consumer can
 \emph{see} the contract change instead of having to notice it from broken tags.
 
+The number does not say what \emph{kind} of change it was, so it is worth stating. Version~3
+is \textbf{additive}: the birth certificate gained the \code{Node Control/Rebirth} metric, so
+a consumer sees one new tag and nothing it already held became wrong. Version~2 was
+\textbf{breaking}: a quality code a consumer had recorded as good was, from that release on,
+not good, and values from either side of that boundary cannot be compared without knowing
+which side they are on. Both bump, and both should --- but only one of them invalidates
+history.
+
 \begin{center}
-\begin{tabular}{@{}c p{10.2cm}@{}}
+\begin{tabular}{@{}c l p{8.4cm}@{}}
 \toprule
-\textbf{Version} & \textbf{Change} \\
+\textbf{Version} & \textbf{Kind} & \textbf{Change} \\
 \midrule
-2 & Quality codes corrected --- version~1 published codes a real host read as
+3 & additive & The node BIRTH declares \code{Node Control/Rebirth} (Boolean,
+    \code{false}) --- the endpoint a host addresses to request a fresh birth.
+    See section~\ref{sec:contract-ncmd}. \\
+2 & breaking & Quality codes corrected --- version~1 published codes a real host read as
     \emph{good}. See section~\ref{sec:quality}. \\
-1 & Initial contract. \\
+1 & --- & Initial contract. \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -80,7 +91,9 @@ measurements, and a device only stops reporting when its node does.
 \toprule
 \normalfont\textbf{Metric} & \textbf{Type} & \textbf{Unit} & \textbf{Meaning} \\
 \midrule
-Contract/Version & Int64  & ---   & Contract version, node BIRTH only. Currently 2. \\
+Contract/Version & Int64  & ---   & Contract version, node BIRTH only. Currently 3. \\
+Node Control/Rebirth & Boolean & --- & Always \code{false}. The command endpoint a host
+                                       addresses to request a fresh birth; node BIRTH only. \\
 Power            & Double & kW    & Instantaneous power. \\
 Energy           & Double & kWh   & Cumulative energy counter. \\
 bdSeq            & Int64  & ---   & Session number; BIRTH and DEATH only. \\
@@ -153,7 +166,9 @@ zero.
 
 \subsection{A rebirth never promotes a value}
 
-On reconnect the bridge re-declares its tags. Re-declared readings are degraded
+The bridge re-declares its tags on a reconnect, and also whenever a host requests a rebirth
+(section~\ref{sec:contract-ncmd}). Both take the same path, so what follows holds for both.
+Re-declared readings are degraded
 (\textsc{good} becomes \textsc{stale}, never the reverse) and stamped with the reading's
 own \code{ValueDate}. Without this, a 45-minute outage would come back looking like a
 fresh measurement.
@@ -223,7 +238,7 @@ reconnect as well as at boot.
 \code{bdSeq} is persisted across restarts through an atomic write (write-temp, fsync,
 rename), so a power loss mid-write cannot leave a corrupt session number.
 
-\subsection{Commands are received and ignored}
+\subsection{Commands are received; one is honoured}
 \label{sec:contract-ncmd}
 
 \prog subscribes to
@@ -235,26 +250,65 @@ This is the one place where \prog uses a QoS other than~0; the rule that everyth
 published at QoS~0 governs \emph{publishing}, and a subscription QoS is a different setting
 travelling the other way.
 
-\textbf{Nothing acts on what arrives.} \prog implements no command at all --- not
-\code{Node Control/Rebirth}, not anything else. Every message received on that topic is
-logged and discarded:
+\textbf{One command is honoured: \code{Node Control/Rebirth}.} It is the command the
+specification requires every edge node to implement, and it is the only one \prog acts on.
+Everything else that arrives is logged and discarded.
+
+A rebirth request is recognised by its \emph{name and its value together}: a metric named
+\code{Node Control/Rebirth} carrying the boolean value \code{true}. The specification
+defines it that way, and the value half matters --- \code{false} is what \prog's own
+\code{NBIRTH} declares, so a host echoing that declaration back is not asking for anything.
 
 \begin{center}
-\begin{tabular}{@{}l p{8.6cm}@{}}
+\begin{tabular}{@{}p{4.3cm} p{8.3cm}@{}}
 \toprule
 \textbf{What arrives} & \textbf{What \prog does} \\
 \midrule
-A command naming metrics & Logs the metric \emph{names} at \code{INFO} and discards it.
-                           Names only --- a full payload dump would be noise and could
+\code{Node Control/Rebirth} = \code{true}
+                         & \textbf{Answers it.} Republishes the complete birth sequence ---
+                           one \code{NBIRTH} followed by one \code{DBIRTH} per meter --- and
+                           logs it at \code{INFO}. The session is \emph{not} reopened: the
+                           \code{bdSeq} is unchanged, because a rebirth re-announces a
+                           session rather than starting one. No measurement is published
+                           between the request and the last \code{DBIRTH}. \\
+\code{Node Control/Rebirth}, any other value
+                         & \textbf{Does not answer, and says so loudly.} Logged at
+                           \code{WARN} \emph{with the datatype and value exactly as they
+                           arrived}. This line is deliberate: if some host encodes the
+                           request differently from what \prog accepts, this is what makes
+                           that visible instead of silent. A request that is quietly not
+                           recognised looks identical to a host that never asked. \\
+A command naming other metrics & Logs the metric \emph{names} at \code{INFO} and discards
+                           it. Names only --- a full payload dump would be noise and could
                            carry values. \\
 Bytes that do not decode & Logs at \code{WARN} and discards. Anyone can publish to this
                            topic, so a malformed payload is an ordinary event and never
                            stops the bridge. \\
 A command with no metrics & Logged too, distinctly, so it cannot be confused with a
                            command whose names were lost. \\
+Any command with the MQTT \emph{retain} flag set
+                         & \textbf{Refused as a replay}, and logged at \code{WARN} naming
+                           the flag. A retained command is one the broker kept and handed
+                           back on subscribing, not one a host is sending now; acting on it
+                           would re-announce the node on every reconnect for as long as the
+                           retained message existed. The specification requires commands to
+                           be published without retain, so no conforming host sends one. \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+\begin{note}
+There is no rate limit on rebirth answers and no coalescing of a burst. A host may resend;
+each request is answered. The reasoning is that a birth here is small --- one \code{NBIRTH}
+plus one \code{DBIRTH} per configured meter --- while a \emph{suppressed} answer is
+invisible to the host, which cannot tell it from a node that never heard. The inbound
+command queue is bounded and a full queue is a logged drop, so a burst degrades to some
+answers plus visible drops, never to a stall.
+\end{note}
+
+A rebirth is also the one thing that can make \prog publish a birth without having
+reconnected. The log line says which of the two happened, because the causes to go looking
+for are entirely different.
 
 \prog also reads the broker's answer to its own subscription, and says so in the log. If
 the broker \emph{refuses} the subscription --- an ACL, typically --- that is logged at
@@ -311,11 +365,42 @@ The two mechanisms are complementary rather than alternative: the will remains t
 \label{sec:contract-limits}
 
 \begin{itemize}
-  \item \textbf{No command is honoured}, \code{Node Control/Rebirth} included. \prog
-        \emph{does} subscribe to its \code{NCMD} topic and \emph{does} receive commands
-        --- see section~\ref{sec:contract-ncmd} --- but it acts on none of them: a consumer
-        that requests a rebirth gets a log line and nothing else. Reconnects still rebirth
-        on their own.
+  \item \textbf{Only one command is honoured}: \code{Node Control/Rebirth}, which the
+        specification requires of every edge node. \prog subscribes to its \code{NCMD}
+        topic, receives every command sent there, and acts on that one --- see
+        section~\ref{sec:contract-ncmd}. Any other command is logged and discarded. In
+        particular there is no \code{DCMD} path at all, so nothing can be written to a
+        device output; that is a separate capability with its own safety argument, and it
+        does not exist yet.
+  \item \textbf{Anyone who can reach the broker can request a rebirth.} The broker on this
+        installation requires no credentials, so any client may publish a rebirth request
+        and \prog will answer it. It is not a new exposure: the same client could already
+        publish a forged death certificate, which lies immediately, whereas a forged rebirth
+        republishes what is already true. Two consequences are worth knowing about, and
+        neither is worth a mechanism here --- the correct control is broker-side, with
+        credentials or an ACL on the \code{NCMD} topic.
+
+        \textbf{Answering a rebirth costs a stale window.} A rebirth re-declares every
+        reading \prog is holding, and it re-declares them \emph{degraded}: a value that was
+        \code{Good} is republished as \code{Bad\_Stale}. That is deliberate and it is the
+        safe direction --- the reading has not been re-fetched, so it cannot honestly be
+        re-asserted as good, and \prog never publishes a fresh-looking value it has not
+        verified. But it means every tag reads stale from the moment the rebirth is answered
+        until the next poll completes, up to one polling interval later. A host that asks for
+        rebirths repeatedly can therefore hold every tag at \code{Bad\_Stale} indefinitely.
+        No measurement is lost and nothing is misreported; the data simply declares itself
+        untrustworthy, which is what it is.
+
+        \textbf{A \emph{retained} rebirth request is refused.} MQTT lets a publisher ask the
+        broker to keep a message and replay it to everyone who subscribes afterwards. Since
+        \prog subscribes on every connect, a retained rebirth request would be handed to it
+        again on every reconnect, for as long as the retained message existed --- with nobody
+        sending anything, and a log line indistinguishable from a real host asking. \prog
+        therefore refuses a command that arrives with the retain flag set and logs it as a
+        replay, naming the flag and how to clear it. This costs nothing: the specification
+        requires commands to be published \emph{without} retain, so no conforming host ever
+        sends one. A retained message is cleared by publishing an empty payload, retained, to
+        the same topic.
   \item \textbf{The registered will is QoS~0 where the specification requires QoS~1.}
         See the note under \emph{Delivery semantics}.
   \item \textbf{No \emph{Primary Host Application} support.} Sparkplug lets an Edge Node
@@ -330,19 +415,28 @@ The two mechanisms are complementary rather than alternative: the will remains t
         retained, so the broker keeps no copy for a returning consumer; \prog reads no
         \code{STATE} topic, so it never learns the host came back; and its own broker
         session is untouched by the host restarting, so \emph{that} event prompts nothing.
-        The protocol's own repair for this is an \code{NCMD} \code{Node Control/Rebirth},
-        which reaches \prog but which \prog does not implement --- so the repair is
-        unavailable for one reason now rather than two. The consequence is that \textbf{after a consumer
-        restarts, it may keep receiving \code{NDATA} it has no \code{NBIRTH} to
-        interpret.}
+        \textbf{The protocol's own repair for this now works.} It is an \code{NCMD}
+        \code{Node Control/Rebirth}, and \prog both receives it and answers it --- the
+        request reaches the bridge and the bridge republishes its complete birth sequence.
+        A returning host that notices it is receiving data for a node whose definitions it
+        does not have can therefore ask for them and get them, without anything happening
+        on \prog's side and without waiting.
 
-        \textbf{What does restore the definitions is any reconnect on \prog's own side.}
-        A fresh \code{NBIRTH} is published on every successful MQTT connection, so a
-        broker restart, a network interruption or a keep-alive expiry all repair the
-        consumer's view --- see the first item in this list. Restarting \prog is therefore
-        the most direct remedy, but it is not the only one, and an earlier edition of this
-        paragraph wrongly said it was. What no event on the \emph{host} side can do is
-        prompt that reconnect by itself.
+        That is the important change, and it is worth being exact about what it does and
+        does not fix. The repair is \emph{host-initiated}: it works if and only if the host
+        asks. Ignition's MQTT Engine does ask, on its own, when it receives data from a
+        node whose birth it never saw --- which is precisely this situation. But \prog
+        still reads no \code{STATE} topic, so it never learns the host came back, and it
+        will not volunteer a birth. A host that does \emph{not} ask still sees
+        \code{NDATA} it has no \code{NBIRTH} to interpret.
+
+        \textbf{Any reconnect on \prog's own side also restores the definitions.} A fresh
+        \code{NBIRTH} is published on every successful MQTT connection, so a broker
+        restart, a network interruption or a keep-alive expiry all repair the consumer's
+        view --- see the first item in this list. Restarting \prog is the most direct
+        remedy, but it has not been the only one for some time, and an earlier edition of
+        this paragraph wrongly said it was. What no event on the \emph{host} side can do is
+        prompt that reconnect by itself --- which is why the rebirth path above matters.
 
         Redundant-broker stranding is a second, separate consequence, and it does require
         a multi-broker topology.

@@ -271,3 +271,16 @@ Items deferred from reviews; each carries its origin and where it should be pick
   protects Ignition too) and broker ACLs — Epics 5/7. **Unmeasured residue:** a sustained attack
   would churn death/birth at roughly 1 Hz on the host; hand that observation to **Story 4.13**
   (chaos broker recovery) rather than reasoning about it further.
+
+## Deferred from: code review of 4-7-node-control-rebirth-answer (2026-07-31)
+
+- ~~**LaTeX table overflow in the manual's NCMD-behaviour table.**~~ **CLOSED in the same review, by
+  building it.** The item was written as a defer on the grounds that an overfull hbox is a *warning*,
+  so the story's *"`latexmk` exits 0"* claim could not rule it out and confirming it needed a build.
+  The build was then run: chapter 5's table was **`Overfull \hbox (17.75223pt too wide)`**, exactly as
+  suspected, under an exit code of 0. Column one was `l`, which does not wrap, and Story 4.7's
+  `\code{Node Control/Rebirth}, any other value` did not fit. Fixed by making both columns `p{}`
+  (`p{4.3cm} p{8.3cm}`); the rebuild has no overfull box for that table, and the three that remain
+  pre-date this work. **Recorded rather than deleted, for the lesson: `latexmk` exiting 0 says nothing
+  about whether the page is right, and this repository already has a rule about exit codes describing
+  something other than what was measured.**

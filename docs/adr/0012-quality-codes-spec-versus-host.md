@@ -44,7 +44,13 @@ anyone knowing there was one.
   in the crate that is allowed to name a vendor.
 
 The wire is unchanged: the bridge publishes the same bytes as before this ADR, so
-`CONTRACT_VERSION` stays at 2.
+`CONTRACT_VERSION` stayed at 2 **for this change**.
+
+> **It is no longer 2.** Story 4.7 raised it to 3 when the NBIRTH gained
+> `Node Control/Rebirth` — an *additive* bump, nothing a consumer already held became wrong.
+> The sentence above is a statement about what THIS ADR did, and it remains true as such; it is
+> marked because this is the document a reader consults to learn what the version numbers mean, and
+> a present-tense "stays at 2" reads there as the current value. Noted by the Story 4.7 code review.
 
 ### Why not conform
 
