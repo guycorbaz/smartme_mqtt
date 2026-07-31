@@ -129,12 +129,12 @@ and authentication are best enabled in the same change.
 
 \subsection{Sparkplug identity}
 
-The group and edge-node identifiers default to \code{Site} and \code{Bridge} and can be
-overridden:
+The group and edge-node identifiers are \textbf{required}. There is no default, and
+\prog refuses to start without them:
 
 \begin{lstlisting}[language=bash]
-SMARTME_GROUP_ID=Site
-SMARTME_NODE_ID=Bridge
+SMARTME_GROUP_ID=<your group>
+SMARTME_NODE_ID=<your node>
 \end{lstlisting}
 
 \begin{warning}
@@ -142,6 +142,14 @@ These form the topic grammar, which is a \emph{versioned contract} (chapter~\ref
 Changing them after a SCADA has begun historising the tags breaks the continuity of its
 stored curves --- the history stays under the old topic and the new one starts empty.
 Choose them before the first production run, not after.
+
+\textbf{And a Sparkplug host persists what it discovers.} The group you name becomes a
+folder in the host's tag tree that outlives the process and has to be deleted by hand ---
+and deleting those tags also discards their alarm and history configuration. Publishing
+into the wrong namespace is not undone by restarting with better settings, which is why
+these have no default at all: they defaulted to \code{Site} and \code{Bridge} until
+2026-07-31, so a \prog started with no configuration published straight into the namespace
+most likely to be the production one.
 \end{warning}
 
 \section{Meter-to-topic mapping}

@@ -51,8 +51,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         meter: MeterId::new(env("SMARTME_METER_ID")?),
         device_id: env("SMARTME_DEVICE_ID")?,
         serial: Serial::new(env("SMARTME_SERIAL")?),
-        group_id: std::env::var("SMARTME_GROUP_ID").unwrap_or_else(|_| "Site".to_string()),
-        node_id: std::env::var("SMARTME_NODE_ID").unwrap_or_else(|_| "Bridge".to_string()),
+        // NO DEFAULT, and this is the same rule as the port below.
+        //
+        // These two identifiers ARE the topic namespace. A Sparkplug host
+        // persists what it discovers: the group becomes a folder in its tag
+        // tree that outlives the process and has to be deleted by hand, and
+        // deleting MQTT Engine tags also discards their alarm and history
+        // configuration. Publishing into the wrong namespace is therefore not
+        // recoverable by restarting with better settings.
+        //
+        // They defaulted to `Site` / `Bridge` until 2026-07-31. The asymmetry
+        // that exposed it: the Tier-3 contract test REFUSES to publish into a
+        // group called `Site`, precisely because that is the production
+        // namespace — while the product itself published there whenever the
+        // variable was unset. The guard was on the disposable artifact and
+        // absent from the real one. Found while standing up a probe against
+        // the live broker, where the default had to be overridden by hand to
+        // avoid exactly this.
+        group_id: env("SMARTME_GROUP_ID")?,
+        node_id: env("SMARTME_NODE_ID")?,
         broker_host: env("SMARTME_BROKER_HOST")?,
         // A typo'd port must not silently connect somewhere else.
         broker_port: match std::env::var("SMARTME_BROKER_PORT") {
