@@ -1,4 +1,27 @@
-//! Tier 3 — the deciding oracle for the hand-rolled protobuf.
+//! Tier 3 — the deciding oracle for the hand-rolled protobuf **of this crate**.
+//!
+//! # What this attests, and what it does NOT (re-scoped 2026-08-01, Story 4.8)
+//!
+//! **It attests to the crate.** These bytes are assembled from `sparkplug-b`
+//! primitives, and the quality codes are the *specification's* — `Good = 192`,
+//! `Stale = 500`, `Bad = 0` — because that is what this crate returns since
+//! [ADR 0012](../../../docs/adr/0012-quality-codes-spec-versus-host.md).
+//!
+//! **It does NOT attest to the bridge.** `smartme_mqtt` deviates deliberately and
+//! publishes Ignition's codes instead (`Bad_Stale = 0x8000_0000 | 516`). Between
+//! `fce148f` and `d28bb02` this file and the product agreed; since `d28bb02` they
+//! do not, and the run table's `v2 | Pass` row was obtained under the old state.
+//! The drift is [#40]. **The gate for the product is
+//! `crates/smartme-bridge/tests/ignition_contract.rs`**, added by Story 4.8, which
+//! drives the real driver.
+//!
+//! **Step 4 is therefore no longer a pass/fail on staleness — it is a
+//! demonstration.** It shows the specification's `Stale = 500` being displayed by
+//! a real host as `Good(500)`, which is the measurement ADR 0012 rests on. Keeping
+//! it is the only standing external evidence that the deviation was necessary;
+//! retiring it would lose that. Decided by Guy, 2026-07-31, recorded on [#40].
+//!
+//! [#40]: https://github.com/guycorbaz/smartme_mqtt/issues/40
 //!
 //! Every other test in this crate checks the encoder against itself: round-trip
 //! through our own decoder, property tests over our own invariants. That proves
@@ -260,12 +283,17 @@ async fn ignition_contract() {
     publish(d_data.clone(), encode(&payload)).await;
 
     checkpoint(
-        "STEP 4 — STALE while the node stays online (the critical case)",
+        "STEP 4 — the specification's STALE code, and what Ignition does with it",
         &[
             "The node is STILL shown as online — it has not died",
-            "Both tags now show quality STALE / uncertain",
-            "The values are unchanged, but they are NOT presented as trustworthy",
-            "=> If Ignition still shows these as good, the whole guarantee fails here",
+            "The values are unchanged",
+            "=> EXPECT quality Good(500). This step now DEMONSTRATES a defect rather than",
+            "   testing a guarantee: this crate publishes the specification's Stale = 500,",
+            "   and Ignition reads the quality LEVEL from the TOP BITS of a 32-bit code, so",
+            "   500 lands in the 'good' band with 500 as a subcode. A non-good quality that",
+            "   displays as good is the exact silent lie the project exists to prevent.",
+            "=> If you see a NON-good quality here, something has changed: either Ignition's",
+            "   encoding, or this crate's codes. Both are findings. Record it and open an issue.",
         ],
     );
 

@@ -381,8 +381,45 @@ development_status:
   # 'Refresh' slip at Sparkplug_5:950?) are MEASUREMENTS this run makes -- and A is the
   # input STORY 4.5 IS WAITING ON.
   # Reuse chaos_ncmd_rebirth.rs's in-process harness; do NOT build a second one.
-  # ONE DECISION LEFT FOR GUY: the crate test's disposition (Task 4).
-  4-8-tier-3-gate-covers-ncmd-rebirth: ready-for-dev
+  # ONE DECISION LEFT FOR GUY: the crate test's disposition (Task 4). -- ANSWERED: keep it,
+  # re-scoped. Task 4 is closed.
+  # 2026-08-01: BUILT, tasks 1-5 done, status `review`. NFR17 is NOT closed and cannot be by
+  # this commit: the gate exists, THE RUN HAS NOT HAPPENED. Task 6 is Guy's and carries the
+  # story's own instruction "Do not run this unasked" -- the broker is unauthenticated
+  # Mosquitto with a live Ignition on it, and the run publishes a disposable node into a real
+  # tag tree whose folder outlives it.
+  # NEW GATE: crates/smartme-bridge/tests/ignition_contract.rs. Drives mqtt_driver::run in
+  # process, reusing 4.7's harness rather than building a second one. Six steps; step 5 is the
+  # rebirth issued FROM Designer, which is the only thing no test in this repo can supply.
+  # THREE PROPERTIES DELIBERATELY ENCODED: (a) the observer connects BEFORE the bridge, because
+  # a gate that subscribes after the birth cannot tell a birth that never happened from one it
+  # arrived too late to see -- the shape the 4.4 review found in the will-vs-death
+  # discriminator; (b) bdSeq is read off the wire and PRINTED with its own verdict before and
+  # after the rebirth, because AC3 forbids asking the operator whether it "looks the same";
+  # (c) every step carries its false-pass list, including the two that have caught this project
+  # -- a RECONNECT birth mistaken for an answer (same bdSeq, so the presence of an NBIRTH
+  # cannot distinguish them) and a RETAINED NCMD replayed at subscribe time (ADR 0017).
+  # FALSIFIED, both red: group=Site is refused by the copied production guard; an unreachable
+  # broker now reports instead of hanging. The second doubles as the CONTROL -- with a
+  # disposable group the run gets PAST the guard and fails later, proving the guard does not
+  # refuse everything.
+  # A DEFECT IN MY OWN GATE, found BY the falsification run: common::named_subscriber_on waits
+  # for a SubAck and retries forever, so a mistyped broker address made the gate hang with NO
+  # OUTPUT AT ALL -- indistinguishable from a slow start. Bounded to 20 s with a message naming
+  # the three likely causes. The falsification found what review would not have.
+  # CRATE GATE RE-SCOPED, NOT RETIRED (Guy, 2026-07-31): its module docs now state what it does
+  # and does not attest, and its step 4 EXPECTS Good(500) -- turning a gate that could not pass
+  # into the standing external evidence that ADR 0012's deviation was necessary. Retiring it
+  # would have destroyed the only external proof of that.
+  # RUNBOOK REWRITTEN around two gates that expect OPPOSITE outcomes at step 4, which is the
+  # single most confusable thing in this project's documentation. Its opening claim ("the only
+  # check in the project") was amended too -- there are two now. All relative links verified to
+  # resolve, mechanically.
+  # CHECKED, NOT ASSUMED: the conformance matrix cites a Tier-3 artifact exactly once
+  # (sparkplug-conformance.md:886) and it cites quality_code_probe, a DIFFERENT test that has
+  # not moved. No evidence citation went stale. The v2 run-table row was ALREADY annotated in
+  # place on 2026-07-31, so AC2's annotation needed nothing.
+  4-8-tier-3-gate-covers-ncmd-rebirth: review
   4-9-sigterm-discriminator-survives-per-connect-bdseq: backlog
   4-10-own-the-reconnect-loop-bdseq-per-connect: backlog
   4-11-broker-outage-traced-drop-exhaustive: backlog

@@ -112,6 +112,8 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 
 **Interoperability & Deployment**
 - NFR17: Sparkplug B output conforms to what Ignition MQTT Engine accepts — verified by a manual pre-release contract test against a real Ignition (values, units, STALE-on-death, NCMD/Rebirth). Not in automated CI. *(Epic 1 delivered the first pass covering values, units and STALE-on-death; the NCMD/Rebirth half is Epic 4 — see the Epic 1 retrospective.)*
+  - **Story 4.8 built the gate that can close this, 2026-08-01: `crates/smartme-bridge/tests/ignition_contract.rs`.** It supersedes the crate-level gate for NFR17's purpose, because that one publishes the *specification's* quality codes while the product publishes Ignition's — the two are different bytes, and the Epic 1 pass attests to an artifact state that no longer exists ([#40](https://github.com/guycorbaz/smartme_mqtt/issues/40)). The new gate drives `mqtt_driver::run`, so every byte on the wire is the product's.
+  - **NFR17 is NOT yet closed**: the gate exists, the run has not been performed. Closing it requires a run against a stated **Ignition version AND MQTT Engine module version** — the runbook records the module version's earlier absence as a defect — with a `v3` row added to the run table. The rebirth step must be triggered from the Designer by a human; it is the one thing no test in this repository can supply.
 - NFR18: The Sparkplug/MQTT contract is a standalone versioned document; a breaking change bumps the contract version.
 - NFR19: The published `sparkplug-b` crate follows semver with a stable, documented public API (no third-party types leaked), complete crate metadata, and a documented conformance scope. Publish acceptance: `cargo publish` succeeds and `cargo add sparkplug-b` in a clean project compiles an encode→decode round-trip.
 - NFR20: The bridge works with either a bundled MQTT broker or an external broker.
@@ -993,6 +995,28 @@ So that NFR17 is covered by the artifact it names.
 **Given** NFR17's coverage note in `epics.md`
 **When** this story is done
 **Then** the note stops saying "the NCMD/Rebirth half is Epic 4" and records the version it was verified against.
+
+> **⚠️ BOTH ACs ABOVE ARE AMENDED, AND SIX MORE WERE ADDED at story creation (2026-07-31).**
+> The full set lives in
+> `_bmad-output/implementation-artifacts/4-8-tier-3-gate-covers-ncmd-rebirth.md`. Two reasons,
+> and the first invalidates AC1 as written:
+>
+> 1. **AC1 names an artifact that cannot answer a rebirth.**
+>    `crates/sparkplug-b/tests/ignition_contract.rs` never subscribes (`grep subscribe` returns
+>    nothing), never declares `Node Control/Rebirth`, and lives in a crate whose own `lib.rs`
+>    states it supplies *"neither the metric nor the command path"*. A publish-only scripted
+>    session cannot answer a request; the step could only ever have been faked. **The scope
+>    became *re-aim* rather than *extend*** — decided by Guy on 2026-07-31 before drafting.
+> 2. **The gate had silently stopped testing the product.** Since `d28bb02` (ADR 0012) the crate
+>    publishes the specification's quality codes and the bridge publishes Ignition's. Different
+>    bytes, and the `v2 | Pass` row predates the split. Its step 4 was *guaranteed to fail*.
+>    [#40](https://github.com/guycorbaz/smartme_mqtt/issues/40).
+>
+> **Delivered 2026-08-01:** `crates/smartme-bridge/tests/ignition_contract.rs`, which drives
+> `mqtt_driver::run` so every byte is the product's; the crate gate re-scoped rather than retired,
+> its step 4 now *expecting* `Good(500)` as the standing external evidence that ADR 0012's
+> deviation was necessary; and the runbook rewritten around two gates that attest to different
+> things. **The run itself has NOT been performed** — NFR17 closes on a run, not on a gate.
 
 ### Story 4.9: Give `chaos_sigterm_no_lie` a discriminator that survives per-CONNECT `bdSeq`
 

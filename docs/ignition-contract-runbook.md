@@ -1,10 +1,14 @@
 # Tier-3 Ignition contract test — runbook
 
-**What this is.** The only check in the project that a *real* Sparkplug host accepts our
-hand-rolled protobuf. Everything else validates the codec against itself — round-trips
+**What this is.** The only checks in the project that a *real* Sparkplug host accepts what we
+publish. Everything else validates our bytes against our own expectations — round-trips
 through our own decoder, property tests over our own invariants — which proves
 self-consistency and nothing about conformance. A codec can be perfectly self-consistent and
 still be rejected by Ignition, or worse, silently misread by it.
+
+**There are two of them since Story 4.8**, and which one you run matters: one publishes the
+crate's bytes, the other the product's, and since ADR 0012 those differ. See *There are TWO
+gates* below before running anything.
 
 **What it is not.** An automated test. There is no assertion here worth the name: the
 assertion is a human looking at the tag browser. It is `#[ignore]`d and will never run as a
@@ -33,7 +37,39 @@ You need:
 Record the **Ignition version** you are testing against. A pass is only meaningful against a
 stated version.
 
-## Running it
+## There are TWO gates, and they attest to different things
+
+Story 4.8 added a second one, because the first had stopped testing the product. Run the
+**bridge** gate to answer NFR17; run the **crate** gate only for the narrow purpose stated below.
+
+| Gate | Publishes | Answers |
+| --- | --- | --- |
+| **`smartme-bridge`** ← the one that matters | the **product's** bytes, by driving `mqtt_driver::run` | *Does what `smartme_mqtt` puts on the wire conform to what MQTT Engine accepts?* — which is NFR17 |
+| `sparkplug-b` | a session scripted from crate primitives, with the **specification's** quality codes | *Does the crate's codec conform?* — plus a standing demonstration that Ignition displays the specified `Stale = 500` as `Good(500)` |
+
+**Why the split exists.** Since `d28bb02` ([ADR 0012](adr/0012-quality-codes-spec-versus-host.md))
+the crate returns the specification's quality codes and the bridge deviates to Ignition's. The two
+publish **different bytes**. The crate gate's `v2 | Pass` row was obtained before that split, so it
+attests to an artifact state that no longer exists — see the drift note under *Record of runs*, and
+[#40](https://github.com/guycorbaz/smartme_mqtt/issues/40).
+
+## Running the bridge gate (NFR17)
+
+```bash
+SPARKPLUG_CONTRACT_BROKER=<host>:1883 \
+SPARKPLUG_CONTRACT_GROUP=ContractV3 \
+  cargo test -p smartme-bridge --test ignition_contract -- --ignored --nocapture
+```
+
+Six steps. Steps 1–4 and 6 mirror the crate gate's; **step 5 is new and cannot be automated at
+all** — you trigger a rebirth *from the Ignition Designer*, and the gate reads the `bdSeq` off the
+wire before and after and prints its own verdict. A rebirth you publish yourself proves only that
+the bridge answers *us*, which every automated test already proves.
+
+The gate refuses to start if it cannot reach the broker within 20 s, and says why. It also refuses
+a group named `Site`.
+
+## Running the crate gate
 
 ```bash
 SPARKPLUG_CONTRACT_BROKER=<host>:1883 \
@@ -41,14 +77,21 @@ SPARKPLUG_CONTRACT_GROUP=ContractTest \
   cargo test -p sparkplug-b --test ignition_contract -- --ignored --nocapture
 ```
 
+**Its step 4 is expected to show `Good(500)`.** That is not a failure of the gate; it is the
+demonstration the gate now exists for. See *Step 4* below.
+
+## Both gates
+
 `--nocapture` is **not optional**. Without it you see none of the prompts, and the test looks
 like it has hung when it is in fact waiting for you.
 
 The broker address is deployment-specific: keep it in your shell or your local `.env`, never
 in a committed file.
 
-The test walks five steps, printing a checklist and waiting for **Enter** at each one. Take as
-long as you need — nothing times out.
+Each gate prints a checklist and waits for **Enter** at each step. Take as long as you need —
+nothing times out. **Every checklist item is followed by what else could make that step pass
+wrongly**; read those, because this gate has already come within one step of returning a false
+pass twice.
 
 ---
 
@@ -95,10 +138,61 @@ answering while the bridge is perfectly healthy on MQTT. The node is alive, so t
 mechanism (NDEATH) will not fire — the only thing marking the data untrustworthy is the
 quality property.
 
-If Ignition still shows these as good, the guarantee fails here, and it fails silently. This
-step is the one worth being slow and suspicious about.
+**The two gates expect OPPOSITE outcomes here, and that is the point.**
 
-### Step 5 — death, two certificates
+- **Bridge gate — expect a NON-good quality** (`Bad_Stale`). It publishes
+  `ignition_quality_code`, and this step is the only check anywhere that the host *agrees* the
+  code means "not good". No automated test can do it: our tests compare our bytes to our own
+  expectations, and the whole v1 failure was a code we were confident about and the host read
+  as good. If this shows good, the guarantee fails silently and the deviation has stopped
+  working.
+- **Crate gate — expect `Good(500)`.** It publishes the specification's `Stale = 500`. Ignition
+  reads the quality *level* from the top bits of a 32-bit code, so 500 lands in the good band
+  with 500 as a subcode. This is a demonstration of the defect
+  [ADR 0012](adr/0012-quality-codes-spec-versus-host.md) exists to work around, kept
+  deliberately as the standing external evidence that the deviation was necessary. A non-good
+  quality *here* would be the surprise, and worth an issue.
+
+Whichever gate you are running, this step is the one worth being slow and suspicious about —
+and it is the step that came closest to a false pass on the v2 run, because a tag can read
+"not good" for reasons that have nothing to do with the quality property. Check the node is
+still **online** before believing it.
+
+### Step 5 (bridge gate only) — a rebirth issued BY IGNITION ← the one nothing else can do
+
+You trigger it from the Designer, by writing `true` to the node's `Node Control/Rebirth` tag.
+**Do not publish it yourself.** A rebirth the gate publishes proves the bridge answers *us*,
+which `chaos_ncmd_rebirth` already proves automatically and for free. The only thing this step
+adds — the only thing no test in this repository can supply — is that the bridge answers
+*Ignition*.
+
+What to confirm, and the gate prints the numbers so you do not have to judge by eye:
+
+- exactly **one** NBIRTH gained, and one DBIRTH per meter;
+- **`bdSeq` unchanged** across the rebirth. The gate reads it off the wire before and after and
+  prints its own verdict.
+
+**Record where the control appears in the Designer.** The next person will not find it, and if
+it is *absent* that absence is the measurement: it would mean MQTT Engine offers the control
+only for a node that declared the metric, and that the flow ADR 0016 described had never
+occurred.
+
+**Two ways this step passes wrongly, both of which have caught this project before:**
+
+- a **reconnect** produced the birth. A reconnect publishes an NBIRTH under the same `bdSeq`,
+  so the presence of an NBIRTH cannot distinguish the two. Check the bridge's log for a
+  connection event at that moment.
+- a **retained** NCMD was replayed at subscribe time rather than a request anyone sent
+  ([ADR 0017](adr/0017-a-retained-ncmd-is-a-replay-not-a-request.md)). The bridge refuses those
+  now and logs `reason=Retained`.
+
+**If no birth follows, look for the near-miss WARN before concluding anything.**
+`reason=NameOnlyNearly` means Engine sent a different spelling — the norm contradicts itself
+here, `Sparkplug_5_Operational_Behavior.adoc:950` says *"Node Control/Refresh"* where every
+tck-id says `Rebirth`. `reason=ValueNotTrue` means a different encoding. Each has a different
+repair, and the log is what tells them apart.
+
+### Step 5 (crate gate) / Step 6 (bridge gate) — death, two certificates
 
 Publishes the explicit NDEATH, then drops the socket so the broker's last will fires as well.
 
