@@ -420,7 +420,41 @@ development_status:
   # not moved. No evidence citation went stale. The v2 run-table row was ALREADY annotated in
   # place on 2026-07-31, so AC2's annotation needed nothing.
   4-8-tier-3-gate-covers-ncmd-rebirth: review
-  4-9-sigterm-discriminator-survives-per-connect-bdseq: backlog
+  # 2026-08-01: contexted AND implemented, status `review`.
+  # THE MECHANISM, which is not obvious and is why AC1 was amended to demand it: the old
+  # discriminator `death_stamp > birth_stamp` was sound ONLY because the will is serialised
+  # ONCE, inside the first CONNECT, so it can never be stamped after any birth. Story 4.10
+  # rebuilds the will PER CONNECT -- a will registered on a later connection is stamped later
+  # than the birth this test captured on the first one, so a WILL satisfies the inequality and
+  # the test goes green on the exact regression it guards. No compile error, no edited
+  # assertion, no failing run would announce it.
+  # REPLACEMENT: COUNT the certificates. A graceful stop produces TWO NDEATHs (the bridge's
+  # own, then the will when the socket drops) and the will can fire ONCE. Reads no clock, so
+  # 4.10 cannot disturb it. This converts a measurement ADR 0011 ALREADY RECORDED into the
+  # discriminator rather than inventing a mechanism.
+  # NO CONTENT-BASED DISCRIMINATOR CAN EXIST: tck-id-...-death-payload (Sparkplug_5:808-812)
+  # says the shutdown payload IS the registered will, so the two are byte-identical. Any
+  # proposal to "tag" the explicit death would be a conformance violation invented to make a
+  # test easier. The count is the only property they do not share.
+  # THE OLD ASSERTION WAS REMOVED, NOT SUPPLEMENTED (AC3, added at contexting): keeping both
+  # would leave an assertion that passes for a reason that has stopped being true next to one
+  # that works, and a reader cannot tell which carries the proof. chaos_ncmd_subscription had
+  # exactly that shape and it cost a story.
+  # THREE FALSIFICATIONS, copied from the runs into the module docs. Baseline green 7.90s.
+  # (A) explicit death not published -> RED. Restored byte-for-byte -> GREEN 7.51s; the green
+  # direction shown deliberately, since an expected-red never demonstrated green proves only
+  # that a test can fail. (B) THE DECIDING ONE: will stamped now+60_000 (Story 4.10 simulated)
+  # AND no explicit death, with a temporary probe printing what the OLD assertion would have
+  # concluded -- `death_stamp(...) > birth_stamp(...) = true`, i.e. IT WOULD HAVE PASSED, while
+  # the count FAILED. On identical broken code the two discriminators disagree. That is the
+  # story's whole premise, measured rather than reasoned. Probe removed before commit; driver
+  # restored byte-for-byte (git diff empty) and the suite re-run green 7.94s.
+  # `birth_stamp` was left UNUSED by the change and clippy caught it -- removed with a comment
+  # saying why, so a future edit does not re-derive a comparison that no longer holds.
+  # ADR 0011 amended with the mechanism and the replacement (AC1), and with what the count does
+  # NOT exclude (AC4): a bridge publishing its explicit death twice while the will never fired
+  # would also produce two -- a different defect, excluded in practice by the socket drop.
+  4-9-sigterm-discriminator-survives-per-connect-bdseq: review
   4-10-own-the-reconnect-loop-bdseq-per-connect: backlog
   4-11-broker-outage-traced-drop-exhaustive: backlog
   4-12-anti-replay-at-the-down-up-instant: backlog

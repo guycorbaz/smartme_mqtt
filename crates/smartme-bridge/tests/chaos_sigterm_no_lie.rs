@@ -28,26 +28,87 @@
 //! fallback), and a dropped socket makes the broker fire the will immediately,
 //! not after the keep-alive.
 //!
-//! What separates them is the payload TIMESTAMP, and the comparison is made
-//! entirely within the BRIDGE's own clock:
+//! What separates them is **how many arrive**, and this reads no clock at all.
 //!
-//! - the will is stamped just before CONNECT (`mqtt_driver.rs`, step 2),
-//! - the NBIRTH is stamped just after CONNACK — the same instant for practical
-//!   purposes, and never earlier than the will,
-//! - the explicit death is stamped when the shutdown is handled, one deliberate
-//!   second later.
+//! A graceful stop produces **two** NDEATHs: the bridge publishes its own
+//! certificate, then drops the socket rather than sending DISCONNECT —
+//! deliberately, so the broker fires the will as the fallback (ADR 0011). **The
+//! will can fire once.** So two certificates prove one of them was published by
+//! the bridge; one proves the explicit path is broken.
 //!
-//! So `death_stamp > birth_stamp` holds only for a death the bridge published
-//! itself. An earlier version compared the death against the instant the TEST
-//! sent the signal; that spanned two clocks, and a backward NTP step during the
-//! run would have let the will satisfy it — passing off the very regression this
-//! test exists to catch. Comparing two stamps from one clock removes that: a
-//! clock step now perturbs both sides together, and in the conservative
-//! direction (a spurious failure, never a spurious pass).
+//! # Why this is not the timestamp comparison it used to be (Story 4.9)
+//!
+//! Until 2026-08-01 the discriminator was `death_stamp > birth_stamp`. It was
+//! sound *because the will is serialised once, inside the first CONNECT*, so it
+//! could never be stamped after any birth.
+//!
+//! **Story 4.10 rebuilds the will per CONNECT, and that silently inverts it.**
+//! A will registered on a later connection is stamped later than the birth this
+//! test captured on the first one, so a WILL would satisfy `death_stamp >
+//! birth_stamp` and the test would go green on exactly the regression it exists
+//! to catch. Nothing would announce it: no compile error, no edited assertion,
+//! no failing run — the same shape as the `bdSeq` comparison that compared a
+//! constant against itself. The comparison was therefore **removed**, not
+//! supplemented; keeping both would leave a reader unable to tell which
+//! assertion carries the proof.
+//!
+//! (An even earlier version compared the death against the instant the TEST sent
+//! the signal. That spanned two clocks, and a backward NTP step during the run
+//! would have let the will satisfy it. Recorded because the lesson generalises:
+//! this discriminator has now been wrong twice, in two different ways, and both
+//! times it still passed.)
+//!
+//! # What the count does NOT exclude
+//!
+//! A bridge that published its explicit death **twice** while the will never
+//! fired would also produce two. That is a duplicate publish, not a missing one
+//! — a different defect from the one under test, and excluded in practice by the
+//! socket drop, which always fires the will. Stated rather than left for a reader
+//! to assume the count proves more than it does.
 //!
 //! The buffered stream is also drained immediately before the signal, so a will
 //! that fired during an earlier transport blip cannot be mistaken for the
 //! shutdown's certificate.
+//!
+//! # Falsification record (Story 4.9, 2026-08-01) — copied from the runs
+//!
+//! Three experiments. The third is the one this story exists for: it shows the
+//! OLD and NEW discriminators disagreeing about the SAME broken code.
+//!
+//! **Baseline, unmutated:** `test result: ok. 1 passed; 0 failed` (7.90 s).
+//!
+//! **Mutation A — the explicit death is not published** (`publish(&client,
+//! publisher.will(…))` replaced by `let _ = publisher.will(…)` in
+//! `mqtt_driver.rs`). RED:
+//!
+//! ```text
+//! only ONE death certificate arrived after the SIGTERM. A graceful stop must
+//! produce two — the bridge's own, and then the broker's will when the socket
+//! drops. […] (bdSeq 42; SIGTERM sent at 1785593108125 …)
+//! test result: FAILED. 0 passed; 1 failed
+//! ```
+//!
+//! Restored byte-for-byte (`git diff` on the driver empty) and re-run GREEN:
+//! `test result: ok. 1 passed; 0 failed` (7.51 s). The green direction is shown
+//! deliberately — an expected-red never demonstrated green proves only that the
+//! test can fail.
+//!
+//! **Mutation B — Story 4.10 simulated.** The will is stamped `now + 60_000`
+//! (what a will rebuilt on a LATER CONNECT looks like relative to the first
+//! birth) *and* the explicit death is not published, so only the will exists. A
+//! temporary probe printed what the old assertion would have concluded:
+//!
+//! ```text
+//! OLD-DISCRIMINATOR death_stamp(1785593432853) > birth_stamp(1785593372871) = true
+//!                                                    <-- true means it would have PASSED
+//! only ONE death certificate arrived after the SIGTERM. […]
+//! test result: FAILED. 0 passed; 1 failed
+//! ```
+//!
+//! **On identical broken code the old discriminator says pass and the new one
+//! says fail.** That is the whole argument for this story, measured rather than
+//! reasoned. The probe was removed before commit; the driver was restored
+//! byte-for-byte and the suite re-run green (7.94 s).
 //!
 //! # What this test does NOT verify
 //!
@@ -271,7 +332,10 @@ async fn run_case(broker_host: &str, port: u16, group: &str) {
         None => panic!("{}", why_no_birth("NBIRTH", &mut child.0, &log_path)),
     };
     let birth_bd_seq = birth.bd_seq().expect("a birth carries its session number");
-    let birth_stamp = birth.payload.timestamp.expect("a birth is stamped");
+    // The birth's TIMESTAMP is deliberately not read. It was the old
+    // discriminator's other half, and Story 4.9 removed the comparison rather
+    // than leaving a value in scope that a future edit could re-use for a test
+    // that no longer holds. See the module docs.
 
     assert_eq!(
         birth_bd_seq, EXPECTED_BD_SEQ,
@@ -327,16 +391,36 @@ async fn run_case(broker_host: &str, port: u16, group: &str) {
          value on screen"
     );
 
-    let death_stamp = death.payload.timestamp.expect("a death is stamped");
+    // COUNT the certificates. This is the discriminator, and it reads no clock.
+    //
+    // A graceful stop produces TWO NDEATHs: the bridge publishes its own, then
+    // drops the socket rather than sending DISCONNECT — deliberately, so the
+    // broker fires the will as well (ADR 0011). **The will can fire once.** So
+    // two certificates prove one of them was published by the bridge, and one
+    // certificate proves the explicit path is broken and the fallback is
+    // carrying the graceful stop on its own.
+    //
+    // The second NDEATH may lag the first by a broker round-trip, so this waits
+    // for it rather than draining immediately.
+    let second = common::wait_for(&mut seen, Duration::from_secs(15), |s| {
+        s.topic.contains("/NDEATH/")
+    })
+    .await;
     assert!(
-        death_stamp > birth_stamp,
-        "the death delivered is the broker's WILL, not the certificate the \
-         bridge must publish itself. The will is serialised and handed over \
-         inside CONNECT, so it can never be stamped later than the birth \
-         (death {death_stamp}, birth {birth_stamp}; the SIGTERM was sent at \
-         {sigterm_at} by the test's own clock). Seeing this means the explicit \
-         NDEATH never reached the wire, and the graceful path is leaning on a \
-         fallback that a graceful stop must not need"
+        second.is_some(),
+        "only ONE death certificate arrived after the SIGTERM. A graceful stop \
+         must produce two — the bridge's own, and then the broker's will when \
+         the socket drops. One means the explicit NDEATH never reached the wire \
+         and the graceful path is leaning on a fallback that a graceful stop \
+         must not need. (bdSeq {birth_bd_seq}; SIGTERM sent at {sigterm_at} by \
+         the test's own clock, recorded for the log only — this assertion does \
+         not compare timestamps.)"
+    );
+    assert_eq!(
+        second.as_ref().and_then(|s| s.bd_seq()),
+        Some(birth_bd_seq),
+        "the second certificate belongs to a different session than the first; \
+         both must carry the bdSeq that was born"
     );
 
     // Nothing may follow the certificate. A further NDEATH is not a violation:

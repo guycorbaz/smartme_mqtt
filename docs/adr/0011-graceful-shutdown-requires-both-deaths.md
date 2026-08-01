@@ -55,6 +55,35 @@ Architecture item ⑧ is resolved: **both, not either.**
 
 ## Consequences
 
+- **⚠️ A DISCRIMINATOR THAT DEPENDS ON THIS ADR EXPIRES WITH STORY 4.10** — recorded here by
+  Story 4.9, and acted on by it. *Stating the mechanism, because the conclusion alone is not
+  re-derivable.*
+
+  `chaos_sigterm_no_lie` has to tell the bridge's explicit NDEATH from the broker's will. On the
+  wire the two are **byte-identical** — `tck-id-…-death-payload`
+  (`Sparkplug_5_Operational_Behavior.adoc:808-812`) says the payload published on shutdown is the
+  one *registered as the will* — so no content-based discriminator can exist, and any proposal to
+  "tag" the explicit death would be a conformance violation invented to make a test easier.
+
+  Until 2026-08-01 the test used `death_stamp > birth_stamp`. That was sound **only because the
+  will is serialised once, inside the first CONNECT**, and so can never be stamped after any
+  birth. **Story 4.10 rebuilds the will per CONNECT.** A will registered on a later connection is
+  stamped later than the birth the test captured on the first one, so a *will* would satisfy the
+  inequality and the test would go green on exactly the regression it guards. Nothing would
+  announce it — no compile error, no edited assertion, no failing run.
+
+  **The replacement is the count, and it reads no clock:** a graceful stop produces **two**
+  NDEATHs (the bridge's own, then the will when the socket drops), and the will can fire once.
+  Two therefore proves one was published by the bridge; one proves the explicit path is broken.
+  This converts the measurement already recorded in the next bullet into the test's discriminator
+  rather than inventing a mechanism. It does not exclude a bridge that published its explicit
+  death *twice* while the will never fired — a different defect, and excluded in practice by the
+  socket drop.
+
+  Demonstrated rather than argued: with the will stamped 60 s in the future and the explicit
+  publish removed, the old comparison evaluates **true** — it would have passed — while the count
+  fails. The record is in the test's module docs.
+
 - **The test suite is now stricter than the previous contract, on purpose.** An implementation
   that dropped the explicit publish and leaned on the will would have satisfied the old AC and
   will now fail `chaos_sigterm_no_lie`. That is the point of the amendment: without it, whoever
