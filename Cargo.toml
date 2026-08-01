@@ -8,7 +8,7 @@ members = [
 
 [workspace.package]
 edition = "2024"
-version = "0.1.0"
+version = "0.2.0"
 license = "MIT"
 rust-version = "1.85"
 
@@ -42,5 +42,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"
 rumqttc = { version = "0.25", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# File logging (opt-in via SMARTME_LOG_DIR). `max_log_files` — the retention
+# window — needs >= 0.2.3; MIT, allowed by deny.toml.
+tracing-appender = "0.2.3"
 # Story 1.14 — chaos tests need a real broker, not a mock of one.
 testcontainers = "0.27"
