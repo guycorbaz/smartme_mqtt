@@ -374,7 +374,7 @@ do below.
 | `message-flow-edge-node-birth-publish-will-message` | MUST | the will is registered in the CONNECT packet (`mqtt_driver.rs:931`), built **before** the client exists | `chaos_stale_on_death` — the bridge's task is aborted without a shutdown signal (`:68`), the socket drops, and an independent subscriber receives the certificate the broker was holding. An external witness against a real broker | conformant |
 | `message-flow-edge-node-birth-publish-will-message-topic` | MUST | `spBv1.0/{group}/NDEATH/{node}`, built by `node_topic` (`sparkplug_publisher.rs:242`, `:367`) | `node_topics_follow_the_namespace_grammar` pins the full literal. `chaos_stale_on_death` is **not** a second witness for the grammar: it tests only `.contains("/NDEATH/")` (`:70-72`), which `foo/NDEATH/bar` would satisfy | conformant |
 | `message-flow-edge-node-birth-publish-will-message-payload` | MUST | the will payload is `encode(&payload)` — the vendored protobuf | `chaos_stale_on_death` decodes it from a real broker; `prop_every_numbered_payload_round_trips` | conformant |
-| `message-flow-edge-node-birth-publish-will-message-payload-bdSeq` | MUST | the metric is present, named `bdSeq`, INT64 — **but the value never increments per CONNECT** | `the_will_matches_the_session_before_and_after_the_birth`, `prop_will_birth_and_death_agree_on_bdseq_for_every_session_number` (both prove presence and pairing, neither the increment) | **deviation** (Story 4.10) — see below |
+| `message-flow-edge-node-birth-publish-will-message-payload-bdSeq` | MUST | the metric is present, named `bdSeq`, INT64, **and the value now increments per CONNECT** — the driver owns its reconnect loop and registers a fresh will carrying the new session number (Story 4.10, 2026-08-01) | `the_will_matches_the_session_before_and_after_the_birth`, `prop_will_birth_and_death_agree_on_bdseq_for_every_session_number` (presence and pairing) + `chaos_bd_seq_advances_on_every_connect` (the INCREMENT, observed by an independent subscriber across a real disconnect, and falsified) | **conformant** (Story 4.10) |
 | `message-flow-edge-node-birth-publish-will-message-qos` | MUST (QoS 1) | the will is registered at **QoS 0** — `qos_for` returns `AtMostOnce` for every type including `NDeath` (`mqtt_driver.rs:173`, `:930`) | — | **gap (unimplemented)** ([#26](https://github.com/guycorbaz/smartme_mqtt/issues/26), Story 4.17) |
 | `message-flow-edge-node-birth-publish-will-message-will-retained` | MUST (false) | retain false, from the same `qos_for` | — **no test observes the registered will's retain flag**; identical to chapter 6's `payloads-ndeath-will-message-retain`, and downgraded for the same reason. See the convention note below — this row and `-nbirth-qos` treat the same derivation differently, on purpose | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
 | `message-flow-edge-node-birth-publish-nbirth-topic` | MUST | `spBv1.0/{group}/NBIRTH/{node}` | `node_topics_follow_the_namespace_grammar`; `cold_start_birth_declares_tags_with_no_value_and_stale_quality` pins the literal `spBv1.0/Site/NBIRTH/Bridge` | conformant |
@@ -470,20 +470,33 @@ could be shown safe before Story 4.7 gave one command meaning. **Story 4.7 has s
 `Node Control/Rebirth` meaning, and every other command is still thrown away** on the same traced
 paths, which are unchanged.
 
-**Why `-will-message-payload-bdSeq` is a deviation while `-nbirth-payload-bdSeq` is conformant, and
-why that is not the two chapters disagreeing.** The will clause carries the increment requirement in
-its own text: *"the value MUST be incremented by one from the value in the previous MQTT CONNECT
-packet unless the value would be greater than 255"* (`:178-182`). The bridge increments **per
-process start** — `load_bd_seq` → `NodeSession::start` → `store_bd_seq` before connecting — but
-never per *internal reconnect*: the will is serialised into `MqttOptions` once and `rumqttc` rebuilds
-every reconnect's CONNECT from that snapshot (`mqtt_driver.rs:77-88`, `:927-940`). So a Host Application
-cannot distinguish a current session from a superseded one after a transport blip. The NBIRTH clause
-asks only that the birth's `bdSeq` **match** the CONNECT's, which it does, provably. Chapter 6 folded
-both halves onto `payloads-nbirth-bdseq-repeat` because chapter 6 gives the increment no id of its
-own; chapter 5 does. **One defect, recorded once per chapter, on the row each chapter provides for
-it** — and pointing at one owner, **Story 4.10**. Chapter 4's own id for it,
-`tck-id-topics-nbirth-bdseq-increment`, is one of the 29 clauses that chapter records nowhere and
-belongs to **Story 4.19**.
+**Why `-will-message-payload-bdSeq` WAS a deviation, and what closed it (Story 4.10, 2026-08-01).**
+The will clause carries the increment requirement in its own text: *"the value MUST be incremented by
+one from the value in the previous MQTT CONNECT packet unless the value would be greater than 255"*
+(`:178-182`). Until 4.10 the bridge incremented **per process start** — `load_bd_seq` →
+`NodeSession::start` → `store_bd_seq` before connecting — but never per *reconnect*: the will was
+serialised into `MqttOptions` once and `rumqttc` rebuilt every reconnect's CONNECT from that
+snapshot, so it could not be updated. A Host Application therefore could not distinguish a current
+session from a superseded one after a transport blip.
+
+**The driver now owns its reconnect loop**: each CONNECT builds a new client and registers a new
+will carrying the session number that CONNECT will use. Both rows are `conformant`.
+
+**The order is what made it safe, and it is worth keeping.** Advancing `bdSeq` *without*
+re-registering the will would have been strictly worse than the deviation — the broker would hold a
+certificate for a session that no longer exists, a consumer pairing death to birth would discard it,
+and a frozen value would stay on screen presented as live. That is why the fix is *own the loop*
+rather than *advance the counter*.
+
+Chapter 6 folded both halves onto `payloads-nbirth-bdseq-repeat` because chapter 6 gives the
+increment no id of its own; chapter 5 does. **One defect, recorded once per chapter, on the row each
+chapter provides for it.** Chapter 4's own id for it, `tck-id-topics-nbirth-bdseq-increment`, is one
+of the 29 clauses that chapter records nowhere and belongs to **Story 4.19** — which should now cite
+the evidence above rather than open the row as a fresh gap.
+
+**One thing 4.10 could NOT verify, recorded rather than glossed:** no NDEATH reaches a subscriber on
+the *reconnect* path at all, so the will's new number is observed only on the SIGTERM path. See
+[#43](https://github.com/guycorbaz/smartme_mqtt/issues/43).
 
 **The five Primary-Host clauses are `gap`, not `n/a`, and that is the single most reversible
 judgement in this chapter.** Every one is conditional — *"If the Edge Node is configured to wait for
@@ -952,7 +965,7 @@ out to be a restatement rather than a new requirement.
 | --- | --- | --- | --- | --- |
 | `payloads-nbirth-seq` | MUST | a BIRTH resets the counter and takes `0`; the counter is a `u8`, so 0–255 is a type invariant | `encode.rs::birth_carries_seq_zero_and_the_session_number`, `prop_seq_bdseq.rs::prop_seq_stays_in_range_and_wraps_at_the_boundary`, `::prop_rebirth_always_restarts_numbering_at_zero` | conformant |
 | `payloads-nbirth-bdseq` | MUST | `build_birth` prepends the `bdSeq` metric before anything else (`encode.rs:181`) | `birth_carries_seq_zero_and_the_session_number`, `prop_will_birth_and_death_agree_on_bdseq_for_every_session_number`, and `chaos_sigterm_no_lie` reads it off a real broker | conformant |
-| `payloads-nbirth-bdseq-repeat` | MUST | the NBIRTH's `bdSeq` **does** match the registered will's — but only because neither ever changes | `the_will_matches_the_session_before_and_after_the_birth` | **deviation** (Story 4.10) — see below |
+| `payloads-nbirth-bdseq-repeat` | MUST | the NBIRTH's `bdSeq` matches the registered will's, and **both now change together per CONNECT** — the reason the row passed was the defect, and it is gone (Story 4.10) | `the_will_matches_the_session_before_and_after_the_birth`, `chaos_bd_seq_advances_on_every_connect` | **conformant** (Story 4.10) |
 | `payloads-nbirth-edge-node-descriptor` | MUST | nothing verifies that `group_id/edge_node_id` is unique across the infrastructure | — | **gap (unimplemented)** ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)) |
 | `payloads-nbirth-rebirth-req` | MUST | *"**Every** NBIRTH"* — satisfied by building the node metric list once (`sparkplug_publisher.rs:387`) and using it in both session arms, so the clause cannot hold on the first birth and fail on later ones | `every_node_birth_declares_the_rebirth_command` asserts it on the `Session::Pending` **and** the `Session::Live` NBIRTH; **mutation-tested** — omitting it from the `Live` arm alone is red on the second birth only, which a single-birth test would have missed | conformant |
 | `payloads-nbirth-qos` | MUST | QoS 0 | `mqtt_driver.rs::every_edge_node_message_is_qos_zero_and_never_retained` | conformant |
@@ -1291,7 +1304,7 @@ manual's deployment prerequisites, not only here.
 | **Eight invariants are correct by construction and proven by no test** — raised from four by the code review of Story 4.2: both property-set array-length clauses, the `engUnit` property's `type` field, the metric-level `timestamp` field, and four more the review found — the quality property's `type` (whose test asserted production's own expression against itself), `-propertyvalue-type-req` (witnessed for `int_property` only), the NBIRTH payload timestamp (a presence check, not a value check), and the registered will's retain flag (no test reaches the will) | 6 | [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30) — **its scope needs widening from "encoder invariants" to match** |
 | **`Int32` is the one datatype code no test pins to its literal.** `codes_match_the_specification_numbering` covers 1, 4, 8–13, 17; change `Int32 = 3` and the suite stays green while `-quality-value-type` violates a MUST | 6 | [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30) |
 | `qos_for` ignores its `MessageType` argument, so the six-type QoS/retain test is one assertion repeated six times. Harmless today; five retain verdicts revert to unproven the day it grows a real `match` | 4, 6 | Story 4.17 |
-| **`bdSeq` is fixed for a client's lifetime**, so `-nbirth-bdseq-repeat` passes for the wrong reason and the per-CONNECT increment the clause requires never happens | 6 | Story 4.10 |
+| ~~**`bdSeq` is fixed for a client's lifetime**, so `-nbirth-bdseq-repeat` passes for the wrong reason and the per-CONNECT increment the clause requires never happens~~ **CLOSED (Story 4.10, 2026-08-01).** The driver owns its reconnect loop; each CONNECT advances the number and registers a will carrying it. **Found while closing it:** no NDEATH reaches a subscriber on the reconnect path at all — [#43](https://github.com/guycorbaz/smartme_mqtt/issues/43) — so the *will* half is verified only on the SIGTERM path | 6 | ~~Story 4.10~~ done |
 | Specification editorial: `sequence-num-req-nbirth` / `-zero-nbirth` are one clause with two spellings, so a mechanical count of chapter 6 reads 109 where 108 requirements exist | 6 | recorded above; upstream, not ours |
 | Specification editorial: `-name-birth-data-requirement` and `-name-cmd-requirement` are timestamp clauses carrying `name` ids | 6 | recorded above; upstream, not ours |
 | **Identifier validation implements Sparkplug's wildcard rule, not MQTT's character set — measured: a `U+0000` passes `check_identifier` and reaches the published topic.** Three chapter-1 clauses defer their character set to a specification this repository does not vendor | 1 | [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34) |
@@ -1646,15 +1659,23 @@ conformance scope".
 | 2 — Principles | 1 | 1 | 1 | 1 | 4 |
 | 3 — Components | 0 | 0 | 0 | 1 | 1 |
 | 4 — Topics | 15 | 0 | 5 | 21 | **41 of 70** |
-| 5 — Operational behaviour | 29 | 2 | 19 | 49 | 99 |
-| 6 — Payloads | 31 | 5 | 14 | 59 | 109 |
+| 5 — Operational behaviour | 30 | 1 | 19 | 49 | 99 |
+| 6 — Payloads | 32 | 4 | 14 | 59 | 109 |
 | 10 — Conformance | 0 | 0 | 0 | 12 | 12 |
-| **Total** | **79** | **8** | **43** | **144** | **274 of 303** |
+| **Total** | **81** | **6** | **43** | **144** | **274 of 303** |
 
 **The total was `72 · 8 · 50 · 144` until Story 4.7**, which moved seven rows from
 `gap (unimplemented)` to `conformant` — six in chapter 5, one in chapter 6. `72 + 7 = 79`,
 `50 − 7 = 43`, and `79 + 8 + 43 + 144 = 274` is unchanged: verdicts moved, no row was added or
-removed. **Chapter 4's tally is deliberately untouched**: its own copy of the clause,
+removed.
+
+**And `79 · 8 · 43 · 144` until Story 4.10** (2026-08-01), which moved the two `bdSeq` rows from
+`deviation` to `conformant` — `-will-message-payload-bdSeq` in chapter 5 and
+`payloads-nbirth-bdseq-repeat` in chapter 6, one each, which is why both chapter lines move by one
+in opposite columns. `79 + 2 = 81`, `8 − 2 = 6`, and `81 + 6 + 43 + 144 = 274` is again unchanged.
+Unlike Story 4.5, this story **earned** the move: it changed the code the verdicts describe, and the
+increment is asserted by `chaos_bd_seq_advances_on_every_connect` against an independent subscriber
+across a real disconnect, falsified before being trusted. **Chapter 4's tally is deliberately untouched**: its own copy of the clause,
 `topics-nbirth-rebirth-metric`, has no row at all — it is one of the 29 that Story 4.19 owns. The
 evidence for it exists (see the chapter-5 rows above) and 4.19 can cite it, but opening the row
 here would change chapter 4 from *41 of 70 audited* to *42 of 70* through a side door, which is the

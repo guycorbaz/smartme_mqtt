@@ -455,7 +455,45 @@ development_status:
   # NOT exclude (AC4): a bridge publishing its explicit death twice while the will never fired
   # would also produce two -- a different defect, excluded in practice by the socket drop.
   4-9-sigterm-discriminator-survives-per-connect-bdseq: review
-  4-10-own-the-reconnect-loop-bdseq-per-connect: backlog
+  # 2026-08-01: contexted AND implemented, status `review`. AC1/AC3/AC4/AC5/AC6/AC7 met;
+  # AC2 PARTIALLY met and said so.
+  # THE CHANGE: pump_transport now RETURNS on a transport error instead of sleeping and
+  # polling again. That sleep was what let rumqttc reconnect INTERNALLY, and an internal
+  # reconnect rebuilds the CONNECT packet from the MqttOptions captured at construction --
+  # re-registering the OLD will under the OLD bdSeq. run() gained an outer session loop:
+  # one iteration = one CONNECT = one bdSeq, each with a freshly built will.
+  # THE SEAM WAS ALREADY THERE: SparkplugPublisher::new_session() existed with NO production
+  # caller, only a unit test. The publisher half had been built for this story and left.
+  # BACKOFF IS NOW OURS AND WRITTEN: floor 1s, ceiling 30s, doubling. The FLOOR is documented
+  # as a DURABILITY property, not politeness -- it bounds how often bdSeq is fsync'd, which
+  # went from once per boot to once per CONNECT. That file lives on a NAS mount (#41).
+  # FALSIFIED: new_session() disabled -> RED with the exact message; restored -> GREEN.
+  # AC5 RE-RUN AS REQUIRED: 4.9's mutation (explicit death removed) re-run UNDER per-CONNECT
+  # wills -> still RED, restored -> GREEN. The window 4.9 was sequenced to close is closed in
+  # fact, not on paper.
+  # AC2 IS THE HONEST GAP. It asks for "the NDEATH the broker HOLDS" -- the WILL. My first
+  # test asserted on the EXPLICIT death, which the publisher rebuilds and which would carry
+  # the right number EVEN WITH A STALE WILL REGISTERED -- precisely the failure this story
+  # warns is worse than the deviation. Correcting it produced a measurement: NO NDEATH REACHES
+  # A SUBSCRIBER ON THE RECONNECT PATH AT ALL. Instrumented over a whole run, twice:
+  # DBIRTH(s1) -> NBIRTH(s2), nothing between. Hypothesis is session takeover (same client_id
+  # reconnecting inside the 1s floor); NOT confirmed. [#43], with the three measurements that
+  # would settle it. Consequence: the stale-will failure cannot be caught on the reconnect
+  # path by any test of this shape, because there is no will to observe.
+  # AC6: two verdicts moved deviation -> conformant (-will-message-payload-bdSeq ch5,
+  # payloads-nbirth-bdseq-repeat ch6). Totals 79.8.43.144 -> 81.6.43.144; chapter sums
+  # recomputed and checked to equal the stated total, and each chapter still sums to its own
+  # clause count. Unlike 4.5 this story EARNED the move -- it changed the code the verdicts
+  # describe. The prose explaining WHY they were deviations was rewritten, not left
+  # contradicting the rows.
+  # AC7: per-passage table, 5 passages -- chaos_sigterm_no_lie's premise about the will,
+  # manual ch2's summary row, manual ch5's two items (the deviation and "persisted once at
+  # boot"), and the matrix summary row. Manual rebuilt: exit 0, 48 pages, only the three
+  # baseline overfull boxes.
+  # CAUGHT BY CI, NOT BY ME: an unused `Event` import in the new chaos test. clippy -D
+  # warnings failed the first full run -- I had linted BEFORE the final rewrite of the test,
+  # and `cargo test` compiles without that gate.
+  4-10-own-the-reconnect-loop-bdseq-per-connect: review
   4-11-broker-outage-traced-drop-exhaustive: backlog
   4-12-anti-replay-at-the-down-up-instant: backlog
   4-13-chaos-broker-recovery: backlog

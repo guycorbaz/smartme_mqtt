@@ -215,6 +215,15 @@ struct Command {
 ///
 /// Small on purpose, and paired with a traced drop rather than a block — see
 /// [`pump_transport`]. Unbounded would trade a stall for unbounded memory.
+/// The shortest wait between two CONNECT attempts, and therefore the ceiling on
+/// how often `bdSeq` is persisted — one fsync-ing write per session (Story 4.10).
+/// A broker refusing every connection can cost at most one write per second.
+const RECONNECT_FLOOR: Duration = Duration::from_secs(1);
+
+/// The longest wait. Doubling from the floor, capped here, so an outage that
+/// lasts hours does not leave the bridge waiting hours to notice it is over.
+const RECONNECT_CEILING: Duration = Duration::from_secs(30);
+
 const COMMAND_QUEUE: usize = 8;
 
 /// Bound on an inbound MQTT packet, in bytes.
@@ -891,206 +900,265 @@ pub async fn run(
         }
     };
 
-    // 1. Restore and advance the session number, persisting BEFORE connecting.
+    // 1. Restore the session number. `SparkplugPublisher::new` advances past the
+    //    value on disk, so the first session of this process is already fresh.
     let previous = load_bd_seq(&config.bd_seq_path);
     let mut publisher = SparkplugPublisher::new(node, previous);
-    if let Err(error) = store_bd_seq(&config.bd_seq_path, publisher.bd_seq()) {
-        tracing::error!(%error, "could not persist bdSeq; a restart may replay a session");
-    }
 
-    // 2. Serialise the DEATH for this session...
-    let will = publisher.will(clock.wall());
-
-    // 3. ...and register it IN the CONNECT packet, before connecting.
-    let mut options = MqttOptions::new(&config.client_id, &config.host, config.port);
-    options.set_keep_alive(config.keep_alive);
-    // The incoming packet bound is OURS, stated, not inherited.
+    // THE SESSION LOOP (Story 4.10). One iteration = one CONNECT = one `bdSeq`.
     //
-    // `rumqttc` defaults `max_incoming_packet_size` to 10 KiB and rejects a larger
-    // frame inside `poll()`, which returns `Err` — so the socket drops
-    // UNGRACEFULLY and the broker fires our will. The host is told the node died
-    // while it was alive. The bridge cannot drop the frame and keep the session;
-    // that is rumqttc's deliberate behaviour, and the correct control is
-    // broker-side (`message_size_limit` in Mosquitto, plus ACLs — Epics 5/7).
+    // The loop exists because `rumqttc` cannot be told about a new will: it
+    // rebuilds the CONNECT packet from the `MqttOptions` captured when the client
+    // was constructed. Reconnecting internally therefore re-registers the OLD
+    // death certificate, which is why the session number used to be frozen for a
+    // client's lifetime. Rebuilding the client is the only way to give the broker
+    // a will that matches the session it is about to cover.
     //
-    // The value is set here anyway, at the same size, for two reasons the Story 4.7
-    // review made concrete. It is a limit `AC-LEAK-01` depends on for bounded
-    // memory, so it must not change silently under a dependency bump. And no
-    // legitimate NCMD for this bridge approaches it: the one command it implements
-    // is a single boolean metric. Raising it would only move the cliff, at the cost
-    // of the bound.
-    //
-    // The residual exposure is recorded in `deferred-work.md` (deferred by
-    // decision, 2026-07-29) and re-examined by the Story 4.7 review: `retain`
-    // removes that deferral's assumption of a SUSTAINED attacker, because a
-    // retained oversized frame is redelivered on every reconnect. `classify`
-    // rejects a retained NCMD, but that runs after decode and this frame never
-    // decodes — so the two are separate problems and only one of them is closed.
-    options.set_max_packet_size(MAX_INCOMING_PACKET, MAX_OUTGOING_PACKET);
-    let (qos, retain) = qos_for(MessageType::NDeath);
-    options.set_last_will(rumqttc::LastWill::new(
-        will.topic.clone(),
-        will.payload.clone(),
-        qos,
-        retain,
-    ));
-
-    // 4. Connect — the EventLoop pumps in its own task (see the module docs).
-    let (client, eventloop) = AsyncClient::new(options, config.capacity);
-    let (transport_tx, mut transport_rx) = mpsc::channel(8);
-    // Inbound commands get their OWN channel. Sharing the transport channel
-    // would put a live, externally-driven path behind an 8-slot bound whose
-    // sender blocks — see `pump_transport`.
-    let (command_tx, mut command_rx) = mpsc::channel(COMMAND_QUEUE);
-    let pump = tokio::spawn(pump_transport(
-        eventloop,
-        transport_tx,
-        command_tx,
-        ncmd_topic.clone(),
-    ));
-
+    // What must NOT be done instead: advance `bdSeq` while leaving the will
+    // alone. That is strictly worse than the old deviation — the broker would
+    // hold a certificate for a session that no longer exists, a consumer pairing
+    // death to birth would discard it, and a frozen value would stay on screen
+    // presented as live.
+    let mut backoff = RECONNECT_FLOOR;
+    let mut first_session = true;
     loop {
-        tokio::select! {
-            event = transport_rx.recv() => {
-                match event {
-                    Some(Transport::Connected) => {
-                        // 5. Connected: subscribe to NCMD BEFORE birthing. The
-                        // order of these two statements IS the requirement; see
-                        // the module docs.
-                        if let Some(topic) = &ncmd_topic {
-                            subscribe_to_commands(&client, topic);
+        // 2. Advance for every session after the first, then persist BEFORE
+        //    connecting: a crash between the CONNECT and the next boot must not
+        //    be able to replay a number the broker has already seen.
+        //
+        //    This write now happens once per CONNECT rather than once per boot,
+        //    and `persist_atomic` is write + fsync + rename + fsync(dir). The
+        //    rate is bounded by `RECONNECT_FLOOR` below — which makes the backoff
+        //    floor a DURABILITY property, not merely a politeness to the broker.
+        if !first_session {
+            publisher.new_session();
+        }
+        first_session = false;
+        if let Err(error) = store_bd_seq(&config.bd_seq_path, publisher.bd_seq()) {
+            tracing::error!(%error, "could not persist bdSeq; a restart may replay a session");
+        }
+
+        // 3. Serialise the DEATH for THIS session...
+        let will = publisher.will(clock.wall());
+
+        // 4. ...and register it IN the CONNECT packet, before connecting.
+        let mut options = MqttOptions::new(&config.client_id, &config.host, config.port);
+        options.set_keep_alive(config.keep_alive);
+        // The incoming packet bound is OURS, stated, not inherited.
+        //
+        // `rumqttc` defaults `max_incoming_packet_size` to 10 KiB and rejects a larger
+        // frame inside `poll()`, which returns `Err` — so the socket drops
+        // UNGRACEFULLY and the broker fires our will. The host is told the node died
+        // while it was alive. The bridge cannot drop the frame and keep the session;
+        // that is rumqttc's deliberate behaviour, and the correct control is
+        // broker-side (`message_size_limit` in Mosquitto, plus ACLs — Epics 5/7).
+        //
+        // The value is set here anyway, at the same size, for two reasons the Story 4.7
+        // review made concrete. It is a limit `AC-LEAK-01` depends on for bounded
+        // memory, so it must not change silently under a dependency bump. And no
+        // legitimate NCMD for this bridge approaches it: the one command it implements
+        // is a single boolean metric. Raising it would only move the cliff, at the cost
+        // of the bound.
+        //
+        // The residual exposure is recorded in `deferred-work.md` (deferred by
+        // decision, 2026-07-29) and re-examined by the Story 4.7 review: `retain`
+        // removes that deferral's assumption of a SUSTAINED attacker, because a
+        // retained oversized frame is redelivered on every reconnect. `classify`
+        // rejects a retained NCMD, but that runs after decode and this frame never
+        // decodes — so the two are separate problems and only one of them is closed.
+        options.set_max_packet_size(MAX_INCOMING_PACKET, MAX_OUTGOING_PACKET);
+        let (qos, retain) = qos_for(MessageType::NDeath);
+        options.set_last_will(rumqttc::LastWill::new(
+            will.topic.clone(),
+            will.payload.clone(),
+            qos,
+            retain,
+        ));
+
+        // 5. Connect — the EventLoop pumps in its own task (see the module docs).
+        let (client, eventloop) = AsyncClient::new(options, config.capacity);
+        let (transport_tx, mut transport_rx) = mpsc::channel(8);
+        // Inbound commands get their OWN channel. Sharing the transport channel
+        // would put a live, externally-driven path behind an 8-slot bound whose
+        // sender blocks — see `pump_transport`.
+        let (command_tx, mut command_rx) = mpsc::channel(COMMAND_QUEUE);
+        let pump = tokio::spawn(pump_transport(
+            eventloop,
+            transport_tx,
+            command_tx,
+            ncmd_topic.clone(),
+        ));
+
+        let ended = loop {
+            tokio::select! {
+                event = transport_rx.recv() => {
+                    match event {
+                        Some(Transport::Connected) => {
+                            // 5. Connected: subscribe to NCMD BEFORE birthing. The
+                            // order of these two statements IS the requirement; see
+                            // the module docs.
+                            if let Some(topic) = &ncmd_topic {
+                                subscribe_to_commands(&client, topic);
+                            }
+                            // 6. Then publish the BIRTH.
+                            announce(
+                                &client,
+                                &mut publisher,
+                                clock.wall(),
+                                &meters,
+                                BirthReason::Connected,
+                            );
                         }
-                        // 6. Then publish the BIRTH.
+                        Some(Transport::Subscribed(codes)) => {
+                            let topic = ncmd_topic.as_deref().unwrap_or("<none>");
+                            trace_subscription_outcome(topic, granted(&codes));
+                        }
+                        Some(Transport::Lost) => {
+                            tracing::warn!("transport lost; the will covers us until we reconnect");
+                        }
+                        None => {
+                            // The pump returns on a transport error, so this is the
+                            // normal disconnect path, not an anomaly.
+                            break SessionEnd::TransportLost;
+                        }
+                    }
+                }
+                command = command_rx.recv() => {
+                    let Some(command) = command else {
+                        // The pump owns both senders, so this means the same thing
+                        // as the transport channel closing. Breaking here rather
+                        // than continuing matters: `recv` on a closed channel
+                        // returns `None` immediately and forever, so a `continue`
+                        // would spin.
+                        break SessionEnd::TransportLost;
+                    };
+                    // Recognise, then say what arrived, then act — three steps, in
+                    // that order, and deliberately not fused. The next command this
+                    // bridge implements is a meter relay, which switches physical
+                    // hardware; it will need an authorisation step between the
+                    // second and the third, and this shape is where it goes.
+                    let inbound = classify(&command.payload, command.retained);
+                    trace_command_outcome(&command.topic, &inbound);
+                    if matches!(inbound, Inbound::Rebirth { .. }) {
+                        // INLINE AND SYNCHRONOUS, and that is the whole of AC3.
+                        //
+                        // `tck-id-operational-behavior-data-commands-rebirth-action-1`
+                        // requires the node to IMMEDIATELY stop sending DATA on
+                        // receipt. `select!` runs one branch to completion before
+                        // polling the others, so between this line and the last
+                        // DBIRTH the `inbox` branch cannot run and no DATA can
+                        // interleave. Nothing here enforces that — the SHAPE does.
+                        //
+                        // So: do not `tokio::spawn` this, do not set a flag consumed
+                        // on a later iteration, do not push it through a channel.
+                        // Any of the three would satisfy `-rebirth-action-2` (a
+                        // birth does go out) while breaking `-rebirth-action-1`,
+                        // with no test, no log line and no wire symptom to notice
+                        // it by. `chaos_ncmd_rebirth_answered` asserts the absence
+                        // of a DDATA across that window precisely because the
+                        // property lives in the shape rather than in a check.
+                        //
+                        // NO RATE LIMIT AND NO COALESCING, decided rather than
+                        // deferred. A host may burst — Ignition resends — and the
+                        // command channel is 8 slots with a traced drop
+                        // (`COMMAND_QUEUE`), so a burst already degrades to some
+                        // answers plus visible drops and never to a stall. A birth
+                        // here is 1 NBIRTH + N DBIRTHs for a single configured
+                        // meter, so the answer is cheap; suppressing a request is
+                        // the exact failure this handler exists to fix; and a
+                        // suppressed answer is INVISIBLE to the host, which cannot
+                        // tell it from a node that never heard. If a burst ever
+                        // proves costly, Story 4.13 is where it is measured, not
+                        // guessed.
                         announce(
                             &client,
                             &mut publisher,
                             clock.wall(),
                             &meters,
-                            BirthReason::Connected,
+                            BirthReason::RebirthRequested,
                         );
                     }
-                    Some(Transport::Subscribed(codes)) => {
-                        let topic = ncmd_topic.as_deref().unwrap_or("<none>");
-                        trace_subscription_outcome(topic, granted(&codes));
-                    }
-                    Some(Transport::Lost) => {
-                        tracing::warn!("transport lost; the will covers us until we reconnect");
-                    }
-                    None => {
-                        tracing::error!("transport task ended; stopping");
-                        break;
-                    }
                 }
-            }
-            command = command_rx.recv() => {
-                let Some(command) = command else {
-                    // The pump owns both senders, so this means the same thing
-                    // as the transport channel closing. Breaking here rather
-                    // than continuing matters: `recv` on a closed channel
-                    // returns `None` immediately and forever, so a `continue`
-                    // would spin.
-                    tracing::error!("transport task ended; stopping");
-                    break;
-                };
-                // Recognise, then say what arrived, then act — three steps, in
-                // that order, and deliberately not fused. The next command this
-                // bridge implements is a meter relay, which switches physical
-                // hardware; it will need an authorisation step between the
-                // second and the third, and this shape is where it goes.
-                let inbound = classify(&command.payload, command.retained);
-                trace_command_outcome(&command.topic, &inbound);
-                if matches!(inbound, Inbound::Rebirth { .. }) {
-                    // INLINE AND SYNCHRONOUS, and that is the whole of AC3.
-                    //
-                    // `tck-id-operational-behavior-data-commands-rebirth-action-1`
-                    // requires the node to IMMEDIATELY stop sending DATA on
-                    // receipt. `select!` runs one branch to completion before
-                    // polling the others, so between this line and the last
-                    // DBIRTH the `inbox` branch cannot run and no DATA can
-                    // interleave. Nothing here enforces that — the SHAPE does.
-                    //
-                    // So: do not `tokio::spawn` this, do not set a flag consumed
-                    // on a later iteration, do not push it through a channel.
-                    // Any of the three would satisfy `-rebirth-action-2` (a
-                    // birth does go out) while breaking `-rebirth-action-1`,
-                    // with no test, no log line and no wire symptom to notice
-                    // it by. `chaos_ncmd_rebirth_answered` asserts the absence
-                    // of a DDATA across that window precisely because the
-                    // property lives in the shape rather than in a check.
-                    //
-                    // NO RATE LIMIT AND NO COALESCING, decided rather than
-                    // deferred. A host may burst — Ignition resends — and the
-                    // command channel is 8 slots with a traced drop
-                    // (`COMMAND_QUEUE`), so a burst already degrades to some
-                    // answers plus visible drops and never to a stall. A birth
-                    // here is 1 NBIRTH + N DBIRTHs for a single configured
-                    // meter, so the answer is cheap; suppressing a request is
-                    // the exact failure this handler exists to fix; and a
-                    // suppressed answer is INVISIBLE to the host, which cannot
-                    // tell it from a node that never heard. If a burst ever
-                    // proves costly, Story 4.13 is where it is measured, not
-                    // guessed.
-                    announce(
-                        &client,
-                        &mut publisher,
-                        clock.wall(),
-                        &meters,
-                        BirthReason::RebirthRequested,
-                    );
-                }
-            }
-            update = inbox.recv() => {
-                let Some(update) = update else {
-                    tracing::info!("poll task closed the channel; stopping");
-                    break;
-                };
-                let mut queue = Queue::default();
-                match publisher.publish(&update, &mut queue) {
-                    Ok(Published::Emitted) => {
-                        for message in queue.pending.drain(..) {
-                            publish(&client, message);
+                update = inbox.recv() => {
+                    let Some(update) = update else {
+                        tracing::info!("poll task closed the channel; stopping");
+                        break SessionEnd::InboxClosed;
+                    };
+                    let mut queue = Queue::default();
+                    match publisher.publish(&update, &mut queue) {
+                        Ok(Published::Emitted) => {
+                            for message in queue.pending.drain(..) {
+                                publish(&client, message);
+                            }
+                        }
+                        Ok(outcome) => {
+                            // A traced drop, never silence.
+                            tracing::warn!(
+                                serial = %update.measurement.serial,
+                                ?outcome,
+                                "reading dropped"
+                            );
+                        }
+                        Err(error) => {
+                            tracing::error!(
+                                serial = %update.measurement.serial,
+                                %error,
+                                "unpublishable reading dropped"
+                            );
                         }
                     }
-                    Ok(outcome) => {
-                        // A traced drop, never silence.
-                        tracing::warn!(
-                            serial = %update.measurement.serial,
-                            ?outcome,
-                            "reading dropped"
-                        );
-                    }
-                    Err(error) => {
-                        tracing::error!(
-                            serial = %update.measurement.serial,
-                            %error,
-                            "unpublishable reading dropped"
-                        );
-                    }
+                }
+                _ = &mut shutdown => {
+                    tracing::info!("shutdown requested");
+                    break SessionEnd::Shutdown;
                 }
             }
-            _ = &mut shutdown => {
-                tracing::info!("shutdown requested");
-                break;
-            }
-        }
-    }
+        };
 
-    // A polite death: queue it, then keep the transport pumping long enough for
-    // it to actually reach the wire. We never send a graceful DISCONNECT — that
-    // instructs the broker to DISCARD the will, so if our explicit death did not
-    // make it, nothing would ever be delivered. Dropping the connection instead
-    // keeps the will as the second mechanism.
-    publish(&client, publisher.will(clock.wall()));
-    let flushed = tokio::time::timeout(config.death_flush, async {
-        // The pump is still running; give it time to drain the request channel.
-        tokio::time::sleep(config.death_flush).await;
-    })
-    .await;
-    if flushed.is_err() {
-        tracing::warn!("death flush timed out; falling back to the will");
+        if matches!(ended, SessionEnd::TransportLost) {
+            // Reconnect under a NEW session number. The will the broker still
+            // holds belongs to the session that just ended and covers it
+            // correctly; the next CONNECT registers a different one.
+            pump.abort();
+            tracing::warn!(
+                bd_seq = publisher.bd_seq().value(),
+                backoff_ms = backoff.as_millis() as u64,
+                "transport lost; the will covers the ended session, reconnecting under a new one"
+            );
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(RECONNECT_CEILING);
+            continue;
+        }
+
+        // A polite death: queue it, then keep the transport pumping long enough for
+        // it to actually reach the wire. We never send a graceful DISCONNECT — that
+        // instructs the broker to DISCARD the will, so if our explicit death did not
+        // make it, nothing would ever be delivered. Dropping the connection instead
+        // keeps the will as the second mechanism.
+        publish(&client, publisher.will(clock.wall()));
+        let flushed = tokio::time::timeout(config.death_flush, async {
+            // The pump is still running; give it time to drain the request channel.
+            tokio::time::sleep(config.death_flush).await;
+        })
+        .await;
+        if flushed.is_err() {
+            tracing::warn!("death flush timed out; falling back to the will");
+        }
+        pump.abort();
+        tracing::info!("death published; transport dropped");
+        return;
     }
-    pump.abort();
-    tracing::info!("death published; transport dropped");
+}
+
+/// Why one session ended, and therefore whether another should begin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionEnd {
+    /// The transport dropped. Reconnect under a new `bdSeq`.
+    TransportLost,
+    /// SIGTERM (or the supervisor). Announce the death and stop.
+    Shutdown,
+    /// The poll task closed the channel; there is nothing left to publish.
+    InboxClosed,
 }
 
 /// Owns the `EventLoop` alone, because `poll()` is not cancellation-safe.
@@ -1166,11 +1234,15 @@ async fn pump_transport(
                      packet is rejected before it can be classified, and it drops \
                      the session ungracefully, which fires the will"
                 );
-                if events.send(Transport::Lost).await.is_err() {
-                    return;
-                }
-                // rumqttc has no internal backoff: this sleep IS the backoff.
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                let _ = events.send(Transport::Lost).await;
+                // RETURN, do not retry. Until Story 4.10 this arm slept a second
+                // and polled again, which let `rumqttc` reconnect internally —
+                // and an internal reconnect rebuilds the CONNECT packet from the
+                // `MqttOptions` captured at construction, so it re-registers the
+                // OLD will under the OLD `bdSeq`. Owning the session number means
+                // owning the reconnect: the driver rebuilds the client, and the
+                // backoff lives there with it.
+                return;
             }
         }
     }

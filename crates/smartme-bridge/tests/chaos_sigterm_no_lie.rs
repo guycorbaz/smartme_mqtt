@@ -8,8 +8,10 @@
 //!
 //! The distinction matters because the will alone is not enough. It is
 //! serialised and handed to the broker inside the CONNECT packet, so it carries
-//! a `bdSeq` and a timestamp fixed at connect time; it is a fallback for the
-//! case where we die without a chance to speak. A planned shutdown is exactly
+//! the `bdSeq` and the timestamp of THAT connect — since Story 4.10 the driver
+//! owns its reconnect loop and registers a fresh will, carrying a fresh session
+//! number, on every CONNECT. It remains a fallback for the case where we die
+//! without a chance to speak. A planned shutdown is exactly
 //! the case where we DO have that chance, and an operator restarting the bridge
 //! must not depend on the broker noticing a dropped socket.
 //!

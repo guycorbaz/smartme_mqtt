@@ -461,14 +461,21 @@ The two mechanisms are complementary rather than alternative: the will remains t
 
         Redundant-broker stranding is a second, separate consequence, and it does require
         a multi-broker topology.
-  \item \textbf{\code{bdSeq} is fixed for the lifetime of one MQTT client}, not
-        incremented per CONNECT as the specification would have it. The will is registered
-        once, inside the first CONNECT, and cannot be updated afterwards; advancing the
-        number on reconnect would leave the broker holding a certificate for a session
-        that no longer exists, and a consumer pairing death to birth by \code{bdSeq}
-        would ignore the death and keep a frozen value on screen. Matching the will is
-        the honest half of that trade.
-  \item \textbf{\code{bdSeq} is persisted once at boot}, not per session, and a missing or
+  \item \textbf{\code{bdSeq} is incremented per CONNECT}, as the specification requires
+        --- since 2026-08-01. It was previously fixed for the lifetime of one MQTT client,
+        because the underlying library reconnects internally and rebuilds the CONNECT
+        packet from the options it was constructed with, so the registered will could
+        never be updated. \prog{} now owns its own reconnect loop: each CONNECT builds a
+        new client and registers a \emph{new} will carrying the session number that
+        CONNECT will use.
+
+        The order matters and is worth stating, because getting it half right is worse
+        than the old behaviour: advancing the number \emph{without} re-registering the
+        will would leave the broker holding a certificate for a session that no longer
+        exists, and a consumer pairing death to birth by \code{bdSeq} would discard it
+        and keep a frozen value on screen, presented as live.
+  \item \textbf{\code{bdSeq} is persisted once per CONNECT} (it was once per boot until
+        2026-08-01), and a missing or
         corrupt file restarts the numbering at the sentinel rather than refusing to start.
   \item \textbf{No report-by-exception}: an unchanged \code{ValueDate} republishes the
         same point on every poll.

@@ -673,9 +673,9 @@ Will registered inside CONNECT & implemented & At \textbf{QoS~0}, where the spec
 Explicit death on a planned stop & implemented & Both certificates fire; a consumer sees
                                 two NDEATHs per graceful stop. \\
 \code{seq} numbering and wrap & implemented & \\
-\code{bdSeq} pairing & implemented & \textbf{Fixed per MQTT client}, not incremented per
-                                CONNECT. A deliberate trade, explained in
-                                chapter~\ref{ch:contract}. \\
+\code{bdSeq} pairing & implemented & Incremented \textbf{per CONNECT}, as the
+                                specification requires, with the will re-registered to match.
+                                See chapter~\ref{ch:contract}. \\
 Metric properties (quality, units) & implemented & Quality codes \textbf{deviate
                                 deliberately} from the specification's enumeration, because
                                 the specified codes were measured to display as
