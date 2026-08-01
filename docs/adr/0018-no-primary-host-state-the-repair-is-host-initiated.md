@@ -139,6 +139,34 @@ decision.
 - **`spBv1.0/STATE` is live on this broker and the bridge ignores it.** That is now a decision rather
   than an oversight, which is the whole point of writing this down.
 
+## The cold-start state, which no clause covers
+
+**Added 2026-08-01, closing Story 4.5.** The Story 4.4 review found a state the eleven clauses do not
+describe: the broker holds a **retained `spBv1.0/STATE/SCADA` payload of `online:false`** at the
+moment the bridge starts. It is not the host going offline — nothing transitions — it is the bridge
+arriving after the fact and reading a death certificate for a session it never saw. The conformance
+matrix records that **Story 4.5 must rule on it alongside the eleven**, and the first version of this
+ADR did not, which is why this section exists.
+
+**The ruling: it cannot arise, and that is a consequence of the decision rather than an argument for
+it.** The bridge subscribes to its own NCMD topic and to nothing else (Story 4.6). It never
+subscribes to `spBv1.0/STATE`, so a retained payload on that topic is never delivered to it, is never
+parsed, and cannot gate anything. The cold-start state is **moot by construction** — not handled, not
+mishandled, simply unreachable.
+
+**Stated separately because it does not follow from the four grounds.** Those grounds argue that
+*waiting* buys nothing. This one is different: it is the observation that the hazard the 4.4 review
+identified attaches to *reading STATE at all*, not to waiting on it. It therefore also disposes of the
+"observe without waiting" alternative below by a second route — that variant WOULD have had to rule on
+the cold start, and would have had to choose between treating a retained `online:false` as a live
+host-down event (wrong: it may be arbitrarily old) or ignoring it (in which case the subscription buys
+nothing it did not already lack).
+
+**It reopens with revisit condition 1 or 2.** Any future design that reads `spBv1.0/STATE` inherits
+this state unsolved, and `-termination-host-offline-timestamp` (a MUST NOT on acting on a stale
+timestamp) is the clause that would then bind. Recorded here so a later implementer meets it as a
+known problem rather than discovering it.
+
 ## ADR 0011 is unchanged, and here is why
 
 Story 4.5's second acceptance criterion asks explicitly whether

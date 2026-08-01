@@ -403,11 +403,23 @@ The two mechanisms are complementary rather than alternative: the will remains t
         the same topic.
   \item \textbf{The registered will is QoS~0 where the specification requires QoS~1.}
         See the note under \emph{Delivery semantics}.
-  \item \textbf{No \emph{Primary Host Application} support.} Sparkplug lets an Edge Node
+  \item \textbf{No \emph{Primary Host Application} support --- and since 2026-07-31 this is
+        a \emph{decision}, not a gap.} Sparkplug lets an Edge Node
         name a host and change its behaviour with that host's \code{STATE}: wait for it
         before birthing, disconnect when it goes offline, walk to another broker. \prog
         implements none of this --- it births as soon as the broker answers, whether or
         not any consumer is listening, and never reads a \code{STATE} topic.
+
+        \textbf{It was ruled out deliberately}, in \textbf{ADR 0018} (\emph{Primary Host /
+        \code{STATE} is ruled out; the repair path is host-initiated}), on four
+        grounds: the specification states that \emph{``specifying a Primary Host is not
+        required for an Edge Node''}; without store-and-forward the wait preserves
+        \emph{zero} readings, so it buys honesty rather than data; one broker means the
+        stranding the mechanism guards against cannot occur; and implementing it would add
+        a \textbf{never-births} state --- which was the real state of this broker on
+        2026-07-28, when no retained \code{STATE} existed at all. The ADR also records the
+        conditions that would reopen it: a second broker, store-and-forward, or
+        report-by-exception (which would remove the trigger the repair below depends on).
 
         \textbf{This is \emph{not} invisible on a single-broker installation, and an
         earlier edition of this manual wrongly said it was.} The cost appears when the
@@ -424,10 +436,19 @@ The two mechanisms are complementary rather than alternative: the will remains t
 
         That is the important change, and it is worth being exact about what it does and
         does not fix. The repair is \emph{host-initiated}: it works if and only if the host
-        asks. Ignition's MQTT Engine does ask, on its own, when it receives data from a
-        node whose birth it never saw --- which is precisely this situation. But \prog
-        still reads no \code{STATE} topic, so it never learns the host came back, and it
-        will not volunteer a birth. A host that does \emph{not} ask still sees
+        asks.
+
+        \textbf{Whether MQTT Engine asks \emph{on its own} has not been observed}, and an
+        earlier edition of this manual asserted that it does. What was measured is that
+        Engine sends a rebirth request when an operator presses the control, and that
+        \prog answers it correctly. The evidence that it might also ask unprompted is
+        indirect: Ignition exposes a \emph{Rebirth (Last) Cause} field that read
+        \emph{``Triggered by user''}, a label that only earns its existence if other causes
+        exist. That is an inference, not a measurement, and settling it is question~1 on
+        Story 4.8's list.
+
+        \prog still reads no \code{STATE} topic, so it never learns the host came back, and
+        it will not volunteer a birth. A host that does \emph{not} ask still sees
         \code{NDATA} it has no \code{NBIRTH} to interpret.
 
         \textbf{Any reconnect on \prog's own side also restores the definitions.} A fresh

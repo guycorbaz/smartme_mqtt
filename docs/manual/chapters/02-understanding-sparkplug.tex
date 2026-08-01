@@ -694,9 +694,11 @@ Report by exception & \textbf{absent} & Publishes on a fixed interval. Recorded 
                                 \code{bdSeq}. Recognised on the name \emph{and} the boolean
                                 value \code{true}; any other value is refused and logged
                                 with what arrived. \\
-\code{DCMD} (writing to outputs) & \textbf{absent} & No device here has a writable output
-                                today, so the topic form is not implemented. Planned. \\
-Primary Host / \code{STATE} & \textbf{absent} & Not read, not waited for. \\
+\code{DCMD} (writing to outputs) & \textbf{absent} & Nothing is built. Note that two of the
+                                four meters \emph{do} expose a relay --- the earlier claim
+                                that none did was wrong. Issue~\#38. \\
+Primary Host / \code{STATE} & \textbf{declined} & Ruled out deliberately in ADR 0018, not
+                                merely unbuilt. See chapter~\ref{ch:contract}. \\
 Aliases, Templates, DataSets & \textbf{absent} & Out of scope; metric names are published in
                                 full. \\
 Multiple brokers & \textbf{absent} & One broker is configured; server-walking cannot arise. \\

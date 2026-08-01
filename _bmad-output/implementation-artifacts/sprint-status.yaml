@@ -208,7 +208,43 @@ development_status:
   # pre-production list. Deferring the decision to that run would have repeated AR13.
   # LEFT FOR THE MATRIX OWNER: the five -phid-* rows are `gap (unimplemented)`, which
   # over-declares if the clauses do not bind. Moving them would move two tallies.
-  4-5-primary-host-state-decide: review
+  # 2026-08-01: CLOSED. Both ACs were already met by ADR 0018; what was missing was the
+  # work the ADR itself assigned and the obligations recorded elsewhere. Four findings.
+  # 1. THE ADR NEVER RULED ON THE COLD-START STATE, though the matrix says in writing that
+  #    "4.5 must rule on it alongside the eleven" -- a retained online:false STATE present
+  #    at bridge start-up, found by the 4.4 review. Zero occurrences of cold-start /
+  #    online:false / start-up in the ADR. Now ruled and added: it CANNOT ARISE, because
+  #    the bridge subscribes to its own NCMD topic and to nothing else, so a retained
+  #    STATE payload is never delivered -- moot by construction, not handled. Stated
+  #    separately because it does NOT follow from the four grounds: those argue that
+  #    WAITING buys nothing, this one attaches to READING STATE at all, and it therefore
+  #    also kills the "observe without waiting" alternative by a second route.
+  # 2. THE MANUAL ASSERTED AS MEASURED WHAT THE ADR CALLS INFERRED. 05-mqtt-sparkplug-
+  #    contract.tex said "Ignition's MQTT Engine does ask, on its own, when it receives
+  #    data from a node whose birth it never saw". ADR 0018 says the opposite about its
+  #    STATUS -- "Step 3 is INFERRED, not measured", "No automatic rebirth has been
+  #    observed", evidence being only a `Rebirth (Last) Cause = Triggered by user` label.
+  #    Corrected, and pointed at question 1 of Story 4.8. Same defect shape as the quality
+  #    codes: a claim stated more strongly downstream than its evidence supports.
+  # 3. A THIRD PASSAGE WAS FALSE FOR AN UNRELATED REASON. The manual's DCMD row said "no
+  #    device here has a writable output today". Measured 2026-08-01 against the live API:
+  #    two of the four meters expose a `Relais` (ObisCode 63000C0102FF). Corrected; the
+  #    mechanism is unbuilt because nothing was built, not because there is nothing to
+  #    control. Sharpens #38, whose whole premise is that the DCMD n/a is time-limited.
+  # 4. THE ADR HANDED THE MATRIX VERDICTS TO "WHOEVER NEXT OWNS THE MATRIX" -- an owner
+  #    who does not exist. CLAUDE.md forbids deferring to an artifact that does not exist;
+  #    deferring to an unnamed person is the same failure with a friendlier face. Now
+  #    [#42]. Also: the ADR and this file both say "the five -phid-* rows", but the
+  #    decision reaches ELEVEN (five -phid-*, -birth-sequence-wait, three
+  #    -termination-host-offline*, -state-subs, -walk). All eleven repointed.
+  # VERDICTS DELIBERATELY NOT MOVED, and proven not moved: 179 rows compared against HEAD
+  # id-by-id, ZERO verdict changed. A story does not re-grade rows on the strength of an
+  # ADR it wrote itself, and 4.3's review chose `gap` over `n/a` knowingly.
+  # Manual rebuilt: exit 0, 48 pages, and the ONLY overfull boxes are the three that exist
+  # in the committed baseline. Two of mine were found and fixed rather than deferred -- a
+  # 127pt hbox (an unbreakable ADR filename in monospace) and a NEW overfull vbox: two
+  # verbose table cells made a non-breakable tabular taller than the page.
+  4-5-primary-host-state-decide: done
   # 2026-07-29: contexted. ADR 0016 sequences 4.6/4.7 AHEAD of 4.5. Two errors in
   # the epic's AC1 fixed at creation: the tck-id was written -subscribe-ncmd (the
   # real one is tck-id-message-flow-edge-node-ncmd-subscribe) and the ordering said
