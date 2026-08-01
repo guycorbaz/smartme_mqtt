@@ -324,3 +324,37 @@ Items deferred from reviews; each carries its origin and where it should be pick
   SELECT level_string, COUNT(*) FROM logging_event
    WHERE logger_name LIKE '%mqtt.engine%' GROUP BY 1;
   ```
+
+## Noted from: the first v0.1.0 deployment on panoramix (2026-08-01) — DEPLOYMENT, not this project's code
+
+- **`/volume1/docker/smartme_mqtt/data` is world-writable, and should not stay that way.**
+  **[#41](https://github.com/guycorbaz/smartme_mqtt/issues/41).**
+  Guy opened it to everyone (POSIX read/write for all) to get past a `Permission denied` that no
+  amount of mode-bit reasoning explained, and said at the time that it "devra être changé".
+  Recorded here so the reason survives the day.
+
+  **What actually happened**, because the symptom was misleading. `ls -la` showed
+  `drwxrwxrwx+ 1 adm users` — mode 777, which under pure POSIX grants `w`+`x` on the directory to
+  every uid, and that is all `persist_atomic_bytes` needs (`persist.rs:24` does `File::create` of a
+  temp file INSIDE the directory, then renames). The write nevertheless failed with
+  `Permission denied (os error 13)`. That contradiction is the whole finding: **the displayed mode
+  was not the enforced permission.** The trailing `+` marks a Synology ACL, and DSM synthesises a
+  mode for POSIX tools while the kernel consults the ACL. The container's `smartme` user (uid 10002)
+  exists only inside the image, matches no ACE, and an NFSv4-style ACL denies what it does not
+  explicitly grant — so POSIX's "other" fallback, which the 777 implied, never applied.
+
+  The directory was owned by `adm` and timestamped at the exact second the container first started:
+  **Docker created the bind-mount source itself**, inheriting the parent's ACL. The documented
+  `mkdir`/`chown` step had never run.
+
+  **Target state:** owner `10002:10002`, mode `700`. The container is the only writer, and this same
+  directory will hold the rotated log files once `SMARTME_LOG_DIR=/data/logs` is set. Removing the
+  inherited ACL (`synoacltool -del`) is what makes the mode bits govern again; if the `+` returns,
+  ACL inheritance must be cut on the folder in File Station.
+
+  **Why this was worth an entry rather than a quick fix.** The failure was invisible where anyone
+  would have looked: the bridge connected, published, and Ignition showed real moving values, while
+  every restart replayed `bd_seq=1`. A consumer pairing a death to a birth by `bdSeq` can then
+  discard a death belonging to a session it believes is still live. None of the repository's 173
+  tests could have found it — it lives in the interaction between DSM's ACLs, Docker's automatic
+  bind-mount creation, and a uid that does not exist on the NAS.
