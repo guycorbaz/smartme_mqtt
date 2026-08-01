@@ -162,6 +162,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(file_layer)
         .init();
 
+    // THE FIRST LINE, and the position is the whole point.
+    //
+    // It is emitted before anything that can fail — before the configuration is
+    // read, and therefore before the identity guard can abort the process. A
+    // banner printed after `env("SMARTME_GROUP_ID")?` would be absent from the
+    // one log an operator most needs it in: the crash-looping container. Today
+    // such a container's entire output is `Error: "missing environment variable
+    // SMARTME_GROUP_ID"`, with nothing saying which build produced it.
+    //
+    // `CARGO_PKG_VERSION` is resolved at COMPILE time, so it describes the binary
+    // rather than the image tag it happens to be wearing. Those can drift — the
+    // publish workflow carries a tag-vs-version guard precisely because they can
+    // — and when they do, this line is the one that is right.
+    //
+    // `CONTRACT_VERSION` is here because it, not the package version, is what a
+    // consumer sees: it says what the wire will carry, and it is the first thing
+    // worth knowing when a tag looks wrong in Ignition.
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        contract = smartme_bridge::adapters::sparkplug_publisher::CONTRACT_VERSION,
+        "smartme_mqtt starting"
+    );
+
     if let Some(log) = &file_log {
         tracing::info!(directory = %log.directory.display(), "logging to file");
     }
