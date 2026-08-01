@@ -58,6 +58,139 @@ OAuth app must be deleted and recreated. All smart-me traffic is over TLS and ha
 if TLS is unavailable.
 \end{warning}
 
+\subsection{Scopes: what an app is allowed to do}
+\label{sec:smartme-scopes}
+
+An app's power comes from the \emph{claims} granted to it when it is created, not from the
+\code{scope} parameter sent at token exchange. A token request may only ask for claims the
+app already holds; asking for more is refused.
+
+\begin{warning}
+Do not take the scope list from the OpenID discovery document
+(\code{/.well-known/openid-configuration}). It advertises only \code{openid} and
+\code{offline\_access}, which is incomplete to the point of being misleading — the real
+vocabulary is twelve claims. Read it instead from the OAuth2 security scheme in
+\code{https://api.smart-me.com/swagger/v1/swagger.json}, or live from
+\code{GET /oauth/claimtree}, which also returns the hierarchy.
+\end{warning}
+
+The claims form a tree, and \textbf{a parent implies its children}. Granting
+\code{device.readswitch} therefore also grants \code{device.read} — a switching app is
+always also a reading app, and there is no claim that permits switching \emph{without}
+reading.
+
+\begin{center}
+\begin{tabular}{@{}>{\ttfamily}l p{7.6cm}@{}}
+\toprule
+\normalfont\textbf{Claim} & \textbf{Grants} \\
+\midrule
+device.readwrite      & Read, control outputs, and add/update values \\
+\quad device.readswitch & Read and control the outputs (the relay) \\
+\quad\quad device.read  & Read device data only \\
+user.readwrite        & Read and write the user settings \\
+\quad user.read       & Read the user settings \\
+auditlog.read         & Read the audit log \\
+realtimeapi.readwrite & Read and write realtime-API registrations \\
+\quad realtimeapi.read & Read realtime-API registrations \\
+partner.write         & Read and write a partner's devices \\
+\quad partner.read    & Read a partner's devices \\
+partner.updatefirmware & Update the firmware of all a partner's devices \\
+oauthapp.write        & Create and change OAuth applications \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Creating a read-only app (what \prog needs)}
+
+\prog only ever reads. Grant it \code{device.read} and nothing else: a bridge that cannot
+switch a relay cannot switch one by accident, and a leaked secret cannot be used to act on
+the installation.
+
+\begin{enumerate}
+  \item In the smart-me portal, create an OAuth application of type
+        \emph{Device (Client Credentials)}.
+  \item Give it a name that says where it runs (for example \code{gateway}).
+  \item Grant the single claim \code{device.read}.
+  \item Copy the Client~ID and secret into \code{.env} as shown above.
+\end{enumerate}
+
+\paragraph{Verifying that it really is read-only.} This can be proved without attempting a
+write, because the token endpoint distinguishes the two failure modes:
+
+\begin{lstlisting}[language=bash]
+# Ask for a claim the app should NOT have.
+curl -s -X POST https://api.smart-me.com/oauth/token \
+  -d grant_type=client_credentials \
+  -d client_id="$ID" -d client_secret="$SECRET" \
+  -d scope=device.readswitch
+\end{lstlisting}
+
+\begin{description}[style=nextline]
+  \item[\code{invalid\_request} — \emph{“This client application is not allowed to use the
+        specified scope.”}] The claim exists and the app does not hold it. This is the
+        expected answer for a read-only app, and it is a positive result.
+  \item[\code{invalid\_scope}] The claim name does not exist. You have made a typo, and the
+        test has proved nothing.
+  \item[A token is returned] The app \emph{can} switch outputs. It is not read-only.
+\end{description}
+
+\begin{note}
+Run this against the credentials actually deployed, not against the ones you meant to
+deploy. The distinction between the two error codes is what makes the check meaningful: a
+test that cannot tell “refused” from “misspelled” always passes.
+\end{note}
+
+\subsection{Creating an app that can command a meter relay}
+
+\begin{warning}
+\prog does not use this, and does not implement any command path. The bridge publishes
+measurements and answers Sparkplug \code{NCMD} \code{Node Control/Rebirth}; it never writes
+to smart-me. This section documents the smart-me side so that the capability can be
+enabled deliberately — it is not a description of current behaviour. The corresponding
+Sparkplug \code{DCMD} question is tracked as issue~\#38.
+\end{warning}
+
+Create a second, \emph{separate} Device app granted \code{device.readswitch}. Keep it
+separate from the bridge's read-only app: the two have different blast radii, and only one
+of them is worth protecting carefully.
+
+\paragraph{1 — Find the device's actions.} Not every meter has a switchable output. Ask
+before assuming:
+
+\begin{lstlisting}[language=bash]
+curl -s -H "Authorization: Bearer $TOKEN" \
+  https://api.smart-me.com/actions/<device-uuid>
+\end{lstlisting}
+
+A meter with no relay returns \code{[]}. A meter with one returns its actions, and the
+\code{ObisCode} is the identifier you will command:
+
+\begin{lstlisting}
+[{"Name":"Relais","ObisCode":"63000C0102FF","ActionType":0}]
+\end{lstlisting}
+
+\paragraph{2 — Send the command.}
+
+\begin{lstlisting}[language=bash]
+curl -s -X POST https://api.smart-me.com/actions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"deviceID":"<device-uuid>",
+       "actions":[{"obisCode":"63000C0102FF","value":1}]}'
+\end{lstlisting}
+
+\begin{note}
+\code{PUT /Devices/\{id\}} also switches an output and still works, but smart-me's own
+specification says of it: \emph{“For new implementations please use the \code{actions}
+command.”} Prefer \code{POST /actions}.
+\end{note}
+
+\begin{tip}
+\code{GET /actions/\{id\}} needs only \code{device.read}, so you can inventory which meters
+have a relay using the bridge's existing read-only credentials, before creating any app
+that can actually operate one.
+\end{tip}
+
 \section{MQTT broker connection}
 \label{sec:broker-config}
 
