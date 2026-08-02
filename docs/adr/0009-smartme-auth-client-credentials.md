@@ -50,6 +50,18 @@ superseded by client credentials.
 - Configuration variables (see `.env.example`): `SMARTME_CLIENT_ID`, `SMARTME_CLIENT_SECRET`
   (primary); `SMARTME_BASIC_USER`, `SMARTME_BASIC_PASSWORD` (fallback). Secrets live only in
   `.env` (perms `0600`, gitignored, never logged — NFR12).
+- **Implementation status (2026-08-03): decision point 2 is unbuilt at the binary, and the two
+  variables above do nothing.** The *crate* conforms — `Credentials::Basic` exists and
+  `client.rs` sends `basic_auth` — so the decision as written ("the `smart-me-client` crate
+  authenticates as follows") holds. What is missing is the wiring: `main.rs` constructs
+  `Credentials::ClientCredentials` unconditionally, with both fields **required**, and reads
+  neither `SMARTME_BASIC_*`. The only caller that ever builds `Credentials::Basic` is test code.
+  So the fallback is not a fallback: it cannot be selected, and choosing it *instead* of client
+  credentials makes the binary refuse to start. Found by a repository integrity check, not by a
+  user, because nothing fails loudly — the documentation simply described a path that did not
+  exist. **Whether to wire it up or drop it from the design is undecided**, and the choice is
+  Guy's; `.env.example`, the manual (§smart-me authentication) and the configuration-reference
+  appendix now all say "reserved, not read" rather than "optional fallback".
 - **Resolved by Story 1.1 (2026-07-25):** the token endpoint is
   **`POST https://api.smart-me.com/oauth/token`** (discovered via
   `/.well-known/openid-configuration`; `client_credentials` grant listed, auth methods

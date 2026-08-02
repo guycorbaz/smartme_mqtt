@@ -27,9 +27,19 @@ headless devices.
   \item[Primary — OAuth2 Client Credentials] The bridge exchanges a Client~ID and Client
         Secret for a bearer token, then calls the API with
         \code{Authorization: Bearer <token>}, refreshing the token on expiry.
-  \item[Fallback — HTTP Basic] Account user/password, used only if client credentials are
-        not configured.
+  \item[Fallback — HTTP Basic] Account user/password. \textbf{Designed, implemented in the
+        client library, and not reachable from the environment} --- see the warning below.
 \end{description}
+
+\begin{warning}
+\textbf{The Basic fallback cannot currently be selected.} \code{smart-me-client} implements
+it, but the binary builds OAuth client-credentials unconditionally and never constructs
+Basic credentials, so \code{SMARTME\_BASIC\_USER} and \code{SMARTME\_BASIC\_PASSWORD} have
+no effect whatever. Worse for anyone relying on the word \emph{fallback}: the OAuth pair is
+\emph{required}, so setting the Basic pair \emph{instead} of it makes \prog refuse to start
+with \code{missing environment variable SMARTME\_CLIENT\_ID}. Treat client credentials as
+the only way in until this is either wired up or dropped from the design.
+\end{warning}
 
 \begin{note}
 This decision — client credentials primary, Basic fallback, TLS mandatory — is recorded
@@ -47,7 +57,8 @@ secret, and set them in \code{.env}:
 SMARTME_CLIENT_ID=your-client-id
 SMARTME_CLIENT_SECRET=your-client-secret
 
-# Optional HTTP Basic fallback:
+# HTTP Basic fallback -- RESERVED, and NOT read by the bridge today.
+# Setting these has no effect; the OAuth pair above is still required.
 # SMARTME_BASIC_USER=your-account-user
 # SMARTME_BASIC_PASSWORD=your-account-password
 \end{lstlisting}
@@ -289,4 +300,52 @@ most likely to be the production one.
 \stub{default scheme, editing, first-run mapping confirmation.}
 
 \section{Poll interval, logging, and retention}
-\stub{configurable poll interval, log level, daily rotation and retention window.}
+
+\stub{configurable poll interval.}
+
+\subsection{Logging to a file}
+
+The console always receives every line. File logging is \emph{additional} and opt-in: with
+\code{SMARTME\_LOG\_DIR} unset there is no log file at all, and \prog behaves exactly as it
+did before file logging existed.
+
+\begin{lstlisting}[language=bash]
+# Turns file logging ON. Written as smartme_mqtt.<YYYY-MM-DD>.log, rotated daily.
+SMARTME_LOG_DIR=/data/logs
+
+# How many rotated files to keep. Default 7 (one week).
+SMARTME_LOG_KEEP=7
+\end{lstlisting}
+
+\code{SMARTME\_LOG\_KEEP} must be a positive whole number. A value that is not one is
+refused rather than guessed at: \prog says so on stderr and keeps 7.
+
+\begin{note}
+File logging can never stop the bridge. If the directory cannot be created or the file
+cannot be opened, logging degrades to console-only and prints the reason on stderr. In a
+container the usual cause is the bind-mount's ownership --- the directory must belong to the
+uid the container runs as (10002); see chapter~\ref{ch:install}.
+\end{note}
+
+\begin{warning}
+Under pressure the \emph{file} loses lines and the console does not. A saturated write
+buffer drops log lines rather than blocking the bridge, because a slow disk must never
+stall publishing. So \code{docker compose logs} stays complete when the file does not. The
+number of lost lines is reported when \prog shuts down, so the loss is never silent --- if
+you are reconciling a file against the console, that line is the reason they differ.
+\end{warning}
+
+\subsection{Log level}
+
+\code{RUST\_LOG} is the standard \code{tracing} filter and applies to the console and the
+file alike. It defaults to \code{info}, deliberately: the library's own default is
+\code{error}, which would hide the ignored-command traces, the QoS-downgrade warning and
+every traced drop --- an operator would read an empty log as ``nothing happened''.
+
+\begin{lstlisting}[language=bash]
+# Default.
+RUST_LOG=info
+
+# Raise one subsystem without drowning in the rest.
+RUST_LOG=info,smartme_bridge::adapters::mqtt_driver=debug
+\end{lstlisting}

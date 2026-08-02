@@ -9,16 +9,24 @@ default, and effect if missing.
 \toprule
 \normalfont\textbf{Variable} & \textbf{Req.} & \textbf{Effect} \\
 \midrule
-SMARTME\_CLIENT\_ID     & yes\textsuperscript{*} & smart-me OAuth client-credentials ID. \\
-SMARTME\_CLIENT\_SECRET & yes\textsuperscript{*} & smart-me OAuth client-credentials secret. \\
-SMARTME\_BASIC\_USER    & no  & HTTP Basic fallback user. \\
-SMARTME\_BASIC\_PASSWORD& no  & HTTP Basic fallback password. \\
+SMARTME\_CLIENT\_ID     & yes & smart-me OAuth client-credentials ID. Missing: \prog refuses to start. \\
+SMARTME\_CLIENT\_SECRET & yes & smart-me OAuth client-credentials secret. Missing: \prog refuses to start. \\
+SMARTME\_BASIC\_USER    & --- & HTTP Basic fallback user. \textbf{Not read by \prog}\textsuperscript{*}. \\
+SMARTME\_BASIC\_PASSWORD& --- & HTTP Basic fallback password. \textbf{Not read by \prog}\textsuperscript{*}. \\
+\addlinespace
+SMARTME\_LOG\_DIR       & no  & Directory for the log file. Unset: no log file, console only. Set: \code{smartme\_mqtt.<date>.log}, rotated daily. \\
+SMARTME\_LOG\_KEEP      & no  & Rotated files kept. Default 7. Not a positive number: refused on stderr, keeps 7. \\
+RUST\_LOG               & no  & \code{tracing} filter, console and file alike. Default \code{info}. \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\footnotesize\textsuperscript{*}Either the OAuth client-credentials pair \emph{or} the
-Basic fallback pair must be present.\normalsize
+\footnotesize\textsuperscript{*}\textbf{The Basic fallback is not reachable from the
+environment.} \code{smart-me-client} implements it (ADR~0009), but the binary constructs
+OAuth client-credentials unconditionally and never builds Basic credentials, so setting
+these two variables has no effect --- and because the OAuth pair is required, omitting it in
+their favour makes \prog refuse to start. Wiring it up, or dropping it from the design, is an
+open decision.\normalsize
 
-\stub{the full table (broker, poll interval, log level/retention, bind, mapping) as those
-settings are implemented.}
+\stub{the full table (broker, meter identity, Sparkplug identity, state directory, poll
+interval, bind, mapping) as those settings are documented here.}

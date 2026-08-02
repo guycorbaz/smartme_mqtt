@@ -513,7 +513,15 @@ review of Story 4.3 found it missing and a reader should not have to go looking:
 > certain applications."* — `Sparkplug_1_Introduction.adoc:285-286`
 
 The specification could hardly be plainer that this is optional. On that reading all five are `n/a`,
-chapter 5 becomes `22 · 2 · 21 · 54` and the whole-specification totals become `70 · 8 · 47 · 149`.
+chapter 5 becomes `29 · 1 · 15 · 54` and the whole-specification totals become `80 · 6 · 39 · 149`.
+
+*(This counterfactual read `22 · 2 · 21 · 54` and `70 · 8 · 47 · 149` until 2026-08-03: it was
+computed against the tallies of the day and not recomputed when they moved. The **delta** it applies
+is what carries — one `conformant` and four `gap` rows becoming `n/a` — and it is unchanged, because
+no story since has touched these five verdicts: 4.5 decided the mechanism without moving them
+([ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md)), 4.6 added NCMD and no
+STATE handling, and 4.7 and 4.10 moved rows elsewhere. Applied to today's `30 · 1 · 19 · 49` and
+`81 · 6 · 43 · 144`, the figures above are what that reading would produce.)*
 
 **The reading is nonetheless rejected, on a distinction that must be stated because the same pass
 ruled the other way on a structurally identical clause.** `message-flow-device-dcmd-subscribe` is
@@ -971,17 +979,22 @@ out to be a restatement rather than a new requirement.
 | `payloads-nbirth-qos` | MUST | QoS 0 | `mqtt_driver.rs::every_edge_node_message_is_qos_zero_and_never_retained` | conformant |
 | `payloads-nbirth-retain` | MUST | retain false | same, plus `chaos_sigterm_no_lie`'s late-subscriber check — an **external** witness that the broker replays nothing | conformant |
 
-**Why `-nbirth-bdseq-repeat` is a deviation despite matching.** The clause reads *"The bdSeq number
-value MUST match the bdSeq number value that was sent in the prior MQTT CONNECT packet WILL
-Message"* (`:1075`), and taken alone it is satisfied. But it is satisfied *vacuously*: the will is
-serialised into `MqttOptions` once at construction and `rumqttc` rebuilds every reconnect's CONNECT
-packet from that same snapshot (`mqtt_driver.rs:77-79`, `:927-940`), so the two values agree because
-neither can move. The clause's own accompanying requirement — *"any new CONNECT packet must
-increment the bdSeq number in the payload compared to what was in the previous CONNECT packet"*
-(`:1521-1525`) — is therefore **violated on every internal reconnect**, and a Host Application
-cannot distinguish a current session from a superseded one. Recording this as `conformant` would be
-the trap this matrix exists to avoid: right answer, wrong reason. **Story 4.10** owns the fix
-(own the reconnect loop, one `bdSeq` per CONNECT).
+**Why `-nbirth-bdseq-repeat` WAS a deviation despite matching, and what closed it (Story 4.10,
+2026-08-01).** The clause reads *"The bdSeq number value MUST match the bdSeq number value that was
+sent in the prior MQTT CONNECT packet WILL Message"* (`:1075`), and taken alone it was satisfied. But
+until 4.10 it was satisfied *vacuously*: the will was serialised into `MqttOptions` once at
+construction and `rumqttc` rebuilt every reconnect's CONNECT packet from that same snapshot, so the
+two values agreed because neither could move. The clause's own accompanying requirement — *"any new
+CONNECT packet must increment the bdSeq number in the payload compared to what was in the previous
+CONNECT packet"* (`:1521-1525`) — was therefore **violated on every internal reconnect**, and a Host
+Application could not distinguish a current session from a superseded one. Recording it as
+`conformant` then would have been the trap this matrix exists to avoid: right answer, wrong reason.
+
+**The driver now owns its reconnect loop**, so each CONNECT registers a new will carrying the session
+number that CONNECT will use, and the match holds because both values move together rather than
+because neither moves. The row is `conformant` on the same evidence chapter 5 cites for
+`-will-message-payload-bdSeq`, whose prose carries the full account of the fix and of the one thing
+4.10 could not verify ([#43](https://github.com/guycorbaz/smartme_mqtt/issues/43)).
 
 #### DBIRTH
 
@@ -1167,9 +1180,9 @@ wrap from every starting point regardless.
 | **The bridge implements no metric aliases, no Templates and no DataSets.** `encode_metric` hard-codes `alias: None` (`encode.rs:241`); `MetricValue` has no `DataSet` or `Template` variant; `DataType` omits codes 16 and 19. | Out of the walking skeleton's scope — recorded at the code review of Story 1-8 (2026-07-25): *"Device-level messages, metric aliases, templates/datasets … out of the walking skeleton's scope"* (`_bmad-output/implementation-artifacts/deferred-work.md`). The features are not merely unused but **unreachable**: there is no API by which a caller could request one. | **deviation** |
 
 **That row is outside the tally, exactly like the prose-only obligations below.** It is a scope
-decision, not a `tck-id` row, so it is not one of the 109 and does not appear in the count of five
-deviations. A reader counting rendered `deviation` verdicts in this chapter finds six; five is the
-number the arithmetic uses, and this is the sixth.
+decision, not a `tck-id` row, so it is not one of the 109 and does not appear in the count of four
+deviations. A reader counting rendered `deviation` verdicts in this chapter finds five; four is the
+number the arithmetic uses, and this is the fifth.
 
 **The 36 clauses this covers are `n/a`, pointing at the row above.** They are listed by id, not by
 heading, so the set can be diffed rather than trusted:
@@ -1402,11 +1415,15 @@ Every chapter-4 `conformant` row names a test. No row is asserted from reading t
 
 ## Tally for chapter 5
 
-**29 conformant · 2 deviations · 19 gaps · 49 n/a**
+**30 conformant · 1 deviation · 19 gaps · 49 n/a**
 
-`29 + 2 + 19 + 49 = 99` — the enumerated clause set, with no remainder.
+`30 + 1 + 19 + 49 = 99` — the enumerated clause set, with no remainder.
 
-**This tally was `23 · 2 · 25 · 49` until Story 4.7**, and `22 · 2 · 26 · 49` until Story 4.6.
+**This tally was `29 · 2 · 19 · 49` until Story 4.10** (2026-08-01), which moved
+`-will-message-payload-bdSeq` from `deviation` to `conformant`: `29 + 1 = 30` and `2 − 1 = 1`. The
+row's own prose above records why it was a deviation and what closed it.
+
+**And `23 · 2 · 25 · 49` until Story 4.7**, and `22 · 2 · 26 · 49` until Story 4.6.
 
 Story 4.7 moved **six** rows from `gap (unimplemented)` to `conformant`, all in the rebirth
 section: the three NBIRTH-metric clauses (`-rebirth-name`, `-rebirth-datatype`, `-rebirth-value`)
@@ -1530,17 +1547,22 @@ saying so.
 
 ## Tally for chapter 6
 
-**31 conformant · 5 deviations · 14 gaps · 59 n/a**
+**32 conformant · 4 deviations · 14 gaps · 59 n/a**
 
-`31 + 5 + 14 + 59 = 109` — the enumerated clause set, with no remainder.
+`32 + 4 + 14 + 59 = 109` — the enumerated clause set, with no remainder.
 
-**This tally was `30 · 5 · 15 · 59` until Story 4.7.** One row moved: `payloads-nbirth-rebirth-req`,
+**This tally was `31 · 5 · 14 · 59` until Story 4.10** (2026-08-01), which moved
+`payloads-nbirth-bdseq-repeat` from `deviation` to `conformant`: `31 + 1 = 32` and `5 − 1 = 4`. That
+row is the chapter-6 half of the one defect chapter 5 records as `-will-message-payload-bdSeq`, which
+is why both chapter tallies move by one in the same direction on the same story.
+
+**And `30 · 5 · 15 · 59` until Story 4.7.** One row moved: `payloads-nbirth-rebirth-req`,
 from `gap (unimplemented)` to `conformant`. `30 + 1 = 31` and `15 − 1 = 14`.
 
 **The count of 109 is a count of ids, not of requirements.** Two of them,
 `payloads-sequence-num-req-nbirth` and `-zero-nbirth`, are one clause under two spellings (see the
-editorial note at the head of this chapter), and both hold a `conformant` row. So **31 conformant is
-30 distinct**, and the chapter states **108 distinct requirements**. The arithmetic is kept against
+editorial note at the head of this chapter), and both hold a `conformant` row. So **32 conformant is
+31 distinct**, and the chapter states **108 distinct requirements**. The arithmetic is kept against
 109 because 109 is what a mechanical enumeration of the specification returns, and a matrix that
 cannot be diffed against the norm is worth less than one that double-counts a known phantom.
 
@@ -1690,13 +1712,21 @@ belong to **Story 4.19**; the chapter-4 tally explains their shape. Until 4.19 l
 audits the specification *in part*, and the Status table says so per chapter — a reader can tell
 audited-in-full from audited-in-part without doing arithmetic.
 
-**Six of the eight deviations are three defects counted twice**, because two chapters state one
+**Four of the six deviations are two defects counted twice**, because two chapters state one
 obligation and the matrix is keyed by `tck-id`: the payload timestamp (chapter 6, two clauses,
-[ADR 0013](adr/0013-payload-timestamp-is-acquisition-time.md)), the frozen `bdSeq` (chapters 5 and 6,
-Story 4.10) and periodic publishing (chapters 2 and 5,
-[#32](https://github.com/guycorbaz/smartme_mqtt/issues/32)). Counting rows is the honest way to
-reconcile against the norm; counting distinct defects gives **five**, and both numbers are stated
-here so neither reading is available to a hurried reader.
+[ADR 0013](adr/0013-payload-timestamp-is-acquisition-time.md)) and periodic publishing (chapters 2
+and 5, [#32](https://github.com/guycorbaz/smartme_mqtt/issues/32)). The remaining two stand alone:
+`DataType` on DDATA metrics ([#28](https://github.com/guycorbaz/smartme_mqtt/issues/28)) and the
+quality codes ([ADR 0012](adr/0012-quality-codes-spec-versus-host.md)). Counting rows is the honest
+way to reconcile against the norm; counting distinct defects gives **four**, and both numbers are
+stated here so neither reading is available to a hurried reader.
+
+**This paragraph read `six of the eight … three defects … five` until 2026-08-03**, three days after
+Story 4.10 removed the third doubled defect — the frozen `bdSeq`, chapters 5 and 6 — from the
+deviation count. 4.10 amended the total table above and the two rows themselves, and left every
+number that *followed* from them: this paragraph, both chapter tallies, chapter 6's rendered-count
+note and the counterfactual under `-primary-host-app`. Amending a claim is not amending its
+consequences, and this document has now had to record that twice.
 
 **The 43 gaps split 29 unimplemented / 14 unproven**, and the balance moved sharply with chapter 5. *(Corrected by the Story 4.7 code review: this read `50 … 36 / 14` — the whole-specification gap split, twenty-eight lines below the total the story DID amend to 43. Three tallies were recomputed and this fourth was not, so the document stated 43 and 50 for the same quantity.)*
 Chapter 6 found a codebase whose dominant defect was behaviour nothing would notice losing; chapter 5
