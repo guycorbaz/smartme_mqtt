@@ -1,6 +1,22 @@
 # Story 4.9: Give `chaos_sigterm_no_lie` a discriminator that survives per-CONNECT `bdSeq`
 
-Status: ready-for-dev
+Status: done
+
+> **Reviewed out of `review` 2026-08-03. All four ACs met, nothing outstanding.**
+>
+> - **AC1** — `docs/adr/0011-…md:58-84` carries the expiry, states the *mechanism* rather than the
+>   conclusion, and names the count as the replacement.
+> - **AC2** — the discriminator is a count of NDEATHs on the drained stream; the test reads no
+>   `payload.timestamp` to tell a death from a will. Falsified in **three** experiments, records
+>   copied into the module docs, not written from memory.
+> - **AC3** — the `death_stamp > birth_stamp` assertion is gone, not supplemented, and the prose that
+>   explained it is rewritten.
+> - **AC4** — *"What the count does NOT exclude"* names the duplicate-publish case and why it is a
+>   different defect.
+>
+> The experiment worth keeping: **on identical broken code the old discriminator says pass and the
+> new one says fail** — the story's whole argument, measured rather than reasoned. That is the
+> standard the rest of the project's falsifications should be held to.
 
 ## Story
 

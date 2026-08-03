@@ -74,18 +74,34 @@
 //! packet. So it is never a `select!` branch — it runs alone in its own task and
 //! reports what it sees through a channel.
 //!
-//! # Session identity, and a recorded deviation
+//! # Session identity
 //!
-//! `rumqttc` reconnects internally and rebuilds the CONNECT packet from the
-//! `MqttOptions` captured at construction — so the registered will can never be
-//! updated. The session number is therefore FIXED for the lifetime of one
-//! client: a reconnect re-births under the same `bdSeq`, which is exactly the
-//! number the will carries. The Sparkplug specification would have it increment
-//! per CONNECT; advancing it here would leave the broker holding a death
-//! certificate for a session that no longer exists, and a consumer that pairs
-//! death to birth by `bdSeq` would IGNORE the death and keep showing a frozen
-//! value as live. Matching the will is the honest half of that trade; owning
-//! the reconnect loop (and rebuilding the client per CONNECT) is deferred.
+//! **One CONNECT is one `bdSeq`, and the will registered in that CONNECT carries
+//! the same number** — what the specification requires. This module owns its
+//! reconnect loop (see THE SESSION LOOP in [`run`]) precisely so that it can:
+//! `rumqttc` rebuilds the CONNECT packet from the `MqttOptions` captured at
+//! construction, so a client that reconnects internally can never be given a new
+//! will, and rebuilding the client is the only way to hand the broker a
+//! certificate that matches the session it is about to cover.
+//!
+//! The number is persisted before each CONNECT rather than once per boot, so a
+//! crash between the CONNECT and the next boot cannot replay a session the
+//! broker has already seen. That write is bounded by `RECONNECT_FLOOR`, which is
+//! why the backoff floor is a durability property and not merely politeness.
+//!
+//! **What must never be done instead**, because it is strictly worse than the
+//! deviation this replaced: advancing `bdSeq` while leaving the old will in
+//! place. The broker would then hold a death certificate for a session that no
+//! longer exists, a consumer pairing death to birth by `bdSeq` would discard it,
+//! and a frozen value would stay on screen presented as live.
+//!
+//! *Until Story 4.10 (2026-08-01) the session number was FIXED for a client's
+//! lifetime and this section recorded that as a deviation. The deviation is
+//! gone; `-will-message-payload-bdSeq` and `payloads-nbirth-bdseq-repeat` moved
+//! to conformant in `docs/sparkplug-conformance.md`. Note that a reconnect now
+//! mints a NEW number — anything that used to tell a reconnect from a rebirth by
+//! observing an unchanged `bdSeq` has had its meaning inverted, which is what
+//! Story 4.9 rearmed `chaos_sigterm_no_lie` for.*
 
 use std::path::PathBuf;
 use std::time::Duration;

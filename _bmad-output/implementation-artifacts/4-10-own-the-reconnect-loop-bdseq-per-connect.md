@@ -1,6 +1,31 @@
 # Story 4.10: Own the reconnect loop — `bdSeq` per CONNECT
 
-Status: ready-for-dev
+Status: done
+
+> **Reviewed out of `review` 2026-08-03. Six ACs met, one recorded UNMET.**
+>
+> - **AC1** — the behaviour was right (`run()`'s session loop: *one iteration = one CONNECT = one
+>   `bdSeq`*), but the second clause was **not** done until this review: the module docs still opened
+>   with *"# Session identity, and a recorded deviation"* and stated the pre-4.10 behaviour verbatim,
+>   ending *"owning the reconnect loop … is deferred"* — of the very story that did it. Replaced with
+>   a statement of the conforming behaviour, which also warns that a reconnect now mints a **new**
+>   number, inverting the meaning of any check that read an unchanged `bdSeq`.
+> - **AC2** — `chaos_bdseq_per_connect.rs` verifies it from an independent subscriber.
+> - **AC3** — closed rather than restated: the persist moved to once per CONNECT, and
+>   `RECONNECT_FLOOR` bounds its rate, which makes the backoff floor a durability property.
+> - **AC4 — UNMET, [#45](https://github.com/guycorbaz/smartme_mqtt/issues/45).** Floor, ceiling and
+>   doubling are stated with their reasons; **jitter is absent, and so is any note saying it was
+>   rejected.** A reader cannot tell forgotten from decided. Low practical risk for one client
+>   against one broker — but `architecture.md:113` claims *"backoff + jitter"*, so either the code or
+>   the principle has to move.
+> - **AC5** — 4.9's falsification record contains the per-CONNECT-will mutation and shows the count
+>   discriminator still going red under it.
+> - **AC6** — both rows moved and the prose at `sparkplug-conformance.md:473` was rewritten.
+> - **AC7 — met only after this review, and it failed on its own first entry.** The per-passage table
+>   listed *"the driver's module docs"* first; the manual, the conformance prose and
+>   `chaos_sigterm_no_lie`'s docs were all amended, and that one was not. Seventh instance of
+>   amending a claim and leaving its consequences — this time the consequence sat 800 lines above the
+>   code that contradicted it, in the file the story named.
 
 ## Story
 

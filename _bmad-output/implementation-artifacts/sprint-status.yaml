@@ -454,7 +454,7 @@ development_status:
   # ADR 0011 amended with the mechanism and the replacement (AC1), and with what the count does
   # NOT exclude (AC4): a bridge publishing its explicit death twice while the will never fired
   # would also produce two -- a different defect, excluded in practice by the socket drop.
-  4-9-sigterm-discriminator-survives-per-connect-bdseq: review
+  4-9-sigterm-discriminator-survives-per-connect-bdseq: done
   # 2026-08-01: contexted AND implemented, status `review`. AC1/AC3/AC4/AC5/AC6/AC7 met;
   # AC2 PARTIALLY met and said so.
   # THE CHANGE: pump_transport now RETURNS on a transport error instead of sleeping and
@@ -493,7 +493,7 @@ development_status:
   # CAUGHT BY CI, NOT BY ME: an unused `Event` import in the new chaos test. clippy -D
   # warnings failed the first full run -- I had linted BEFORE the final rewrite of the test,
   # and `cargo test` compiles without that gate.
-  4-10-own-the-reconnect-loop-bdseq-per-connect: review
+  4-10-own-the-reconnect-loop-bdseq-per-connect: done
   4-11-broker-outage-traced-drop-exhaustive: backlog
   4-12-anti-replay-at-the-down-up-instant: backlog
   4-13-chaos-broker-recovery: backlog
