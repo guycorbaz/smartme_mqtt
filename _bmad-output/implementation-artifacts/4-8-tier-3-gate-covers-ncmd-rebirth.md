@@ -1,6 +1,12 @@
 # Story 4.8: Re-aim the Tier-3 gate at the bridge, and extend it to `Node Control/Rebirth` — close NFR17
 
-Status: ready-for-dev
+Status: done
+
+> **Closed 2026-08-03 by the run, not by the code.** The gate was delivered 2026-08-01 and the story
+> then sat in `review` for the only reason it could: NFR17 closes on a human running it against a
+> real Ignition. That run happened — **Ignition 8.3.7, MQTT Engine 5.0.0-rc1, contract v3, six steps,
+> pass**. The header said `ready-for-dev` throughout the review period; it was stale, and
+> `sprint-status.yaml` was the accurate record.
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -107,6 +113,11 @@ time rather than a request anyone sent (ADR 0017).
 version it was verified against
 **And** the run table gains a row for contract **v3**, with the module version in it — the runbook
 already flags that its absence is a defect.
+
+> **MET, 2026-08-03.** Ignition **8.3.7**, MQTT Engine **5.0.0-rc1**, contract **v3**. The `v3 · the
+> bridge binary · Pass` row is the top of the run table, `epics.md:114-116` no longer says the
+> NCMD/Rebirth half is outstanding, and the full findings sit under *What the 2026-08-03 run
+> established* in `docs/ignition-contract-runbook.md`.
 
 *AC1, AC2, AC6 and AC7 added at story creation 2026-07-31; AC3 and AC5 amended. The scope decision
 — re-aim rather than extend — was taken by Guy on 2026-07-31 before drafting.*
@@ -393,7 +404,7 @@ answers refine is a **revisit condition** and the gate's own coverage.
 | ---: | --- | --- | --- |
 | 1 | **Does MQTT Engine request a rebirth on its OWN** when it receives DATA from a node whose BIRTH it never saw? | **ADR 0018's revisit condition 3.** It is the one inferred link in the host-initiated repair chain; steps 1 and 4 are measured. | Leave the bridge running, restart Ignition, click nothing. The bridge logs `Rebirth Request accepted`; Ignition's `Rebirth (Last) Cause` shows something other than `Triggered by user`. |
 | 2 | **What values does `Rebirth (Last) Cause` take?** | The label's existence is the entire evidence for question 1's premise. Its vocabulary is the answer. | Read the tag after each rebirth of any origin. |
-| 3 | **Step 4 of the gate — `Good` then `Stale`, against the product.** | **Never exercised.** The 2026-07-31 probe published no `Good` value, so `Bad_Stale` after the death was indistinguishable from `Bad_Stale` before it. This is the step that guards against the silent lie. | The gate this story builds: publish `Good`, degrade to `Stale`, then die — in that order. |
+| 3 ✅ | **ANSWERED 2026-08-03 — Ignition displayed `Bad_Stale` on a `Good`→`Stale` transition, node still `online`, `Death Count = 0`.** Original entry below. **Step 4 of the gate — `Good` then `Stale`, against the product.** | **Never exercised.** The 2026-07-31 probe published no `Good` value, so `Bad_Stale` after the death was indistinguishable from `Bad_Stale` before it. This is the step that guards against the silent lie. | The gate this story builds: publish `Good`, degrade to `Stale`, then die — in that order. |
 | 4 | **Does Engine consume `$sparkplug`?** | A *Sparkplug Aware* MQTT Server stores BIRTHs and replays them retained (`Sparkplug_10:71-83`) — a **third** remedy neither ADR 0016 nor ADR 0018 weighed, because Mosquitto is not one. Story 4.4 noted it is cheap to check. | Subscribe to `$sparkplug/#` and watch, or read Engine's namespace configuration. |
 | 5 | **Does an out-of-order `seq` provoke a rebirth?** | `tck-id-operational-behavior-host-reordering-rebirth` (`Sparkplug_5:565-568`) is conditional on the host being *"configured with a 'reordering timeout' parameter"*, and **nothing measured says Ignition is**. | Publish a DDATA with a deliberately skipped `seq` from a disposable node and watch for an NCMD. |
 | 6 | **Do the two STATE forms move together across a transition?** | Engine publishes both a legacy `STATE/<id>` = `ONLINE`/`OFFLINE` and the conformant `spBv1.0/STATE/SCADA` JSON (Story 4.4). Whether both track a real transition is unmeasured, and it bears on any future STATE work. | Subscribe to both before the restart; compare. |
@@ -413,5 +424,30 @@ answers refine is a **revisit condition** and the gate's own coverage.
 ### Debug Log References
 
 ### Completion Notes List
+
+**The run, 2026-08-03 — Ignition 8.3.7, MQTT Engine 5.0.0-rc1, contract v3, group `ContractV3`,
+node `ContractNodeV3`. Six steps, pass.** Findings in full in the runbook; what belongs to this
+story:
+
+- **Question 3 of the batched list is ANSWERED** — the one marked *"never exercised"*. Steps 2–3
+  published `Good`, step 4 degraded the same values to `Stale` with the node `online` and
+  `Death Count = 0`, and Ignition displayed `Bad_Stale`. ADR 0012's deviation is verified on a
+  transition, which is the only form of that measurement worth anything.
+- **Questions 1 and 2 remain open.** The run never restarted Ignition, so whether Engine requests a
+  rebirth on its own — ADR 0018's revisit condition 3 — is still the inferred link it was. Two
+  operator writes produced exactly two requests, which is the second measurement that bursts are
+  operator-driven and *not* evidence that Engine resends.
+- **A false-pass this story's own AC list did not name.** Step 1 shows `Bad_Stale` on a tag Ignition
+  has never valued, and it shows it whether or not the host honoured our quality code — the two are
+  indistinguishable at rest. Recorded in the runbook so the next operator does not read step 1 as
+  quality evidence.
+- **Three step-5 guards were inert** — no `tracing` subscriber in either gate, so no bridge log line
+  can appear ([#44](https://github.com/guycorbaz/smartme_mqtt/issues/44)). Harmless here: since
+  Story 4.10 a reconnect mints a new `bdSeq`, so the gate's own `bdSeq`-unchanged verdict excludes
+  the reconnect false-pass without the log, and a retained NCMD would have replayed at subscribe
+  time. The gate's printed checklist still carries the pre-4.10 wording; the runbook has been
+  corrected.
+- **Not observed:** which timestamp `Offline DateTime` retained. The 2026-07-31 probe found it
+  tracked the will rather than the explicit certificate; this run did not re-check it.
 
 ### File List

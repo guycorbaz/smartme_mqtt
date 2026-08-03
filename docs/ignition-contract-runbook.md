@@ -88,6 +88,16 @@ like it has hung when it is in fact waiting for you.
 The broker address is deployment-specific: keep it in your shell or your local `.env`, never
 in a committed file.
 
+**Neither gate installs a `tracing` subscriber, so the bridge prints no log at all.** The
+subscriber is built in `main.rs`, which these tests do not run; without one, `tracing` discards
+every event and `RUST_LOG` changes nothing. Any checklist item phrased as *"the bridge's log
+shows…"* — `Rebirth Request accepted`, `node re-announced on a Rebirth Request`,
+`reason=Retained`, `reason=NameOnlyNearly`, `reason=ValueNotTrue` — **cannot fire**, and the
+operator sees silence rather than a failure. Discovered during the 2026-08-03 run;
+[#44](https://github.com/guycorbaz/smartme_mqtt/issues/44). Until it is fixed, treat those items as
+absent, not as passed: silence is not evidence. It is the same shape as the Epic 4 acceptance
+criteria written in terms of trace levels that sat below the default filter.
+
 Each gate prints a checklist and waits for **Enter** at each step. Take as long as you need —
 nothing times out. **Every checklist item is followed by what else could make that step pass
 wrongly**; read those, because this gate has already come within one step of returning a false
@@ -179,9 +189,14 @@ occurred.
 
 **Two ways this step passes wrongly, both of which have caught this project before:**
 
-- a **reconnect** produced the birth. A reconnect publishes an NBIRTH under the same `bdSeq`,
-  so the presence of an NBIRTH cannot distinguish the two. Check the bridge's log for a
-  connection event at that moment.
+- a **reconnect** produced the birth. ⚠️ **This warning was written before Story 4.10 and is no
+  longer true of the bridge** — the gate's own printed checklist still carries the old wording.
+  A reconnect *used to* publish an NBIRTH under the same `bdSeq`, because the session number was
+  frozen for a client's lifetime. Since 4.10 the driver rebuilds the client per session and *one
+  iteration = one CONNECT = one `bdSeq`* (`crates/smartme-bridge/src/app/mqtt_driver.rs:908`), so a
+  reconnect mints a **new** number. **The gate's `bdSeq`-unchanged verdict therefore excludes a
+  reconnect by itself**, which is just as well: the log check this bullet asks for cannot be
+  performed at all (see *Both gates*).
 - a **retained** NCMD was replayed at subscribe time rather than a request anyone sent
   ([ADR 0017](adr/0017-a-retained-ncmd-is-a-replay-not-a-request.md)). The bridge refuses those
   now and logs `reason=Retained`.
@@ -245,6 +260,7 @@ Check the Ignition logs, not just the tag values.
 
 | Date | Ignition | MQTT Engine | Contract | Artifact | Result |
 | --- | --- | --- | --- | --- | --- |
+| 2026-08-03 | 8.3.7 | 5.0.0-rc1 | v3 | **the bridge binary** | **Pass — all six steps.** The first complete run of the bridge gate that exists, and the run that closes NFR17. What it establishes, and the two guards that were inert, are below |
 | 2026-07-31 | 8.3.7 | 5.0.0-rc1 | v3 | **the bridge binary** | **Partial — targeted probe, NOT the five-step gate.** Steps 2–4 were never exercised: the run published no `Good` value at all. What it did establish is below |
 | 2026-07-26 | 8.3.7 | *(not recorded)* | v2 | `sparkplug-b` scripted session | **Pass**, all five steps. ⚠️ **This row attests to an artifact state that no longer exists** — see the drift note below |
 | 2026-07-26 | 8.3.7 | *(not recorded)* | v1 | `sparkplug-b` scripted session | **Fail at step 4** — quality `STALE` displayed as `Good(500)`; see [#22](https://github.com/guycorbaz/smartme_mqtt/issues/22) |
@@ -253,6 +269,53 @@ A pass is only meaningful against a stated version, so add a row rather than edi
 **MQTT Engine module** column was added 2026-07-31: it is the component that decodes Sparkplug, so it
 governs conformance more directly than the Ignition platform version, and the note below had been
 asking for it since the table was written.
+
+### What the 2026-08-03 run established — the run that closes NFR17
+
+Ignition 8.3.7, MQTT Engine 5.0.0-rc1, contract v3, group `ContractV3`, node `ContractNodeV3`.
+Six steps, all passed. **Every previous row in this table is either partial or attests to an
+artifact that no longer exists**, so these are first measurements, not confirmations.
+
+- **ADR 0012's deviation is verified on a TRANSITION.** Steps 2–3 published `Good`
+  (`Power = 1.234 kW`, `Energy = 5678.9 kWh`, then `2.345` / `5679.1`), and step 4 republished the
+  same values as `Stale` with the node still `online` and `Death Count = 0`. Ignition displayed
+  **`Bad_Stale`**. This is the one thing no automated test in the workspace can establish, and the
+  exact failure that contract v1 shipped: a quality code we were confident about that the host read
+  as good.
+- **Step 1's `Bad_Stale` is NOT part of that evidence, and the runbook should say so.** A tag
+  Ignition has just created and never received a value for reads `Bad_Stale` on its own. At step 1,
+  *"the host honoured our `STALE`"* and *"the host defaults a valueless tag to `Bad_Stale`"* are
+  indistinguishable. Only the step-2→4 transition separates them — which is precisely why the
+  2026-07-31 probe, which never published a `Good` value, established nothing about quality.
+- **The cold start survives contact with the host.** The null metric was accepted with its datatype;
+  Ignition did **not** invent a `0`. `EngUnit` came through as `kW` / `kWh`, and the device folder
+  is named by the serial `30000001`.
+- **`Contract/Version = 3` was read by a real host** for the first time.
+- **The bridge answers a rebirth issued by IGNITION.** Two writes to
+  `ContractNodeV3/Node Control/Rebirth` produced **2 NBIRTHs and 2 DBIRTHs, `bdSeq` unchanged at 1**
+  — the gate read both off the wire. Everything else in the repository proves only that the bridge
+  answers *us*.
+- **Engine did not resend of its own accord** — two writes, two requests. Second independent
+  measurement after 2026-07-31. So the *"Ignition resends"* premise behind Story 4.7's
+  no-rate-limit decision is still **unmeasured**; what is measured, twice, is that bursts would be
+  operator-driven.
+- **Both death certificates were processed:** `Node Info → Death Count` moved 0 → 2, per ADR 0011.
+
+**Two guards were inert, and one of them is now unnecessary.**
+
+- The **reconnect** false-pass at step 5 could not be checked the way the checklist asks — see the
+  tracing note under *Both gates* — but it no longer needs to be. Since Story 4.10 the driver owns
+  its session loop, *one iteration = one CONNECT = one `bdSeq`*
+  (`mqtt_driver.rs:908`), so a reconnect mints a **new** number. **`bdSeq` unchanged now excludes a
+  reconnect on its own.** The wording under *Step 5* has been corrected accordingly.
+- The **retained-NCMD** false-pass (ADR 0017) was excluded by timing rather than by log: a retained
+  message is replayed at subscribe time, which is step 1, not ten minutes later at the instant of an
+  operator's click.
+
+**Not observed, and worth a line next time:** which timestamp `Offline DateTime` retained — the
+explicit certificate's, or the will's two seconds later. The 2026-07-31 probe found it tracked the
+**will**, which makes ADR 0011's claimed benefit (*"the explicit certificate is immediate"*)
+unobservable from the host side. This run did not re-check it.
 
 ### ⚠️ The v2 row attests to an artifact that no longer exists
 
@@ -327,6 +390,10 @@ Story 4.8 re-aims the gate at the bridge binary for this reason.
 > wrong verdict on the Story 1.15 run. A real gate must publish `Good`, then degrade to `Stale`, then
 > die — in that order — which is what Story 4.8 builds.
 
+> **⚠️ Superseded 2026-08-03 — v3 now has a complete run**, the top row of the table. The note below
+> is kept because its reasoning about *why the version was bumped* is still the reason this table
+> works. What is no longer true is its opening claim.
+>
 > **The contract is now v3 and no run has been recorded against it** (Story 4.7, 2026-07-30). The
 > change is **additive**: the NBIRTH declares one new metric, `Node Control/Rebirth` — boolean,
 > `false` — which a consumer sees as a new tag in its browse tree. Nothing was removed or renamed, so
@@ -367,8 +434,13 @@ it was made.
 In the Designer's Tag Browser, under the **MQTT Engine** provider, delete:
 
 ```
-Edge Nodes/<your group>/ContractNode
+Edge Nodes/<your group>/ContractNodeV3     ← bridge gate
+Edge Nodes/<your group>/ContractNode       ← crate gate
 ```
+
+**The two gates use different node ids** — `ContractNodeV3` and `ContractNode`, from each test's own
+`NODE_ID`. This section named only the crate gate's until 2026-08-03, so following it after a bridge
+run left the folder behind.
 
 **Delete only that folder.** Removing MQTT Engine tags also discards their alarm and history
 configuration, and your real edge nodes live under the same parent.

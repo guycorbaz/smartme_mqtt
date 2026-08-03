@@ -111,9 +111,11 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 - NFR16: The broker connection may be secured (TLS and/or auth) or plain per config; when secured, broker credentials follow the same discipline as smart-me creds (never logged).
 
 **Interoperability & Deployment**
-- NFR17: Sparkplug B output conforms to what Ignition MQTT Engine accepts — verified by a manual pre-release contract test against a real Ignition (values, units, STALE-on-death, NCMD/Rebirth). Not in automated CI. *(Epic 1 delivered the first pass covering values, units and STALE-on-death; the NCMD/Rebirth half is Epic 4 — see the Epic 1 retrospective.)*
+- NFR17: Sparkplug B output conforms to what Ignition MQTT Engine accepts — verified by a manual pre-release contract test against a real Ignition (values, units, STALE-on-death, NCMD/Rebirth). Not in automated CI. *(Epic 1 delivered a first pass covering values, units and STALE-on-death, but against the crate's bytes; the NCMD/Rebirth half, and the product's own bytes, were delivered by Epic 4 and **verified 2026-08-03 against Ignition 8.3.7 / MQTT Engine 5.0.0-rc1**.)*
   - **Story 4.8 built the gate that can close this, 2026-08-01: `crates/smartme-bridge/tests/ignition_contract.rs`.** It supersedes the crate-level gate for NFR17's purpose, because that one publishes the *specification's* quality codes while the product publishes Ignition's — the two are different bytes, and the Epic 1 pass attests to an artifact state that no longer exists ([#40](https://github.com/guycorbaz/smartme_mqtt/issues/40)). The new gate drives `mqtt_driver::run`, so every byte on the wire is the product's.
-  - **NFR17 is NOT yet closed**: the gate exists, the run has not been performed. Closing it requires a run against a stated **Ignition version AND MQTT Engine module version** — the runbook records the module version's earlier absence as a defect — with a `v3` row added to the run table. The rebirth step must be triggered from the Designer by a human; it is the one thing no test in this repository can supply.
+  - **NFR17 is CLOSED, 2026-08-03**, against **Ignition 8.3.7 / MQTT Engine 5.0.0-rc1 / contract v3** — the first complete run of the bridge gate that exists. All six steps passed, and the two that no automated test can supply both hold: Ignition displayed the bridge's `Stale` as **`Bad_Stale` on a transition from `Good` with the node still online**, and the bridge answered a rebirth **triggered from the Designer** with `bdSeq` unchanged. Row and full findings in `docs/ignition-contract-runbook.md`.
+  - Two things the run also settled, both wider than NFR17. **Engine did not resend a rebirth request of its own accord** — two writes, two requests, now the second independent measurement — so Story 4.7's *"Ignition resends"* premise for not rate-limiting remains unsupported. And **step 1's `Bad_Stale` proves nothing about quality**: Ignition gives a never-valued tag that quality by itself, so only the step-2→4 transition separates the host honouring our code from the host's own default.
+  - Caveat carried forward: **three of the gate's step-5 guards are inert** because neither gate installs a `tracing` subscriber ([#44](https://github.com/guycorbaz/smartme_mqtt/issues/44)). It did not affect this run — the `bdSeq` verdict excludes a reconnect on its own since Story 4.10 — but silence from the bridge must be read as *absent*, not as *passed*.
 - NFR18: The Sparkplug/MQTT contract is a standalone versioned document; a breaking change bumps the contract version.
 - NFR19: The published `sparkplug-b` crate follows semver with a stable, documented public API (no third-party types leaked), complete crate metadata, and a documented conformance scope. Publish acceptance: `cargo publish` succeeds and `cargo add sparkplug-b` in a clean project compiles an encode→decode round-trip.
 - NFR20: The bridge works with either a bundled MQTT broker or an external broker.
@@ -1016,7 +1018,14 @@ So that NFR17 is covered by the artifact it names.
 > `mqtt_driver::run` so every byte is the product's; the crate gate re-scoped rather than retired,
 > its step 4 now *expecting* `Good(500)` as the standing external evidence that ADR 0012's
 > deviation was necessary; and the runbook rewritten around two gates that attest to different
-> things. **The run itself has NOT been performed** — NFR17 closes on a run, not on a gate.
+> things.
+>
+> **Run performed 2026-08-03 — Ignition 8.3.7, MQTT Engine 5.0.0-rc1, contract v3, all six steps
+> pass.** NFR17 closes on a run, not on a gate, and this is the run. It is also the first complete
+> bridge-gate run in the table: everything above it is a partial probe or attests to an artifact
+> that no longer exists. Findings, including the three step-5 guards found inert
+> ([#44](https://github.com/guycorbaz/smartme_mqtt/issues/44)), are in
+> `docs/ignition-contract-runbook.md`.
 
 ### Story 4.9: Give `chaos_sigterm_no_lie` a discriminator that survives per-CONNECT `bdSeq`
 
