@@ -521,3 +521,17 @@ development_status:
   # max 300 s, default 30 s (ADR 0020, ratified by Guy 2026-08-03).
   epic-5: in-progress
   5-1-config-model-and-refuse-to-start-validation: ready-for-dev
+  # 2026-08-03: 5.2 closes architecture open item 5 via ADR 0022 — secrets rest in a
+  # SEPARATE secrets.toml at 0600, beside a 0644 config.toml that stays diagnosable
+  # without privileges. The bridge STATs the mode and refuses to start if it is group-
+  # or world-readable, because #41 already showed the displayed mode disagreeing with
+  # the enforced Synology ACL on this deployment.
+  #
+  # BLOCKED ON #41, and deliberately recorded as blocked rather than weakened: /data is
+  # world-writable, and a 0600 file in a directory anyone can write to is a claim about
+  # one inode in a directory where files can be replaced. 5.2 cannot close until #41 does.
+  #
+  # Writing 5.2 also found architecture.md contradicting itself: line 73 said config is
+  # "restart-only (YAGNI hot-reload)" while line 426 assumed ArcSwap. FR46 settles it —
+  # line 73 was the stale one.
+  5-2-config-persists-and-reloads-without-a-restart: ready-for-dev
