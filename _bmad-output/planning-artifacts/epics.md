@@ -258,13 +258,17 @@ Grow from one meter to the author's actual 4-meter fleet on a single account: fu
 *FR21 (orphan-retained purge on mapping change) moved to Epic 3: mapping changes originate with multi-meter discovery, and at one meter there is no honest way to exercise it. It is also near-moot today — the bridge publishes everything with `retain = false`, so it cannot create the orphans FR21 purges; the requirement guards against orphans left by something else.*
 
 ### Epic 5: Configuration, Secrets & Persistence
-The author configures the bridge safely and confirms mappings before anything publishes: `.env` secrets discipline, external/bundled broker connection (optionally TLS/auth), meter→topic mapping with defaults, first-run mapping confirmation, startup validation with refuse-to-start, and config that survives restarts + image updates (reusing the Epic 0 `persist_atomic` primitive via `ArcSwap`). Delivers Journey 1 (First Run) configuration.
-**FRs covered:** FR23, FR24, FR25, FR26, FR27, FR43
+The author configures the bridge safely and confirms mappings before anything publishes. This epic owns **the configuration model, not its screens** ([ADR 0021](../../docs/adr/0021-configuration-is-editable-from-the-ui.md)): what is configurable and its bounds, startup validation with refuse-to-start, meter→topic mapping with defaults, first-run mapping confirmation, external/bundled broker connection (optionally TLS/auth), the **bounded publish period** ([ADR 0020](../../docs/adr/0020-the-publish-period-is-bounded-and-cannot-be-turned-off.md): min 5 s, max 300 s, default 30 s, no "off"), **write-only storage of secrets** ([ADR 0019](../../docs/adr/0019-no-auth-on-the-config-ui-secrets-are-write-only.md), implementing NFR14), and config that survives restarts + image updates (reusing the Epic 0 `persist_atomic` primitive via `ArcSwap`). Delivers Journey 1 (First Run) configuration.
+**Every acceptance criterion here is testable without a single line of HTML** — that is the point of the split, and the reason the write-only rule can be falsified before a form exists.
+**FRs covered:** FR23 *(bootstrap path)*, FR24, FR25, FR26, FR27, FR43, FR46 *(the model and persistence half)*
 **NFR/AR:** NFR12, NFR14, NFR16, NFR20 · AR8 *(ArcSwap config)*
 
-### Epic 6: Observability, Diagnostics & the State-of-the-Bridge UI
-Single-screen confidence plus 3am re-orientation: the unified `axum` UI (live per-meter view, dual source/sink health, actionable errors, empty/error/loading distinction), the health endpoint feeding the Docker healthcheck (with the `last_loop_tick` heartbeat), culprit labels, auto-written context line, the "state of the bridge" screen, on-demand end-to-end validation, version display, and daily-rotated logging. Delivers Journeys 2 & 5.
-**FRs covered:** FR28, FR29, FR30, FR31, FR32, FR33, FR34, FR35, FR36, FR37, FR38, FR44
+> **Rewritten 2026-08-03.** This epic used to be framed as *"`.env` secrets discipline"*, and Epic 6 as a read-only surface — so **configuration editing in the UI was owned by nobody**, while the PRD's own product description assumed it throughout. See ADR 0021 and the new FR46.
+
+### Epic 6: The Web UI — Configuration Screens, Observability & Diagnostics
+Single-screen confidence plus 3am re-orientation. This epic owns **the `axum` surface and every screen on it** ([ADR 0021](../../docs/adr/0021-configuration-is-editable-from-the-ui.md)): the server and its bind posture (no authentication, Traefik the only ingress — [ADR 0019](../../docs/adr/0019-no-auth-on-the-config-ui-secrets-are-write-only.md)), **the configuration screens that edit the model Epic 5 defines**, the live per-meter view, dual source/sink health, actionable errors, empty/error/loading distinction, the health endpoint feeding the Docker healthcheck (with the `last_loop_tick` heartbeat), culprit labels, auto-written context line, the "state of the bridge" screen, on-demand end-to-end validation, version display, and daily-rotated logging. Delivers Journeys 2 & 5, and the visible half of Journey 1.
+**A secret field renders empty, always** — the write-only rule is Epic 5's to enforce at the process boundary and Epic 6's to not undo at the template.
+**FRs covered:** FR28, FR29, FR30, FR31, FR32, FR33, FR34, FR35, FR36, FR37, FR38, FR44, FR46 *(the screen half)*
 **NFR/AR:** NFR11, NFR12 *(log-grep)* · AR11 *(axum bind)*, AR12 *(healthz heartbeat)*, AR19 *(enriched published state)*
 
 ### Epic 7: Deployment, Healthcheck & Update Lifecycle

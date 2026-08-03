@@ -2,6 +2,11 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-03 *(recording a decision Guy took on 2026-08-01)*
+- **Implements:** **NFR14** — *"Web UI exposure safe-by-default (bind/auth posture decided in
+  architecture); credentials never re-shown in clear"*. The write-only rule below is not a new
+  requirement; it is NFR14's second clause made testable, and the *"decided in architecture"* of its
+  first clause is what this ADR finally decides. `prd.md:183` flagged the same thing as a domain
+  constraint and deferred it here.
 - **Related:** architecture open items **2** (*"Web UI network bind + auth posture"*) and **5**
   (*"Broker/token secrets-at-rest boundary … Coupled with item 2"*), Epics 5 and 6,
   [ADR 0009](0009-smartme-auth-client-credentials.md)
@@ -52,6 +57,26 @@ The project has been caught by exactly the failure this rule prevents. A `sed` m
 `KEY=value` was applied to `docker compose config`'s YAML, matched nothing, and printed both
 credentials in full — see the *never render secrets* rule. **A mask is a claim about output format,
 and it fails silently when the format changes.** Not rendering at all cannot fail that way.
+
+## A question this ADR surfaced — SETTLED the same day by [ADR 0021](0021-configuration-is-editable-from-the-ui.md)
+
+> **Resolved 2026-08-03.** Guy added **FR46** (configuration is editable from the UI, FR23 rescoped
+> to the bootstrap path) and split ownership: **Epic 5 owns the configuration model, Epic 6 owns the
+> screens.** The deciding argument was this ADR's own rule — the write-only property becomes
+> falsifiable in Epic 5, at the process boundary, before any form exists. The finding as first
+> written follows.
+
+**No epic owned configuration *editing* in the UI.** The PRD is unambiguous that it exists — the
+product is *"configured, previewed, and diagnosed through a built-in web UI"* (`prd.md:28`), and
+Journey 1 has Guy clicking *"Test connection"* — but the epic split does not reflect it. Epic 5 is
+described in terms of *"`.env` secrets discipline"*, and Epic 6 is *Observability, Diagnostics & the
+State-of-the-Bridge UI*, which is a **read** surface. FR23 still says credentials arrive *"via
+environment/`.env`"*, and no FR says the operator may change configuration through a browser.
+
+This ADR assumes a form that submits a secret. That assumption is sound against the PRD's prose and
+NFR14, and unowned by any epic. **Settling it is a scope decision, not an architectural one**, so it
+is recorded here and left to Guy rather than answered by an ADR that would be inventing requirements
+it also depends on.
 
 ## Consequences
 
