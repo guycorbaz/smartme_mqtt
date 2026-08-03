@@ -11,9 +11,11 @@ so that bringing it up is one read-fix-restart cycle instead of one per mistake.
 
 ## Acceptance Criteria
 
-The epic states FR26. **It stands, and four are added** — three because the epic's wording hides a
-false pass, one because [ADR 0021](../../docs/adr/0021-configuration-is-editable-from-the-ui.md)
-gave this story a second consumer it did not have when the epic was written.
+The epic states FR26. **It stands, and six are added.** Three (AC2, AC5, AC7) because the epic's
+wording hides a false pass; one (AC1) because
+[ADR 0021](../../docs/adr/0021-configuration-is-editable-from-the-ui.md) gave this story a second
+consumer — the UI — that it did not have when the epic was written; and two (AC4, AC6) because Guy
+set the multi-meter scope on 2026-08-03, after this file was first drafted.
 
 **AC1 — one model, one validation, no second opinion**
 
@@ -56,20 +58,48 @@ disabled) is **rejected**, with a message that says why the bound exists
 > periodic publish the trigger for host-initiated recovery — a bound enforced only in a form is a
 > bound a `.env` bypasses.
 
-**AC4 — "topic uniqueness" must not pass vacuously** *(added)*
+**AC4 — the model holds MANY meters, each with an enabled flag** *(added; scope set by Guy
+2026-08-03)*
 
-**Given** FR26 requires validating topic uniqueness
-**When** the walking skeleton serves **exactly one** meter (`BridgeConfig::meter`, singular)
-**Then** the uniqueness check is either **written against a collection that can hold duplicates and
-tested with two**, or **recorded as unmet with an issue** — not implemented over a single-element
-field and reported as satisfied.
+**Given** `BridgeConfig::meter` is singular today (`supervisor.rs:36`) and Guy has **four** real
+meters, one of them not currently connected
+**When** this story lands
+**Then** the configuration holds a **collection** of meters, each carrying its identity and an
+**enabled** flag — the unconnected fourth is expressible as *configured but not enabled*
+**And** the runtime is **not** changed: serving more than one meter is later work.
 
-> A uniqueness check over one element is green forever and proves nothing. Four Epic 1 tests passed
-> for this class of reason, and the `n/a` column of the conformance matrix has 144 clauses that have
-> never been falsified. Decide at drafting: *if* the model does not yet hold more than one meter,
-> this AC is **unmet**, and it says so.
+> **Why the shape moves now and the runtime does not.** Guy's order is *web UI first, then multiple
+> meters*. The meter list is the central object of the configuration screen, so a form built against
+> a singular field would be built twice. Reshaping the model costs a few lines and is invisible at
+> runtime; reshaping a form is not. This is the cheap half of multi-meter, taken early precisely so
+> the expensive half can stay late.
 
-**AC5 — a serial is validated as an identity, not as a string** *(added)*
+**AC5 — topic uniqueness is checked for real, with two meters that collide** *(added)*
+
+**Given** the collection from AC4
+**When** two meters resolve to the same topic, or share a serial
+**Then** validation rejects the configuration and names **both** offenders
+**And** the test constructs the collision rather than asserting over a one-element list.
+
+> Until AC4 this could not be written: a uniqueness check over one element is green forever and
+> proves nothing. Four Epic 1 tests passed for that class of reason, and the conformance matrix's
+> `n/a` column still has 144 clauses nobody has ever falsified. AC4 is what makes FR26's uniqueness
+> clause a real requirement instead of a vacuous one.
+
+**AC6 — more enabled meters than the runtime can serve is REFUSED, not truncated** *(added)*
+
+**Given** the model accepts N meters while the runtime still serves one
+**When** a configuration enables more than the runtime supports
+**Then** the bridge **refuses to start**, with a message naming the limit and the story that lifts it
+**And** it never starts serving a subset.
+
+> This is the AC that keeps AC4 from being dangerous. Without it, Epic 6 lets Guy add four meters in
+> a browser, the bridge starts happily, and three of them silently never publish — a healthy-looking
+> node with missing devices, which is the same failure shape as a serial with a leading zero
+> (`DroppedUndeclaredDevice`) and just as hard to notice. **Silent truncation of a configuration is
+> the exact lie this product exists to prevent.**
+
+**AC7 — a serial is validated as an identity, not as a string** *(added)*
 
 **Given** the serial is the Sparkplug device identifier
 **When** it is validated
@@ -89,8 +119,8 @@ whatever `check_identifier` already enforces for the topic grammar
         and the `BridgeConfig` literal beginning at :196. That assembly is what this story replaces.
   - [ ] `crates/smartme-bridge/src/app/supervisor.rs:28` — `BridgeConfig` as it stands.
   - [ ] `.env.example` — the variable names are the operator-facing contract and must not drift.
-  - [ ] `crates/sparkplug-b/src/topic.rs::check_identifier` — what is already enforced, so AC5 adds
-        rather than duplicates. Note it implements **Sparkplug's** wildcard rule, not MQTT's
+  - [ ] `crates/sparkplug-b/src/topic.rs::check_identifier` — what is already enforced, so **AC7**
+        adds rather than duplicates. Note it implements **Sparkplug's** wildcard rule, not MQTT's
         character set ([#34](https://github.com/guycorbaz/smartme_mqtt/issues/34)).
 
 - [ ] **Task 2 — the model and its one constructor** (AC: 1)
@@ -109,11 +139,17 @@ whatever `check_identifier` already enforces for the topic grammar
   - [ ] `main.rs:237`'s hard-coded `30` is **deleted**, not left as a fallback beside the default —
         two sources for one value is how they diverge.
 
-- [ ] **Task 5 — serial and uniqueness** (AC: 4, 5)
-  - [ ] Serial rules, with the `DroppedUndeclaredDevice` consequence in the message.
-  - [ ] Decide and record AC4 either way. If unmet, open the issue in the same change.
+- [ ] **Task 5 — the meter collection** (AC: 4, 6)
+  - [ ] `BridgeConfig::meter` becomes a collection, each entry carrying its identity and an
+        `enabled` flag. **Do not touch the runtime** — `supervisor` keeps serving what it serves.
+  - [ ] The refusal of AC6, with the limit and the lifting story named in the message. Falsify by
+        enabling two and confirming the process exits without publishing.
 
-- [ ] **Task 6 — the record**
+- [ ] **Task 6 — uniqueness and serials** (AC: 5, 7)
+  - [ ] Uniqueness over the collection, tested with a constructed collision, naming both offenders.
+  - [ ] Serial rules, with the `DroppedUndeclaredDevice` consequence in the message.
+
+- [ ] **Task 7 — the record**
   - [ ] Falsification notes copied from the runs, next to each test.
   - [ ] `./scripts/ci-local.sh` — full, not `--fast`.
 
