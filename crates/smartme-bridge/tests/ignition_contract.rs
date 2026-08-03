@@ -160,6 +160,49 @@ fn device_births(seen: &Arc<std::sync::Mutex<Vec<Seen>>>) -> usize {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "manual Tier-3 gate: drives the real bridge against a real broker for a human to inspect"]
 async fn ignition_contract_v3() {
+    // WITHOUT THIS, THE BRIDGE IS SILENT — and the silence looks like a pass.
+    //
+    // This gate drives `mqtt_driver::run` in-process. The only subscriber in the
+    // crate is built in `main.rs`, which an integration test does not run, and
+    // `tracing` with no subscriber discards every event regardless of `RUST_LOG`.
+    // Three of step 5's checks are phrased "the bridge's log shows…" and none of
+    // them could fire: the operator saw nothing and had no way to tell that from
+    // a bridge that said nothing. Found on the 2026-08-03 run, [#44].
+    //
+    // INFO by default and NOT `fmt::init()`, for the reason `main.rs:135` gives:
+    // `from_default_env()` defaults to ERROR, which drops the ignored-NCMD traces
+    // and the near-miss WARNs that are exactly what step 5 asks the operator to
+    // read. `RUST_LOG` still overrides.
+    //
+    // `try_init` rather than `init`: this file may not be the only test in the
+    // process, and a second global subscriber is an error, not a reason to abort
+    // a run a human is standing in front of.
+    // FALSIFIED 2026-08-03, and the record is copied from the run, not written
+    // from memory. Local `eclipse-mosquitto:2` on 127.0.0.1:18831, group
+    // `FalsifyLocal`, stdin from /dev/null so the checkpoints fall through.
+    // Counting `session born|no readable bdSeq|subscription granted`:
+    //
+    //     subscriber ENABLED  → 3
+    //     subscriber DISABLED → 0
+    //
+    // The mutation was this block, made unreachable; nothing else changed. Both
+    // levels step 5 depends on are covered by those three lines — `session born`
+    // is INFO and `no readable bdSeq state` is WARN — so a `reason=NameOnlyNearly`
+    // WARN will reach the operator too.
+    //
+    // A first count of 0 on the ENABLED run was a bad grep, not a bad fix: the
+    // level is wrapped in ANSI colour codes, so a pattern of " INFO " with a
+    // trailing space matches nothing. The tool's output described something other
+    // than what was being measured — again.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::builder()
+                .with_default_directive(tracing_subscriber::filter::LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .with_test_writer()
+        .try_init();
+
     let target = std::env::var("SPARKPLUG_CONTRACT_BROKER")
         .expect("set SPARKPLUG_CONTRACT_BROKER=host:port — there is deliberately no default");
     let group = std::env::var("SPARKPLUG_CONTRACT_GROUP").expect(
@@ -415,9 +458,13 @@ async fn ignition_contract_v3() {
             "Ignition's Node Info shows its Rebirth counter incremented",
         ],
         &[
-            "★ a RECONNECT produced the birth, not the rebirth — a reconnect publishes an \
-             NBIRTH under the same bdSeq, so the presence of an NBIRTH cannot distinguish \
-             them. Check the bridge's log for a connection event at that moment",
+            "a RECONNECT produced the birth, not the rebirth. NOTE, since Story 4.10 this \
+             no longer applies to THIS bridge: one CONNECT is one bdSeq, so a reconnect \
+             mints a NEW number and the verdict printed above already excludes it. The \
+             warning is kept because it applies to any build predating 4.10, and because \
+             a bdSeq line reading 'could not be read from the wire' leaves you with no \
+             discriminator at all — in that case, and only then, check the log for a \
+             connection event",
             "★ a RETAINED NCMD was replayed at subscribe time rather than a request anyone \
              sent (ADR 0017) — the bridge now refuses those, and logs reason=Retained",
             "the birth was already in flight from an earlier step and you counted it twice",
@@ -447,6 +494,9 @@ async fn ignition_contract_v3() {
             "Every tag under it is marked not-good",
             "The bridge logged an explicit death BEFORE the connection dropped (ADR 0011 \
              requires both: the explicit NDEATH and the broker's will)",
+            "WRITE DOWN, from Node Info, before reading any further: the Death Count, and \
+             the DATE AND TIME on Offline DateTime — both fields, the date as well as the \
+             time. Record what you see; do not compare it to anything yet",
         ],
         &[
             "Ignition marked it offline on a keep-alive timeout rather than on a death \
@@ -455,6 +505,17 @@ async fn ignition_contract_v3() {
             "you are watching a different node go offline",
         ],
     );
+
+    // Printed AFTER the checkpoint above, deliberately. What the field is for is
+    // not a secret; announcing it in the same breath as asking for the reading is
+    // what cost the 2026-08-03 run its measurement. Ask, then look, then compare.
+    println!("\n  Now — and not before — what that reading is for:");
+    println!("    The two deaths are ~2 s apart: the explicit NDEATH first, the will second.");
+    println!("    Which timestamp the host kept says whether ADR 0011's claimed benefit");
+    println!("    — 'the explicit certificate is immediate' — is observable from the host");
+    println!("    side at all. Add your figures to the run table either way.");
+    println!("    If they match a value already written in the runbook to the second,");
+    println!("    check the DATE before recording: that has happened once.");
 
     println!("\n  ────────────────────────────────────────────────────────────");
     println!("  CLEAN-UP IS PART OF THE PROCEDURE");
