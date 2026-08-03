@@ -509,3 +509,15 @@ development_status:
   # 29 missing, not the 27 the review reported.
   4-19-finish-chapter-4-payload-clauses: backlog
   epic-4-retrospective: optional
+  # 2026-08-03: Epic 5 opens with its scope CHANGED, not merely detailed. It used to
+  # be framed as ".env secrets discipline" while Epic 6 was a read-only surface, so
+  # configuration editing in the UI was owned by nobody — although the PRD's prose
+  # and NFR14 assumed it throughout. ADR 0021 + FR46 (#47) settle it: Epic 5 owns the
+  # configuration MODEL, Epic 6 owns the screens. Every Epic 5 acceptance criterion is
+  # therefore testable without a line of HTML, which is what lets ADR 0019's
+  # write-only-secrets rule be falsified before a form exists.
+  #
+  # Bounds already decided, so no story may re-choose them: publish period min 5 s,
+  # max 300 s, default 30 s (ADR 0020, ratified by Guy 2026-08-03).
+  epic-5: in-progress
+  5-1-config-model-and-refuse-to-start-validation: ready-for-dev
