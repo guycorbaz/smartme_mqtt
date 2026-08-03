@@ -220,6 +220,23 @@ So this step asks the question directly: does Ignition treat the second death as
 repeat, or does it log an error, complain about a duplicate session, or otherwise misbehave?
 Check the Ignition logs, not just the tag values.
 
+**Record, from `Node Info`, without reading ahead:**
+
+- `Death Count`, before and after;
+- the **date and time** carried by `Offline DateTime` — both, not the time alone.
+
+**Write those down before reading the next paragraph or the findings below.** The two deaths are
+about two seconds apart, so the second field discriminates which one the host kept — and this
+runbook already contains a prior answer to that question, in a section an operator can easily have
+read first. On 2026-08-03 the operator was told the expected outcome *in the briefing for this step*
+and then reported that outcome, quoting a timestamp that turned out to be the previous run's, from a
+node deleted before the value could be checked. Nothing was recorded, which was the right call, but
+the measurement was lost for that run.
+
+That is the plainest form of the failure this document is built around: a step that announces its
+own answer cannot measure anything. Steps 1–5 each carry a *what else could make this pass wrongly*
+list; this one needs the opposite discipline — **ask, then look, then compare.**
+
 > **⚠️ "Check the Ignition logs" is not performable by scrolling, and on this installation it is not
 > performable at all without a filter.** Measured 2026-07-31: an unrelated `MQTT Transmission` client
 > retrying a connection it cannot make produces **8–10 lines every 3 seconds** — roughly 200 lines a
@@ -312,10 +329,18 @@ artifact that no longer exists**, so these are first measurements, not confirmat
   message is replayed at subscribe time, which is step 1, not ten minutes later at the instant of an
   operator's click.
 
-**Not observed, and worth a line next time:** which timestamp `Offline DateTime` retained — the
-explicit certificate's, or the will's two seconds later. The 2026-07-31 probe found it tracked the
-**will**, which makes ADR 0011's claimed benefit (*"the explicit certificate is immediate"*)
-unobservable from the host side. This run did not re-check it.
+**Not observed, and the reason is worth more than the measurement.** Which timestamp
+`Offline DateTime` retained — the explicit certificate's, or the will's two seconds later — was not
+established. The 2026-07-31 probe found it tracked the **will**, which would make ADR 0011's claimed
+benefit (*"the explicit certificate is immediate"*) unobservable from the host side.
+
+The step-6 briefing **stated that prior finding before asking for the reading**. The operator then
+reported *"it's the will"* with the timestamp `8:34:58 PM` — which is verbatim the 2026-07-31 value
+recorded further down this page, and impossible for a run that ended around midday. By the time the
+coincidence was caught, `ContractNodeV3` had been deleted in the clean-up and the value was gone.
+
+Nothing was recorded, and that is the only reason this is a lost measurement rather than a false
+one. Step 6 now asks for the date *and* the time and says to write them down before reading on.
 
 ### ⚠️ The v2 row attests to an artifact that no longer exists
 
