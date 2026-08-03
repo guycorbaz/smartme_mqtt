@@ -1,6 +1,6 @@
 # ADR 0020 — The publish period becomes a setting, bounded above, with no "off"
 
-- **Status:** Accepted, **with one number owed** — see *The maximum* below
+- **Status:** Accepted — **complete**. The bounds were ratified by Guy on 2026-08-03.
 - **Date:** 2026-08-03 *(recording a decision Guy took on 2026-08-01)*
 - **Related:** [ADR 0018](0018-no-primary-host-state-the-repair-is-host-initiated.md) (which made
   this value load-bearing), [#32](https://github.com/guycorbaz/smartme_mqtt/issues/32) (RBE),
@@ -42,7 +42,15 @@ The UI must state, next to the field, *why* the bounds exist. An operator who se
 value will work around it; one who is told the period is what lets a restarted host find the node
 will not want to.
 
-## The maximum — the one number this ADR owes
+## The bounds — ratified 2026-08-03
+
+**Minimum 5 s · maximum 300 s · default 30 s.** Guy ratified these on 2026-08-03, the day this ADR
+was drafted; the derivation that produced them is below, kept because a number without its reasoning
+is a number the next person will change for a reason nobody can weigh.
+
+The default preserves today's hard-coded behaviour exactly, so adopting the setting is not itself a
+behaviour change — the first release with the UI must poll at the same cadence as the release
+before it, or the change is two changes wearing one name.
 
 The bound is not arbitrary and must not be invented at implementation time. It is the answer to:
 **how long may a host that restarted go without hearing from us before somebody notices?**
@@ -55,12 +63,17 @@ derivation and the proposed value rather than leaving it to the story:
   guarantee is about;
 - the current hard-coded value is **30 s**, and it has never been felt to be too fast.
 
-**Proposed: minimum 5 s, maximum 300 s, default 30 s** — the default preserving today's behaviour
-exactly, the maximum being five minutes, which is short enough that a restarted host repairs within
-one coffee and long enough to cut cloud traffic by an order of magnitude for someone who wants that.
+Hence the values above: the maximum is five minutes, short enough that a restarted host repairs
+within one coffee and long enough to cut cloud traffic by an order of magnitude for someone who
+wants that; the minimum is 5 s, which is the fixture value the tests already exercise and six times
+faster than production runs today.
 
-**Guy has not ratified the maximum.** It is the single open point in this ADR; everything else is
-settled. Until he does, the story must not pick a different number quietly.
+**What would make these numbers wrong.** The maximum is derived from the recovery path, so it is
+only as good as ADR 0018's premise — that recovery is host-initiated. If a Primary Host / STATE
+subscription is ever adopted, the trigger stops being the periodic publish and the maximum stops
+being load-bearing; it would then be a pure freshness question and could be relaxed. Conversely, if
+a consumer is ever added that treats a missed period as a fault, the maximum becomes a contract with
+that consumer and cannot be raised unilaterally.
 
 ## Consequences
 
