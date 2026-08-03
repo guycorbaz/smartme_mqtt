@@ -7,6 +7,7 @@
 pub mod config;
 pub mod mqtt_driver;
 pub mod poll_publish;
+pub mod store;
 pub mod supervisor;
 
 pub use poll_publish::{LastLoopTick, PollConfig};

@@ -92,7 +92,7 @@ pub struct MeterConfig {
 
 /// Configuration exactly as it arrived, from an environment or a form. Every
 /// field optional, no rule applied, nothing trusted.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct RawConfig {
     pub api_base: Option<String>,
     pub client_id: Option<String>,
@@ -104,6 +104,37 @@ pub struct RawConfig {
     pub state_dir: Option<String>,
     pub publish_period_secs: Option<String>,
     pub meters: Vec<RawMeter>,
+}
+
+/// Hand-written so `{:?}` cannot leak the credential.
+///
+/// **Found by falsification, 2026-08-03.** A mutation made a test fail, and the
+/// panic message printed `client_secret: Some("s3cr3t-do-not-print")` — from the
+/// derived `Debug` on this struct. `StoredSecrets` had a hand-written one from
+/// the start; the struct the secret actually ARRIVES through did not. Every
+/// `tracing::debug!(?raw)` anyone adds later would have leaked it, and nothing
+/// would have complained.
+///
+/// ADR 0019 is a property of the product, so it cannot rest on remembering not
+/// to derive `Debug`. Where a secret lives, the derive is the defect.
+impl std::fmt::Debug for RawConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RawConfig")
+            .field("api_base", &self.api_base)
+            .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field("group_id", &self.group_id)
+            .field("node_id", &self.node_id)
+            .field("broker_host", &self.broker_host)
+            .field("broker_port", &self.broker_port)
+            .field("state_dir", &self.state_dir)
+            .field("publish_period_secs", &self.publish_period_secs)
+            .field("meters", &self.meters)
+            .finish()
+    }
 }
 
 /// One meter as it arrived.
@@ -678,6 +709,30 @@ mod tests {
         assert!(
             named.contains(&"Sparkplug group id"),
             "the endpoint fault must not short-circuit the rest: {named:?}"
+        );
+    }
+
+    /// The struct the secret ARRIVES through must not print it either.
+    ///
+    /// Added after a falsification run leaked it through a panic message: the
+    /// derived `Debug` on `RawConfig` rendered `client_secret: Some("...")` in
+    /// full. `StoredSecrets` was protected and this one was not, which is what
+    /// makes it worth a test rather than a habit.
+    #[test]
+    fn the_raw_config_debug_never_renders_the_secret() {
+        let secret = "s3cr3t-do-not-print";
+        let raw = RawConfig {
+            client_secret: Some(secret.into()),
+            ..sound()
+        };
+        let debugged = format!("{raw:?}");
+        assert!(
+            !debugged.contains(secret),
+            "leaked through Debug: {debugged}"
+        );
+        assert!(
+            debugged.contains("<redacted>") && debugged.contains("broker_host"),
+            "the absence assertion needs the struct to have rendered at all: {debugged}"
         );
     }
 
