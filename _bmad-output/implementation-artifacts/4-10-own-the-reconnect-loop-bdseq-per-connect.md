@@ -13,11 +13,18 @@ Status: done
 > - **AC2** — `chaos_bdseq_per_connect.rs` verifies it from an independent subscriber.
 > - **AC3** — closed rather than restated: the persist moved to once per CONNECT, and
 >   `RECONNECT_FLOOR` bounds its rate, which makes the backoff floor a durability property.
-> - **AC4 — UNMET, [#45](https://github.com/guycorbaz/smartme_mqtt/issues/45).** Floor, ceiling and
->   doubling are stated with their reasons; **jitter is absent, and so is any note saying it was
->   rejected.** A reader cannot tell forgotten from decided. Low practical risk for one client
->   against one broker — but `architecture.md:113` claims *"backoff + jitter"*, so either the code or
->   the principle has to move.
+> - **AC4 — MET later the same day.** It was recorded UNMET at the review
+>   ([#45](https://github.com/guycorbaz/smartme_mqtt/issues/45)): floor, ceiling and doubling stated
+>   with their reasons, jitter absent, and no note saying jitter had been rejected — so a reader
+>   could not tell forgotten from decided. **Guy chose to add it.** `jittered()` spreads the wait
+>   *upwards only*: `backoff + [0, backoff/2)`.
+>
+>   The textbook *full jitter*, `sleep(rand(0, backoff))`, would have been a defect here.
+>   `RECONNECT_FLOOR` is not politeness — it bounds how often `bdSeq` reaches the disk, one fsync per
+>   session — so a wait shorter than the floor breaks the durability property **this very story**
+>   rests on, and neither the type system nor any test would have said so. Additive jitter cannot.
+>   Entropy comes from the monotonic clock's low bits through the existing `Clock` seam: no new
+>   dependency, and still injectable. Four unit tests, two mutations, records copied from the runs.
 > - **AC5** — 4.9's falsification record contains the per-CONNECT-will mutation and shows the count
 >   discriminator still going red under it.
 > - **AC6** — both rows moved and the prose at `sparkplug-conformance.md:473` was rewritten.

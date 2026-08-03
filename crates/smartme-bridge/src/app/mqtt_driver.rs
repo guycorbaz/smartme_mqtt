@@ -227,20 +227,59 @@ struct Command {
     retained: bool,
 }
 
+/// The shortest wait between two CONNECT attempts, and therefore the ceiling on
+/// how often `bdSeq` is persisted — one fsync-ing write per session (Story 4.10).
+/// A broker refusing every connection can cost at most one write per second.
+///
+/// **This floor is a durability bound, not politeness**, which is why
+/// [`jittered`] only ever adds to a wait and never subtracts from one.
+const RECONNECT_FLOOR: Duration = Duration::from_secs(1);
+
+/// The longest wait *before jitter*. Doubling from the floor, capped here, so an
+/// outage that lasts hours does not leave the bridge waiting hours to notice it
+/// is over. With jitter the longest actual wait is half again as long — 45 s —
+/// which still serves that purpose.
+const RECONNECT_CEILING: Duration = Duration::from_secs(30);
+
 /// Bound of the inbound-command queue.
 ///
 /// Small on purpose, and paired with a traced drop rather than a block — see
 /// [`pump_transport`]. Unbounded would trade a stall for unbounded memory.
-/// The shortest wait between two CONNECT attempts, and therefore the ceiling on
-/// how often `bdSeq` is persisted — one fsync-ing write per session (Story 4.10).
-/// A broker refusing every connection can cost at most one write per second.
-const RECONNECT_FLOOR: Duration = Duration::from_secs(1);
-
-/// The longest wait. Doubling from the floor, capped here, so an outage that
-/// lasts hours does not leave the bridge waiting hours to notice it is over.
-const RECONNECT_CEILING: Duration = Duration::from_secs(30);
-
+///
+/// *(This doc comment was attached to [`RECONNECT_FLOOR`] until 2026-08-03,
+/// leaving that constant described as a queue bound and this one undocumented.)*
 const COMMAND_QUEUE: usize = 8;
+
+/// Spreads reconnect attempts, **upwards only**: the wait becomes
+/// `backoff + [0, backoff/2)`.
+///
+/// # Why not the usual recipe
+///
+/// The textbook form is *full jitter*, `sleep(rand(0, backoff))`. It is wrong
+/// here. [`RECONNECT_FLOOR`] bounds how often `bdSeq` reaches the disk — one
+/// fsync-ing write per session — so a wait shorter than the floor would quietly
+/// break the durability property Story 4.10 rests on, and nothing in the type
+/// system or the tests would have said so. Additive jitter cannot violate it:
+/// the result is never smaller than its input, and the input is never below the
+/// floor.
+///
+/// # Where the entropy comes from
+///
+/// The monotonic clock's low bits, through the existing [`Clock`] seam, rather
+/// than a new dependency. Two consequences worth stating: it is *predictable*,
+/// not random — fine, because the purpose is to keep independent clients from
+/// re-synchronising after a shared outage, and independent clients have
+/// independent clock offsets — and it stays injectable, so a test can pin it.
+///
+/// A `span` of zero (a sub-2 ms backoff, which the floor makes unreachable in
+/// production) returns the backoff unchanged rather than dividing by zero.
+fn jittered(backoff: Duration, entropy: i64) -> Duration {
+    let span = (backoff.as_millis() as u64) / 2;
+    if span == 0 {
+        return backoff;
+    }
+    backoff + Duration::from_millis(entropy.unsigned_abs() % span)
+}
 
 /// Bound on an inbound MQTT packet, in bytes.
 ///
@@ -1136,12 +1175,18 @@ pub async fn run(
             // holds belongs to the session that just ended and covers it
             // correctly; the next CONNECT registers a different one.
             pump.abort();
+            // Computed BEFORE the log, so the number traced is the wait that
+            // actually happens. Logging the un-jittered base would have made the
+            // log describe something other than the behaviour — the defect this
+            // project keeps finding in its own documents.
+            let wait = jittered(backoff, clock.monotonic().0);
             tracing::warn!(
                 bd_seq = publisher.bd_seq().value(),
                 backoff_ms = backoff.as_millis() as u64,
+                wait_ms = wait.as_millis() as u64,
                 "transport lost; the will covers the ended session, reconnecting under a new one"
             );
-            tokio::time::sleep(backoff).await;
+            tokio::time::sleep(wait).await;
             backoff = (backoff * 2).min(RECONNECT_CEILING);
             continue;
         }
@@ -2443,6 +2488,88 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("smartme_bdseq_{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         dir.join(name)
+    }
+
+    /// The property the durability bound depends on. If jitter can ever shorten
+    /// a wait, `RECONNECT_FLOOR` stops bounding how often `bdSeq` is fsynced —
+    /// and nothing else in the tree would notice.
+    ///
+    /// FALSIFIED 2026-08-03. Copied from the run, not written from memory —
+    /// the first draft of this record stated numbers no run had produced.
+    ///
+    /// Mutation: `backoff + …` → `backoff - …`, the full-jitter shape this
+    /// function exists to avoid. Only this test moved:
+    ///
+    /// ```text
+    /// test app::mqtt_driver::tests::jitter_never_shortens_a_wait ... FAILED
+    /// panicked at crates/smartme-bridge/src/app/mqtt_driver.rs:2507:17:
+    /// jitter must never shorten a wait: 999ms < 1s (entropy 1)
+    /// test result: FAILED. 2 passed; 1 failed
+    /// ```
+    ///
+    /// Restored, re-run green: `test result: ok. 3 passed; 0 failed`.
+    #[test]
+    fn jitter_never_shortens_a_wait() {
+        for base_ms in [1_000u64, 2_000, 8_000, 30_000] {
+            let base = Duration::from_millis(base_ms);
+            for entropy in [0i64, 1, -1, 7, i64::MAX, i64::MIN, 123_456_789] {
+                let waited = jittered(base, entropy);
+                assert!(
+                    waited >= base,
+                    "jitter must never shorten a wait: {waited:?} < {base:?} (entropy {entropy})"
+                );
+            }
+        }
+    }
+
+    /// `i64::MIN` is the case a naive `entropy.abs()` panics on in debug and
+    /// wraps negative on in release. `unsigned_abs` is the reason it is here.
+    #[test]
+    fn jitter_stays_within_half_again_of_the_backoff() {
+        for base_ms in [1_000u64, 30_000] {
+            let base = Duration::from_millis(base_ms);
+            for entropy in [0i64, i64::MAX, i64::MIN, -999_999] {
+                assert!(
+                    jittered(base, entropy) < base + base / 2,
+                    "jitter is bounded at half the backoff"
+                );
+            }
+        }
+    }
+
+    /// Without this, a `jittered` that returned its input unchanged would satisfy
+    /// both bounds above and spread nothing. An expected-red for the "it does
+    /// something" direction, which the two bound tests cannot supply.
+    ///
+    /// FALSIFIED 2026-08-03, copied from the run. Mutation: the body replaced by
+    /// `let _ = entropy; backoff`. The two bound tests above stayed GREEN — which
+    /// is the point of this one existing:
+    ///
+    /// ```text
+    /// test app::mqtt_driver::tests::jitter_never_shortens_a_wait ... ok
+    /// test app::mqtt_driver::tests::jitter_stays_within_half_again_of_the_backoff ... ok
+    /// test app::mqtt_driver::tests::jitter_actually_varies ... FAILED
+    /// jitter that never varies is not jitter — got {8s}
+    /// test result: FAILED. 2 passed; 1 failed
+    /// ```
+    #[test]
+    fn jitter_actually_varies() {
+        let base = Duration::from_secs(8);
+        let spread: std::collections::BTreeSet<_> = (0..100i64)
+            .map(|entropy| jittered(base, entropy * 37))
+            .collect();
+        assert!(
+            spread.len() > 1,
+            "jitter that never varies is not jitter — got {spread:?}"
+        );
+    }
+
+    /// The floor makes this unreachable in production; it is here because the
+    /// division would panic and a guard nobody exercises is a guard nobody has.
+    #[test]
+    fn a_backoff_too_short_to_halve_is_returned_unchanged() {
+        let tiny = Duration::from_millis(1);
+        assert_eq!(jittered(tiny, i64::MAX), tiny);
     }
 
     #[test]
