@@ -18,7 +18,6 @@ use crate::app::mqtt_driver::{self, MqttConfig};
 use crate::app::poll_publish::{self, LastLoopTick, PollConfig};
 use crate::core::clock::{Clock, SystemClock};
 use crate::core::state_machine::Policy;
-use crate::domain::{MeterId, Serial};
 use smart_me_client::{Credentials, SmartMeClient};
 
 /// Everything the bridge needs to run. Assembled by the caller (Epic 3 reads it
@@ -32,12 +31,15 @@ pub struct BridgeConfig {
     pub credentials: Credentials,
     /// Per-request HTTP timeout.
     pub http_timeout: Duration,
-    /// The logical meter served by this bridge (walking skeleton: exactly one).
-    pub meter: MeterId,
-    /// smart-me device id backing that meter.
-    pub device_id: String,
-    /// The device serial, used as the Sparkplug device identifier.
-    pub serial: Serial,
+    /// Every meter configured, enabled or not.
+    ///
+    /// **The model is plural and the runtime is not** (Story 5.1). The
+    /// configuration screen is built against this list, so it takes its final
+    /// shape now rather than being reshaped — with its form — when the runtime
+    /// learns to serve more than one. [`crate::app::config::validate`] refuses a
+    /// configuration that enables more than [`crate::app::config::RUNTIME_METER_LIMIT`],
+    /// so this never silently serves a subset.
+    pub meters: Vec<crate::app::config::MeterConfig>,
     /// Sparkplug group identifier.
     pub group_id: String,
     /// Sparkplug edge node identifier.
@@ -64,6 +66,15 @@ pub enum StartupError {
     /// The Sparkplug identifiers are not usable as topic levels.
     #[error("sparkplug identifiers: {0}")]
     Topic(#[from] sparkplug_b::TopicError),
+    /// No meter is enabled.
+    ///
+    /// Unreachable through [`crate::app::config::validate`], which reports it as
+    /// a configuration fault along with everything else that is wrong. It exists
+    /// because a `BridgeConfig` can also be built by hand — every chaos test does
+    /// — and a hand-built one with no enabled meter would otherwise panic here or,
+    /// worse, run and publish nothing.
+    #[error("no meter is enabled; the bridge would connect, birth, and publish nothing")]
+    NoEnabledMeter,
 }
 
 /// Builds and runs the bridge until `shutdown` resolves.
@@ -77,10 +88,18 @@ pub async fn run(
 ) -> Result<(), StartupError> {
     let clock: Arc<dyn Clock + Send + Sync> = Arc::new(SystemClock::new());
     let node = sparkplug_b::EdgeNode::new(config.group_id.clone(), config.node_id.clone())?;
+    // The runtime serves ONE meter. `config::validate` refuses a configuration
+    // that enables more, so taking the first enabled one here is not a silent
+    // truncation — it is the single meter the validation guaranteed.
+    let served = config
+        .meters
+        .iter()
+        .find(|meter| meter.enabled)
+        .ok_or(StartupError::NoEnabledMeter)?;
     // Validate the device identifier HERE: a serial that cannot be a topic level
     // would otherwise leave the node connected, unborn and publishing nothing,
     // forever. Refusing to start beats starting wrong.
-    node.device_topic(sparkplug_b::MessageType::DBirth, config.serial.as_str())?;
+    node.device_topic(sparkplug_b::MessageType::DBirth, served.serial.as_str())?;
 
     let client = SmartMeClient::new(
         config.api_base.clone(),
@@ -90,8 +109,8 @@ pub async fn run(
     let source = SmartMeCloudSource::new(
         client,
         Arc::clone(&clock),
-        config.meter.clone(),
-        config.device_id.clone(),
+        served.meter.clone(),
+        served.device_id.clone(),
     );
 
     // The channel first: the seam exists before either end does.
@@ -110,14 +129,14 @@ pub async fn run(
             death_flush: Duration::from_secs(2),
         },
         node,
-        vec![config.serial.clone()],
+        vec![served.serial.clone()],
         Arc::clone(&clock),
         rx,
         death_rx,
     ));
 
     let poll = tokio::spawn(poll_publish::run(
-        config.meter.clone(),
+        served.meter.clone(),
         source,
         Arc::clone(&clock),
         config.policy,
@@ -170,6 +189,7 @@ pub async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{MeterId, Serial};
 
     fn config() -> BridgeConfig {
         BridgeConfig {
@@ -179,9 +199,12 @@ mod tests {
                 password: "p".to_string(),
             },
             http_timeout: Duration::from_secs(10),
-            meter: MeterId::new("garage"),
-            device_id: "a1a1a1a1-b2b2-c3c3-d4d4-000000000001".to_string(),
-            serial: Serial::new("30000001"),
+            meters: vec![crate::app::config::MeterConfig {
+                meter: MeterId::new("garage"),
+                device_id: "a1a1a1a1-b2b2-c3c3-d4d4-000000000001".to_string(),
+                serial: Serial::new("30000001"),
+                enabled: true,
+            }],
             group_id: "Site".to_string(),
             node_id: "Bridge".to_string(),
             broker_host: "127.0.0.1".to_string(),

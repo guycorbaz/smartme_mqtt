@@ -1,21 +1,15 @@
 //! Thin shell over `lib::run()` — the wiring lives in the library so the
 //! integration and chaos tests can drive the same code the binary runs.
 //!
-//! Configuration is read from the environment for the walking skeleton; Epic 3
-//! replaces this with the validated config file. Secrets stay env-only and are
-//! never logged (NFR12).
+//! Configuration is read from the environment into `app::config::RawConfig` and
+//! validated by `app::config::validate` — this file applies no rule of its own.
+//! The environment is the BOOTSTRAP path (FR23); FR46 adds the web UI as a
+//! second source feeding the same validation. Secrets are never logged, and
+//! never reach a fault message (NFR12, ADR 0019).
 
 use std::path::PathBuf;
-use std::time::Duration;
 
-use smart_me_client::{Credentials, SmartMeClient};
-use smartme_bridge::app::{BridgeConfig, PollConfig};
-use smartme_bridge::core::state_machine::Policy;
-use smartme_bridge::domain::{MeterId, Serial};
-
-fn env(key: &str) -> Result<String, String> {
-    std::env::var(key).map_err(|_| format!("missing environment variable {key}"))
-}
+use smartme_bridge::app::config::{RawConfig, RawMeter};
 
 /// Default number of rotated log files kept when `SMARTME_LOG_KEEP` is unset.
 /// Rotation is daily, so this is a retention window in days.
@@ -189,55 +183,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!(directory = %log.directory.display(), "logging to file");
     }
 
-    let credentials = Credentials::ClientCredentials {
-        client_id: env("SMARTME_CLIENT_ID")?,
-        client_secret: env("SMARTME_CLIENT_SECRET")?,
+    // Read, then validate — and nothing in between. Every rule lives in
+    // `app::config`, because FR46 gives the configuration a SECOND consumer (the
+    // web UI) and two places applying the same rules is how they drift apart.
+    let raw = RawConfig {
+        api_base: std::env::var("SMARTME_API_BASE").ok(),
+        client_id: std::env::var("SMARTME_CLIENT_ID").ok(),
+        client_secret: std::env::var("SMARTME_CLIENT_SECRET").ok(),
+        group_id: std::env::var("SMARTME_GROUP_ID").ok(),
+        node_id: std::env::var("SMARTME_NODE_ID").ok(),
+        broker_host: std::env::var("SMARTME_BROKER_HOST").ok(),
+        broker_port: std::env::var("SMARTME_BROKER_PORT").ok(),
+        state_dir: std::env::var("SMARTME_STATE_DIR").ok(),
+        publish_period_secs: std::env::var("SMARTME_PUBLISH_PERIOD_SECS").ok(),
+        // ONE meter from the environment, deliberately.
+        //
+        // The model holds any number (Story 5.1) so the configuration screen can
+        // be built against its final shape, but the environment is the BOOTSTRAP
+        // path (FR23) and inventing an indexed variable scheme here would be a
+        // second configuration surface to keep in step with the first. More
+        // meters arrive through the UI, which is Epic 6.
+        meters: vec![RawMeter {
+            meter_id: std::env::var("SMARTME_METER_ID").ok(),
+            device_id: std::env::var("SMARTME_DEVICE_ID").ok(),
+            serial: std::env::var("SMARTME_SERIAL").ok(),
+            enabled: None,
+        }],
     };
-    let config = BridgeConfig {
-        api_base: std::env::var("SMARTME_API_BASE")
-            .unwrap_or_else(|_| SmartMeClient::DEFAULT_BASE.to_string()),
-        credentials,
-        http_timeout: Duration::from_secs(10),
-        meter: MeterId::new(env("SMARTME_METER_ID")?),
-        device_id: env("SMARTME_DEVICE_ID")?,
-        serial: Serial::new(env("SMARTME_SERIAL")?),
-        // NO DEFAULT, and this is the same rule as the port below.
-        //
-        // These two identifiers ARE the topic namespace. A Sparkplug host
-        // persists what it discovers: the group becomes a folder in its tag
-        // tree that outlives the process and has to be deleted by hand, and
-        // deleting MQTT Engine tags also discards their alarm and history
-        // configuration. Publishing into the wrong namespace is therefore not
-        // recoverable by restarting with better settings.
-        //
-        // They defaulted to `Site` / `Bridge` until 2026-07-31. The asymmetry
-        // that exposed it: the Tier-3 contract test REFUSES to publish into a
-        // group called `Site`, precisely because that is the production
-        // namespace — while the product itself published there whenever the
-        // variable was unset. The guard was on the disposable artifact and
-        // absent from the real one. Found while standing up a probe against
-        // the live broker, where the default had to be overridden by hand to
-        // avoid exactly this.
-        group_id: env("SMARTME_GROUP_ID")?,
-        node_id: env("SMARTME_NODE_ID")?,
-        broker_host: env("SMARTME_BROKER_HOST")?,
-        // A typo'd port must not silently connect somewhere else.
-        broker_port: match std::env::var("SMARTME_BROKER_PORT") {
-            Ok(raw) => raw
-                .trim()
-                .parse()
-                .map_err(|_| format!("SMARTME_BROKER_PORT is not a port number: {raw:?}"))?,
-            Err(_) => 1883,
-        },
-        bd_seq_path: PathBuf::from(
-            std::env::var("SMARTME_STATE_DIR").unwrap_or_else(|_| "/data".to_string()),
-        )
-        .join("bdseq.toml"),
-        poll: PollConfig {
-            interval: Duration::from_secs(30),
-            fetch_timeout: Duration::from_secs(10),
-        },
-        policy: Policy { max_age_ms: 90_000 },
+
+    let config = match smartme_bridge::app::config::validate(raw) {
+        Ok(config) => config,
+        Err(errors) => {
+            // Every fault at once, and to stderr as well as the log: a first run
+            // that fails here may have no log destination configured yet, and an
+            // operator who cannot see why is an operator who guesses.
+            tracing::error!("{errors}");
+            eprintln!("{errors}");
+            return Err(errors.to_string().into());
+        }
     };
 
     let outcome = smartme_bridge::run(config);

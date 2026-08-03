@@ -4,6 +4,7 @@
 //! NEVER do is decide truth: the shell carries data to and from the pure core,
 //! and `tests/arch_purity.rs` keeps the core clean of everything in here.
 
+pub mod config;
 pub mod mqtt_driver;
 pub mod poll_publish;
 pub mod supervisor;
