@@ -520,7 +520,20 @@ development_status:
   # Bounds already decided, so no story may re-choose them: publish period min 5 s,
   # max 300 s, default 30 s (ADR 0020, ratified by Guy 2026-08-03).
   epic-5: in-progress
-  5-1-config-model-and-refuse-to-start-validation: ready-for-dev
+  # 2026-08-03, implemented. 12 unit tests in app/config.rs; main.rs applies no
+  # rule of its own any more. AC4/AC6 landed together: the model is plural, the
+  # runtime is not, and enabling more meters than the runtime serves is REFUSED
+  # rather than truncated.
+  #
+  # Two things worth carrying into the review:
+  #  - under the AC2 mutation (faults.truncate(1)) TEN of eleven tests stayed
+  #    green — every other one asserts that SOME fault exists, and a truncated
+  #    fault is still a fault. Exactly one test carries that property.
+  #  - ci-local.sh caught a regression the unit tests did not: the faults named
+  #    settings in prose while a first run is fixed by editing SMARTME_GROUP_ID.
+  #    startup_banner was right; fixed in the code, and a unit test now locks it
+  #    in at the level where the message is built.
+  5-1-config-model-and-refuse-to-start-validation: review
   # 2026-08-03: 5.2 closes architecture open item 5 via ADR 0022 — secrets rest in a
   # SEPARATE secrets.toml at 0600, beside a 0644 config.toml that stays diagnosable
   # without privileges. The bridge STATs the mode and refuses to start if it is group-

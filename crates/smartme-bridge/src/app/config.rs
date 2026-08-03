@@ -69,8 +69,8 @@ pub const PERIOD_DEFAULT: Duration = Duration::from_secs(30);
 /// The **model** holds any number (Story 5.1 AC4), because the configuration
 /// screen is built against the model and a form built against a singular field
 /// would be built twice. The **runtime** still serves one. Enabling more than
-/// this is refused rather than truncated — see [`Fault`]'s
-/// `TooManyEnabledMeters`.
+/// this is refused rather than truncated — the fault is raised in [`validate`]
+/// under the field name `enabled meters`.
 pub const RUNTIME_METER_LIMIT: usize = 1;
 
 /// A meter as configured: its identity, and whether it is published at all.
@@ -244,6 +244,18 @@ fn check_serial(
     // browser, and every reading is discarded as DroppedUndeclaredDevice because
     // the serial the meter reports never matches the one declared. A healthy
     // bridge that publishes nothing is far more expensive than a refusal now.
+    //
+    // KNOW WHAT THIS RULE ACTUALLY IS. The real requirement is *the serial must
+    // be the one smart-me reports*, which cannot be checked offline. The leading
+    // zero is a proxy for it, generalised from a single incident — so it can in
+    // principle refuse a legitimate serial, and there is deliberately no override.
+    //
+    // Guy confirmed on 2026-08-03 that none of his four meters carries one, and
+    // chose the hard refusal over a warning, on the grounds that the failure it
+    // prevents is silent and a startup WARN would drown — which is exactly what
+    // #44 had just demonstrated about warnings nobody can see. If a meter with a
+    // genuine leading zero ever appears, this is a code change and not a
+    // configuration one, and that is the accepted cost rather than an oversight.
     if raw.len() > 1 && raw.starts_with('0') {
         faults.push(Fault {
             field: field.clone(),
@@ -468,14 +480,46 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
         });
     }
 
+    // The endpoint, checked HERE rather than left to `SmartMeClient::new` at
+    // startup.
+    //
+    // It was left to it in the first draft of this module, and that quietly broke
+    // AC2: an operator with a bad endpoint AND a missing group id was told about
+    // the group id, fixed it, restarted, and only then learnt about the endpoint.
+    // Two cycles — the exact shape this story exists to remove.
+    //
+    // The rule is not restated. `SmartMeClient::new` owns it (it is the type that
+    // refuses a non-TLS base), so it is asked, the same way the serial check asks
+    // the topic grammar instead of reimplementing it. The client built here is
+    // discarded; what is wanted is its verdict.
+    let api_base = present(&raw.api_base)
+        .unwrap_or(SmartMeClient::DEFAULT_BASE)
+        .to_string();
+    if let (Some(id), Some(secret)) = (&client_id, &client_secret) {
+        if let Err(error) = SmartMeClient::new(
+            api_base.clone(),
+            Credentials::ClientCredentials {
+                client_id: id.clone(),
+                client_secret: secret.clone(),
+            },
+            Duration::from_secs(10),
+        ) {
+            faults.push(Fault {
+                field: "smart-me API base".to_string(),
+                env_var: Some("SMARTME_API_BASE"),
+                // `SmartMeError`'s Display is asserted elsewhere never to embed
+                // credentials, which is why it is safe to interpolate here.
+                problem: format!("was refused: {error}"),
+            });
+        }
+    }
+
     if !faults.is_empty() {
         return Err(ConfigErrors(faults));
     }
 
     Ok(BridgeConfig {
-        api_base: present(&raw.api_base)
-            .unwrap_or(SmartMeClient::DEFAULT_BASE)
-            .to_string(),
+        api_base,
         credentials: Credentials::ClientCredentials {
             client_id: client_id.expect("no faults means every required field is present"),
             client_secret: client_secret.expect("no faults means every required field is present"),
@@ -609,6 +653,32 @@ mod tests {
                 "{expected} is what the operator edits; message was:\n{rendered}"
             );
         }
+    }
+
+    /// AC2 again, on the fault that used to escape it.
+    ///
+    /// The endpoint check lived in `SmartMeClient::new` at startup, so a bad
+    /// endpoint was reported only once everything else was already correct — one
+    /// more restart, which is what this story exists to remove. The assertion
+    /// that matters is not that the endpoint is refused; it is that it is refused
+    /// **in the same pass** as an unrelated fault.
+    #[test]
+    fn a_refused_endpoint_is_reported_alongside_everything_else() {
+        let raw = RawConfig {
+            api_base: Some("http://not-tls.example".into()),
+            group_id: None,
+            ..sound()
+        };
+        let errors = validate(raw).expect_err("a non-TLS endpoint should be refused");
+        let named = fields(&errors);
+        assert!(
+            named.contains(&"smart-me API base"),
+            "the endpoint was not checked at all: {named:?}"
+        );
+        assert!(
+            named.contains(&"Sparkplug group id"),
+            "the endpoint fault must not short-circuit the rest: {named:?}"
+        );
     }
 
     /// ADR 0019, tested where the value enters the process rather than where a

@@ -107,6 +107,15 @@ meters, one of them not currently connected
 whatever `check_identifier` already enforces for the topic grammar
 **And** the failure message names the consequence, not the rule.
 
+> **What this rule actually is, decided 2026-08-03.** The real requirement is *the serial must be the
+> one smart-me reports*, which cannot be checked offline. The leading zero is a **proxy** for it,
+> generalised from a single incident, so it can in principle refuse a legitimate serial and there is
+> deliberately no override. Guy confirmed none of his four meters carries one and chose the hard
+> refusal over a warning — because the failure it prevents is silent, and a startup WARN would drown,
+> which [#44](https://github.com/guycorbaz/smartme_mqtt/issues/44) had just demonstrated about
+> warnings nobody can see. A meter with a genuine leading zero would be a code change, and that is
+> the accepted cost rather than an oversight.
+>
 > This is not hypothetical tidiness. Serial `9202685` written as `09202685` drops **every reading**
 > as `DroppedUndeclaredDevice`: the bridge runs, the node births, the tags exist, and no value ever
 > arrives. A validation error at startup costs a minute; this failure mode costs however long it
