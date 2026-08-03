@@ -273,6 +273,44 @@ const COMMAND_QUEUE: usize = 8;
 ///
 /// A `span` of zero (a sub-2 ms backoff, which the floor makes unreachable in
 /// production) returns the backoff unchanged rather than dividing by zero.
+/// One step of the reconnect ladder: returns `(the base wait to use now, the
+/// base for the step after this one)`.
+///
+/// `established` means the session that just ended had reached CONNACK.
+///
+/// # Why a session that connected resets the ladder
+///
+/// Until 2026-08-03 there was no reset at all: `backoff` was declared outside
+/// the session loop and only ever doubled, so it was monotonic for the lifetime
+/// of the process. Five transport losses put it at the ceiling and it stayed
+/// there — not for the outage, but until someone restarted the bridge. A
+/// one-second blip on a Tuesday, after a rough Monday, cost thirty seconds; and
+/// since Story 4.10 a reconnect is a full NDEATH → NBIRTH, so for those thirty
+/// seconds the node was **offline to every consumer** and the readings taken in
+/// the window were lost. Nothing announced it: the WARN printed the number, but
+/// reading it meant noticing that a value which should be 1000 was 30000. [#46]
+///
+/// The ladder exists for a broker that will not accept us. A broker that accepts
+/// us and later drops the connection has answered that question — the evidence
+/// the ladder was accumulating is stale, so it is discarded.
+///
+/// # What this does NOT do
+///
+/// A broker that accepts and immediately drops, forever, now reconnects at the
+/// floor rather than climbing away from it. That is deliberate and already
+/// bounded: one attempt and one fsync-ing `bdSeq` write per second, which is the
+/// rate [`RECONNECT_FLOOR`] was chosen to cap and which its own doc comment
+/// already calls acceptable for a broker refusing every connection. A flapping
+/// broker costs exactly the same as a refusing one.
+fn ladder_step(previous: Duration, established: bool) -> (Duration, Duration) {
+    let now = if established {
+        RECONNECT_FLOOR
+    } else {
+        previous
+    };
+    (now, (now * 2).min(RECONNECT_CEILING))
+}
+
 fn jittered(backoff: Duration, entropy: i64) -> Duration {
     let span = (backoff.as_millis() as u64) / 2;
     if span == 0 {
@@ -1044,11 +1082,16 @@ pub async fn run(
             ncmd_topic.clone(),
         ));
 
+        // Did this session ever reach CONNACK? It is what tells a broker that
+        // will not have us from one that had us and let go — see [`ladder_step`].
+        let mut established = false;
+
         let ended = loop {
             tokio::select! {
                 event = transport_rx.recv() => {
                     match event {
                         Some(Transport::Connected) => {
+                            established = true;
                             // 5. Connected: subscribe to NCMD BEFORE birthing. The
                             // order of these two statements IS the requirement; see
                             // the module docs.
@@ -1179,15 +1222,17 @@ pub async fn run(
             // actually happens. Logging the un-jittered base would have made the
             // log describe something other than the behaviour — the defect this
             // project keeps finding in its own documents.
-            let wait = jittered(backoff, clock.monotonic().0);
+            let (base, next) = ladder_step(backoff, established);
+            let wait = jittered(base, clock.monotonic().0);
             tracing::warn!(
                 bd_seq = publisher.bd_seq().value(),
-                backoff_ms = backoff.as_millis() as u64,
+                established,
+                backoff_ms = base.as_millis() as u64,
                 wait_ms = wait.as_millis() as u64,
                 "transport lost; the will covers the ended session, reconnecting under a new one"
             );
             tokio::time::sleep(wait).await;
-            backoff = (backoff * 2).min(RECONNECT_CEILING);
+            backoff = next;
             continue;
         }
 
@@ -2488,6 +2533,60 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("smartme_bdseq_{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         dir.join(name)
+    }
+
+    /// The defect [#46] was: no reset at all, so the ladder was monotonic for the
+    /// life of the process. This drives the ladder to its ceiling the only way a
+    /// caller can — repeated sessions that never connect — and then asserts that
+    /// ONE session which reached CONNACK brings it back to the floor.
+    ///
+    /// The sequence is driven through `ladder_step` itself rather than
+    /// re-implemented here; a test that restates production's own expression
+    /// proves only that the expression equals itself, which this project has
+    /// already been caught by once.
+    ///
+    /// FALSIFIED 2026-08-03 against the ORIGINAL defect, copied from the run.
+    /// Mutation: `let now = previous;` — the pre-fix behaviour, no reset:
+    ///
+    /// ```text
+    /// test app::mqtt_driver::tests::the_ladder_is_capped ... ok
+    /// test app::mqtt_driver::tests::a_session_that_connected_forgives_the_ladder ... FAILED
+    /// assertion `left == right` failed: a session that reached CONNACK must
+    /// reset the ladder, not inherit 30s
+    /// test result: FAILED. 1 passed; 1 failed
+    /// ```
+    ///
+    /// `30s` in that message is the bug itself, reported by the test. The cap
+    /// test stayed green, so this one carries the proof alone.
+    #[test]
+    fn a_session_that_connected_forgives_the_ladder() {
+        let mut base = RECONNECT_FLOOR;
+        let mut climbed = Vec::new();
+        for _ in 0..8 {
+            let (now, next) = ladder_step(base, false);
+            climbed.push(now);
+            base = next;
+        }
+        assert_eq!(
+            base, RECONNECT_CEILING,
+            "eight failures should have reached the ceiling; got {climbed:?}"
+        );
+
+        let (after_a_healthy_session, _) = ladder_step(base, true);
+        assert_eq!(
+            after_a_healthy_session, RECONNECT_FLOOR,
+            "a session that reached CONNACK must reset the ladder, not inherit {base:?}"
+        );
+    }
+
+    /// The ladder must not climb past the ceiling however long the outage runs.
+    #[test]
+    fn the_ladder_is_capped() {
+        let mut base = RECONNECT_FLOOR;
+        for _ in 0..64 {
+            base = ladder_step(base, false).1;
+        }
+        assert_eq!(base, RECONNECT_CEILING);
     }
 
     /// The property the durability bound depends on. If jitter can ever shorten
