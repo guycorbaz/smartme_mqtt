@@ -293,20 +293,15 @@ async fn run_case(broker_host: &str, port: u16, group: &str) {
     // in-process, which no signal can reach; `main.rs → run() →
     // shutdown_signal()` is the path a SIGTERM actually travels and it is
     // covered nowhere else.
+    // The bridge is configured by the FILE now (ADR 0023). Spawning it with the
+    // old variables and no file would not fail — it would come up unconfigured
+    // and never birth, so the SIGTERM this test measures would be delivered to a
+    // process that had nothing to say goodbye about.
+    common::write_config(&state_dir.0, group, NODE_ID, SERIAL, broker_host, port);
+
     let child = Command::new(env!("CARGO_BIN_EXE_smartme-bridge"))
-        // TEST-NET-1 (RFC 5737): guaranteed unroutable, so the cloud stays
-        // silent for the whole test. The Sparkplug session does not depend on
-        // having a reading, so the node still births.
-        .env("SMARTME_API_BASE", "https://192.0.2.1")
         .env("SMARTME_CLIENT_ID", "id")
         .env("SMARTME_CLIENT_SECRET", "secret")
-        .env("SMARTME_METER_ID", "garage")
-        .env("SMARTME_DEVICE_ID", "a1a1a1a1-b2b2-c3c3-d4d4-000000000001")
-        .env("SMARTME_SERIAL", SERIAL)
-        .env("SMARTME_GROUP_ID", group)
-        .env("SMARTME_NODE_ID", NODE_ID)
-        .env("SMARTME_BROKER_HOST", broker_host)
-        .env("SMARTME_BROKER_PORT", port.to_string())
         .env("SMARTME_STATE_DIR", state_dir.0.display().to_string())
         // reqwest honours the proxy environment by default. Inherited from a
         // developer's shell or a corporate runner, a proxy would route the

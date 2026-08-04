@@ -211,3 +211,49 @@ pub async fn wait_for(
     .ok()
     .flatten()
 }
+
+/// Write the `config.toml` a spawned bridge will read (ADR 0023).
+///
+/// **Added 2026-08-04, and the two tests that spawn the real binary would
+/// otherwise have gone quiet rather than red.** They used to configure the
+/// bridge through `SMARTME_GROUP_ID` and its nine companions; those variables
+/// were withdrawn when the file became the configuration. A binary spawned with
+/// them and no file does not fail — it comes up UNCONFIGURED, publishes nothing,
+/// and waits, so every assertion about what a subscriber receives would have
+/// timed out against a bridge that was working exactly as designed.
+///
+/// The Sparkplug identity and the meter are parameters because each chaos test
+/// needs its own group, so that two runs against the shared broker cannot see
+/// each other's births.
+pub fn write_config(
+    dir: &std::path::Path,
+    group: &str,
+    node: &str,
+    serial: &str,
+    broker_host: &str,
+    broker_port: u16,
+) {
+    std::fs::write(
+        dir.join("config.toml"),
+        format!(
+            "schema_version = {}\n\
+             group_id = \"{group}\"\n\
+             node_id = \"{node}\"\n\
+             broker_host = \"{broker_host}\"\n\
+             broker_port = {broker_port}\n\
+             publish_period_secs = 30\n\
+             # TEST-NET-1 (RFC 5737): unroutable, so the cloud stays silent for\n\
+             # the whole run. The Sparkplug session does not depend on having a\n\
+             # reading, so the node still births.\n\
+             api_base = \"https://192.0.2.1\"\n\
+             \n\
+             [[meters]]\n\
+             meter_id = \"garage\"\n\
+             device_id = \"a1a1a1a1-b2b2-c3c3-d4d4-000000000001\"\n\
+             serial = \"{serial}\"\n\
+             enabled = true\n",
+            smartme_bridge::app::store::SCHEMA_VERSION
+        ),
+    )
+    .expect("write the bridge's configuration");
+}

@@ -573,4 +573,33 @@ development_status:
   # to the environment: a credential is a pair, a pair split across two sources can be
   # rotated by halves, and a mismatched pair presents as a smart-me OUTAGE rather than a
   # configuration fault.
+  #
+  # 2026-08-04, IMPLEMENTED THROUGH TASK 3. store::load is wired into main.rs at last;
+  # the eleven environment variables are gone; the logging init now runs AFTER the file
+  # is read, because log_dir/log_keep moved into it (schema 1 -> 2). Five mutations run,
+  # all red, records copied beside their tests. Full ci-local green, chaos included.
+  #
+  # Three things the rewiring broke that no unit test would have caught:
+  #  - startup_banner would have HUNG FOREVER. Its premise was "incomplete configuration
+  #    => the binary exits"; an absent configuration now means the bridge comes up and
+  #    waits. It writes an invalid file now instead of withholding variables.
+  #  - TWO CHAOS TESTS WOULD HAVE GONE QUIET RATHER THAN RED — chaos_ncmd_subscription
+  #    and chaos_sigterm_no_lie spawn the real binary with SMARTME_GROUP_ID and its
+  #    companions. With those withdrawn they would have started an UNCONFIGURED bridge
+  #    that publishes nothing, and every assertion would have timed out against a bridge
+  #    working exactly as designed. ci-local --fast does not run them; only the full run
+  #    covers this. common::write_config now writes the file they read.
+  #  - Every fault named a withdrawn variable. Fault.env_var became Fault.source
+  #    (File(key) | Env(var)) — otherwise a refusal would send the operator to edit
+  #    SMARTME_GROUP_ID, which is the exact misdirection that field exists to prevent,
+  #    merely pointing somewhere new. The test asserting the old names failed, as it had
+  #    to, and now asserts both destinations AND the absence of the withdrawn ones.
+  #
+  # Also found: the three startup_banner tests shared one scratch directory and deleted
+  # it under each other in parallel — a flake that only appeared once all three ran
+  # together. One directory per case now, confirmed over three consecutive runs.
+  #
+  # STILL OWED: AC4 (hot reload — ArcSwap is a new dependency, plus the per-field
+  # hot/requires-reconnect table and DBIRTH-on-enable/DDEATH-on-disable), and Task 6
+  # (the manual's chapters 4 and 9 still document the eleven withdrawn variables).
   5-2-config-persists-and-reloads-without-a-restart: ready-for-dev

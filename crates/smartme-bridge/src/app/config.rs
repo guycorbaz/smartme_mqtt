@@ -158,23 +158,58 @@ pub struct RawMeter {
 pub struct Fault {
     /// The setting at fault, named as the operator knows it.
     pub field: String,
-    /// The environment variable that carries it, where one does.
+    /// Where the operator changes it, where that can be named.
     ///
-    /// **Both names are needed, and for different readers.** An operator fixing
-    /// a first run edits `SMARTME_GROUP_ID`; a form shows *Sparkplug group id*.
-    /// Printing only the prose name is a regression this project caught the
-    /// moment it happened — `startup_banner` asserts the failure names the
-    /// variable, because a message that does not is one the reader has to
-    /// translate before acting on.
-    pub env_var: Option<&'static str>,
+    /// **Both names are needed, and for different readers.** A form shows
+    /// *Sparkplug group id*; someone fixing a refusal from a shell needs the key
+    /// or the variable they actually type. Printing only the prose name is a
+    /// regression this project caught the moment it happened —
+    /// `startup_banner` asserts the failure names it, because a message that does
+    /// not is one the reader has to translate before acting on.
+    ///
+    /// **Was `env_var: Option<&'static str>` until 2026-08-04.** [ADR 0023] moved
+    /// every setting but the credential into `config.toml`, which would have left
+    /// nine faults directing the operator to `SMARTME_*` variables that no longer
+    /// do anything — the same misdirection the field exists to prevent, merely
+    /// pointing somewhere new.
+    ///
+    /// [ADR 0023]: ../../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md
+    pub source: Option<Source>,
     /// What is wrong, and where it matters, what it will cost.
     pub problem: String,
 }
 
+/// Where a setting is edited — and there are exactly two places, by decision
+/// rather than by accident ([ADR 0023]).
+///
+/// [ADR 0023]: ../../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Source {
+    /// A key in `config.toml`: changed in the web UI, or by hand for a headless
+    /// bring-up. Owned rather than `&'static str` because a meter's key carries
+    /// its index — `meters[2].serial` names one meter out of four, and "the
+    /// serial is missing" across four of them does not.
+    File(String),
+    /// An environment variable. The credential only — nothing else is left.
+    Env(&'static str),
+}
+
+impl std::fmt::Display for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            // The file is named, not just the key. "group_id" alone sends a
+            // reader looking for an environment variable of that name, which is
+            // where this whole class of message went wrong the first time.
+            Source::File(key) => write!(f, "config.toml: {key}"),
+            Source::Env(var) => write!(f, "environment: {var}"),
+        }
+    }
+}
+
 impl std::fmt::Display for Fault {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.env_var {
-            Some(var) => write!(f, "{} ({var}): {}", self.field, self.problem),
+        match &self.source {
+            Some(source) => write!(f, "{} ({source}): {}", self.field, self.problem),
             None => write!(f, "{}: {}", self.field, self.problem),
         }
     }
@@ -208,7 +243,7 @@ fn present(value: &Option<String>) -> Option<&str> {
 fn required<'a>(
     value: &'a Option<String>,
     field: &str,
-    env_var: Option<&'static str>,
+    source: Option<Source>,
     consequence: &str,
     faults: &mut Vec<Fault>,
 ) -> Option<&'a str> {
@@ -217,7 +252,7 @@ fn required<'a>(
         None => {
             faults.push(Fault {
                 field: field.to_string(),
-                env_var,
+                source,
                 problem: format!("is missing or empty — {consequence}"),
             });
             None
@@ -233,7 +268,7 @@ fn period(raw: &Option<String>, faults: &mut Vec<Fault>) -> Duration {
     let Ok(secs) = text.parse::<u64>() else {
         faults.push(Fault {
             field: "publish period".to_string(),
-            env_var: Some("SMARTME_PUBLISH_PERIOD_SECS"),
+            source: Some(Source::File("publish_period_secs".into())),
             problem: format!(
                 "is not a whole number of seconds: {text:?}. There is no value meaning \
                  'off' — see below for why"
@@ -245,7 +280,7 @@ fn period(raw: &Option<String>, faults: &mut Vec<Fault>) -> Duration {
     if candidate < PERIOD_MIN || candidate > PERIOD_MAX {
         faults.push(Fault {
             field: "publish period".to_string(),
-            env_var: Some("SMARTME_PUBLISH_PERIOD_SECS"),
+            source: Some(Source::File("publish_period_secs".into())),
             problem: format!(
                 "is {secs}s, outside {}s..={}s. The maximum is not a preference: the \
                  periodic publish is what lets a SCADA host that restarted notice a node \
@@ -290,7 +325,7 @@ fn check_serial(
     if raw.len() > 1 && raw.starts_with('0') {
         faults.push(Fault {
             field: field.clone(),
-            env_var: None,
+            source: None,
             problem: format!(
                 "has a leading zero ({} digits). smart-me reports it without one, so every \
                  reading would be discarded as DroppedUndeclaredDevice — the bridge would \
@@ -306,7 +341,7 @@ fn check_serial(
         if let Err(error) = node.device_topic(sparkplug_b::MessageType::DBirth, raw) {
             faults.push(Fault {
                 field,
-                env_var: None,
+                source: None,
                 problem: format!(
                     "cannot be a Sparkplug topic level ({error}); the node would connect, \
                      never birth, and publish nothing"
@@ -325,7 +360,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
     let client_id = required(
         &raw.client_id,
         "smart-me client id",
-        Some("SMARTME_CLIENT_ID"),
+        Some(Source::Env("SMARTME_CLIENT_ID")),
         "the bridge cannot authenticate against the smart-me cloud",
         &mut faults,
     )
@@ -337,7 +372,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
         None => {
             faults.push(Fault {
                 field: "smart-me client secret".to_string(),
-                env_var: Some("SMARTME_CLIENT_SECRET"),
+                source: Some(Source::Env("SMARTME_CLIENT_SECRET")),
                 problem: "is missing or empty".to_string(),
             });
             None
@@ -347,7 +382,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
     let group_id = required(
         &raw.group_id,
         "Sparkplug group id",
-        Some("SMARTME_GROUP_ID"),
+        Some(Source::File("group_id".into())),
         "there is deliberately no default: a Sparkplug host PERSISTS what it discovers, so \
          publishing into the wrong namespace creates a tag folder that outlives the process \
          and has to be deleted by hand",
@@ -357,7 +392,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
     let node_id = required(
         &raw.node_id,
         "Sparkplug node id",
-        Some("SMARTME_NODE_ID"),
+        Some(Source::File("node_id".into())),
         "same reason as the group: the namespace is not recoverable by restarting with \
          better settings",
         &mut faults,
@@ -366,7 +401,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
     let broker_host = required(
         &raw.broker_host,
         "broker host",
-        Some("SMARTME_BROKER_HOST"),
+        Some(Source::File("broker_host".into())),
         "there is nowhere to publish",
         &mut faults,
     )
@@ -379,7 +414,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
             Err(_) => {
                 faults.push(Fault {
                     field: "broker port".to_string(),
-                    env_var: Some("SMARTME_BROKER_PORT"),
+                    source: Some(Source::File("broker_port".into())),
                     problem: format!(
                         "is not a port number: {text:?}. A typo must not silently connect \
                          somewhere else"
@@ -401,7 +436,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
             Err(error) => {
                 faults.push(Fault {
                     field: "Sparkplug group id / node id".to_string(),
-                    env_var: None,
+                    source: None,
                     problem: format!("cannot form a topic: {error}"),
                 });
                 None
@@ -412,28 +447,32 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
 
     let mut meters: Vec<MeterConfig> = Vec::new();
     for (index, raw_meter) in raw.meters.iter().enumerate() {
-        // The bootstrap path (FR23) carries exactly one meter, so meter 0 has
-        // canonical variable names and the rest — which can only arrive through
-        // the UI — have none to name.
-        let var = |bootstrap: &'static str| if index == 0 { Some(bootstrap) } else { None };
+        // Every meter can be named now, and by its index.
+        //
+        // Until 2026-08-04 only meter 0 had a name to give — the environment
+        // carried exactly one meter, and the rest could arrive only through a UI
+        // that did not exist. With the meters in the file (ADR 0023) there is a
+        // key for each, and "the serial is missing" over four meters is not a
+        // message anyone can act on.
+        let key = |field: &str| Some(Source::File(format!("meters[{index}].{field}")));
         let meter_id = required(
             &raw_meter.meter_id,
             &format!("meter {index} id"),
-            var("SMARTME_METER_ID"),
+            key("meter_id"),
             "it names the metric path a SCADA host will show",
             &mut faults,
         );
         let device_id = required(
             &raw_meter.device_id,
             &format!("meter {index} device id"),
-            var("SMARTME_DEVICE_ID"),
+            key("device_id"),
             "it is what the smart-me API is asked for",
             &mut faults,
         );
         let serial = required(
             &raw_meter.serial,
             &format!("meter {index} serial"),
-            var("SMARTME_SERIAL"),
+            key("serial"),
             "it binds the reading to the device that produced it",
             &mut faults,
         );
@@ -453,7 +492,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
     if raw.meters.is_empty() {
         faults.push(Fault {
             field: "meters".to_string(),
-            env_var: None,
+            source: None,
             problem: "none configured — the bridge would connect, birth, and have nothing \
                       to say"
                 .to_string(),
@@ -468,7 +507,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
         .for_each(|serial| {
             faults.push(Fault {
                 field: "meter serials".to_string(),
-                env_var: None,
+                source: None,
                 problem: format!(
                     "{serial:?} is used by more than one meter; they would share one \
                      Sparkplug device topic and overwrite each other"
@@ -480,7 +519,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
         .for_each(|meter| {
             faults.push(Fault {
                 field: "meter ids".to_string(),
-                env_var: None,
+                source: None,
                 problem: format!("{meter:?} is used by more than one meter"),
             })
         });
@@ -493,7 +532,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
     if enabled > RUNTIME_METER_LIMIT {
         faults.push(Fault {
             field: "enabled meters".to_string(),
-            env_var: None,
+            source: None,
             problem: format!(
                 "{enabled} are enabled and the runtime serves {RUNTIME_METER_LIMIT}. The \
                  configuration model accepts more so the UI can be built against its final \
@@ -505,7 +544,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
     if enabled == 0 && !meters.is_empty() {
         faults.push(Fault {
             field: "enabled meters".to_string(),
-            env_var: None,
+            source: None,
             problem: "every configured meter is disabled; the bridge would publish nothing"
                 .to_string(),
         });
@@ -537,7 +576,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
         ) {
             faults.push(Fault {
                 field: "smart-me API base".to_string(),
-                env_var: Some("SMARTME_API_BASE"),
+                source: Some(Source::File("api_base".into())),
                 // `SmartMeError`'s Display is asserted elsewhere never to embed
                 // credentials, which is why it is safe to interpolate here.
                 problem: format!("was refused: {error}"),
@@ -661,27 +700,78 @@ mod tests {
         }
     }
 
-    /// A fault must name what the operator actually types.
+    /// A fault must name what the operator actually types — and since
+    /// 2026-08-04 there are two different answers to that.
     ///
     /// **Added because the first implementation of this module failed it**, and
     /// not at this level: it named settings in prose — *"Sparkplug group id"* —
-    /// while a first run is fixed by editing `SMARTME_GROUP_ID`. The integration
-    /// test `startup_banner` caught it, which means the unit tests here were all
-    /// green on a message the reader would have had to translate before acting
-    /// on. This is that gap closed at the level where the message is built.
+    /// while a first run was fixed by editing an environment variable. The
+    /// integration test `startup_banner` caught it, which means the unit tests
+    /// here were all green on a message the reader would have had to translate
+    /// before acting on. This is that gap closed where the message is built.
+    ///
+    /// **This test failed on the ADR 0023 rewiring, which is the point of it.**
+    /// It still asserted `SMARTME_GROUP_ID`, a variable that had just stopped
+    /// doing anything — the same misdirection as the original defect, merely
+    /// pointing somewhere new. Both destinations are now asserted, because a
+    /// message naming only one kind is a message that is wrong half the time.
+    ///
+    /// FALSIFIED 2026-08-04 by mutating `Source`'s `Display` to print the bare
+    /// key — which is precisely the message that sends a reader looking for an
+    /// environment variable called `group_id`:
+    ///
+    /// ```text
+    /// test a_fault_names_where_the_operator_changes_the_setting ... FAILED
+    /// config.toml: group_id is what the operator edits; message was:
+    ///   - smart-me client secret (environment: SMARTME_CLIENT_SECRET): is missing or empty
+    /// ```
     #[test]
-    fn a_fault_names_the_environment_variable_the_operator_edits() {
+    fn a_fault_names_where_the_operator_changes_the_setting() {
         let raw = RawConfig {
             group_id: None,
             node_id: None,
             broker_host: None,
+            client_secret: None,
+            meters: vec![RawMeter {
+                serial: None,
+                ..sound().meters.remove(0)
+            }],
             ..sound()
         };
         let rendered = format!("{}", validate(raw).expect_err("should be refused"));
-        for expected in ["SMARTME_GROUP_ID", "SMARTME_NODE_ID", "SMARTME_BROKER_HOST"] {
+
+        // Settings in the file: named by their key, and by the file, because
+        // "group_id" alone reads as an environment variable to anyone who has
+        // met one.
+        for expected in [
+            "config.toml: group_id",
+            "config.toml: node_id",
+            "config.toml: broker_host",
+            // Indexed, so a fault over four meters says WHICH meter.
+            "config.toml: meters[0].serial",
+        ] {
             assert!(
                 rendered.contains(expected),
                 "{expected} is what the operator edits; message was:\n{rendered}"
+            );
+        }
+
+        // And the one thing that is still an environment variable.
+        assert!(
+            rendered.contains("environment: SMARTME_CLIENT_SECRET"),
+            "the credential is the only setting left in the environment, and a \
+             message that sends the reader to config.toml for it is wrong; \
+             message was:\n{rendered}"
+        );
+
+        // The withdrawn variables must not be named at all: a message telling an
+        // operator to set SMARTME_GROUP_ID now describes a variable the binary
+        // does not read.
+        for withdrawn in ["SMARTME_GROUP_ID", "SMARTME_NODE_ID", "SMARTME_BROKER_HOST"] {
+            assert!(
+                !rendered.contains(withdrawn),
+                "{withdrawn} was withdrawn on 2026-08-04 and setting it does \
+                 nothing; message was:\n{rendered}"
             );
         }
     }

@@ -1,19 +1,24 @@
 //! Thin shell over `lib::run()` — the wiring lives in the library so the
 //! integration and chaos tests can drive the same code the binary runs.
 //!
-//! Configuration is read from the environment into `app::config::RawConfig` and
+//! Configuration is read from `config.toml` into `app::config::RawConfig` and
 //! validated by `app::config::validate` — this file applies no rule of its own.
-//! The environment is the BOOTSTRAP path (FR23); FR46 adds the web UI as a
-//! second source feeding the same validation. Secrets are never logged, and
-//! never reach a fault message (NFR12, ADR 0019).
+//!
+//! **The file is the configuration** ([ADR 0023]). The environment carries two
+//! things and no others: `SMARTME_STATE_DIR`, because a file cannot say where it
+//! lives, and the smart-me credential, which never descends to disk. The domains
+//! are disjoint, so nothing here merges or arbitrates between them.
+//!
+//! Secrets are never logged and never reach a fault message (NFR12, ADR 0019).
+//!
+//! [ADR 0023]: ../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md
 
 use std::path::PathBuf;
 
-use smartme_bridge::app::config::{RawConfig, RawMeter};
+use smartme_bridge::app::store::{self, Credential, StoredConfig};
 
-/// Default number of rotated log files kept when `SMARTME_LOG_KEEP` is unset.
-/// Rotation is daily, so this is a retention window in days.
-const DEFAULT_LOG_KEEP: usize = 7;
+/// Where the state directory lives when `SMARTME_STATE_DIR` does not say.
+const DEFAULT_STATE_DIR: &str = "/data";
 
 /// What must outlive `run()` for file logging to keep working, plus the means to
 /// report at the end how much of it was lost.
@@ -27,18 +32,28 @@ struct FileLog {
 /// Builds the file-logging layer, or `None` when file logging is not configured
 /// or not possible.
 ///
-/// **Opt-in, deliberately.** File logging exists only when `SMARTME_LOG_DIR` is
-/// set. With it unset the binary behaves exactly as it did before this was
-/// added — which is what the two chaos tests that spawn the real binary and read
-/// its output depend on. A default path would have made a comfort feature able
-/// to break the tests that guard the product's honesty.
+/// **Opt-in, deliberately.** File logging exists only when `log_dir` is set in
+/// the configuration. With it unset the binary behaves exactly as it did before
+/// this was added — which is what the two chaos tests that spawn the real binary
+/// and read its output depend on. A default path would have made a comfort
+/// feature able to break the tests that guard the product's honesty.
+///
+/// **Takes the stored configuration, and takes it before validation.** `log_dir`
+/// and `log_keep` moved out of the environment on 2026-08-04 ([ADR 0023]), which
+/// inverted the order this file used to run in: logging can no longer be set up
+/// before the configuration is read, because the configuration is where the log
+/// settings are. `None` here covers both the first run and an unreadable file —
+/// in either case the console is the only destination, which is exactly when it
+/// matters that faults also go to `stderr`.
 ///
 /// **Never fatal.** A bridge that stops publishing because it cannot write a log
 /// file has turned a diagnostic aid into an outage. Every failure here degrades
 /// to console-only and says so on stderr — loudly, because the failure this
 /// whole change was requested to diagnose (`bdSeq`, `Permission denied`) was one
 /// nobody saw until they went looking for a file that was never there.
-fn file_log_layer<S>() -> (
+fn file_log_layer<S>(
+    stored: Option<&StoredConfig>,
+) -> (
     Option<Box<dyn tracing_subscriber::Layer<S> + Send + Sync>>,
     Option<FileLog>,
 )
@@ -47,23 +62,25 @@ where
 {
     use tracing_subscriber::Layer as _;
 
-    let Ok(directory) = std::env::var("SMARTME_LOG_DIR") else {
+    let Some(stored) = stored else {
+        return (None, None);
+    };
+    let Some(directory) = stored.log_dir.as_ref() else {
         return (None, None);
     };
     let directory = PathBuf::from(directory);
 
-    let keep = match std::env::var("SMARTME_LOG_KEEP") {
-        Ok(raw) => match raw.trim().parse::<usize>() {
-            Ok(n) if n > 0 => n,
-            _ => {
-                eprintln!(
-                    "SMARTME_LOG_KEEP is not a positive number ({raw:?}); \
-                     keeping {DEFAULT_LOG_KEEP} files"
-                );
-                DEFAULT_LOG_KEEP
-            }
-        },
-        Err(_) => DEFAULT_LOG_KEEP,
+    let keep = match stored.log_keep {
+        Some(n) if n > 0 => n,
+        Some(n) => {
+            eprintln!(
+                "log_keep is {n}, which would keep no history at all; \
+                 keeping {} files",
+                store::DEFAULT_LOG_KEEP
+            );
+            store::DEFAULT_LOG_KEEP
+        }
+        None => store::DEFAULT_LOG_KEEP,
     };
 
     if let Err(error) = std::fs::create_dir_all(&directory) {
@@ -145,7 +162,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use tracing_subscriber::layer::SubscriberExt as _;
     use tracing_subscriber::util::SubscriberInitExt as _;
 
-    let (file_layer, file_log) = file_log_layer();
+    // PHASE 1 — read the file, before there is anywhere to report about it.
+    //
+    // The order is forced, not chosen: `log_dir` and `log_keep` live in the
+    // configuration, so the configuration must be read before the subscriber can
+    // be built. Nothing is traced or printed here; the outcome is held and
+    // reported in phase 3, once there is a log to report it to.
+    //
+    // `exists` separates two states that must not be merged. Absent is a first
+    // run — the bridge comes up and serves the UI. Present-but-unreadable is a
+    // refusal to start. Merged, this either bricks the first run or treats a
+    // corrupt file as a fresh install and overwrites it.
+    let state_dir = PathBuf::from(
+        std::env::var("SMARTME_STATE_DIR").unwrap_or_else(|_| DEFAULT_STATE_DIR.to_string()),
+    );
+    let stored: Option<Result<StoredConfig, _>> =
+        store::exists(&state_dir).then(|| store::read(&state_dir));
+
+    // PHASE 2 — logging, configured by what phase 1 found, if anything.
+    let (file_layer, file_log) = file_log_layer(stored.as_ref().and_then(|r| r.as_ref().ok()));
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::builder()
@@ -158,12 +193,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // THE FIRST LINE, and the position is the whole point.
     //
-    // It is emitted before anything that can fail — before the configuration is
-    // read, and therefore before the identity guard can abort the process. A
-    // banner printed after `env("SMARTME_GROUP_ID")?` would be absent from the
-    // one log an operator most needs it in: the crash-looping container. Today
-    // such a container's entire output is `Error: "missing environment variable
-    // SMARTME_GROUP_ID"`, with nothing saying which build produced it.
+    // It is emitted before anything that can be *reported*, and therefore before
+    // any refusal to start. A banner printed after the configuration faults would
+    // be absent from the one log an operator most needs it in: the crash-looping
+    // container, whose entire output would otherwise be a complaint about a
+    // setting, with nothing saying which build is doing the complaining.
+    //
+    // Note what changed on 2026-08-04 and what did not. The configuration is now
+    // READ before this line, because the log settings are in it — but nothing is
+    // *said* before this line, which is the property that was ever worth having.
+    // A failure between the two reaches stderr and nowhere else, which is why
+    // phase 1 does no reporting of its own.
     //
     // `CARGO_PKG_VERSION` is resolved at COMPILE time, so it describes the binary
     // rather than the image tag it happens to be wearing. Those can drift — the
@@ -183,47 +223,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!(directory = %log.directory.display(), "logging to file");
     }
 
-    // Read, then validate — and nothing in between. Every rule lives in
-    // `app::config`, because FR46 gives the configuration a SECOND consumer (the
-    // web UI) and two places applying the same rules is how they drift apart.
-    let raw = RawConfig {
-        api_base: std::env::var("SMARTME_API_BASE").ok(),
-        client_id: std::env::var("SMARTME_CLIENT_ID").ok(),
-        client_secret: std::env::var("SMARTME_CLIENT_SECRET").ok(),
-        group_id: std::env::var("SMARTME_GROUP_ID").ok(),
-        node_id: std::env::var("SMARTME_NODE_ID").ok(),
-        broker_host: std::env::var("SMARTME_BROKER_HOST").ok(),
-        broker_port: std::env::var("SMARTME_BROKER_PORT").ok(),
-        state_dir: std::env::var("SMARTME_STATE_DIR").ok(),
-        publish_period_secs: std::env::var("SMARTME_PUBLISH_PERIOD_SECS").ok(),
-        // ONE meter from the environment, deliberately.
-        //
-        // The model holds any number (Story 5.1) so the configuration screen can
-        // be built against its final shape, but the environment is the BOOTSTRAP
-        // path (FR23) and inventing an indexed variable scheme here would be a
-        // second configuration surface to keep in step with the first. More
-        // meters arrive through the UI, which is Epic 6.
-        meters: vec![RawMeter {
-            meter_id: std::env::var("SMARTME_METER_ID").ok(),
-            device_id: std::env::var("SMARTME_DEVICE_ID").ok(),
-            serial: std::env::var("SMARTME_SERIAL").ok(),
-            enabled: None,
-        }],
-    };
+    // PHASE 3 — act on what phase 1 found, now that it can be said out loud.
+    //
+    // Every fault goes to stderr as well as the log. That is not belt-and-braces:
+    // a run that fails here may have no file destination configured, and reaching
+    // an operator who is watching `docker compose logs` is the whole point of
+    // saying anything at all.
+    let outcome = match stored {
+        // A first run. Not a fault, and not reported as one — the operator has
+        // done nothing wrong, they have simply not done it yet.
+        None => {
+            tracing::info!(
+                path = %store::config_path(&state_dir).display(),
+                "no configuration yet — the bridge is up and will publish nothing \
+                 until one exists. Configure it in the web UI; it is written here"
+            );
+            smartme_bridge::run_unconfigured()
+        }
 
-    let config = match smartme_bridge::app::config::validate(raw) {
-        Ok(config) => config,
-        Err(errors) => {
-            // Every fault at once, and to stderr as well as the log: a first run
-            // that fails here may have no log destination configured yet, and an
-            // operator who cannot see why is an operator who guesses.
+        // A configuration that exists and cannot be read. Refusing beats starting
+        // on defaults nobody chose (Story 5.1).
+        Some(Err(errors)) => {
             tracing::error!("{errors}");
             eprintln!("{errors}");
             return Err(errors.to_string().into());
         }
-    };
 
-    let outcome = smartme_bridge::run(config);
+        // A configuration that exists and parses. The credential joins it here,
+        // and only here — the two sources have no field in common, so this is a
+        // join and never a merge (ADR 0023 §4).
+        Some(Ok(stored)) => {
+            let credential = Credential {
+                client_id: std::env::var("SMARTME_CLIENT_ID").ok(),
+                client_secret: std::env::var("SMARTME_CLIENT_SECRET").ok(),
+            };
+            let raw = store::into_raw(stored, credential, &state_dir);
+
+            // Read, then validate — and nothing in between. Every rule lives in
+            // `app::config`, because FR46 gives the configuration a SECOND
+            // consumer (the web UI), and two places applying the same rules is
+            // how they drift apart.
+            match smartme_bridge::app::config::validate(raw) {
+                Ok(config) => smartme_bridge::run(config),
+                Err(errors) => {
+                    tracing::error!("{errors}");
+                    eprintln!("{errors}");
+                    return Err(errors.to_string().into());
+                }
+            }
+        }
+    };
 
     // Report the loss before the guard is dropped. A dropped line is a line the
     // FILE never received; the console has them all. Saying nothing here would

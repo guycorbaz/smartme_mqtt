@@ -5,10 +5,10 @@
 //! A version line is trivially easy to write and trivially easy to place where
 //! it does no good. The case an operator needs it in is the **crash-looping
 //! container**: one whose configuration is wrong, which therefore exits before
-//! doing anything, and whose entire output today is
+//! doing anything, and whose entire output would otherwise be
 //!
 //! ```text
-//! Error: "missing environment variable SMARTME_GROUP_ID"
+//! Error: the configuration was refused; 2 problem(s) found …
 //! ```
 //!
 //! A banner emitted after the configuration is read would be absent from exactly
@@ -50,25 +50,61 @@ fn strip_ansi(s: &str) -> String {
     out
 }
 
-/// Runs the bridge with a DELIBERATELY incomplete configuration and returns
+/// A scratch state directory, empty.
+fn state_dir(name: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("smartme_banner_{}_{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).expect("scratch dir");
+    path
+}
+
+/// Runs the bridge with a configuration that EXISTS and is invalid, and returns
 /// everything it said.
 ///
-/// The identity variables are the ones withheld, because they are the guard that
-/// actually fires in a real misconfigured deployment — it fired on panoramix on
-/// the day this test was written.
-fn run_with_missing_identity() -> (String, String, bool) {
+/// **The distinction is the subject of the test, since 2026-08-04.** Before
+/// [ADR 0023] this helper withheld environment variables, and an incomplete
+/// configuration meant a refusal to start. It no longer does: a bridge with *no*
+/// configuration comes up and serves the UI, so withholding everything would
+/// leave this test waiting on a process designed never to exit. The identity is
+/// therefore written to the file and left **empty** — present, readable, and
+/// invalid, which is the case that still refuses.
+///
+/// [ADR 0023]: ../../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md
+fn run_with_missing_identity(case: &str) -> (String, String, bool) {
+    // A directory PER CASE. The three tests below run concurrently and this
+    // helper deletes the directory on the way out, so a shared name means one
+    // test removing the configuration another has not finished reading —
+    // a flake that showed up the first time all three ran together.
+    let dir = state_dir(case);
+    std::fs::write(
+        dir.join("config.toml"),
+        // Parses, matches the schema, and is refused by validation — which is a
+        // different code path from a file that does not parse at all.
+        "schema_version = 2\n\
+         group_id = \"\"\n\
+         node_id = \"\"\n\
+         broker_host = \"192.0.2.1\"\n\
+         broker_port = 1883\n\
+         publish_period_secs = 30\n\
+         \n\
+         [[meters]]\n\
+         meter_id = \"m\"\n\
+         device_id = \"d\"\n\
+         serial = \"9202685\"\n\
+         enabled = true\n",
+    )
+    .expect("write config");
+
     let out = Command::new(env!("CARGO_BIN_EXE_smartme-bridge"))
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
-        // Everything EXCEPT the Sparkplug identity.
+        .env("SMARTME_STATE_DIR", &dir)
         .env("SMARTME_CLIENT_ID", "x")
         .env("SMARTME_CLIENT_SECRET", "x")
-        .env("SMARTME_METER_ID", "m")
-        .env("SMARTME_DEVICE_ID", "d")
-        .env("SMARTME_SERIAL", "9")
-        .env("SMARTME_BROKER_HOST", "192.0.2.1")
         .output()
         .expect("the bridge binary runs");
+
+    let _ = std::fs::remove_dir_all(&dir);
     (
         strip_ansi(&String::from_utf8_lossy(&out.stdout)),
         strip_ansi(&String::from_utf8_lossy(&out.stderr)),
@@ -78,7 +114,7 @@ fn run_with_missing_identity() -> (String, String, bool) {
 
 #[test]
 fn the_version_is_logged_even_when_the_bridge_refuses_to_start() {
-    let (stdout, stderr, success) = run_with_missing_identity();
+    let (stdout, stderr, success) = run_with_missing_identity("version");
     let all = format!("{stdout}{stderr}");
 
     // The premise. If this ever stops holding, the test below would be asserting
@@ -90,8 +126,8 @@ fn the_version_is_logged_even_when_the_bridge_refuses_to_start() {
          subject is what gets logged when it REFUSES to start:\n{all}"
     );
     assert!(
-        all.contains("SMARTME_GROUP_ID"),
-        "expected the identity guard to name the missing variable:\n{all}"
+        all.contains("config.toml: group_id"),
+        "expected the identity guard to name the key the operator edits:\n{all}"
     );
 
     assert!(
@@ -109,7 +145,7 @@ fn the_version_is_logged_even_when_the_bridge_refuses_to_start() {
 
 #[test]
 fn the_banner_precedes_the_failure() {
-    let (stdout, stderr, _) = run_with_missing_identity();
+    let (stdout, stderr, _) = run_with_missing_identity("order");
 
     // ORDER, not mere presence. A banner that appears after the error would still
     // satisfy the test above if both landed in the same capture, and would still
@@ -126,14 +162,14 @@ fn the_banner_precedes_the_failure() {
          stdout was:\n{stdout}"
     );
     assert!(
-        stderr.contains("SMARTME_GROUP_ID"),
+        stderr.contains("config.toml: group_id"),
         "the failure must be the one under test; stderr was:\n{stderr}"
     );
 }
 
 #[test]
 fn the_banner_carries_the_contract_version() {
-    let (stdout, stderr, _) = run_with_missing_identity();
+    let (stdout, stderr, _) = run_with_missing_identity("contract");
     let all = format!("{stdout}{stderr}");
 
     // The contract version is what a CONSUMER sees. It answers a different

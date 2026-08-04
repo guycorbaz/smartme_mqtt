@@ -112,33 +112,33 @@ one place a refactor could put it back without any test noticing.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — read before writing**
-  - [ ] `crates/smartme-bridge/src/persist.rs` in full — `persist_atomic` is TOML + temp + fsync +
+- [x] **Task 1 — read before writing**
+  - [x] `crates/smartme-bridge/src/persist.rs` in full — `persist_atomic` is TOML + temp + fsync +
         rename + fsync(dir), and it already exists. Do not write a second writer.
-  - [ ] `main.rs:233` — the state directory and its `/data` default.
-  - [ ] Story 5.1's fault collection: this story adds to it, it does not start a second one.
-  - [ ] [ADR 0023](../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md)
+  - [x] `main.rs:233` — the state directory and its `/data` default.
+  - [x] Story 5.1's fault collection: this story adds to it, it does not start a second one.
+  - [x] [ADR 0023](../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md)
         in full. **Not ADR 0022** — it is superseded, and its `secrets.toml` no longer exists.
 
-- [ ] **Task 2 — one file, and the unconfigured state** (AC: 2)
-  - [ ] **Delete what ADR 0022 left behind**, committed at `6476412`: `StoredSecrets`,
+- [x] **Task 2 — one file, and the unconfigured state** (AC: 2)
+  - [x] **Delete what ADR 0022 left behind**, committed at `6476412`: `StoredSecrets`,
         `secrets_path`, `check_mode`, `persist_atomic_with_mode`, and the three `store.rs` tests
         that exercise them. Deleting a test is a claim; say in the commit which AC each one served
         and why that AC is gone.
-  - [ ] **Keep** `RawConfig`'s hand-written `Debug` (AC6) — the secret still transits it.
-  - [ ] Wire `store::load` into `main.rs`, which today has no caller for it. `store::exists`
+  - [x] **Keep** `RawConfig`'s hand-written `Debug` (AC6) — the secret still transits it.
+  - [x] Wire `store::load` into `main.rs`, which today has no caller for it. `store::exists`
         is the seam: absent → serve the UI and stay off the wire; present → load, validate, refuse
         on fault.
-  - [ ] Withdraw the eleven environment variables from `main.rs`; keep `SMARTME_STATE_DIR`,
+  - [x] Withdraw the eleven environment variables from `main.rs`; keep `SMARTME_STATE_DIR`,
         `SMARTME_CLIENT_ID`, `SMARTME_CLIENT_SECRET`.
-  - [ ] **Logging is initialised before the configuration is read today, and `LOG_DIR`/`LOG_KEEP`
+  - [x] **Logging is initialised before the configuration is read today, and `LOG_DIR`/`LOG_KEEP`
         are moving into the file.** That ordering has to invert. `main.rs` already writes faults to
         `stderr` as well as the log precisely for a start with no log destination — check that the
         no-configuration and invalid-configuration paths both still reach a human.
 
-- [ ] **Task 3 — versioned schema** (AC: 5)
-  - [ ] A version field, and `deny_unknown_fields` — the default of ignoring them is the defect.
-  - [ ] Decide migrate-or-refuse **now**, not when the first schema change happens.
+- [x] **Task 3 — versioned schema** (AC: 5)
+  - [x] A version field, and `deny_unknown_fields` — the default of ignoring them is the defect.
+  - [x] Decide migrate-or-refuse **now**, not when the first schema change happens.
 
 - [ ] **Task 4 — hot reload** (AC: 4)
   - [ ] `ArcSwap` — **a new dependency.** It reaches `Cargo.lock` and `deny.toml`; stage those files
@@ -146,7 +146,8 @@ one place a refactor could put it back without any test noticing.
   - [ ] The per-field table: hot vs requires-reconnect, every field listed.
   - [ ] DBIRTH on enable, DDEATH on disable, same `bdSeq`, DBIRTH before any DDATA.
 
-- [ ] **Task 5 — falsification** (AC: all)
+- [ ] **Task 5 — falsification** (AC: all) — *five mutations run 2026-08-04, all red, records copied
+      next to their tests. AC4's remain, and so does the log-search for the secret.*
   - [ ] Schema: rename a field in the file and confirm refusal rather than a silent default.
   - [ ] Secrets: assert absence from logs by **searching for the value**, having first confirmed the
         search finds it when deliberately leaked — an absence assertion over a stream that never
