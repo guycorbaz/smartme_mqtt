@@ -42,35 +42,17 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # A built image that cannot start is not a built image. This is the same
-      # smoke test the Dockerfile's own comments promise, run where a regression
-      # would otherwise reach Docker Hub unnoticed.
-      - name: Smoke — runs as non-root
-        run: |
-          id_line=$(docker run --rm --entrypoint id smartme_mqtt:ci)
-          echo "$id_line"
-          echo "$id_line" | grep -q 'uid=10002' \
-            || { echo "::error::image does not run as uid 10002"; exit 1; }
-
-      - name: Smoke — a CA bundle is present
-        run: |
-          docker run --rm --entrypoint ls smartme_mqtt:ci \
-            /etc/ssl/certs/ca-certificates.crt \
-            || { echo "::error::no CA bundle — every HTTPS call to the smart-me cloud would fail, and the bridge would publish a permanent, honest STALE that looks exactly like a cloud outage"; exit 1; }
-
-      - name: Smoke — refuses to start without a Sparkplug identity
-        run: |
-          # No default for SMARTME_GROUP_ID / _NODE_ID is a deliberate guard:
-          # a Sparkplug host persists what it discovers, so publishing into the
-          # wrong namespace is not undone by restarting with better settings.
-          out=$(docker run --rm \
-            -e SMARTME_CLIENT_ID=x -e SMARTME_CLIENT_SECRET=x \
-            -e SMARTME_METER_ID=m -e SMARTME_DEVICE_ID=d -e SMARTME_SERIAL=9 \
-            -e SMARTME_BROKER_HOST=broker.invalid \
-            smartme_mqtt:ci 2>&1 || true)
-          echo "$out"
-          echo "$out" | grep -q 'SMARTME_GROUP_ID' \
-            || { echo "::error::the image started without a group id; the guard is gone"; exit 1; }
+      # A built image that cannot start is not a built image. These run from a
+      # SCRIPT rather than inline, so `ci-local.sh` runs the same four checks
+      # this job does — it reproduced two workflows out of three until
+      # 2026-08-04, and the third is where a change to how the bridge starts
+      # left a step hanging for 26 minutes with every local run green.
+      #
+      # `timeout-minutes` is the backstop for the same failure: a step that
+      # starts the bridge and waits has no deadline of its own.
+      - name: Smoke tests
+        timeout-minutes: 5
+        run: scripts/docker-smoke.sh smartme_mqtt:ci
 
   publish:
     name: publish to Docker Hub

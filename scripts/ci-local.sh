@@ -9,6 +9,13 @@
 # The commands below are copied verbatim from .github/workflows/. If you change
 # a workflow, change this too; they are meant to be compared line by line.
 #
+# THIS FILE REPRODUCED TWO WORKFLOWS OUT OF THREE UNTIL 2026-08-04, while saying
+# it reproduced CI. The Docker one was added later and never landed here, so a
+# change to how the bridge STARTS left an image smoke test hanging for 26
+# minutes against a 3 minute baseline — with every local run green. Its checks
+# now live in `scripts/docker-smoke.sh`, called by both, because two copies of a
+# check drift and one copy cannot.
+#
 #   ./scripts/ci-local.sh          full run
 #   ./scripts/ci-local.sh --fast   skip the chaos tests (no Docker needed)
 #
@@ -81,6 +88,30 @@ if command -v cargo-deny >/dev/null 2>&1; then
     ok "cargo-deny"
 else
     echo "cargo-deny not installed — SKIPPED (CI will still run it)"
+fi
+
+# ---------------------------------------------------------------------------
+# .github/workflows/docker-publish.yml — the image's own smoke tests.
+#
+# ADDED 2026-08-04, because this script did NOT cover this workflow and the gap
+# cost a hung CI run: the image smoke test expected the binary to exit on an
+# incomplete configuration, ADR 0023 made an absent configuration a first run
+# that comes up and waits, and the step ran for 26 minutes against a 3 minute
+# baseline before anyone looked. Every local run before that push was green,
+# because this file reproduced two workflows out of three while its own header
+# said it reproduced CI.
+#
+# Skipped under --fast: it builds a container.
+# ---------------------------------------------------------------------------
+if [[ $fast -eq 0 ]]; then
+    step "docker-publish.yml — image build and smoke tests"
+    docker build -t smartme_mqtt:ci . >/dev/null
+    scripts/docker-smoke.sh
+    ok "image smoke tests"
+else
+    step "docker-publish.yml — SKIPPED (--fast)"
+    echo "the image is not built, so its smoke tests do not run."
+    echo "anything that changes how the binary STARTS needs the full run."
 fi
 
 printf '\n\033[32m\033[1mAll CI steps reproduced locally.\033[0m\n'
