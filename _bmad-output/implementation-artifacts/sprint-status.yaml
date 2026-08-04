@@ -704,4 +704,32 @@ development_status:
   # FR43/NFR16 (broker TLS + auth) are BLOCKED UPSTREAM, not unstarted — rumqttc pins a
   # rustls-webpki with unfixed advisories. Recorded as [#50] so a blocked requirement stops
   # looking like an unwritten one.
-  5-3-nothing-is-published-until-the-mapping-is-confirmed: ready-for-dev
+  #
+  # 2026-08-04, IMPLEMENTED. schema 2 -> 3, `mapping_confirmed`, default FALSE — the
+  # direction is the decision: an unrecognised older file costs one click, the other way
+  # publishes a mapping nobody looked at. FR24 SETTLED as met (the scheme is fixed and
+  # defaulted; a per-meter topic template was never in the requirement).
+  #
+  # The withdrawal is STRUCTURAL: `save` discards the caller's flag and computes it from
+  # whether the meter set changed, so a writer cannot assert confirmation in the same call
+  # that changes the mapping. `confirm` is deliberately NOT routed through `save` — it
+  # changes no setting, so there is nothing for the withdrawal to act on, and routing it
+  # through would clear the very flag it exists to set.
+  #
+  # FIFTH INSTANCE OF THE SAME CLASS, and the full ci-local run is what found it again:
+  # common::write_config wrote an unconfirmed mapping, so chaos_ncmd_subscription TIMED OUT
+  # against a bridge behaving exactly as designed. Then startup_banner failed for the WRONG
+  # REASON — it spelled `schema_version = 2` as a literal, which rotted at the bump; it
+  # reads the constant now. And appending `mapping_confirmed` after [[meters]] put it INSIDE
+  # the meter table — the exact TOML trap store.rs's unknown-field test documents, walked
+  # into again.
+  #
+  # Three mutations, all red: the guard removed (the failure names the NBIRTH that reached
+  # the wire — an NBIRTH, not a DDATA, which is why withholding only data would not do);
+  # `save` trusting the caller; the serde default flipped to true.
+  #
+  # AC1's test drives the REAL BINARY. An earlier draft re-implemented main.rs's branch in
+  # the test and a comment claimed that tested the product — it did not: the branch under
+  # test was the branch the test supplied, and the line this story adds to main.rs could
+  # have been deleted with both cases green.
+  5-3-nothing-is-published-until-the-mapping-is-confirmed: review

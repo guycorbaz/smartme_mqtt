@@ -45,12 +45,13 @@ ok "CA bundle present"
 # case that refuses; absent is the case below, which serves the UI instead.
 mkdir -p "$TMP/invalid"
 cat > "$TMP/invalid/config.toml" <<'TOML'
-schema_version = 2
+schema_version = 3
 group_id = ""
 node_id = ""
 broker_host = "broker.invalid"
 broker_port = 1883
 publish_period_secs = 30
+mapping_confirmed = true
 
 [[meters]]
 meter_id = "m"
@@ -94,3 +95,44 @@ echo "$out" | grep -qE 'EXIT:(124|137)' \
 [[ ! -f "$TMP/empty/config.toml" ]] \
     || fail "an unconfigured start wrote a config.toml; defaults nobody chose are still nobody's configuration"
 ok "with no configuration: comes up, says so, stays up, writes nothing"
+
+# --- a VALID but UNCONFIRMED mapping publishes nothing ----------------------
+#
+# The fourth startup state (Story 5.3). It shares "comes up and waits" with the
+# state above and must NOT share its message: an operator who cannot tell "not
+# configured" from "not confirmed" cannot act, and only the second is one click
+# from fixed.
+mkdir -p "$TMP/unconfirmed"
+cat > "$TMP/unconfirmed/config.toml" <<'TOML'
+schema_version = 3
+group_id = "Plant"
+node_id = "Bridge01"
+broker_host = "broker.invalid"
+broker_port = 1883
+publish_period_secs = 30
+mapping_confirmed = false
+
+[[meters]]
+meter_id = "garage"
+device_id = "a1a1a1a1-b2b2-c3c3-d4d4-000000000001"
+serial = "9202685"
+enabled = true
+TOML
+out=$(timeout -s KILL 20 docker run --rm \
+    -e SMARTME_CLIENT_ID=x -e SMARTME_CLIENT_SECRET=x \
+    -e SMARTME_STATE_DIR=/state \
+    -v "$TMP/unconfirmed:/state:ro" \
+    "$IMAGE" 2>&1; echo "EXIT:$?")
+echo "$out" | grep -q 'has NOT been confirmed' \
+    || { echo "$out"; fail "a valid but unconfirmed mapping must say SO — and not in the same words as an absent configuration, which is a different problem with a different fix"; }
+# Written as an explicit `if`, not `grep -q … && fail`. This is a NEGATIVE
+# assertion, and under `set -e` an and-list whose first command fails is exactly
+# the shape that makes an exit code describe something other than what was
+# measured — a trap this repository has already paid for three times.
+if echo "$out" | grep -q 'no configuration yet'; then
+    echo "$out"
+    fail "the unconfirmed state is reporting itself as UNCONFIGURED; the two must not share a message"
+fi
+echo "$out" | grep -qE 'EXIT:(124|137)' \
+    || { echo "$out"; fail "the image exited on an unconfirmed mapping; it must stay up to serve the screen where the mapping is confirmed"; }
+ok "with an unconfirmed mapping: stays up, and says something different"

@@ -262,6 +262,7 @@ The author configures the bridge safely and confirms mappings before anything pu
 **Every acceptance criterion here is testable without a single line of HTML** — that is the point of the split.
 **And the epic now owns one more state:** a bridge with **no** configuration starts, serves the UI, and opens no MQTT session ([ADR 0023](../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md) §5). Refuse-to-start governs a configuration that *exists and is invalid*; absence is not invalidity, or the screen that creates the first configuration is unreachable.
 **FRs covered:** FR23 *(bootstrap path)*, FR24, FR25, FR26, FR27, FR43, FR46 *(the model and persistence half)*
+**Status 2026-08-04:** FR23/26/27/46 met (5.1, 5.2); **FR25 met by 5.3** — nothing publishes until a human confirms the mapping; **FR43 and NFR16 are BLOCKED UPSTREAM**, not unstarted ([#50](https://github.com/guycorbaz/smartme_mqtt/issues/50)): `rumqttc` pins a `rustls-webpki` carrying unfixed advisories, so broker TLS ships disabled and authentication waits for it.
 **NFR/AR:** NFR12, NFR14, NFR16, NFR20 · AR8 *(ArcSwap config)*
 
 > **Rewritten 2026-08-03.** This epic used to be framed as *"`.env` secrets discipline"*, and Epic 6 as a read-only surface — so **configuration editing in the UI was owned by nobody**, while the PRD's own product description assumed it throughout. See ADR 0021 and the new FR46.

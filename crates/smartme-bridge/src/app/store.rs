@@ -46,13 +46,16 @@ use crate::persist;
 /// The shape of what is on disk. Bumped whenever a field is added, renamed or
 /// removed — see the module docs for why "read it and hope" is not available.
 ///
-/// **2 since 2026-08-04**: `log_dir` and `log_keep` moved in from the
-/// environment. Both are optional-with-default, so a version-1 file would in
-/// fact have parsed — the bump is made anyway, because version 1 never reached a
-/// disk outside these tests (`save` had no caller until today) so it costs
-/// nothing, and an exception made once to "bump whenever a field is added" is
-/// how the guarantee stops being one.
-pub const SCHEMA_VERSION: u32 = 2;
+/// **3 since 2026-08-04 (Story 5.3)**: `mapping_confirmed`. **2** added `log_dir`
+/// and `log_keep`, moved in from the environment.
+///
+/// Both bumps were made even though the added fields are optional-with-default,
+/// so an older file would have parsed. An exception made once to "bump whenever
+/// a field is added" is how the guarantee stops being one — and version 3's
+/// default is the one that must not be got wrong: an unrecognised older file
+/// reads as **unconfirmed**, which costs one click, where the other direction
+/// would publish a mapping nobody had looked at.
+pub const SCHEMA_VERSION: u32 = 3;
 
 pub fn config_path(dir: &Path) -> PathBuf {
     dir.join("config.toml")
@@ -112,6 +115,20 @@ pub struct StoredConfig {
     /// How many daily-rotated files to keep. Absent means [`DEFAULT_LOG_KEEP`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_keep: Option<usize>,
+    /// Whether a human has looked at the meter→topic mapping and said it is
+    /// right (FR25, Story 5.3).
+    ///
+    /// **Absent means `false`**, and the direction is the decision: an older
+    /// file, or one somebody assembled without reading this, costs one click.
+    /// Defaulting the other way would publish a mapping nobody had looked at
+    /// into a namespace a Sparkplug host persists.
+    ///
+    /// **A caller cannot set this through [`save`].** Confirmation is a human
+    /// act about a *specific* mapping, so a writer able to assert it in the same
+    /// call that changes the mapping would make the guard decorative. [`save`]
+    /// computes it; [`confirm`] is the only way to make it true.
+    #[serde(default)]
+    pub mapping_confirmed: bool,
     pub meters: Vec<StoredMeter>,
 }
 
@@ -235,11 +252,65 @@ pub fn into_raw(config: StoredConfig, credential: Credential, dir: &Path) -> Raw
     }
 }
 
+/// Do these two configurations publish the same thing?
+///
+/// Compared as a SET, not as a list: reordering the meters in a form changes
+/// nothing about what reaches the wire, and treating it as a change would make
+/// the confirmation lapse for no reason an operator could see — which is how a
+/// guard becomes noise and then becomes ignored. Same rule as
+/// [`crate::app::reconfigure::classify`].
+fn same_mapping(a: &[StoredMeter], b: &[StoredMeter]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().all(|m| b.contains(m))
+}
+
 /// Write the configuration atomically — temp file, `fsync`, `rename`,
 /// `fsync(dir)`, all of it already in [`crate::persist::persist_atomic`].
+///
+/// **`mapping_confirmed` is computed here and the caller's value is discarded**
+/// (Story 5.3 AC3). If this write changes what is published, the confirmation is
+/// withdrawn; if it does not, whatever the stored file said is carried over.
+///
+/// That rule lives here rather than in the screen that saves, because a boolean
+/// the UI is trusted to clear is a boolean that survives the one edit somebody
+/// makes through a different path — a future API, a migration, a repair script.
+/// This is the boundary every writer passes.
 pub fn save(dir: &Path, config: &StoredConfig) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    persist::persist_atomic(&config_path(dir), config)
+    let mut to_write = config.clone();
+    to_write.mapping_confirmed = match read(dir) {
+        Ok(stored) if same_mapping(&stored.meters, &config.meters) => stored.mapping_confirmed,
+        // Unreadable, absent, or a different mapping — all three mean nobody has
+        // confirmed what is about to be written.
+        _ => false,
+    };
+    persist::persist_atomic(&config_path(dir), &to_write)
+}
+
+/// Record that a human has looked at the mapping now on disk and said it is
+/// right (FR25).
+///
+/// **Deliberately not routed through [`save`]**, and the asymmetry is the design
+/// rather than a hole in it. `save` answers *"this mapping changed, so nobody
+/// has confirmed it"*. This answers *"this mapping did not change, and somebody
+/// just looked at it"* — it writes no setting, so there is nothing for the
+/// withdrawal rule to act on. Sending it through `save` would clear the very
+/// flag it exists to set.
+pub fn confirm(dir: &Path) -> Result<StoredConfig, ConfigErrors> {
+    let mut config = read(dir)?;
+    config.mapping_confirmed = true;
+    persist::persist_atomic(&config_path(dir), &config).map_err(|error| {
+        ConfigErrors(vec![fault(
+            "mapping confirmation",
+            format!(
+                "{} could not be written: {error}. The mapping stays unconfirmed, so the                  bridge publishes nothing — which is the safe direction, but it means the                  click did not take",
+                config_path(dir).display()
+            ),
+        )])
+    })?;
+    Ok(config)
 }
 
 #[cfg(test)]
@@ -267,6 +338,7 @@ mod tests {
             api_base: None,
             log_dir: None,
             log_keep: None,
+            mapping_confirmed: true,
             meters: vec![StoredMeter {
                 meter_id: "meter-a".into(),
                 device_id: "dev-a".into(),
@@ -415,6 +487,144 @@ mod tests {
         assert!(
             !written.contains(SECRET) && !written.contains("client_secret"),
             "the credential reached the disk: {written}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Story 5.3 AC3 — **the withdrawal is structural.** A caller that changes
+    /// the mapping and asserts confirmation in the same write does not get to.
+    ///
+    /// FALSIFIED 2026-08-04 by making `save` write what it is given:
+    ///
+    /// ```text
+    /// test changing_the_mapping_withdraws_the_confirmation_whatever_the_caller_says ... FAILED
+    /// a mapping nobody has looked at was recorded as confirmed
+    /// ```
+    ///
+    /// The two neighbouring tests stayed GREEN under that mutation, which is
+    /// what makes this one worth having on its own: preserving a confirmation
+    /// across an unrelated write is easy, and it is not the property at issue.
+    #[test]
+    fn changing_the_mapping_withdraws_the_confirmation_whatever_the_caller_says() {
+        let dir = dir("withdraw");
+        save(&dir, &sound()).expect("save");
+        confirm(&dir).expect("a human confirms it");
+        assert!(read(&dir).expect("read").mapping_confirmed);
+
+        // A different serial IS a different device on the wire — and the caller
+        // insists it is confirmed, which is exactly the write the rule exists
+        // for. `sound()` sets the flag true, so this is not a straw man.
+        let mut moved = sound();
+        moved.meters[0].serial = "9202699".into();
+        assert!(
+            moved.mapping_confirmed,
+            "the fixture must assert it, or this proves nothing"
+        );
+        save(&dir, &moved).expect("save");
+
+        assert!(
+            !read(&dir).expect("read").mapping_confirmed,
+            "a mapping nobody has looked at was recorded as confirmed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half: a write that does NOT touch the mapping must not cost the
+    /// operator a second click. A guard that lapses for no visible reason is a
+    /// guard that gets switched off.
+    #[test]
+    fn changing_something_that_is_not_the_mapping_keeps_the_confirmation() {
+        let dir = dir("keep");
+        save(&dir, &sound()).expect("save");
+        confirm(&dir).expect("confirm");
+
+        let mut faster = sound();
+        faster.publish_period_secs = 5;
+        save(&dir, &faster).expect("save");
+
+        let back = read(&dir).expect("read");
+        assert!(back.mapping_confirmed, "the period is not the mapping");
+        assert_eq!(back.publish_period_secs, 5, "and the period did change");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Reordering is not a change — same rule as `reconfigure::classify`.
+    #[test]
+    fn reordering_the_meters_does_not_withdraw_the_confirmation() {
+        let dir = dir("reorder");
+        let mut two = sound();
+        two.meters.push(StoredMeter {
+            meter_id: "cellar".into(),
+            device_id: "dev-b".into(),
+            serial: "9202686".into(),
+            enabled: false,
+        });
+        save(&dir, &two).expect("save");
+        confirm(&dir).expect("confirm");
+
+        two.meters.reverse();
+        save(&dir, &two).expect("save");
+
+        assert!(
+            read(&dir).expect("read").mapping_confirmed,
+            "sorting a list in a form publishes nothing different, so it must not \
+             cost a confirmation"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// AC2 — a file written by hand may assert the confirmation, because writing
+    /// the mapping out IS having looked at it. This is the headless bring-up
+    /// FR23 promises, and it must not require computing anything.
+    #[test]
+    fn a_hand_written_file_may_confirm_itself() {
+        let dir = dir("hand");
+        std::fs::write(
+            config_path(&dir),
+            format!(
+                "schema_version = {SCHEMA_VERSION}\n\
+                 group_id = \"G\"\nnode_id = \"N\"\n\
+                 broker_host = \"b\"\nbroker_port = 1883\n\
+                 publish_period_secs = 30\n\
+                 mapping_confirmed = true\n\
+                 \n[[meters]]\n\
+                 meter_id = \"garage\"\ndevice_id = \"d\"\n\
+                 serial = \"9202685\"\nenabled = true\n"
+            ),
+        )
+        .expect("write");
+        assert!(read(&dir).expect("read").mapping_confirmed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// And the default is the safe direction: a file that never heard of the key
+    /// reads as UNCONFIRMED, which costs one click.
+    ///
+    /// FALSIFIED 2026-08-04 by flipping the serde default to `true`:
+    ///
+    /// ```text
+    /// test a_file_without_the_key_is_unconfirmed_not_confirmed ... FAILED
+    /// defaulting the other way would publish a mapping nobody had looked at
+    /// ```
+    #[test]
+    fn a_file_without_the_key_is_unconfirmed_not_confirmed() {
+        let dir = dir("absent-key");
+        std::fs::write(
+            config_path(&dir),
+            format!(
+                "schema_version = {SCHEMA_VERSION}\n\
+                 group_id = \"G\"\nnode_id = \"N\"\n\
+                 broker_host = \"b\"\nbroker_port = 1883\n\
+                 publish_period_secs = 30\n\
+                 \n[[meters]]\n\
+                 meter_id = \"garage\"\ndevice_id = \"d\"\n\
+                 serial = \"9202685\"\nenabled = true\n"
+            ),
+        )
+        .expect("write");
+        assert!(
+            !read(&dir).expect("read").mapping_confirmed,
+            "defaulting the other way would publish a mapping nobody had looked at"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

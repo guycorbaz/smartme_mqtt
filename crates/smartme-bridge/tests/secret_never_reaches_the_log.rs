@@ -67,6 +67,7 @@ fn everything_it_said() -> String {
              broker_port = 1883\n\
              publish_period_secs = 5\n\
              api_base = \"https://192.0.2.1\"\n\
+             mapping_confirmed = true\n\
              \n\
              [[meters]]\n\
              meter_id = \"garage\"\n\

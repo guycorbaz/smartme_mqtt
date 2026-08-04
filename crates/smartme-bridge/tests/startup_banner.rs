@@ -80,18 +80,29 @@ fn run_with_missing_identity(case: &str) -> (String, String, bool) {
         dir.join("config.toml"),
         // Parses, matches the schema, and is refused by validation — which is a
         // different code path from a file that does not parse at all.
-        "schema_version = 2\n\
+        format!(
+            // Read from the constant, never spelled out: written as a literal `2`
+            // this rotted the moment story 5.3 bumped the schema, and the test then
+            // failed for a schema fault instead of the identity fault it is about —
+            // right colour, wrong reason.
+            "schema_version = {}\n\
          group_id = \"\"\n\
          node_id = \"\"\n\
          broker_host = \"192.0.2.1\"\n\
          broker_port = 1883\n\
          publish_period_secs = 30\n\
+         # AT THE ROOT, before the meters table. Appended after it, TOML makes it\n\
+         # a member of the last [[meters]] — which is the exact trap recorded in\n\
+         # store.rs's unknown-field test, walked into again here.\n\
+         mapping_confirmed = true\n\
          \n\
          [[meters]]\n\
          meter_id = \"m\"\n\
          device_id = \"d\"\n\
          serial = \"9202685\"\n\
          enabled = true\n",
+            smartme_bridge::app::store::SCHEMA_VERSION
+        ),
     )
     .expect("write config");
 

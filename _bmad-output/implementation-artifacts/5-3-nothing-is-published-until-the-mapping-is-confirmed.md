@@ -1,6 +1,6 @@
 # Story 5.3: Nothing is published until a human has confirmed the mapping
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -120,45 +120,45 @@ enabled, disabled, or its `meter_id`, `device_id` or `serial` edited
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — read before writing**
-  - [ ] `app/store.rs` — `exists` is the existing seam between *absent* and *present*; this story
+- [x] **Task 1 — read before writing**
+  - [x] `app/store.rs` — `exists` is the existing seam between *absent* and *present*; this story
         adds a second distinction *inside* present, and must not blur the first.
-  - [ ] `lib.rs::run_unconfigured` — it already does most of AC1. Decide whether the unconfirmed
+  - [x] `lib.rs::run_unconfigured` — it already does most of AC1. Decide whether the unconfirmed
         state reuses it or needs its own, and say why in the code.
-  - [ ] Story 5.2's `unconfigured_start.rs` — the harness and its guards are reusable verbatim.
-  - [ ] `app/reconfigure.rs` — AC3 is a change classification, and that module already exists to
+  - [x] Story 5.2's `unconfigured_start.rs` — the harness and its guards are reusable verbatim.
+  - [x] `app/reconfigure.rs` — AC3 is a change classification, and that module already exists to
         answer "what did this change cost". Do not start a second one.
 
-- [ ] **Task 2 — the model** (AC: 2, 3)
-  - [ ] `mapping_confirmed` in `StoredConfig`, schema version bumped, defaulting to **`false`** for
+- [x] **Task 2 — the model** (AC: 2, 3)
+  - [x] `mapping_confirmed` in `StoredConfig`, schema version bumped, defaulting to **`false`** for
         a file that predates it — the safe direction, and the one an operator can undo in one click.
-  - [ ] The withdrawal in AC3, at the boundary every writer passes.
-  - [ ] A test that the withdrawal survives a path the UI does not own: change the meter set by
+  - [x] The withdrawal in AC3, at the boundary every writer passes.
+  - [x] A test that the withdrawal survives a path the UI does not own: change the meter set by
         writing the file directly, and confirm it comes back unconfirmed.
 
-- [ ] **Task 3 — the startup state** (AC: 1, 5)
-  - [ ] Three states distinguishable in code, one trace each, all at a level the default filter
+- [x] **Task 3 — the startup state** (AC: 1, 5)
+  - [x] Three states distinguishable in code, one trace each, all at a level the default filter
         shows.
-  - [ ] The image smoke tests in `scripts/docker-smoke.sh` gain the unconfirmed case — that file is
+  - [x] The image smoke tests in `scripts/docker-smoke.sh` gain the unconfirmed case — that file is
         where a change to how the bridge starts is now caught, and this is one.
 
-- [ ] **Task 4 — what the operator is shown** (AC: 4)
-  - [ ] A function on the model returning per-meter (meter id, serial, device id, full topic).
-  - [ ] Asserted against literal topic strings.
+- [x] **Task 4 — what the operator is shown** (AC: 4)
+  - [x] A function on the model returning per-meter (meter id, serial, device id, full topic).
+  - [x] Asserted against literal topic strings.
 
-- [ ] **Task 5 — falsification** (AC: all)
-  - [ ] Remove the confirmation check and confirm an unconfirmed configuration publishes — against
+- [x] **Task 5 — falsification** (AC: all)
+  - [x] Remove the confirmation check and confirm an unconfirmed configuration publishes — against
         a **real broker**, and prove the harness sees the CONNECT for a confirmed one first.
-  - [ ] Make the withdrawal a no-op and confirm a changed mapping stays confirmed.
-  - [ ] Default `mapping_confirmed` to `true` for an old file and confirm the test catches it.
-  - [ ] `./scripts/ci-local.sh`, **full** — not `--fast`; this story changes how the binary starts,
+  - [x] Make the withdrawal a no-op and confirm a changed mapping stays confirmed.
+  - [x] Default `mapping_confirmed` to `true` for an old file and confirm the test catches it.
+  - [x] `./scripts/ci-local.sh`, **full** — not `--fast`; this story changes how the binary starts,
         and `--fast` does not build the image.
 
-- [ ] **Task 6 — the consequences** (see the standing rule)
-  - [ ] `docs/manual/chapters/04-configuration.tex`: the three states, and the new key.
-  - [ ] `docs/manual/chapters/09-appendix-config-reference.tex`: `mapping_confirmed`.
-  - [ ] `.env.example`'s "what moved into config.toml" list.
-  - [ ] Epic 5's FR list: FR25 stops being outstanding.
+- [x] **Task 6 — the consequences** (see the standing rule)
+  - [x] `docs/manual/chapters/04-configuration.tex`: the three states, and the new key.
+  - [x] `docs/manual/chapters/09-appendix-config-reference.tex`: `mapping_confirmed`.
+  - [x] `.env.example`'s "what moved into config.toml" list.
+  - [x] Epic 5's FR list: FR25 stops being outstanding.
 
 ## Dev Notes
 
@@ -185,7 +185,18 @@ does it by requiring the specific log line before it will believe the process is
 `chaos_device_certificates.rs` does it by counting NBIRTHs rather than asserting none. Reuse
 whichever fits — do not write a third pattern.
 
-### FR24, and whether it is already met
+### FR24 — SETTLED, and recorded as met
+
+The mapping **scheme** is fixed and defaulted: the topic is
+`spBv1.0/{group}/{type}/{node}/{serial}` and the metrics are `Power` and `Energy` under the meter
+name. What the operator configures is the identity, not a template — and `mapping_preview` now
+renders exactly that, per meter, for the confirmation this story adds. **FR24 is met.** A per-meter
+editable topic *template* was never in the requirement and is not implied by it; if one is ever
+wanted it is a new FR, not an unfinished one.
+
+### The original note, kept for the reasoning
+
+
 
 FR24 — *"configure the meter→topic/tag mapping, with sensible defaults"* — is worth settling in this
 story rather than leaving to drift. The mapping **scheme** is fixed and defaulted: the topic is

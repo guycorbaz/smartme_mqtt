@@ -31,13 +31,14 @@ in it, so it can be read for diagnosis without privileges: checking which topic 
 maps to has never needed \code{sudo}, and now provably cannot.
 
 \begin{lstlisting}
-schema_version      = 2
+schema_version      = 3
 
 group_id            = "Plant"
 node_id             = "Bridge01"
 broker_host         = "mqtt.example.lan"
 broker_port         = 1883
 publish_period_secs = 30
+mapping_confirmed   = true
 
 # Optional.
 api_base = "https://api.smart-me.com"
@@ -51,6 +52,42 @@ serial    = "9202685"
 enabled   = true
 \end{lstlisting}
 
+\subsection{Nothing is published until you confirm the mapping}
+\label{sec:confirm}
+
+\prog will not publish anything until a human has looked at the meter→topic mapping and said it is
+right. Until then it starts, serves the web UI, and opens \textbf{no MQTT session at all} --- no
+connection, no birth, nothing on the broker.
+
+\begin{lstlisting}
+mapping_confirmed = false   # nothing is published
+mapping_confirmed = true    # a human has checked the mapping
+\end{lstlisting}
+
+\begin{warning}
+\textbf{This is the one error validation cannot catch.} \prog refuses a serial that cannot be a
+topic level, and two meters that would collide on one topic. It cannot tell that \code{garage} is
+pointed at the cellar's device: that configuration is well-formed, unique, complete --- and wrong.
+Only you can see it, and only by reading the serial beside the topic.
+
+And the cost of not seeing it is not a restart. A SCADA host \emph{persists what it discovers}: the
+tag folder outlives the process, has to be deleted by hand, and deleting it discards the alarm and
+history configuration of everything beneath it.
+\end{warning}
+
+\textbf{Changing the mapping withdraws the confirmation automatically.} Adding, removing, enabling
+or disabling a meter, or editing its name, device or serial, sets \code{mapping\_confirmed} back to
+\code{false}. Changing something that is not the mapping --- the publish period, the broker, the log
+settings --- does not, because it costs you a click for a change you can already see is unrelated,
+and a guard that fires for no visible reason is a guard that gets switched off.
+
+\begin{note}
+\textbf{Writing the file by hand counts as confirming it.} A headless bring-up sets
+\code{mapping\_confirmed = true} itself: typing the mapping out \emph{is} having looked at it. The
+key is a plain boolean for exactly this reason --- a checksum would have been harder to forge and
+impossible to write, which would have made the documented bring-up path impossible.
+\end{note}
+
 \subsection{The first run: no file is not an error}
 
 A fresh deployment has no \code{config.toml}, and every setting but the credential arrives
@@ -58,6 +95,10 @@ through a browser. So \prog \textbf{starts anyway}: it comes up, serves the web 
 opens \emph{no} MQTT session --- no CONNECT, no will registered, no NBIRTH, nothing
 published --- until a configuration exists. It says so in the log, naming the path where
 the file will be written.
+
+A configuration that exists but is \emph{unconfirmed} looks similar from outside and is a different
+problem: \prog says so in different words, because one of the two is a click away from being fixed
+and the other is not. See section~\ref{sec:confirm}.
 
 That is not the same as a configuration that exists and is wrong. \textbf{A file that is
 present and invalid makes \prog refuse to start}, listing every fault at once

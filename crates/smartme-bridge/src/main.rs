@@ -238,7 +238,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "no configuration yet — the bridge is up and will publish nothing \
                  until one exists. Configure it in the web UI; it is written here"
             );
-            smartme_bridge::run_unconfigured()
+            smartme_bridge::run_without_publishing()
         }
 
         // A configuration that exists and cannot be read. Refusing beats starting
@@ -253,6 +253,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // and only here — the two sources have no field in common, so this is a
         // join and never a merge (ADR 0023 §4).
         Some(Ok(stored)) => {
+            let confirmed = stored.mapping_confirmed;
             let credential = Credential {
                 client_id: std::env::var("SMARTME_CLIENT_ID").ok(),
                 client_secret: std::env::var("SMARTME_CLIENT_SECRET").ok(),
@@ -264,6 +265,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // consumer (the web UI), and two places applying the same rules is
             // how they drift apart.
             match smartme_bridge::app::config::validate(raw) {
+                // Valid, and nobody has said the mapping is right (Story 5.3).
+                //
+                // NO SESSION AT ALL, not merely no DDATA: an NBIRTH on its own
+                // creates the node's folder in a Sparkplug host's tag tree, and
+                // that folder outlives the process and is deleted by hand.
+                // Withholding only the data would leave the irreversible half
+                // already done.
+                //
+                // This is the guard against the one error validation cannot see
+                // — a mapping that is well-formed, unique, complete and pointed
+                // at the wrong meter.
+                Ok(_) if !confirmed => {
+                    tracing::warn!(
+                        path = %store::config_path(&state_dir).display(),
+                        "the meter mapping has NOT been confirmed, so nothing is \
+                         published — no connection, no birth. Check each meter's \
+                         serial against its topic in the web UI and confirm it; \
+                         a mapping that is merely well-formed can still be wrong, \
+                         and a SCADA host keeps the tags it discovers"
+                    );
+                    smartme_bridge::run_without_publishing()
+                }
                 Ok(config) => smartme_bridge::run(config),
                 Err(errors) => {
                     tracing::error!("{errors}");

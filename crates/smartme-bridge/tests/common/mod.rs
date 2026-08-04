@@ -242,6 +242,13 @@ pub fn write_config(
              broker_host = \"{broker_host}\"\n\
              broker_port = {broker_port}\n\
              publish_period_secs = 30\n\
+             # CONFIRMED, because these tests are about what reaches the wire\n\
+             # and not about the confirmation gate (Story 5.3). Without this the\n\
+             # spawned binary comes up and publishes NOTHING — and the tests do\n\
+             # not fail, they TIME OUT against a bridge behaving exactly as\n\
+             # designed. That is the fifth time in one day that a change to how\n\
+             # the bridge starts went quiet rather than red here.\n\
+             mapping_confirmed = true\n\
              # TEST-NET-1 (RFC 5737): unroutable, so the cloud stays silent for\n\
              # the whole run. The Sparkplug session does not depend on having a\n\
              # reading, so the node still births.\n\

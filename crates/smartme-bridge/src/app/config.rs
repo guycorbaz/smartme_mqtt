@@ -618,6 +618,54 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
     })
 }
 
+/// One line of what an operator is asked to confirm (Story 5.3 AC4, FR25).
+///
+/// **The serial and the topic are here because the mistake is invisible without
+/// them.** `prd.md:135` asks for *"serial beside each so he can't cross-wire"*:
+/// a confirmation screen showing only meter names would be a click that proves
+/// nothing, since a name is exactly the part that looks right when it is wrong.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MappingRow {
+    /// The meter as the operator named it.
+    pub meter: String,
+    /// The smart-me device actually polled — the half that is easy to
+    /// cross-wire, because it is a UUID nobody recognises by sight.
+    pub device_id: String,
+    /// The serial, which becomes the device level of the topic.
+    pub serial: String,
+    /// The exact topic values will be published on.
+    pub topic: String,
+    /// Whether this meter is published at all.
+    pub enabled: bool,
+}
+
+/// What will be published where, for a human to check before anything is.
+///
+/// **The DDATA topic, not the DBIRTH one.** Both carry the same device level, so
+/// either would prove the mapping — but DDATA is the topic an operator will meet
+/// again in a SCADA trend, and showing them a topic they will never see twice
+/// makes the check harder to repeat.
+///
+/// Returns the topic error rather than rendering something approximate: a
+/// preview that quietly differs from what is published is worse than no preview,
+/// because it is a check that passes for the wrong reason.
+pub fn mapping_preview(config: &BridgeConfig) -> Result<Vec<MappingRow>, sparkplug_b::TopicError> {
+    let node = sparkplug_b::EdgeNode::new(config.group_id.clone(), config.node_id.clone())?;
+    config
+        .meters
+        .iter()
+        .map(|meter| {
+            Ok(MappingRow {
+                meter: meter.meter.as_str().to_string(),
+                device_id: meter.device_id.clone(),
+                serial: meter.serial.as_str().to_string(),
+                topic: node.device_topic(sparkplug_b::MessageType::DData, meter.serial.as_str())?,
+                enabled: meter.enabled,
+            })
+        })
+        .collect()
+}
+
 /// Values appearing more than once, each reported once.
 fn duplicates<'a>(values: impl Iterator<Item = &'a str>) -> Vec<String> {
     let mut seen = std::collections::BTreeSet::new();
@@ -707,6 +755,41 @@ mod tests {
                 "{expected} missing from {named:?}"
             );
         }
+    }
+
+    /// Story 5.3 AC4 — what the operator is asked to confirm.
+    ///
+    /// **Literal strings, deliberately.** Building the expected topic from the
+    /// same expression production uses would assert the code against itself —
+    /// the defect the Story 4.2 review found in a conformance row, where the
+    /// evidence was a test that could not have failed.
+    #[test]
+    fn the_mapping_preview_shows_the_serial_and_the_exact_topic() {
+        let mut raw = sound();
+        raw.group_id = Some("Plant".into());
+        raw.node_id = Some("Bridge01".into());
+        raw.meters = vec![RawMeter {
+            meter_id: Some("garage".into()),
+            device_id: Some("a1a1a1a1-b2b2-c3c3-d4d4-000000000001".into()),
+            serial: Some("9202685".into()),
+            enabled: Some(true),
+        }];
+        let config = validate(raw).expect("validates");
+
+        let rows = mapping_preview(&config).expect("a valid configuration previews");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].meter, "garage");
+        assert_eq!(rows[0].serial, "9202685");
+        assert_eq!(
+            rows[0].device_id, "a1a1a1a1-b2b2-c3c3-d4d4-000000000001",
+            "the device id is the half that is easy to cross-wire, because it is \
+             a UUID nobody recognises by sight"
+        );
+        assert_eq!(
+            rows[0].topic, "spBv1.0/Plant/DDATA/Bridge01/9202685",
+            "the operator must see the topic they will meet again in a trend"
+        );
+        assert!(rows[0].enabled);
     }
 
     /// A fault must name what the operator actually types — and since
