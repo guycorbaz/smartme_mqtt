@@ -306,8 +306,8 @@ constraint; ideally the bridge refuses to start on a detectable collision. Issue
 | `topics-dbirth-mqtt` | MUST | QoS 0, retain false | `every_edge_node_message_is_qos_zero_and_never_retained` | conformant |
 | `topics-ddata-topic` | MUST | `spBv1.0/{group}/DDATA/{node}/{device}` | `device_topics_append_the_device_identifier` | conformant |
 | `topics-ddata-mqtt` | MUST | QoS 0, retain false | `every_edge_node_message_is_qos_zero_and_never_retained` | conformant |
-| `topics-ddeath-topic` | MUST | topic construction supports it; **DDEATH is never emitted** | — | **gap (unimplemented)** (Epic 3 — with one meter a device only stops when its node does) |
-| `topics-ddeath-mqtt` | MUST | as above | — | **gap (unimplemented)** (Epic 3) |
+| `topics-ddeath-topic` | MUST | `spBv1.0/{group}/DDEATH/{node}/{device}`, built by `node.device_topic(MessageType::DDeath, …)` (`sparkplug_publisher.rs::device_death`). **Emitted since Story 5.2** — disabling a meter buries its device | `device_topics_append_the_device_identifier`; and `chaos_device_certificates` reads the DDEATH off a **real broker** and asserts the topic names the device that went away | conformant |
+| `topics-ddeath-mqtt` | MUST | QoS 0, retain false | `every_edge_node_message_is_qos_zero_and_never_retained` enumerates `DDeath` explicitly | conformant |
 | `topics-dcmd-topic` | MUST | **not implemented** — no DCMD subscription, and a subscriber must build this topic form too. **⏳ TIME-LIMITED, recorded at Story 4.7:** a planned meter relay command is a writable Device output, which is the condition its chapter-5 twin `-device-dcmd-subscribe` is `n/a` upon; when it lands both go live together. Not re-verdicted here — [#38](https://github.com/guycorbaz/smartme_mqtt/issues/38) owns the expiry | — | **gap (unimplemented)** (**Story 4.19**, re-owned) — Story 4.6 declined DCMD deliberately: `-device-dcmd-subscribe` is conditional on *"if the Device supports writing to outputs"* (`:403-407`) and no device here does. `MessageType` has no `DCmd` variant on purpose. See the criterion note below: this row probably belongs at `n/a` |
 | `topics-dcmd-mqtt` | MUST | a **publication** clause — see the note below | — | n/a |
 
@@ -649,7 +649,7 @@ still holds. The *timestamp* of that same payload is a recorded deviation
 | `message-flow-device-birth-publish-dbirth-retained` | MUST (false) | retain false | same, plus `chaos_sigterm_no_lie`'s late-subscriber check — and the DBIRTH is certainly published in that run, because the test waited for it | conformant |
 | `message-flow-device-birth-publish-dbirth-payload-seq` | MUST | device messages draw from the node's single counter, one more than the previous message | `device_messages_share_the_edge_node_numbering`, `sequence_numbering_is_continuous_across_node_and_device_messages`, `prop_published_messages_wrap_255_to_0` | conformant |
 | `message-flow-device-dcmd-subscribe` | MUST (QoS 1) | conditional — *"**If the Device supports writing to outputs**, the MQTT client associated with the Device MUST subscribe…"* (`:403-407`). The bridge declares `Power` and `Energy`, both read-only measurements; no writable output exists on any device | — | n/a — see the criterion below. **⏳ TIME-LIMITED, recorded at Story 4.7:** the stated condition is scheduled to start holding. A **meter relay command** is planned for the pre-production Ignition run, and a relay is exactly *"writing to outputs"* on a Device. When it lands, this verdict expires and the clause becomes live. **Not re-verdicted here** — the condition does not hold today, and pre-dating a verdict is as wrong as missing one. [#38](https://github.com/guycorbaz/smartme_mqtt/issues/38) owns the expiry |
-| `operational-behavior-device-ddeath` | MUST | **DDEATH is never emitted by the bridge**; `device_death` is called nowhere outside the crate's own tests | the **crate side is conformant and tested**: `LiveSession::device_death` takes the next sequence number (`encode.rs:155-163`), asserted by `device_messages_share_the_edge_node_numbering` and `a_device_death_carries_no_bdseq` | **gap (unimplemented)** (Epic 3) — the gap is entirely in the bridge, which never calls it |
+| `operational-behavior-device-ddeath` | MUST | **The DDEATH is now emitted — but not for this clause's reason, and the distinction is the verdict.** Story 5.2 publishes one when an operator *disables* a meter. The clause triggers on the Edge Node *losing connection* with a Device, and that case still degrades the reading's quality to `Bad_Stale` instead of burying the device (ADR 0012, the two-mechanism design) | mechanism proven end to end on a real broker by `chaos_device_certificates`; crate side by `device_messages_share_the_edge_node_numbering` and `a_device_death_carries_no_bdseq` | **gap (unimplemented)** — **narrowed, not closed, 2026-08-04.** What was missing is now half present: the message exists, the trigger does not. Recorded rather than flipped, because a row that read `conformant` here would claim the bridge buries an unreachable meter, and it does not |
 
 **`-dcmd-subscribe` is `n/a` while its NCMD twin is a `gap`, and the two verdicts rest on the
 criterion this matrix already adopted** under chapter 6's NDATA section: *does the bridge hold the
@@ -934,7 +934,7 @@ is legal and is a deliberate choice — a consumer should never have to infer go
 | `payloads-dbirth-timestamp` | MUST | **cold start conforms** (stamped `now`); **a rebirth re-declaring a known reading is stamped with that reading's `ValueDate`** (`sparkplug_publisher.rs:313-317`) | `a_rebirth_redeclares_what_is_known_instead_of_blanking_it` asserts the deviating behaviour by name | **deviation** ([#29](https://github.com/guycorbaz/smartme_mqtt/issues/29)) |
 | `payloads-ddata-timestamp` | MUST | **the payload timestamp is the reading's `ValueDate`, not the publish instant** (`sparkplug_publisher.rs:313`) | `a_good_reading_carries_units_serial_and_the_source_timestamp`, `a_stale_verdict_never_publishes_a_fresh_looking_metric` — both assert it deliberately | **deviation** ([#29](https://github.com/guycorbaz/smartme_mqtt/issues/29)) |
 | `payloads-ndata-timestamp` | MUST | NDATA is never emitted | — | n/a |
-| `payloads-ddeath-timestamp` | MUST | DDEATH is never emitted | — | **gap (unimplemented)** (Epic 3) |
+| `payloads-ddeath-timestamp` | MUST | the **publish instant** (`clock.wall()` at `device_death`), which is what the clause asks for — *"the time at which the message was published"*. **Deliberately unlike `payloads-ddata-timestamp`**, where the deviation is to stamp the reading's `ValueDate`: a DDEATH reports an event, not a measurement, so it has no earlier truth to be stamped with | `chaos_device_certificates` (the message reaches a real subscriber); form by `a_device_death_carries_no_bdseq` | conformant |
 | `payloads-ncmd-timestamp` | MUST | Host-published | — | n/a |
 | `payloads-dcmd-timestamp` | MUST | Host-published | — | n/a |
 
@@ -1042,15 +1042,25 @@ mutable metric — bridge health, uptime, connection state — these six clauses
 
 | tck-id | Level | Our behaviour | Proof | Verdict |
 | --- | --- | --- | --- | --- |
-| `payloads-ddeath-seq` | MUST | **DDEATH is never emitted by the bridge** | — | **gap (unimplemented)** (Epic 3) |
-| `payloads-ddeath-seq-inc` | MUST | as above | — | **gap (unimplemented)** (Epic 3) |
-| `payloads-ddeath-seq-number` | MUST | as above | — | **gap (unimplemented)** (Epic 3) |
+| `payloads-ddeath-seq` | MUST | `LiveSession::device_death` takes the next sequence number from the node's single counter (`encode.rs:155-163`). **Emitted since Story 5.2** | `device_messages_share_the_edge_node_numbering`, `a_device_death_carries_no_bdseq`; emission proven on a real broker by `chaos_device_certificates` | conformant |
+| `payloads-ddeath-seq-inc` | MUST | one greater than the previous message from the edge node — the counter is shared by node and device messages, so there is no second sequence to drift | `sequence_numbering_is_continuous_across_node_and_device_messages` | conformant |
+| `payloads-ddeath-seq-number` | MUST | wraps 255 → 0 with the rest | `prop_published_messages_wrap_255_to_0` | conformant |
 
-**Gap, not n/a, and the distinction is deliberate** — it is the criterion stated under NDATA above,
-applied the other way: the bridge already detects the event (meter unreachability drives the
-stale/bad quality verdict) and does not publish the message. A device *can* die while its node
-lives; with one meter it simply never has, which is a deployment fact rather than a role we do not
-play. Consistent with `topics-ddeath-topic` in chapter 4.
+**Closed 2026-08-04 by Story 5.2, and the reason is worth keeping.** These three read *"gap, not
+n/a"* for as long as the bridge emitted no DDEATH — deliberately, on the criterion stated under
+NDATA above: the bridge already detected the event and simply did not publish the message, which is
+a missing implementation rather than a role we do not play. That reasoning is what made them
+closeable at all; an `n/a` would have had to be re-argued from scratch.
+
+**What closed them was not a decision to implement DDEATH.** It was AC4 needing to disable a meter
+without lying to the host: a meter switched off cannot provide real-time information, and the norm
+requires a DDEATH in exactly that case (`Sparkplug_5_Operational_Behavior.adoc:470`). The message
+these rows describe arrived as a consequence.
+
+**Note what did NOT close.** `operational-behavior-device-ddeath` in chapter 5 stays a gap: it
+triggers on the Edge Node *losing connection* with a Device, and that case still degrades quality
+rather than burying the device. The form of a DDEATH is now conformant; one of the two situations
+that should produce one still does not.
 
 Worth recording precisely: the **crate side is already conformant and tested**.
 `LiveSession::device_death` takes the next sequence number (`encode.rs:155-163`), asserted by
@@ -1379,7 +1389,15 @@ flag ([#35](https://github.com/guycorbaz/smartme_mqtt/issues/35)).
 
 ## Tally for chapter 4
 
-**15 conformant · 0 deviations · 5 gaps · 21 n/a** (16 Host Application, 3 messages we do not emit,
+**This tally was `15 · 0 · 5 · 21` until Story 5.2** (2026-08-04), which made the bridge emit a
+DDEATH for the first time: `topics-ddeath-topic` and `topics-ddeath-mqtt` moved from gap to
+conformant. **One clause of this chapter is still recorded nowhere** —
+`tck-id-topics-ddeath-seq-num` — and it is one of the 29 that Story 4.19 owns. It is named here
+rather than added, because adding a single row of another story's 29 would leave `41 of 70` reading
+`42` with no account of the rest; but it is now a clause the bridge SATISFIES and does not claim,
+which is the less common direction for this document to be wrong in.
+
+**17 conformant · 0 deviations · 3 gaps · 21 n/a** (16 Host Application, 3 messages we do not emit,
 2 command clauses that bind a Host Application publisher)
 
 `15 + 0 + 5 + 21 = 41` rows. **This corrects a miscount**: the tally read `17 · 0 · 8 · 21` until the
@@ -1547,7 +1565,11 @@ saying so.
 
 ## Tally for chapter 6
 
-**32 conformant · 4 deviations · 14 gaps · 59 n/a**
+**This tally was `32 · 4 · 14 · 59` until Story 5.2** (2026-08-04). Four DDEATH payload rows —
+`-timestamp`, `-seq`, `-seq-inc`, `-seq-number` — moved from gap to conformant when the bridge
+began emitting the message. See the note under that table for what did *not* move.
+
+**36 conformant · 4 deviations · 10 gaps · 59 n/a**
 
 `32 + 4 + 14 + 59 = 109` — the enumerated clause set, with no remainder.
 
@@ -1680,11 +1702,11 @@ conformance scope".
 | 1 — Introduction | 3 | 0 | 4 | 1 | 8 |
 | 2 — Principles | 1 | 1 | 1 | 1 | 4 |
 | 3 — Components | 0 | 0 | 0 | 1 | 1 |
-| 4 — Topics | 15 | 0 | 5 | 21 | **41 of 70** |
+| 4 — Topics | 17 | 0 | 3 | 21 | **41 of 70** |
 | 5 — Operational behaviour | 30 | 1 | 19 | 49 | 99 |
-| 6 — Payloads | 32 | 4 | 14 | 59 | 109 |
+| 6 — Payloads | 36 | 4 | 10 | 59 | 109 |
 | 10 — Conformance | 0 | 0 | 0 | 12 | 12 |
-| **Total** | **81** | **6** | **43** | **144** | **274 of 303** |
+| **Total** | **87** | **6** | **37** | **144** | **274 of 303** |
 
 **The total was `72 · 8 · 50 · 144` until Story 4.7**, which moved seven rows from
 `gap (unimplemented)` to `conformant` — six in chapter 5, one in chapter 6. `72 + 7 = 79`,

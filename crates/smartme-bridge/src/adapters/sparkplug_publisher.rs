@@ -63,6 +63,25 @@ use crate::domain::{Measurement, Serial, UtcMillis};
 ///   deviation from the specification — see [`ignition_quality_code`] and ADR
 ///   0012.
 /// - **1** — initial contract, with the specification's quality codes.
+///
+/// # Story 5.2 does NOT bump this, and the reasoning is recorded because the
+/// # question will be asked again
+///
+/// The bridge began emitting **DDEATH** on 2026-08-04 (AC4: disabling a meter
+/// buries its device). A consumer therefore now receives a message type it had
+/// never received from this node before, which looks like it should move the
+/// number.
+///
+/// It does not, on the rule stated above: the topic grammar is unchanged
+/// (DDEATH has always been part of the Sparkplug namespace), no metric name or
+/// unit moved, and no quality code changed meaning. More to the point, the
+/// property this constant exists to protect is the one the Tier-3 runbook
+/// indexes by — *two runs sharing a version number attest to the same tag set* —
+/// and **the tag set is untouched**. What changed is the message repertoire, not
+/// the contract about tags.
+///
+/// If that ever stops being the property being protected, this decision should
+/// be re-weighed rather than assumed to still hold.
 pub const CONTRACT_VERSION: i64 = 3;
 
 /// The quality code this bridge publishes for `quality`.
