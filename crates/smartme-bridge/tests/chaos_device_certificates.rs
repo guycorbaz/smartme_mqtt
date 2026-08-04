@@ -76,6 +76,7 @@ fn config(port: u16, state_dir: &std::path::Path) -> BridgeConfig {
         policy: Policy { max_age_ms: 90_000 },
         log_dir: None,
         log_keep: None,
+        ui_port: None,
     }
 }
 

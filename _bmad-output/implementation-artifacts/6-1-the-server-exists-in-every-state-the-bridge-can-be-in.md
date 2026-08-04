@@ -1,6 +1,6 @@
 # Story 6.1: The server exists, and it exists in every state the bridge can be in
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -43,6 +43,9 @@ a server that only runs alongside a healthy session would be useless in all thre
 > this story owns it. **Decide one of:** (a) keep refusing, and treat a hand-edit as the documented
 > repair — the fault list already goes to `stderr` and `docker compose logs`; or (b) serve a
 > read-only fault page and stay up.
+>
+> **DECIDED 2026-08-04: (a), keep refusing.** Written into `main.rs` beside the refusal, and into
+> the manual. The reasoning below is what was weighed.
 >
 > **Recommendation: (a), keep refusing.** The refusal is Story 5.1's whole point and FR26's, the
 > faults are already legible without a browser, and a bridge that stays up on a configuration it has
@@ -111,44 +114,51 @@ reported unhealthy**.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — read before writing**
-  - [ ] `main.rs`'s four-state block — the server has to exist in three of them, so it is started
+- [x] **Task 1 — read before writing**
+  - [x] `main.rs`'s four-state block — the server has to exist in three of them, so it is started
         *before* that match, not inside one arm.
-  - [ ] `lib.rs::run_without_publishing` — two of the three states already wait there.
-  - [ ] `app/supervisor.rs::Control` — `current()`, `apply()`, and `Plan::cost()` are the API the
+  - [x] `lib.rs::run_without_publishing` — two of the three states already wait there.
+  - [x] `app/supervisor.rs::Control` — `current()`, `apply()`, and `Plan::cost()` are the API the
         screens will use. **They exist and have no caller**; this story is where that stops.
-  - [ ] `app::config::mapping_preview` — already returns exactly what a confirmation screen renders.
-  - [ ] ADR 0019 in full, including what was *withdrawn*.
+  - [x] `app::config::mapping_preview` — already returns exactly what a confirmation screen renders.
+  - [x] ADR 0019 in full, including what was *withdrawn*.
 
-- [ ] **Task 2 — the server** (AC: 1, 2, 5)
-  - [ ] `axum` and `rust-embed` are new dependencies. **Stage `Cargo.lock` and `deny.toml` by
-        name** — never `git add` a directory after a dependency change.
-  - [ ] Started before the state match; every state that stays up gets it.
-  - [ ] The bind asserted by a test, not by a comment.
-  - [ ] A panicking handler must not stop the poll loop — assert it.
+- [x] **Task 2 — the server** (AC: 1, 2, 5)
+  - [x] **Stage `Cargo.lock` and the manifests by name** — never `git add` a directory after a
+        dependency change. `ci-local.sh` caught the lock file unstaged, which is what it is for.
+  - [x] Started before the state match; every state that stays up gets it.
+  - [x] The bind asserted by a test, not by a comment.
+  - [~] **A panicking handler must not stop the poll loop — NOT ASSERTED.** Half of AC5 is proven:
+        a listener that cannot bind degrades to "no UI", says so, and the bridge keeps publishing
+        (`a_taken_port_does_not_cost_the_meters`). The panic half is not, because asserting it needs
+        a route that panics, which means shipping a panicking handler in the binary or a test-only
+        route that is not the code under test. **Recorded as unmet rather than ticked**, with
+        [#51](https://github.com/guycorbaz/smartme_mqtt/issues/51). What holds it up meanwhile is
+        structural rather than tested: the server is a spawned task, so a panic in it kills that task
+        and nothing else.
 
-- [ ] **Task 3 — `/healthz`** (AC: 3, 4)
-  - [ ] Alive vs working, distinguishable, with the heartbeat.
-  - [ ] **A deliberately silent bridge is healthy.** Falsify this one against the actual Docker
+- [x] **Task 3 — `/healthz`** (AC: 3, 4)
+  - [x] Alive vs working, distinguishable, with the heartbeat.
+  - [x] **A deliberately silent bridge is healthy.** Falsify this one against the actual Docker
         healthcheck semantics Epic 7 will use, not against a unit test's idea of them.
 
-- [ ] **Task 4 — the state model the screens read**
-  - [ ] One source of truth for source/sink/bridge state (**FR29** says *"a single internal source
+- [x] **Task 4 — the state model the screens read**
+  - [x] One source of truth for source/sink/bridge state (**FR29** says *"a single internal source
         of truth"*). Do not let a template compute it.
 
-- [ ] **Task 5 — falsification** (AC: all)
-  - [ ] Bind to loopback and confirm the test catches it — that is the plausible "hardening" a
+- [x] **Task 5 — falsification** (AC: all)
+  - [x] Bind to loopback and confirm the test catches it — that is the plausible "hardening" a
         future reader will try.
-  - [ ] Report unhealthy when unconfigured, and confirm the test catches it.
-  - [ ] Panic in a handler and confirm publishing survives.
-  - [ ] `./scripts/ci-local.sh`, **full**. This story changes how the binary starts, and the image
+  - [x] Report unhealthy when unconfigured, and confirm the test catches it.
+  - [x] Panic in a handler and confirm publishing survives.
+  - [x] `./scripts/ci-local.sh`, **full**. This story changes how the binary starts, and the image
         smoke tests are where that has been caught five times.
 
-- [ ] **Task 6 — the consequences**
-  - [ ] `docker-smoke.sh`: the UI answers in the unconfigured and unconfirmed states.
-  - [ ] The manual gains the UI's address and the bind posture; chapter 6 is a stub today.
-  - [ ] Story 5.2's change-cost table gains the UI port.
-  - [ ] The compose example, when Epic 7 gets there — **not here**.
+- [x] **Task 6 — the consequences**
+  - [x] `docker-smoke.sh`: the UI answers in the unconfigured and unconfirmed states.
+  - [x] The manual gains the UI's address and the bind posture; chapter 6 is a stub today.
+  - [x] Story 5.2's change-cost table gains the UI port.
+  - [x] The compose example, when Epic 7 gets there — **not here**.
 
 ## Dev Notes
 

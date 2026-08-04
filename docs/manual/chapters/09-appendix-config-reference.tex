@@ -50,7 +50,7 @@ open decision.\normalsize
 \toprule
 \normalfont\textbf{Key} & \textbf{Req.} & \textbf{Effect} \\
 \midrule
-schema\_version      & yes & Currently \code{3}. Another value is refused: there is no migration, and reading an unknown layout by guesswork would start \prog on settings nobody wrote. \\
+schema\_version      & yes & Currently \code{4}. Another value is refused: there is no migration, and reading an unknown layout by guesswork would start \prog on settings nobody wrote. \\
 \addlinespace
 group\_id            & yes & Sparkplug group. \textbf{No default}: a host persists what it discovers, so the wrong namespace leaves a tag folder that outlives the process and must be deleted by hand. \\
 node\_id             & yes & Sparkplug edge node. Same reason. \\
@@ -64,6 +64,8 @@ api\_base            & no  & smart-me endpoint. Default \code{https://api.smart-
 \addlinespace
 log\_dir             & no  & Directory for the log file. Unset: no file at all, console only. Set: \code{smartme\_mqtt.<date>.log}, rotated daily. \\
 log\_keep            & no  & Rotated files kept. Default \code{7}. Not a positive number: refused on stderr, keeps 7. \\
+\addlinespace
+ui\_port             & no  & Port the embedded web UI listens on \emph{inside} the container. Default \code{8080}. The container publishes no host port --- Traefik reaches it over a shared Docker network and is the only thing that can. Changing it costs a new Sparkplug session: a listener cannot move without dropping what is connected to it. \\
 \addlinespace
 mapping\_confirmed   & no  & Whether a human has checked the meter→topic mapping. \textbf{Absent means \code{false}}, and nothing is published until it is \code{true} --- no connection, no birth. Editing the mapping withdraws it automatically; editing anything else does not. Writing the file by hand and setting it counts as confirming it. See section~\ref{sec:confirm}. \\
 \bottomrule

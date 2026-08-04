@@ -19,6 +19,7 @@ tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 thiserror = { workspace = true }
 arc-swap = { workspace = true }
+axum = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

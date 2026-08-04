@@ -128,6 +128,7 @@ pub fn classify(old: &BridgeConfig, new: &BridgeConfig) -> Plan {
         policy: old_policy,
         log_dir: old_log_dir,
         log_keep: old_log_keep,
+        ui_port: old_ui_port,
     } = old;
     let BridgeConfig {
         api_base: new_api_base,
@@ -143,6 +144,7 @@ pub fn classify(old: &BridgeConfig, new: &BridgeConfig) -> Plan {
         policy: new_policy,
         log_dir: new_log_dir,
         log_keep: new_log_keep,
+        ui_port: new_ui_port,
     } = new;
 
     let mut plan = Plan::default();
@@ -186,6 +188,13 @@ pub fn classify(old: &BridgeConfig, new: &BridgeConfig) -> Plan {
     // current session never saw.
     if old_bd_seq_path != new_bd_seq_path {
         note("state directory", Cost::NewSession);
+    }
+    // A listener cannot move without dropping what is connected to it. Same
+    // argument as the broker — and the compiler is what asked the question:
+    // adding this field to `BridgeConfig` broke the destructure above until
+    // somebody classified it, which is the guarantee this module exists for.
+    if old_ui_port != new_ui_port {
+        note("ui_port", Cost::NewSession);
     }
 
     // PROCESS RESTART — see the module docs. Both of these are honest
@@ -306,6 +315,7 @@ mod tests {
             policy: Policy { max_age_ms: 90_000 },
             log_dir: None,
             log_keep: None,
+            ui_port: None,
         }
     }
 

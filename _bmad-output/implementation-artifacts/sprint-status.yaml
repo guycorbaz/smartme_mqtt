@@ -761,4 +761,29 @@ development_status:
   # /healthz to a Docker healthcheck that RESTARTS the container. A /healthz reporting
   # unhealthy because no configuration exists would put a fresh deployment in a restart
   # loop — destroying, every few seconds, the screen needed to configure it.
-  6-1-the-server-exists-in-every-state-the-bridge-can-be-in: ready-for-dev
+  #
+  # 2026-08-04, IMPLEMENTED. axum only (rust-embed NOT taken — no assets yet, and a
+  # dependency acquired before it has a user is one nobody can justify removing). schema
+  # 3 -> 4 for ui_port, default 8080: a default is REQUIRED, not convenient, because the
+  # first run has no file to read a port from and is the run that most needs a screen.
+  #
+  # THE COMPILER ASKED THE QUESTION IT WAS BUILT TO ASK: adding ui_port to BridgeConfig
+  # broke reconfigure::classify's exhaustive destructure until somebody classified it.
+  # Story 5.2 AC4's guarantee working in the field, one story later. Classified NewSession
+  # — a listener cannot move without dropping what is connected to it.
+  #
+  # AC1's invalid-configuration corner DECIDED, not discovered: (a) keep refusing. The
+  # refusal is FR26's point, the faults already reach `docker compose logs`, and a bridge
+  # staying up on a configuration it rejected is one restart from being believed. Written
+  # into main.rs beside the refusal and into the manual.
+  #
+  # TWO FALSIFICATION LESSONS, and the first is the sharper:
+  #  - the /healthz mutation MISSED ITS TARGET and the test stayed green — rustfmt had
+  #    folded the return tuple onto one line, so the multi-line pattern matched nothing.
+  #    A mutation that does not apply proves exactly as much as no mutation. The second
+  #    attempt asserts the text changed BEFORE running anything, and then it went red.
+  #  - the image smoke test's first draft probed /dev/tcp INSIDE the container, which is a
+  #    bash feature the image's shell does not have — it reported "no web UI" against a
+  #    server that was answering perfectly. It probes from the host now, over a port
+  #    published to loopback for the duration of the check only.
+  6-1-the-server-exists-in-every-state-the-bridge-can-be-in: review

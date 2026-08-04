@@ -45,7 +45,7 @@ ok "CA bundle present"
 # case that refuses; absent is the case below, which serves the UI instead.
 mkdir -p "$TMP/invalid"
 cat > "$TMP/invalid/config.toml" <<'TOML'
-schema_version = 3
+schema_version = 4
 group_id = ""
 node_id = ""
 broker_host = "broker.invalid"
@@ -104,7 +104,7 @@ ok "with no configuration: comes up, says so, stays up, writes nothing"
 # from fixed.
 mkdir -p "$TMP/unconfirmed"
 cat > "$TMP/unconfirmed/config.toml" <<'TOML'
-schema_version = 3
+schema_version = 4
 group_id = "Plant"
 node_id = "Bridge01"
 broker_host = "broker.invalid"
@@ -136,3 +136,40 @@ fi
 echo "$out" | grep -qE 'EXIT:(124|137)' \
     || { echo "$out"; fail "the image exited on an unconfirmed mapping; it must stay up to serve the screen where the mapping is confirmed"; }
 ok "with an unconfirmed mapping: stays up, and says something different"
+
+# --- the UI answers in a state where nothing is published -------------------
+#
+# Story 6.1: the states where the bridge is silent are exactly the states where
+# the screen matters, because since ADR 0023 the browser is the only way in.
+# An image that publishes nothing AND serves nothing cannot be configured at all.
+# The port is published to LOOPBACK ON THE HOST for the duration of this check
+# only. In production the container publishes nothing and Traefik reaches it over
+# a shared Docker network (ADR 0019) — this is a probe, not the deployment shape.
+#
+# Probed from the host rather than from inside the container: `/dev/tcp` is a
+# bash feature and the image's shell is not bash, which is how the first draft of
+# this check reported "no web UI" against a server that was answering perfectly.
+cid=$(docker run -d --rm \
+    -p 127.0.0.1:18099:8080 \
+    -e SMARTME_CLIENT_ID=x -e SMARTME_CLIENT_SECRET=x \
+    -e SMARTME_STATE_DIR=/state \
+    -v "$TMP/empty:/state" \
+    "$IMAGE")
+# shellcheck disable=SC2064
+trap "docker rm -f $cid >/dev/null 2>&1 || true; rm -rf $TMP" EXIT
+ui_ok=""
+for _ in $(seq 1 30); do
+    if answer=$(exec 3<>/dev/tcp/127.0.0.1/18099 2>/dev/null \
+        && printf 'GET /healthz HTTP/1.0\r\n\r\n' >&3 && cat <&3); then
+        if [[ "$answer" == *"200 OK"* ]]; then
+            ui_ok=yes
+            break
+        fi
+    fi
+    sleep 1
+done
+docker rm -f "$cid" >/dev/null 2>&1 || true
+trap 'rm -rf "$TMP"' EXIT
+[[ -n "$ui_ok" ]] \
+    || fail "the image serves no web UI while unconfigured — which is the one state that can only be left THROUGH the web UI"
+ok "the UI answers on 8080 while the bridge is unconfigured"

@@ -16,6 +16,7 @@
 use std::path::PathBuf;
 
 use smartme_bridge::app::store::{self, Credential, StoredConfig};
+use smartme_bridge::ui;
 
 /// Where the state directory lives when `SMARTME_STATE_DIR` does not say.
 const DEFAULT_STATE_DIR: &str = "/data";
@@ -180,6 +181,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         store::exists(&state_dir).then(|| store::read(&state_dir));
 
     // PHASE 2 — logging, configured by what phase 1 found, if anything.
+    // The UI's port comes from the file when there is one, and from a default
+    // when there is not — because the run with no file is the run that needs the
+    // UI most, and it has nowhere to read a port from.
+    let ui_port = stored
+        .as_ref()
+        .and_then(|r| r.as_ref().ok())
+        .and_then(|c| c.ui_port)
+        .unwrap_or(ui::DEFAULT_PORT);
+
     let (file_layer, file_log) = file_log_layer(stored.as_ref().and_then(|r| r.as_ref().ok()));
     tracing_subscriber::registry()
         .with(
@@ -238,11 +248,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "no configuration yet — the bridge is up and will publish nothing \
                  until one exists. Configure it in the web UI; it is written here"
             );
-            smartme_bridge::run_without_publishing()
+            smartme_bridge::run_without_publishing(Some((ui_port, ui::Lifecycle::Unconfigured)))
         }
 
         // A configuration that exists and cannot be read. Refusing beats starting
         // on defaults nobody chose (Story 5.1).
+        //
+        // AND THE UI IS NOT SERVED HERE — decided in Story 6.1 AC1, not left to
+        // be discovered. The refusal is FR26's whole point; the faults already
+        // reach `docker compose logs` and stderr without a browser; and a bridge
+        // that stayed up on a configuration it had REJECTED is one restart away
+        // from somebody believing it is running. Serving a repair page would also
+        // need the listener up before the configuration is read, inverting the
+        // ordering this file was given for the log settings.
+        //
+        // The documented repair is to fix the file. The manual says so.
         Some(Err(errors)) => {
             tracing::error!("{errors}");
             eprintln!("{errors}");
@@ -285,9 +305,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                          a mapping that is merely well-formed can still be wrong, \
                          and a SCADA host keeps the tags it discovers"
                     );
-                    smartme_bridge::run_without_publishing()
+                    smartme_bridge::run_without_publishing(Some((
+                        ui_port,
+                        ui::Lifecycle::Unconfirmed,
+                    )))
                 }
-                Ok(config) => smartme_bridge::run(config),
+                Ok(config) => smartme_bridge::run(config, Some(ui_port)),
                 Err(errors) => {
                     tracing::error!("{errors}");
                     eprintln!("{errors}");

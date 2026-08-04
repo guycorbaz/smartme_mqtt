@@ -95,6 +95,7 @@ same event to someone watching Ignition, namely nothing.
 | `group_id`, `node_id` | **new session** | the topic namespace *and* the will registered in the CONNECT packet |
 | `broker_host`, `broker_port` | **new session** | self-evident |
 | state directory | **new session** | `bdSeq` is read at connect and written across restarts |
+| `ui_port` | **new session** | *(added by Story 6.1)* a listener cannot move without dropping what is connected to it. **The compiler asked for this row**: adding the field broke `classify`'s exhaustive destructure until somebody classified it |
 | `log_dir`, `log_keep` | **process restart** | the tracing subscriber is installed before the configuration is read and cannot be re-pointed |
 | smart-me credential | **process restart** | it is not in the file at all ([ADR 0023]) |
 

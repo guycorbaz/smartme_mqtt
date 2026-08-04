@@ -31,7 +31,7 @@ in it, so it can be read for diagnosis without privileges: checking which topic 
 maps to has never needed \code{sudo}, and now provably cannot.
 
 \begin{lstlisting}
-schema_version      = 3
+schema_version      = 4
 
 group_id            = "Plant"
 node_id             = "Bridge01"
@@ -39,6 +39,7 @@ broker_host         = "mqtt.example.lan"
 broker_port         = 1883
 publish_period_secs = 30
 mapping_confirmed   = true
+ui_port             = 8080
 
 # Optional.
 api_base = "https://api.smart-me.com"

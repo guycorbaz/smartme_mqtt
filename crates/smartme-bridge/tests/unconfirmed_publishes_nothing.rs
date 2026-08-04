@@ -49,6 +49,7 @@ fn stored(port: u16, group: &str) -> StoredConfig {
         // `save` discards this and computes it — which is the rule under test in
         // `store`, and the reason each case below confirms explicitly.
         mapping_confirmed: false,
+        ui_port: None,
         meters: vec![StoredMeter {
             meter_id: "garage".to_string(),
             device_id: "a1a1a1a1-b2b2-c3c3-d4d4-000000000001".to_string(),

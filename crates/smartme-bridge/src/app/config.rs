@@ -105,6 +105,7 @@ pub struct RawConfig {
     pub publish_period_secs: Option<String>,
     pub log_dir: Option<String>,
     pub log_keep: Option<usize>,
+    pub ui_port: Option<u16>,
     pub meters: Vec<RawMeter>,
 }
 
@@ -136,6 +137,7 @@ impl std::fmt::Debug for RawConfig {
             .field("publish_period_secs", &self.publish_period_secs)
             .field("log_dir", &self.log_dir)
             .field("log_keep", &self.log_keep)
+            .field("ui_port", &self.ui_port)
             .field("meters", &self.meters)
             .finish()
     }
@@ -615,6 +617,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
         // reload can SEE them change — see `app::reconfigure`.
         log_dir: present(&raw.log_dir).map(str::to_owned),
         log_keep: raw.log_keep,
+        ui_port: raw.ui_port,
     })
 }
 

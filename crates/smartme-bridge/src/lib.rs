@@ -10,14 +10,38 @@ pub mod app;
 pub mod core;
 pub mod domain;
 pub mod persist;
+pub mod ui;
 
 /// Application entry point: build the runtime and run until the process is
 /// asked to stop. `main.rs` is a thin shell over this.
-pub fn run(config: app::BridgeConfig) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(
+    config: app::BridgeConfig,
+    ui_port: Option<u16>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(app::run(config, app::supervisor::shutdown_signal()))?;
+    runtime.block_on(async move {
+        app::supervisor::run_with_control(
+            config,
+            app::supervisor::shutdown_signal(),
+            move |control| {
+                // Spawned, never awaited: the UI is a diagnostic aid and must not
+                // be able to hold the bridge up or bring it down (AC5).
+                //
+                // The heartbeat comes FROM the supervisor rather than being made
+                // here, so `/healthz` reports the instant the poll loop actually
+                // recorded and not a second opinion about it.
+                if let Some(port) = ui_port {
+                    tokio::spawn(ui::serve(
+                        port,
+                        ui::UiState::new(ui::Lifecycle::Running, Some(control.heartbeat())),
+                    ));
+                }
+            },
+        )
+        .await
+    })?;
     Ok(())
 }
 
@@ -41,14 +65,24 @@ pub fn run(config: app::BridgeConfig) -> Result<(), Box<dyn std::error::Error>> 
 /// all until a configuration exists, rather than a node announcing itself with
 /// nothing to say.
 ///
-/// The web UI will be served from this function when Epic 6 lands. Until then it
-/// waits and does nothing, which is the same behaviour minus the listener.
+/// **The web UI is served here** (Story 6.1) — which is the point: these are the
+/// two states in which nothing is published, and therefore the two in which an
+/// operator most needs a screen to tell them why.
 ///
 /// [ADR 0023]: ../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md
-pub fn run_without_publishing() -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_without_publishing(
+    ui: Option<(u16, ui::Lifecycle)>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(app::supervisor::shutdown_signal());
+    runtime.block_on(async move {
+        // No heartbeat, because there is no poll loop to have one — and
+        // `/healthz` says so rather than inventing a plausible instant.
+        if let Some((port, lifecycle)) = ui {
+            tokio::spawn(ui::serve(port, ui::UiState::new(lifecycle, None)));
+        }
+        app::supervisor::shutdown_signal().await;
+    });
     Ok(())
 }

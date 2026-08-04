@@ -54,6 +54,7 @@ async fn chaos_stale_on_death() {
         policy: Policy { max_age_ms: 90_000 },
         log_dir: None,
         log_keep: None,
+        ui_port: None,
     };
 
     // The bridge runs with no shutdown signal: it will be killed, not asked.

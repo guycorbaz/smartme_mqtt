@@ -66,6 +66,8 @@ pub struct BridgeConfig {
     pub log_dir: Option<String>,
     /// How many rotated files to keep. Same caveat as [`Self::log_dir`].
     pub log_keep: Option<usize>,
+    /// Port the embedded web UI listens on (Story 6.1).
+    pub ui_port: Option<u16>,
 }
 
 /// Why the bridge could not start. Refusing to start beats starting wrong: a
@@ -113,6 +115,7 @@ pub type ConfigHandle = Arc<arc_swap::ArcSwap<BridgeConfig>>;
 pub struct Control {
     config: ConfigHandle,
     devices: mpsc::Sender<DeviceCommand>,
+    heartbeat: LastLoopTick,
 }
 
 impl Control {
@@ -124,6 +127,15 @@ impl Control {
     /// what the running process is *actually using*. [`Self::apply`] moves a
     /// value from the first to the second only when it really took effect, and
     /// says in its return value what it left behind.
+    /// The poll loop's heartbeat (AR12).
+    ///
+    /// Handed out rather than duplicated: `/healthz` must report the SAME
+    /// instant the loop records, or a healthcheck would be acting on a second
+    /// opinion about whether the bridge is alive.
+    pub fn heartbeat(&self) -> LastLoopTick {
+        self.heartbeat.clone()
+    }
+
     pub fn current(&self) -> Arc<BridgeConfig> {
         self.config.load_full()
     }
@@ -253,6 +265,7 @@ pub async fn run_with_control(
     with_control(Control {
         config: Arc::clone(&handle),
         devices: device_tx,
+        heartbeat: heartbeat.clone(),
     });
 
     let mqtt = tokio::spawn(mqtt_driver::run(
@@ -336,6 +349,7 @@ mod tests {
             Control {
                 config: Arc::new(arc_swap::ArcSwap::from_pointee(config())),
                 devices,
+                heartbeat: LastLoopTick::new(),
             },
             rx,
         )
@@ -451,6 +465,7 @@ mod tests {
             policy: Policy { max_age_ms: 90_000 },
             log_dir: None,
             log_keep: None,
+            ui_port: None,
         }
     }
 

@@ -46,7 +46,7 @@ use crate::persist;
 /// The shape of what is on disk. Bumped whenever a field is added, renamed or
 /// removed — see the module docs for why "read it and hope" is not available.
 ///
-/// **3 since 2026-08-04 (Story 5.3)**: `mapping_confirmed`. **2** added `log_dir`
+/// **4 since 2026-08-04 (Story 6.1)**: `ui_port`. **3** added `mapping_confirmed`. **2** added `log_dir`
 /// and `log_keep`, moved in from the environment.
 ///
 /// Both bumps were made even though the added fields are optional-with-default,
@@ -55,7 +55,7 @@ use crate::persist;
 /// default is the one that must not be got wrong: an unrecognised older file
 /// reads as **unconfirmed**, which costs one click, where the other direction
 /// would publish a mapping nobody had looked at.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 pub fn config_path(dir: &Path) -> PathBuf {
     dir.join("config.toml")
@@ -129,6 +129,17 @@ pub struct StoredConfig {
     /// computes it; [`confirm`] is the only way to make it true.
     #[serde(default)]
     pub mapping_confirmed: bool,
+    /// Port the embedded web UI listens on, inside the container.
+    ///
+    /// Absent means [`crate::ui::DEFAULT_PORT`]. It has a default because the
+    /// first run has no file to read one from — and that is the run that needs
+    /// the UI most.
+    ///
+    /// **Changing it costs a new session** by the same argument as the broker: a
+    /// listener cannot move without dropping what is connected to it. See
+    /// `app::reconfigure`, which will not compile until this is classified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_port: Option<u16>,
     pub meters: Vec<StoredMeter>,
 }
 
@@ -239,6 +250,7 @@ pub fn into_raw(config: StoredConfig, credential: Credential, dir: &Path) -> Raw
         publish_period_secs: Some(config.publish_period_secs.to_string()),
         log_dir: config.log_dir,
         log_keep: config.log_keep,
+        ui_port: config.ui_port,
         meters: config
             .meters
             .into_iter()
@@ -339,6 +351,7 @@ mod tests {
             log_dir: None,
             log_keep: None,
             mapping_confirmed: true,
+            ui_port: None,
             meters: vec![StoredMeter {
                 meter_id: "meter-a".into(),
                 device_id: "dev-a".into(),
