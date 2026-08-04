@@ -733,3 +733,32 @@ development_status:
   # test was the branch the test supplied, and the line this story adds to main.rs could
   # have been deleted with both cases green.
   5-3-nothing-is-published-until-the-mapping-is-confirmed: review
+  # Epic 5 is FUNCTIONALLY COMPLETE: FR23/24/25/26/27/46 met; FR43+NFR16 blocked upstream
+  # ([#50]). Two stories in review, one AC partially unmet ([#49]). It stays `in-progress`
+  # rather than `done` until those reviews run — a review is not a formality here; the
+  # 4.2 one moved four conformance verdicts.
+  epic-6: in-progress
+  # 2026-08-04 — 6.1 WRITTEN, and it is now the SHORTEST PATH TO A USABLE PRODUCT.
+  #
+  # ADR 0023 made the web UI the only way to configure the bridge, and the web UI does not
+  # exist. Stories 5.2 and 5.3 both wrote "comes up and serves the web UI" into their ACs
+  # and both delivered only the first half — deliberately, and recorded, but a fresh
+  # deployment today cannot be configured except by hand-writing config.toml.
+  #
+  # That is why the first story is the SERVER and not a screen, and it dictates the shape:
+  # the states where the bridge publishes nothing are exactly the states where the UI
+  # matters most. A server that only ran alongside a healthy session would be useless in
+  # three of the four.
+  #
+  # ONE DECISION THE STORY REFUSES TO DEFER: what happens to the UI when the configuration
+  # is present and INVALID. Today the bridge refuses to start, so the screen that would
+  # repair it is behind the process that refused. Recommended (a) keep refusing — the
+  # refusal is FR26's whole point, the faults already reach `docker compose logs`, and a
+  # bridge staying up on a configuration it rejected is one restart from somebody believing
+  # it runs. But it must be WRITTEN DOWN and the manual must say which.
+  #
+  # AC3 is the one most likely to be got wrong and the failure is expensive: Epic 7 wires
+  # /healthz to a Docker healthcheck that RESTARTS the container. A /healthz reporting
+  # unhealthy because no configuration exists would put a fresh deployment in a restart
+  # loop — destroying, every few seconds, the screen needed to configure it.
+  6-1-the-server-exists-in-every-state-the-bridge-can-be-in: ready-for-dev
