@@ -1,10 +1,26 @@
 \chapter{Configuration}
 \label{ch:config}
 
-\textbf{\code{config.toml} is the configuration.} It lives in the state directory, it is
-edited from the web UI, and it holds every setting \prog has. The environment carries
-exactly two things and no others: the smart-me credential, which never descends to disk,
-and \code{SMARTME\_STATE\_DIR}, because a file cannot say where it lives.
+\textbf{\code{config.toml} is the configuration.} It lives in the state directory and holds
+every setting \prog has. The environment carries the smart-me credential, which never
+descends to disk; \code{SMARTME\_STATE\_DIR}, because a file cannot say where it lives; and
+\code{RUST\_LOG}, which has to be readable \emph{before} the configuration is, since raising
+the level is what one does to diagnose a configuration that will not load.
+
+\begin{warning}
+\textbf{As of this build, \code{config.toml} is written BY HAND. There is no editing screen
+yet.} The web UI exists and answers --- it tells you which state the bridge is in and serves
+\code{/healthz} --- but the forms that write this file are specified and not built
+(story~6.2).
+
+This matters more than it sounds, because of \code{mapping\_confirmed}
+(section~\ref{sec:confirm}): a configuration that is valid but unconfirmed publishes
+\emph{nothing at all}. So a first run done by hand must set
+\code{mapping\_confirmed = true} in the file, or the bridge will come up, serve its page,
+and stay silent for ever while looking healthy.
+
+This warning is removed by story~6.2, not before.
+\end{warning}
 
 The two sources have no setting in common, and that is deliberate. Any overlap would need
 a rule about which wins, and such a rule is a place where one source loses silently ---
@@ -390,7 +406,7 @@ that can actually operate one.
 \label{sec:broker-config}
 
 \prog connects to an \emph{external} broker; it does not embed one. Host and port are
-settings in \code{config.toml}, changed from the web UI or written by hand:
+settings in \code{config.toml}, written by hand for now (see the warning on page~\pageref{ch:config}):
 
 \begin{lstlisting}
 broker_host = "mqtt.example.lan"   # host or IP of your broker

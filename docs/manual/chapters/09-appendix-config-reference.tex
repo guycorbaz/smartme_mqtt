@@ -7,8 +7,9 @@ chapter~\ref{ch:config}; this is the lookup table.
 
 \section{The environment}
 
-Three entries, and there are no others. Everything else \prog has is in
-\code{config.toml} --- see section~\ref{sec:configfile}.
+Four are honoured --- the credential pair, the state directory and \code{RUST\_LOG} --- plus
+two reserved names the bridge does not read. Everything else \prog has is in
+\code{config.toml}; see section~\ref{sec:configfile}.
 
 \begin{center}
 \begin{tabular}{@{}>{\ttfamily}l l p{6.4cm}@{}}
@@ -67,7 +68,7 @@ log\_keep            & no  & Rotated files kept. Default \code{7}. Not a positiv
 \addlinespace
 ui\_port             & no  & Port the embedded web UI listens on \emph{inside} the container. Default \code{8080}. The container publishes no host port --- Traefik reaches it over a shared Docker network and is the only thing that can. Changing it costs a new Sparkplug session: a listener cannot move without dropping what is connected to it. \\
 \addlinespace
-mapping\_confirmed   & no  & Whether a human has checked the meter→topic mapping. \textbf{Absent means \code{false}}, and nothing is published until it is \code{true} --- no connection, no birth. Editing the mapping withdraws it automatically; editing anything else does not. Writing the file by hand and setting it counts as confirming it. See section~\ref{sec:confirm}. \\
+mapping\_confirmed   & no  & \textbf{Set this by hand on a first run, or nothing is ever published.} Whether a human has checked the meter→topic mapping. \textbf{Absent means \code{false}}, and nothing is published until it is \code{true} --- no connection, no birth. Editing the mapping withdraws it automatically; editing anything else does not. Writing the file by hand and setting it counts as confirming it. See section~\ref{sec:confirm}. \\
 \bottomrule
 \end{tabular}
 \end{center}

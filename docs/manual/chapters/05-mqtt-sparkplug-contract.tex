@@ -75,14 +75,27 @@ never birthing, and publishing nothing — looks identical to a healthy but idle
 NBIRTH & node   & On every successful connect, including reconnects. \\
 DBIRTH & device & Immediately after NBIRTH, one per meter. \\
 DDATA  & device & On each poll that produced a reading. \\
+DDEATH & device & When a meter is \emph{disabled}, mid-session, under the same
+                  \code{bdSeq}. The node is untouched: no NDEATH, no rebirth.
+                  Enabling one publishes a DBIRTH the same way. \\
 NDEATH & node   & On shutdown (published by the bridge) and on connection loss
                   (published by the broker as the last will). \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\code{NDATA} and \code{DDEATH} are \emph{not} emitted: the bridge carries no node-level
-measurements, and a device only stops reporting when its node does.
+\code{NDATA} is \emph{not} emitted: the bridge carries no node-level measurements.
+
+\begin{note}
+\textbf{DDEATH became live on 2026-08-04} (story~5.2) and this chapter said the opposite
+until then --- *``a device only stops reporting when its node does''*. It was true while a
+meter could only be switched off by stopping the bridge; the moment a meter could be
+disabled on its own, it stopped being true, and the sentence survived the change. The
+specification permits a DBIRTH mid-session provided the NBIRTH went out in the same session
+(\code{tck-id-message-flow-device-birth-publish-nbirth-wait}), and \emph{requires} a DDEATH
+whenever a device can no longer provide real-time information --- which a meter you have just
+disabled cannot.
+\end{note}
 
 \section{Metrics}
 

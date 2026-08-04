@@ -91,6 +91,17 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Not a CI step either, and added 2026-08-04 after a review found the same
+# defect for the SECOND time: the conformance matrix states its own numbers in
+# prose as well as in tables, and an amendment that fixes the tables leaves the
+# prose saying the old ones. A script had already been run that day — it checked
+# the tables.
+# ---------------------------------------------------------------------------
+step "the conformance matrix agrees with itself"
+python3 scripts/check-conformance-arithmetic.py
+ok "conformance arithmetic"
+
+# ---------------------------------------------------------------------------
 # .github/workflows/docker-publish.yml — the image's own smoke tests.
 #
 # ADDED 2026-08-04, because this script did NOT cover this workflow and the gap

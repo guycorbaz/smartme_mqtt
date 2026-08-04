@@ -1400,7 +1400,7 @@ which is the less common direction for this document to be wrong in.
 **17 conformant · 0 deviations · 3 gaps · 21 n/a** (16 Host Application, 3 messages we do not emit,
 2 command clauses that bind a Host Application publisher)
 
-`15 + 0 + 5 + 21 = 41` rows. **This corrects a miscount**: the tally read `17 · 0 · 8 · 21` until the
+`17 + 0 + 3 + 21 = 41` rows. **This corrects a miscount**: the tally read `17 · 0 · 8 · 21` until the
 code review of Story 4.2 recounted the rows mechanically — the conformant and n/a figures were
 over-stated, and two of the gaps (`topics-ncmd-mqtt`, `topics-dcmd-mqtt`) then became `n/a`.
 
@@ -1409,9 +1409,10 @@ the bridge now builds that exact topic form and subscribes to it. This chapter w
 scope and the row was not on its list of documents to amend — it was reached by re-running the
 story's own grep and following what the change made false.
 
-The 5 gaps are all `gap (unimplemented)`: two uniqueness checks ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27), Epic 3),
-two DDEATH topics (Epic 3), and `topics-dcmd-topic` (Story 4.19 — see the criterion note in
-chapter 5's device section; it probably belongs at `n/a`).
+The 3 gaps are all `gap (unimplemented)`: two uniqueness checks ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27), Epic 3)
+and `topics-dcmd-topic` (Story 4.19 — see the criterion note in chapter 5's device section; it
+probably belongs at `n/a`). **The two DDEATH topic rows left this list on 2026-08-04**, when Story
+5.2 made the bridge emit one.
 
 **41 rows is not the chapter's clause set.** `Sparkplug_4_Topics.adoc` carries **70** `tck-id`s, so
 **29 are recorded nowhere**, and the shape of the 29 explains itself: **26 are `topics-*` clauses
@@ -1571,7 +1572,7 @@ began emitting the message. See the note under that table for what did *not* mov
 
 **36 conformant · 4 deviations · 10 gaps · 59 n/a**
 
-`32 + 4 + 14 + 59 = 109` — the enumerated clause set, with no remainder.
+`36 + 4 + 10 + 59 = 109` — the enumerated clause set, with no remainder.
 
 **This tally was `31 · 5 · 14 · 59` until Story 4.10** (2026-08-01), which moved
 `payloads-nbirth-bdseq-repeat` from `deviation` to `conformant`: `31 + 1 = 32` and `5 − 1 = 4`. That
@@ -1583,8 +1584,8 @@ from `gap (unimplemented)` to `conformant`. `30 + 1 = 31` and `15 − 1 = 14`.
 
 **The count of 109 is a count of ids, not of requirements.** Two of them,
 `payloads-sequence-num-req-nbirth` and `-zero-nbirth`, are one clause under two spellings (see the
-editorial note at the head of this chapter), and both hold a `conformant` row. So **32 conformant is
-31 distinct**, and the chapter states **108 distinct requirements**. The arithmetic is kept against
+editorial note at the head of this chapter), and both hold a `conformant` row. So **36 conformant is
+35 distinct**, and the chapter states **108 distinct requirements**. The arithmetic is kept against
 109 because 109 is what a mechanical enumeration of the specification returns, and a matrix that
 cannot be diffed against the norm is worth less than one that double-counts a known phantom.
 
@@ -1600,17 +1601,17 @@ was a proof cell that named evidence weaker than its clause, and one of them
 `bdSeq` (Story 4.10). A sixth `deviation` verdict renders in this chapter — the scope limit — and is
 deliberately outside the tally, because it is a scope decision rather than a `tck-id` row.
 
-**The 14 gaps, split by kind** (see "How to read this"):
+**The 10 gaps, split by kind** (see "How to read this"):
 
 - **8 × `gap (unproven)`** — we do the thing; nothing proves it. Both property-set array-length
   clauses, the `engUnit` property's `type`, the quality property's `type`, `-propertyvalue-type-req`,
   the metric-level `timestamp`, the NBIRTH payload timestamp, and the will's retain flag. All
   [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30).
-- **6 × `gap (unimplemented)`** — we do not do it. Three DDEATH clauses and the DDEATH timestamp
-  (Epic 3), the will's QoS ([#26](https://github.com/guycorbaz/smartme_mqtt/issues/26), Story 4.17),
-  and edge-node-descriptor uniqueness
-  ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)). `payloads-nbirth-rebirth-req` left
-  this list at Story 4.7.
+- **2 × `gap (unimplemented)`** — we do not do it. The will's QoS
+  ([#26](https://github.com/guycorbaz/smartme_mqtt/issues/26), Story 4.17) and edge-node-descriptor
+  uniqueness ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)).
+  `payloads-nbirth-rebirth-req` left this list at Story 4.7; **the three DDEATH clauses and the
+  DDEATH timestamp left it on 2026-08-04** with Story 5.2.
 
 **Every gap carries an owning story, epic or issue.** That the unproven half now outnumbers the
 unimplemented half is the finding, not an accounting detail: this chapter's dominant defect is not
@@ -1725,6 +1726,15 @@ evidence for it exists (see the chapter-5 rows above) and 4.19 can cite it, but 
 here would change chapter 4 from *41 of 70 audited* to *42 of 70* through a side door, which is the
 kind of drive-by arithmetic this matrix has already had to correct twice.
 
+**And `81 · 6 · 43 · 144` until Story 5.2** (2026-08-04), which made the bridge emit a DDEATH for
+the first time and moved six rows from `gap (unimplemented)` to `conformant` — two in chapter 4
+(`topics-ddeath-topic`, `-mqtt`) and four in chapter 6 (`payloads-ddeath-timestamp`, `-seq`,
+`-seq-inc`, `-seq-number`). `81 + 6 = 87`, `43 − 6 = 37`, and `87 + 6 + 37 + 144 = 274` is again
+unchanged. **Chapter 5's `operational-behavior-device-ddeath` deliberately did NOT move**: that
+clause triggers on the Edge Node *losing connection* with a Device, and the bridge emits its DDEATH
+when an operator *disables* a meter, which is a different event. The form of a DDEATH is conformant;
+one of the two situations that should produce one still does not.
+
 **`70 + 109 + 124 = 303`** is the whole-specification clause set: chapter 4 (Story 4.1), chapter 6
 (Story 4.2), and chapters 1, 2, 3, 5 and 10 (Story 4.3). Story 4.3's own arithmetic closes at
 **`26 + 3 + 31 + 64 = 124`**.
@@ -1750,7 +1760,7 @@ number that *followed* from them: this paragraph, both chapter tallies, chapter 
 note and the counterfactual under `-primary-host-app`. Amending a claim is not amending its
 consequences, and this document has now had to record that twice.
 
-**The 43 gaps split 29 unimplemented / 14 unproven**, and the balance moved sharply with chapter 5. *(Corrected by the Story 4.7 code review: this read `50 … 36 / 14` — the whole-specification gap split, twenty-eight lines below the total the story DID amend to 43. Three tallies were recomputed and this fourth was not, so the document stated 43 and 50 for the same quantity.)*
+**The 37 gaps split 23 unimplemented / 14 unproven**, and the balance moved sharply with chapter 5. *(Corrected TWICE, and the second time is worse than the first. The Story 4.7 code review found it reading `50 … 36 / 14` while the total said 43 — three tallies recomputed and this fourth missed. Then Story 5.2 moved six rows on 2026-08-04, amended both chapter tallies and the total, ran a SCRIPT to verify the arithmetic — and the script checked the TABLES only, so this sentence went on saying 43 and 29 for a quantity that was now 37 and 23. The lesson recorded after the first correction was "amend the consequences, not just the claim"; the lesson from the second is that a checker which verifies the tables verifies the half of the document least likely to be wrong.)*
 Chapter 6 found a codebase whose dominant defect was behaviour nothing would notice losing; chapter 5
 found two whole mechanisms — command handling and Primary Host STATE — that were never built. Both
 were real, and they needed different work: a test versus a feature. **Neither is now open**: Story 4.7
