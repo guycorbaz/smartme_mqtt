@@ -101,6 +101,34 @@ authentication, LAN-only, Traefik the sole ingress
 > `secret_never_reaches_the_log.rs` already uses: prove the search finds the value when it IS there,
 > then prove it is not.
 
+**AC7 — confirming must not require the operator to restart the container** *(added while drafting
+the implementation — see below)*
+
+**Given** a bridge sitting in *unconfigured* or *unconfirmed*, which is `run_without_publishing`
+**When** the operator saves a valid configuration and confirms the mapping
+**Then** the bridge begins publishing **without human intervention**
+**And** if that is not delivered, the screen says plainly that a restart is needed — it never
+implies publishing has begun.
+
+> **This gap was found by writing the story's implementation notes, not by running anything, and it
+> would otherwise have surfaced halfway through the work.**
+>
+> `run_without_publishing` waits for a shutdown signal and can do nothing else. It has no session to
+> start, and `main.rs` decides the state once, before it. So as the code stands today, an operator
+> who configures and confirms in the browser is met by a bridge that keeps saying *"nothing is
+> published"* until somebody restarts the container — which turns the story's own promise, *a first
+> run completed entirely in the browser*, into a first run completed in the browser and a terminal.
+>
+> **Decided: `main.rs` becomes a loop over the lifecycle.** `run_without_publishing` returns a
+> reason — *shutdown* or *the configuration became ready* — the UI signals the second after a
+> successful confirmation, and the loop re-reads the file and enters `run`. It is a small change and
+> it is the honest one: the alternative, exiting so a restart policy picks it up, depends on a
+> deployment setting the bridge cannot see and would look like a crash in the logs.
+>
+> **The transition is one-way in this story.** Going back — a confirmation withdrawn while
+> publishing — means tearing the session down, which is [#49]'s problem and not this one. Withdrawal
+> already costs a restart today and the screen must say so.
+
 ## Tasks / Subtasks
 
 - [ ] **Task 1 — read before writing**
@@ -137,7 +165,15 @@ authentication, LAN-only, Traefik the sole ingress
         matched nothing because `rustfmt` had reflowed the target, and the test stayed green.
   - [ ] `./scripts/ci-local.sh`, **full**.
 
-- [ ] **Task 7 — the consequences**
+- [ ] **Task 7 — the lifecycle loop** (AC: 7)
+  - [ ] `run_without_publishing` returns a reason rather than `()`.
+  - [ ] `main.rs` loops: re-read the file, re-decide the state, enter the right runner.
+  - [ ] **The re-read is a full `store::read` + `validate`**, not a patch of what was posted — the
+        file is the configuration, and a loop that trusted its own memory would be a second source.
+  - [ ] Falsify by signalling the transition without writing the file, and confirming the bridge
+        does not publish.
+
+- [ ] **Task 8 — the consequences**
   - [ ] `docker-smoke.sh`: a first run can be configured over HTTP end to end.
   - [ ] The manual's chapter 6 is a stub; it gains the screens.
   - [ ] NFR11 — *time-to-first-value under 15 minutes from a clean machine* — becomes measurable for
