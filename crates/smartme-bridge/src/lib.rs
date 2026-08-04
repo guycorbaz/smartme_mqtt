@@ -64,10 +64,14 @@ pub fn run(
 /// have not confirmed it"* cannot act: the second is one click away and the
 /// first is not.
 ///
-/// **No MQTT session is opened here, and that is the assertion.** No CONNECT, no
-/// will registered, no NBIRTH: an operator watching the broker sees nothing at
-/// all until a configuration exists, rather than a node announcing itself with
-/// nothing to say.
+/// **No MQTT session is opened here.** No CONNECT, no will registered, no
+/// NBIRTH: an operator watching the broker sees nothing at all until a
+/// configuration exists, rather than a node announcing itself with nothing to
+/// say.
+///
+/// It said *"and that is the assertion"* until 2026-08-04. It was not an
+/// assertion — it is a structural property, and nothing tested it. What tests it
+/// now is `unconfirmed_publishes_nothing.rs`, against a real broker.
 ///
 /// **The web UI is served here** (Story 6.1) — which is the point: these are the
 /// two states in which nothing is published, and therefore the two in which an

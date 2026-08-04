@@ -73,7 +73,13 @@ pub struct Change {
 /// Everything that changed between two configurations, and what to do about it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Plan {
-    /// Every field that differs, in declaration order.
+    /// Every field that differs, **grouped by cost** — hot first, then new
+    /// session, then process restart, then the meter set.
+    ///
+    /// It said *"in declaration order"* until a review on 2026-08-04 pointed out
+    /// that it never was: the meters are compared last while being declared
+    /// fourth. Grouping is what the code actually does and what a form wants,
+    /// since it renders by consequence rather than by struct layout.
     pub changes: Vec<Change>,
     /// Devices to announce, **before** any DDATA can carry their metrics.
     pub births: Vec<Serial>,
@@ -203,14 +209,6 @@ pub fn classify(old: &BridgeConfig, new: &BridgeConfig) -> Plan {
     if old_bd_seq_path != new_bd_seq_path {
         note("state directory", Cost::NewSession);
     }
-    // A listener cannot move without dropping what is connected to it. Same
-    // argument as the broker — and the compiler is what asked the question:
-    // adding this field to `BridgeConfig` broke the destructure above until
-    // somebody classified it, which is the guarantee this module exists for.
-    if old_ui_port != new_ui_port {
-        note("ui_port", Cost::NewSession);
-    }
-
     // PROCESS RESTART — see the module docs. Both of these are honest
     // admissions, not oversights.
     if old_log_dir != new_log_dir {
@@ -224,6 +222,28 @@ pub fn classify(old: &BridgeConfig, new: &BridgeConfig) -> Plan {
     // silent difference here would be the one nobody notices.
     if old_credentials != new_credentials {
         note("smart-me credential", Cost::ProcessRestart);
+    }
+    // PROCESS RESTART, and it read `NewSession` until a review caught it on
+    // 2026-08-04.
+    //
+    // The costs here are named for what the OPERATOR sees, and `NewSession`
+    // means one specific thing on the wire: NDEATH, a new `bdSeq`, NBIRTH.
+    // Moving the UI's port produces none of those — the Sparkplug session is not
+    // touched at all. It produces exactly `ProcessRestart`'s description:
+    // nothing until the container is restarted, because the listener is spawned
+    // once from `main.rs` and nothing re-reads this.
+    //
+    // Worth keeping as a lesson: the compiler DID force this field to be
+    // classified — the exhaustive destructure above would not build otherwise —
+    // and the classification was then got wrong, which no compiler can catch.
+    // The guarantee is that a question is asked, never that it is answered well.
+    //
+    // Two things followed from the wrong answer: `apply` warned "the Sparkplug
+    // identity or the broker changed" when neither had, and `needs_restart()`
+    // filters on `ProcessRestart`, so a form would not have listed `ui_port`
+    // among the fields waiting for a restart — which is precisely what it is.
+    if old_ui_port != new_ui_port {
+        note("ui_port", Cost::ProcessRestart);
     }
 
     classify_meters(old_meters, new_meters, &mut plan);
@@ -436,13 +456,28 @@ mod tests {
     }
 
     /// The category that exists to stop a form from lying.
+    ///
+    /// `ui_port` is in here because a review corrected it from `NewSession` on
+    /// 2026-08-04: moving a listener produces no NDEATH, no new `bdSeq` and no
+    /// NBIRTH, so calling it a new session sent an operator to look at their
+    /// broker — and kept it out of `needs_restart()`, which is the one list a
+    /// form shows.
     #[test]
-    fn the_log_settings_and_the_credential_need_a_restart() {
+    fn the_log_settings_the_credential_and_the_ui_port_need_a_restart() {
         let mut new = base();
         new.log_dir = Some("/data/logs".into());
         new.log_keep = Some(30);
+        new.ui_port = Some(9090);
         let plan = classify(&base(), &new);
         assert_eq!(plan.cost(), Some(Cost::ProcessRestart));
-        assert_eq!(plan.needs_restart(), vec!["log_dir", "log_keep"]);
+        assert_eq!(
+            plan.needs_restart(),
+            vec!["log_dir", "log_keep", "ui_port"],
+            "every field a form must mark as waiting has to be in this list"
+        );
+        assert!(
+            !plan.changes.iter().any(|c| c.cost == Cost::NewSession),
+            "moving a listener does not disturb the Sparkplug session: {plan:?}"
+        );
     }
 }

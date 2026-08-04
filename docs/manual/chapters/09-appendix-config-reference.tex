@@ -66,7 +66,7 @@ api\_base            & no  & smart-me endpoint. Default \code{https://api.smart-
 log\_dir             & no  & Directory for the log file. Unset: no file at all, console only. Set: \code{smartme\_mqtt.<date>.log}, rotated daily. \\
 log\_keep            & no  & Rotated files kept. Default \code{7}. Not a positive number: refused on stderr, keeps 7. \\
 \addlinespace
-ui\_port             & no  & Port the embedded web UI listens on \emph{inside} the container. Default \code{8080}. The container publishes no host port --- Traefik reaches it over a shared Docker network and is the only thing that can. Changing it costs a new Sparkplug session: a listener cannot move without dropping what is connected to it. \\
+ui\_port             & no  & Port the embedded web UI listens on \emph{inside} the container. Default \code{8080}. The container publishes no host port --- Traefik reaches it over a shared Docker network and is the only thing that can. Changing it takes effect at the next restart --- the listener is started once. It does \emph{not} disturb the Sparkplug session. \\
 \addlinespace
 mapping\_confirmed   & no  & \textbf{Set this by hand on a first run, or nothing is ever published.} Whether a human has checked the meter→topic mapping. \textbf{Absent means \code{false}}, and nothing is published until it is \code{true} --- no connection, no birth. Editing the mapping withdraws it automatically; editing anything else does not. Writing the file by hand and setting it counts as confirming it. See section~\ref{sec:confirm}. \\
 \bottomrule

@@ -18,13 +18,23 @@
 //! has already produced a false pass in this project, where every chaos test
 //! pointed at TEST-NET-1 and *"no DATA appeared"* held over an empty stream.
 //!
-//! So each absence here is paired with a **presence** first:
+//! So each absence here is paired with a **presence** first: it did not exit
+//! **and** it said the specific thing an unconfigured bridge says, so the
+//! process is alive on purpose rather than stuck.
 //!
-//! - it did not exit **and** it said the specific thing an unconfigured bridge
-//!   says, so the process is alive on purpose rather than stuck;
-//! - it opened no session **and** the same harness is shown, in
-//!   `startup_banner`, to observe a bridge that *does* reach its configuration
-//!   and exit on a fault.
+//! # What this file does NOT test, corrected 2026-08-04
+//!
+//! **It never touches a broker**, and a doc comment here claimed otherwise — that
+//! *"it opened no session and the same harness is shown, in `startup_banner`, to
+//! observe a bridge that does reach its configuration"*. Both halves were false:
+//! there was no session assertion in this file at all, and `startup_banner` is a
+//! different harness that reads the stdout of a process exiting on a validation
+//! fault, which demonstrates nothing about a subscriber's ability to see a
+//! CONNECT.
+//!
+//! The wire half of that acceptance criterion lives in
+//! `unconfirmed_publishes_nothing.rs`, which has a real broker and an independent
+//! subscriber, and pairs its silence with a birth on the same harness.
 //!
 //! [ADR 0023]: ../../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md
 

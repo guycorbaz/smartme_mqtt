@@ -238,3 +238,54 @@ fn a_taken_port_does_not_cost_the_meters() {
          to absent and say so, never propagate"
     );
 }
+
+/// AC1's fourth row — **untested until a review pointed it out on 2026-08-04**.
+///
+/// Three tests fetched from the two silent states and one squatted the port, so
+/// nothing had ever asked a RUNNING bridge for a page. `Lifecycle::Running`'s
+/// text was covered only by a string-distinctness unit test, and `/healthz`'s
+/// running body by nothing at all — which is part of why it shipped claiming to
+/// be publishing.
+///
+/// The broker is unroutable on purpose: the bridge reaches Running, tries to
+/// connect, and fails. That is the case the endpoint must describe honestly.
+#[test]
+fn a_running_bridge_serves_its_page_and_an_honest_health_body() {
+    let dir = state_dir("running");
+    let port = port_for(4);
+    write_config(&dir, port, true);
+    let mut child = spawn(&dir);
+
+    let page = wait_for_ui(port, &mut child);
+    let health = get(port, "/healthz");
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let page = page.expect("a running bridge must serve its page too");
+    assert!(
+        page.contains("Running"),
+        "the page must say which state it is in:\n{page}"
+    );
+
+    let health = health.expect("/healthz must answer");
+    assert!(
+        health.contains("200 OK"),
+        "a bridge whose broker is unreachable is working correctly and saying so \
+         — an honest STALE, which must never trigger a restart:\n{health}"
+    );
+    assert!(
+        health.contains("\"status\":\"running\""),
+        "and it must say which state:\n{health}"
+    );
+    assert!(
+        !health.contains("\"publishing\":true"),
+        "the endpoint must not claim to be PUBLISHING. The broker here is \
+         unroutable and nothing has reached the wire; what the bridge can \
+         honestly assert is what it INTENDS. Answer was:\n{health}"
+    );
+    assert!(
+        health.contains("\"intends_to_publish\":true"),
+        "and it must assert that much:\n{health}"
+    );
+}

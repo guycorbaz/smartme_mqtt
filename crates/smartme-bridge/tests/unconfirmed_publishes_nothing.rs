@@ -155,3 +155,35 @@ async fn an_unconfirmed_mapping_never_reaches_the_broker() {
     let _ = bridge.wait();
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The OTHER silent state, on the wire.
+///
+/// `unconfigured_start.rs` proves the process comes up and stays up with no
+/// configuration; it never touches a broker, and a doc comment there claimed a
+/// session assertion it did not have. This is that assertion, on the same
+/// harness whose ability to see a birth is proved above.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unconfigured_bridge_never_reaches_the_broker_either() {
+    let (_broker, port) = common::start_broker().await;
+    let mut seen = common::independent_subscriber(port).await;
+    let dir = state_dir("no-config");
+    // Deliberately EMPTY: no config.toml at all.
+
+    let mut bridge = spawn(&dir);
+
+    let anything = common::wait_for(&mut seen, Duration::from_secs(10), |s| {
+        s.topic.starts_with("spBv1.0/")
+    })
+    .await;
+
+    let _ = bridge.kill();
+    let _ = bridge.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        anything.is_none(),
+        "an unconfigured bridge put {:?} on the wire. It has no group and no node \
+         to publish under, so anything at all here is a namespace nobody chose",
+        anything.map(|s| s.topic)
+    );
+}

@@ -106,6 +106,21 @@ fn config(port: u16, state_dir: &std::path::Path) -> BridgeConfig {
 /// The first green run finished in 0.59 s, which was suspicious enough to be
 /// worth checking rather than trusting. The 31 s failure above is what shows the
 /// speed was a warm container and not a test that measured nothing.
+///
+/// FALSIFIED AGAIN 2026-08-05, for the session-number assertion, which a review
+/// had found to be `x == x`. The first mutation tried — `publisher.new_session()`
+/// on a device birth — **failed at the wrong assertion**: it left the publisher
+/// pending so no DBIRTH went out, and the test died on *"re-enabling the meter
+/// announces it again"*. Right colour, wrong reason, and it would have proved
+/// nothing about the line under repair.
+///
+/// The isolating mutation moves the persisted number and NOTHING else — the
+/// DBIRTH still goes out, the NBIRTH count is still one:
+///
+/// ```text
+/// the persisted session number is "bd_seq = 42\n", and the birth the host saw
+/// carried 1. A device certificate must not open a new session
+/// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn chaos_enabling_and_disabling_a_meter_costs_certificates_not_a_session() {
     let (_broker, port) = common::start_broker().await;
@@ -210,10 +225,25 @@ async fn chaos_enabling_and_disabling_a_meter_costs_certificates_not_a_session()
          not cost a node certificate. tck-id-message-flow-device-birth-publish-nbirth-wait \
          allows a mid-session DBIRTH precisely so that it does not"
     );
-    assert_eq!(
-        birth.bd_seq().expect("still readable"),
-        bd_seq,
-        "the session number must not have moved"
+    // THE SESSION NUMBER, checked against something the test did not already
+    // hold.
+    //
+    // This read `assert_eq!(birth.bd_seq(), bd_seq)` until a review on
+    // 2026-08-04 — and `bd_seq` had been taken FROM `birth`, which is never
+    // reassigned. It was `x == x`: unfalsifiable, and the exact defect this
+    // repository's own rules cite from Epic 1 ("a bdSeq comparison of a constant
+    // against itself"), reintroduced by someone who had read that line.
+    //
+    // `bdseq.toml` is an INDEPENDENT witness: the driver rewrites it once per
+    // CONNECT, before registering the will. If it still holds the number the
+    // birth carried, no second session was opened — which is the property, and
+    // it cannot be satisfied by re-parsing the same buffer.
+    let persisted = std::fs::read_to_string(state_dir.join("bdseq.toml"))
+        .expect("the driver persists the session number once per connect");
+    assert!(
+        persisted.contains(&bd_seq.to_string()),
+        "the persisted session number is {persisted:?}, and the birth the host \
+         saw carried {bd_seq}. A device certificate must not open a new session"
     );
 
     bridge.abort();

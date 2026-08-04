@@ -9,9 +9,12 @@ It is a **personal reliability tool** — a compact binary for dependable 24/7 o
 modest hardware (NAS / Raspberry Pi), deployed via `docker compose`, and configured,
 previewed, and diagnosed through a built-in web UI. Open-sourced under **MIT**.
 
-> ⚙️ **Status: early development.** The project is being built epic by epic. The Cargo
-> workspace, CI gates, and shared primitives (Epic 0) are in place; the bridge is **not yet
-> functional**. See [Project status](#project-status).
+> ⚙️ **Status: works, not yet deployed.** The bridge polls, judges freshness, and publishes
+> Sparkplug B to a broker — proven against Ignition 8.3.7 in a manual contract run. It is
+> **not yet running in production**, and its configuration screens are not built: today a
+> deployment is configured by writing `config.toml` by hand, and **nothing is published until
+> the meter mapping is confirmed in that file**. See [Project status](#project-status) and
+> `docs/manual/`.
 
 ## The guiding principle — "never lies to the SCADA"
 
@@ -72,10 +75,22 @@ Built epic by epic, walking-skeleton-first:
 - ✅ **Epic 0 — Socle:** 3-crate workspace, pinned toolchain, CI gates (`fmt`, `clippy`,
   `cargo-deny`, `arch_purity`, isolated-build), the Sparkplug `.proto`, fixtures scaffolding,
   and the atomic-persistence primitive.
-- ⏳ **Epic 1 — Walking Skeleton:** one meter → Ignition with an honest STALE flag; the
+- ✅ **Epic 1 — Walking Skeleton:** one meter → Ignition with an honest STALE flag; the
   `ValueDate`/HTTP-`Date`-header freshness audit.
-- ⏳ Epics 2–8: exhaustive oracles, full fleet, publishing state machine, configuration,
-  observability UI, deployment, documentation.
+- ✅ **Epic 4 — Sparkplug conformance:** the specification audited clause by clause
+  (`docs/sparkplug-conformance.md`), rebirth answered, the session number advanced per
+  connect, and a Tier-3 contract run against a real Ignition.
+- ✅ **Epic 5 — Configuration:** one validated model, `config.toml` as the single source,
+  the credential kept in the environment, and nothing published until the mapping is
+  confirmed.
+- ⏳ **Epic 6 — Web UI:** the server and `/healthz` exist; **the configuration screens do
+  not**, which is why a first run is currently a hand-written file.
+- ⏳ Epics 2, 3, 7, 8: exhaustive oracles, the full four-meter fleet, deployment,
+  documentation.
+
+*(This section read "Epic 1 in progress, the bridge is not yet functional" until a review on
+2026-08-05 — sixteen commits and four epics after it stopped being true. The README is the
+one document a newcomer reads first and the one nobody re-reads.)*
 
 ## Building
 

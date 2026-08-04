@@ -51,7 +51,8 @@ RUN cargo build --release --locked -p smartme-bridge
 FROM debian:bookworm-slim AS runtime
 
 # `ca-certificates` is REQUIRED, not hygiene. The bridge refuses a non-TLS
-# `SMARTME_API_BASE` (`a_non_tls_api_base_refuses_to_start`), so every call to
+# `api_base` (`a_non_tls_api_base_refuses_to_start`) — a key in `config.toml`
+# since 2026-08-04, the environment variable `SMARTME_API_BASE` before that — so every call to
 # the smart-me cloud is HTTPS. Without a CA bundle the poll task fails on every
 # tick and the bridge publishes an honest but permanent STALE — which looks
 # exactly like a cloud outage and is the hardest possible way to discover a
@@ -70,10 +71,20 @@ RUN groupadd --gid 10002 smartme \
  && useradd --uid 10002 --gid 10002 --no-create-home --shell /usr/sbin/nologin smartme
 
 # The persisted state directory. `SMARTME_STATE_DIR` defaults to `/data`, and
-# what lives there is `bdseq.toml` — the Sparkplug session number. It MUST
-# survive restarts: a bridge that restarts with a fresh state directory replays a
-# session number, and a consumer that pairs a death to a birth by `bdSeq` can
-# then discard a death that belongs to a session it thinks is still live.
+# TWO things live there:
+#
+#   config.toml  THE CONFIGURATION — every setting the bridge has, since
+#                2026-08-04 (ADR 0023). Lose it and the bridge comes back
+#                unconfigured, publishing nothing until somebody configures it
+#                again. This comment described only `bdseq.toml` until a review
+#                on 2026-08-05, which would have had anyone sizing a backup
+#                around a session counter.
+#   bdseq.toml   the Sparkplug session number. It MUST survive restarts: a bridge
+#                that restarts with a fresh state directory replays a session
+#                number, and a consumer that pairs a death to a birth by `bdSeq`
+#                can then discard a death that belongs to a session it thinks is
+#                still live.
+#
 # Mount a volume over this in compose.
 RUN mkdir -p /data && chown 10002:10002 /data
 VOLUME ["/data"]
