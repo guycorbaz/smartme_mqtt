@@ -671,3 +671,37 @@ development_status:
   # ci-local.sh reproduced TWO WORKFLOWS OUT OF THREE while claiming to reproduce CI. Image
   # checks now live in scripts/docker-smoke.sh, called by both.
   5-2-config-persists-and-reloads-without-a-restart: review
+  #
+  # 2026-08-04 — 5.3 WRITTEN. FR25, the first-run mapping confirmation, and it is the last
+  # buildable requirement Epic 5 owns. prd.md:136 is blunt about why it exists: it is "the
+  # ONLY guard against a mis-map the machine cannot detect". 5.1's validation catches a bad
+  # serial and a topic collision; it cannot catch meter_id="garage" pointed at the cellar's
+  # device_id, and a Sparkplug host PERSISTS what it discovers.
+  #
+  # ADR 0023 RAISED the stakes rather than lowering them: the whole configuration now
+  # arrives through a form, so one click would otherwise be the entire distance between an
+  # empty file and an irreversible namespace.
+  #
+  # Two decisions taken at drafting rather than deferred:
+  #  - a BOOLEAN, not a fingerprint. A fingerprint self-invalidates and is the shape this
+  #    project usually prefers, but it CANNOT BE WRITTEN BY HAND — and FR23 now promises a
+  #    headless bring-up that writes config.toml by hand. A guard that makes the documented
+  #    bring-up impossible is a second bug, not a guard.
+  #  - what replaces the self-invalidation is AC3: the withdrawal lives in the MODEL, at the
+  #    boundary every writer passes, not in the screen that saved it.
+  # An unconfirmed configuration opens NO MQTT SESSION — not merely no DDATA. An NBIRTH
+  # alone creates the node folder, which is the irreversible half.
+  #
+  # This makes FOUR startup states, and they must stay distinguishable: absent / present
+  # and invalid / present valid unconfirmed / ready. If the two "comes up, no session"
+  # states share a trace line, an operator cannot tell "not configured" from "not
+  # confirmed" — and the second is one click from fixed while the first is not.
+  #
+  # FR24 is left to be SETTLED in 5.3 rather than drift: the mapping scheme is fixed and
+  # defaulted, so it is probably met, but an FR nobody ever declares met is discovered open
+  # at the end of the epic.
+  #
+  # FR43/NFR16 (broker TLS + auth) are BLOCKED UPSTREAM, not unstarted — rumqttc pins a
+  # rustls-webpki with unfixed advisories. Recorded as [#50] so a blocked requirement stops
+  # looking like an unwritten one.
+  5-3-nothing-is-published-until-the-mapping-is-confirmed: ready-for-dev
