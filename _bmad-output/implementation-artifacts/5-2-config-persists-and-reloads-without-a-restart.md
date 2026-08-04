@@ -177,17 +177,27 @@ one place a refactor could put it back without any test noticing.
         one. Conformant per `tck-id-message-flow-device-birth-publish-nbirth-wait`, read in the
         vendored spec rather than remembered.
 
-- [~] **Task 5 — falsification** (AC: all) — *nine mutations run 2026-08-04, all red, records copied
-      next to their tests. What remains is the log-search for the secret (AC6's third clause) and
-      AC1 below.*
+- [x] **Task 5 — falsification** (AC: all) — *twelve mutations run 2026-08-04, all red, records
+      copied next to their tests. The log-search for the secret is
+      `secret_never_reaches_the_log.rs`, falsified by reproducing Story 1.6's defect exactly: a
+      derived `Debug` on `Credential` plus the one trace line somebody plausibly adds beside it.
+      **Neither half leaks alone**, which is why this is a test about the process rather than a rule
+      about a derive.*
 
-- [ ] **Task 7 — AC1's image-update path** *(never started, and it is the one AC nothing covers)*
-  - [ ] AC1 asks for a test that exercises an **image update**, not only a restart. A restart
-        re-reads a file the same binary wrote; an image update replaces the binary that reads it,
-        which is what FR40 promises and what a schema change breaks. The schema-version refusal
-        (AC5) is tested, but nothing yet runs *two different builds* against one state directory.
-  - [ ] Until then AC1 is **half met** — the restart half falls out of `store::load` being wired
-        and is covered incidentally, the image-update half is untested.
+- [x] **Task 7 — AC1's image-update path** — `config_survives_an_image_update.rs`.
+  - [x] **The file is written as TEXT, by hand, never through `store::save`.** A round-trip through
+        the writer proves only that the writer and the reader agree with each other — which is
+        exactly the assurance an image update removes. What distinguishes an update from a restart
+        is that the code reading the file may not be the code that wrote it, so the *file* is what
+        has to be tested, not a second toolchain run.
+  - [x] Every stored value asserted, not a spot check: *"it loaded"* would also be true of a reader
+        that substituted its own defaults for everything.
+  - [x] Optional keys a previous build never wrote take their **documented defaults**, which is a
+        different claim from *"they are absent"*.
+  - [x] A file from another schema is **refused, naming the version it found**. Falsified by
+        disabling the version check — and the telling part is that **the three other tests stayed
+        green** under that mutation, because a file from another schema parses perfectly well. That
+        is the whole danger.
   - [ ] Schema: rename a field in the file and confirm refusal rather than a silent default.
   - [ ] Secrets: assert absence from logs by **searching for the value**, having first confirmed the
         search finds it when deliberately leaked — an absence assertion over a stream that never

@@ -649,4 +649,25 @@ development_status:
   #  - AC4's new-session half, [#49].
   #  - AC6's third clause: search the LOG for the secret value, having first proved the
   #    search finds it when deliberately leaked.
-  5-2-config-persists-and-reloads-without-a-restart: ready-for-dev
+  #
+  # 2026-08-04, last pass — AC1 and AC6 CLOSED. Story 5.2 goes to review with ONE
+  # acceptance criterion recorded as partially unmet: AC4's new-session half, [#49].
+  #
+  # AC6: secret_never_reaches_the_log.rs runs the real binary at RUST_LOG=trace and
+  # searches everything it says. Falsified by reproducing story 1.6's defect exactly —
+  # a derived Debug on Credential PLUS the one trace line somebody plausibly adds beside
+  # it. NEITHER HALF LEAKS ALONE, which is why this is a test about the process and not a
+  # rule about a derive.
+  #
+  # AC1: config_survives_an_image_update.rs. The file is written as TEXT, by hand, never
+  # through store::save — a round-trip through the writer proves only that the writer and
+  # the reader agree with each other, which is exactly the assurance an image update
+  # removes. The finding worth keeping: under the mutation that disables the schema-version
+  # check, THE THREE OTHER TESTS STAYED GREEN, because a file from another schema parses
+  # perfectly well. That is the whole danger and why it needs a test of its own.
+  #
+  # Also today: the Docker smoke test HUNG rather than failed (26 min vs 3 min) because it
+  # expected the binary to exit without a configuration — and it reached CI because
+  # ci-local.sh reproduced TWO WORKFLOWS OUT OF THREE while claiming to reproduce CI. Image
+  # checks now live in scripts/docker-smoke.sh, called by both.
+  5-2-config-persists-and-reloads-without-a-restart: review
