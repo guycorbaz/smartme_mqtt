@@ -1,22 +1,29 @@
 \chapter{Configuration reference}
 \label{app:configref}
 
-Every environment variable and TOML key: name, whether required, format, example,
-default, and effect if missing.
+Every environment variable and every \code{config.toml} key: name, whether required,
+default, and what happens if it is missing. The reasoning behind each lives in
+chapter~\ref{ch:config}; this is the lookup table.
+
+\section{The environment}
+
+Three entries, and there are no others. Everything else \prog has is in
+\code{config.toml} --- see section~\ref{sec:configfile}.
 
 \begin{center}
-\begin{tabular}{@{}>{\ttfamily}l l p{6.5cm}@{}}
+\begin{tabular}{@{}>{\ttfamily}l l p{6.4cm}@{}}
 \toprule
 \normalfont\textbf{Variable} & \textbf{Req.} & \textbf{Effect} \\
 \midrule
 SMARTME\_CLIENT\_ID     & yes & smart-me OAuth client-credentials ID. Missing: \prog refuses to start. \\
 SMARTME\_CLIENT\_SECRET & yes & smart-me OAuth client-credentials secret. Missing: \prog refuses to start. \\
+\addlinespace
+SMARTME\_STATE\_DIR     & no  & Where \code{config.toml} and \code{bdseq.toml} live. Default \code{/data}. \\
+\addlinespace
+RUST\_LOG               & no  & \code{tracing} filter, console and file alike. Default \code{info}. Stays in the environment deliberately: raising the level is what one does to diagnose a configuration that will not load, so it must be readable before the configuration is. \\
+\addlinespace
 SMARTME\_BASIC\_USER    & --- & HTTP Basic fallback user. \textbf{Not read by \prog}\textsuperscript{*}. \\
 SMARTME\_BASIC\_PASSWORD& --- & HTTP Basic fallback password. \textbf{Not read by \prog}\textsuperscript{*}. \\
-\addlinespace
-SMARTME\_LOG\_DIR       & no  & Directory for the log file. Unset: no log file, console only. Set: \code{smartme\_mqtt.<date>.log}, rotated daily. \\
-SMARTME\_LOG\_KEEP      & no  & Rotated files kept. Default 7. Not a positive number: refused on stderr, keeps 7. \\
-RUST\_LOG               & no  & \code{tracing} filter, console and file alike. Default \code{info}. \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -28,5 +35,72 @@ these two variables has no effect --- and because the OAuth pair is required, om
 their favour makes \prog refuse to start. Wiring it up, or dropping it from the design, is an
 open decision.\normalsize
 
-\stub{the full table (broker, meter identity, Sparkplug identity, state directory, poll
-interval, bind, mapping) as those settings are documented here.}
+\begin{warning}
+\textbf{Eleven variables were withdrawn on 2026-08-04} and setting them does nothing:
+\code{SMARTME\_GROUP\_ID}, \code{SMARTME\_NODE\_ID}, \code{SMARTME\_BROKER\_HOST},
+\code{SMARTME\_BROKER\_PORT}, \code{SMARTME\_METER\_ID}, \code{SMARTME\_DEVICE\_ID},
+\code{SMARTME\_SERIAL}, \code{SMARTME\_PUBLISH\_PERIOD\_SECS}, \code{SMARTME\_API\_BASE},
+\code{SMARTME\_LOG\_DIR}, \code{SMARTME\_LOG\_KEEP}. Each is a key in the table below.
+\end{warning}
+
+\section{\code{config.toml}}
+
+\begin{center}
+\begin{tabular}{@{}>{\ttfamily}l l p{6.1cm}@{}}
+\toprule
+\normalfont\textbf{Key} & \textbf{Req.} & \textbf{Effect} \\
+\midrule
+schema\_version      & yes & Currently \code{2}. Another value is refused: there is no migration, and reading an unknown layout by guesswork would start \prog on settings nobody wrote. \\
+\addlinespace
+group\_id            & yes & Sparkplug group. \textbf{No default}: a host persists what it discovers, so the wrong namespace leaves a tag folder that outlives the process and must be deleted by hand. \\
+node\_id             & yes & Sparkplug edge node. Same reason. \\
+\addlinespace
+broker\_host         & yes & Host or IP of the MQTT broker. \\
+broker\_port         & no  & Default \code{1883}. A value that is not a port number is refused rather than silently replaced. \\
+\addlinespace
+publish\_period\_secs & no & Seconds between publishes. Default \code{30}, minimum \code{5}, maximum \code{300}. There is deliberately no value meaning ``off'': the periodic publish is what lets a host that restarted notice a node whose BIRTH it never saw and ask for a rebirth. \\
+\addlinespace
+api\_base            & no  & smart-me endpoint. Default \code{https://api.smart-me.com}. Must be \code{https}; a plaintext base is refused. \\
+\addlinespace
+log\_dir             & no  & Directory for the log file. Unset: no file at all, console only. Set: \code{smartme\_mqtt.<date>.log}, rotated daily. \\
+log\_keep            & no  & Rotated files kept. Default \code{7}. Not a positive number: refused on stderr, keeps 7. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{\code{[[meters]]} --- one table per meter}
+
+\begin{center}
+\begin{tabular}{@{}>{\ttfamily}l l p{6.1cm}@{}}
+\toprule
+\normalfont\textbf{Key} & \textbf{Req.} & \textbf{Effect} \\
+\midrule
+meter\_id  & yes & Logical name. It becomes the metric path a SCADA host displays. \\
+device\_id & yes & The smart-me device UUID behind it. \\
+serial     & yes & The meter's serial. It becomes the Sparkplug device topic level, so a value that cannot be a topic level is refused. \\
+enabled    & yes & Whether this meter is published. Disabling one publishes a \code{DDEATH}; enabling one publishes a \code{DBIRTH}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{note}
+The model holds any number of meters; \textbf{the runtime currently serves one}. Enabling
+more than that is \emph{refused} at startup rather than silently truncated --- a bridge
+that quietly published three of your four meters would be indistinguishable, from the
+outside, from one meter having failed.
+\end{note}
+
+\begin{note}
+Any key not in these tables is refused. That is the opposite of the usual default, and it
+is the point: an ignored unknown key means a rename reads as \emph{absent}, takes its
+default, and \prog runs on a configuration nobody chose. See
+section~\ref{sec:configfile}.
+\end{note}
+
+\section{What a change costs}
+
+Whether a setting can be adopted without restarting anything, and what a SCADA host sees
+when it is: table~\ref{tab:changecost}, section~\ref{sec:changecost}.
+
+\stub{the UI bind address and the meter-to-topic mapping scheme, once Epic~6 documents
+them.}

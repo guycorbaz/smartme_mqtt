@@ -177,8 +177,17 @@ one place a refactor could put it back without any test noticing.
         one. Conformant per `tck-id-message-flow-device-birth-publish-nbirth-wait`, read in the
         vendored spec rather than remembered.
 
-- [ ] **Task 5 — falsification** (AC: all) — *five mutations run 2026-08-04, all red, records copied
-      next to their tests. AC4's remain, and so does the log-search for the secret.*
+- [~] **Task 5 — falsification** (AC: all) — *nine mutations run 2026-08-04, all red, records copied
+      next to their tests. What remains is the log-search for the secret (AC6's third clause) and
+      AC1 below.*
+
+- [ ] **Task 7 — AC1's image-update path** *(never started, and it is the one AC nothing covers)*
+  - [ ] AC1 asks for a test that exercises an **image update**, not only a restart. A restart
+        re-reads a file the same binary wrote; an image update replaces the binary that reads it,
+        which is what FR40 promises and what a schema change breaks. The schema-version refusal
+        (AC5) is tested, but nothing yet runs *two different builds* against one state directory.
+  - [ ] Until then AC1 is **half met** — the restart half falls out of `store::load` being wired
+        and is covered incidentally, the image-update half is untested.
   - [ ] Schema: rename a field in the file and confirm refusal rather than a silent default.
   - [ ] Secrets: assert absence from logs by **searching for the value**, having first confirmed the
         search finds it when deliberately leaked — an absence assertion over a stream that never
@@ -188,14 +197,14 @@ one place a refactor could put it back without any test noticing.
         Reversed, the test passes against a bridge that never connects under any circumstances.
   - [ ] `./scripts/ci-local.sh`, full. Never piped — the exit code becomes `tail`'s.
 
-- [ ] **Task 6 — the manual, and the deployment** (AC: 2, 6)
-  - [ ] `docs/manual/chapters/04-configuration.tex` and `09-appendix-config-reference.tex` document
+- [x] **Task 6 — the manual, and the deployment** (AC: 2, 6)
+  - [x] `docs/manual/chapters/04-configuration.tex` and `09-appendix-config-reference.tex` document
         the eleven withdrawn variables. The manual documents behaviour that **exists**, so it is
         amended in the same commit as the code, not before and not after. Its statement that secrets
         live in `.env` at `0600` was right all along and stays.
-  - [ ] The manual gains `config.toml`: its schema, its version field, and the fact that **writing it
+  - [x] The manual gains `config.toml`: its schema, its version field, and the fact that **writing it
         by hand is the supported headless bring-up** (rescoped FR23).
-  - [ ] `.env.example` loses the same eleven. Guy's deployment `.env` on panoramix does too — flag
+  - [x] `.env.example` loses the same eleven. Guy's deployment `.env` on panoramix does too — flag
         it rather than assume, since the file is not in the repository.
 
 ## Dev Notes

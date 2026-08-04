@@ -634,4 +634,19 @@ development_status:
   # The chaos test's first green run took 0.59s, which was suspicious enough to check
   # rather than trust; the mutation failing at 31s is what proved the speed was a warm
   # container and not a test measuring nothing.
+  #
+  # 2026-08-04 end of day — Task 6 (the manual) DONE. Chapter 4 leads with "config.toml
+  # IS the configuration" and carries the change-cost table; the appendix finally lists
+  # every key rather than promising to; the two stubs on mapping and poll interval are
+  # replaced by what actually exists. Manual builds clean, 55 pages, no undefined refs.
+  #
+  # STILL NOT DONE, and the story is NOT ready for review:
+  #  - AC1's IMAGE-UPDATE path was never started, and nothing else covers it. A restart
+  #    re-reads a file the same binary wrote; an image update replaces the binary that
+  #    reads it — which is what FR40 promises and what a schema change breaks. AC5's
+  #    version refusal is tested, but nothing runs TWO BUILDS against one state dir.
+  #    Added as Task 7. AC1 is half met, and the untested half is the one that matters.
+  #  - AC4's new-session half, [#49].
+  #  - AC6's third clause: search the LOG for the secret value, having first proved the
+  #    search finds it when deliberately leaked.
   5-2-config-persists-and-reloads-without-a-restart: ready-for-dev

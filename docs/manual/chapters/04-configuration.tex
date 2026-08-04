@@ -1,8 +1,149 @@
 \chapter{Configuration}
 \label{ch:config}
 
-Secrets live only in a \code{.env} file (permissions \code{0600}, never committed, never
-logged). Non-secret settings live in a TOML config file the UI can re-read at runtime.
+\textbf{\code{config.toml} is the configuration.} It lives in the state directory, it is
+edited from the web UI, and it holds every setting \prog has. The environment carries
+exactly two things and no others: the smart-me credential, which never descends to disk,
+and \code{SMARTME\_STATE\_DIR}, because a file cannot say where it lives.
+
+The two sources have no setting in common, and that is deliberate. Any overlap would need
+a rule about which wins, and such a rule is a place where one source loses silently ---
+a value changed in the browser reverting at the next restart to a forgotten line in
+\code{.env}, with no error and nothing in the log.
+
+\begin{warning}
+\textbf{Eleven environment variables were withdrawn on 2026-08-04} and setting them now
+does nothing at all: \code{SMARTME\_GROUP\_ID}, \code{SMARTME\_NODE\_ID},
+\code{SMARTME\_BROKER\_HOST}, \code{SMARTME\_BROKER\_PORT}, \code{SMARTME\_METER\_ID},
+\code{SMARTME\_DEVICE\_ID}, \code{SMARTME\_SERIAL}, \code{SMARTME\_PUBLISH\_PERIOD\_SECS},
+\code{SMARTME\_API\_BASE}, \code{SMARTME\_LOG\_DIR} and \code{SMARTME\_LOG\_KEEP}. They are
+all keys in \code{config.toml} now. See section~\ref{sec:configfile}, and
+\code{docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md}
+for why.
+\end{warning}
+
+\section{The configuration file}
+\label{sec:configfile}
+
+\code{config.toml} sits in the state directory --- \code{/data} unless
+\code{SMARTME\_STATE\_DIR} says otherwise --- beside \code{bdseq.toml}. Nothing secret is
+in it, so it can be read for diagnosis without privileges: checking which topic a meter
+maps to has never needed \code{sudo}, and now provably cannot.
+
+\begin{lstlisting}
+schema_version      = 2
+
+group_id            = "Plant"
+node_id             = "Bridge01"
+broker_host         = "mqtt.example.lan"
+broker_port         = 1883
+publish_period_secs = 30
+
+# Optional.
+api_base = "https://api.smart-me.com"
+log_dir  = "/data/logs"
+log_keep = 7
+
+[[meters]]
+meter_id  = "garage"
+device_id = "a1a1a1a1-b2b2-c3c3-d4d4-000000000001"
+serial    = "9202685"
+enabled   = true
+\end{lstlisting}
+
+\subsection{The first run: no file is not an error}
+
+A fresh deployment has no \code{config.toml}, and every setting but the credential arrives
+through a browser. So \prog \textbf{starts anyway}: it comes up, serves the web UI, and
+opens \emph{no} MQTT session --- no CONNECT, no will registered, no NBIRTH, nothing
+published --- until a configuration exists. It says so in the log, naming the path where
+the file will be written.
+
+That is not the same as a configuration that exists and is wrong. \textbf{A file that is
+present and invalid makes \prog refuse to start}, listing every fault at once
+(chapter~\ref{ch:trouble}). Absence is not invalidity: a bridge that refused to
+start without a configuration could never be configured at all, because the screen that
+writes the first one would sit behind a process that had already exited.
+
+\prog never writes a configuration it invented. A first run leaves the state directory
+untouched --- defaults nobody chose are still nobody's configuration.
+
+\subsection{Bringing one up without a browser}
+
+Write the file by hand. It is a documented format with a version field, which is a better
+headless surface than eleven environment variables ever were: put the file in the state
+directory, set the credential in \code{.env}, and start the container.
+
+\subsection{The schema version, and why an old file is refused}
+
+\code{schema\_version} exists so that ``this build does not understand this file'' is
+\emph{detectable}. A file written by another version is refused --- there is no migration
+--- and any key \prog does not recognise is refused too.
+
+That second rule matters more than it looks. The library default is to ignore unknown keys
+and let missing ones take a default value, so a renamed key would read as \emph{absent},
+quietly take its default, and \prog would run happily on a configuration nobody wrote ---
+publishing every 30 seconds because the period had silently reverted. Refusing is the only
+honest answer until a migration exists to be the other one.
+
+\subsection{What a change costs}
+\label{sec:changecost}
+
+Not every setting can be adopted by a running bridge, and the ones that cannot must say so
+rather than report a success that did not happen. \prog classifies every field, and the
+classification is enforced by the compiler --- a new setting stops the build until someone
+decides which row of this table it belongs in.
+
+\begin{center}
+\begin{tabular}{@{}l p{8.2cm}@{}}
+\toprule
+\textbf{Cost} & \textbf{What you see} \\
+\midrule
+Hot & Nothing. The change is simply in force. \\
+Device certificate & A \code{DDEATH} and/or \code{DBIRTH} for \emph{one} meter, in the same session, under the same \code{bdSeq}. The node does not blink and the other meters are untouched. \\
+New session & The node disconnects and comes back: \code{NDEATH}, a new \code{bdSeq}, \code{NBIRTH}. \\
+Process restart & Nothing until the container is restarted. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{table}[htbp]
+\centering
+\caption{Which setting costs what.}
+\label{tab:changecost}
+\begin{tabular}{@{}>{\ttfamily}l l@{}}
+\toprule
+\normalfont\textbf{Setting} & \textbf{Cost} \\
+\midrule
+publish\_period\_secs   & Hot \\
+api\_base               & Hot \\
+meters[].device\_id     & Hot \\
+meters[].enabled        & Device certificate \\
+meters[].serial         & Device certificate \\
+group\_id, node\_id     & New session \\
+broker\_host, broker\_port & New session \\
+SMARTME\_STATE\_DIR     & New session \\
+log\_dir, log\_keep     & Process restart \\
+SMARTME\_CLIENT\_ID/\_SECRET & Process restart \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{note}
+Enabling a meter publishes a \code{DBIRTH} and disabling one publishes a \code{DDEATH},
+both without disturbing the session. This is conformant, not a convenience: the
+specification permits a \code{DBIRTH} mid-session provided the \code{NBIRTH} went out in
+the same session, and it \emph{requires} a \code{DDEATH} whenever a device can no longer
+provide real-time information --- which is exactly what a meter you have just switched off
+is. Stopping quietly would leave its last reading on the host's screen looking current.
+\end{note}
+
+\begin{warning}
+\textbf{A new-session change is currently saved but not carried out} (issue~\#49). \prog
+records it, reports it, and keeps the session it has until it is restarted. What it will
+never do is claim otherwise: the running configuration it reports back is what is
+\emph{in force}, not what was last saved.
+\end{warning}
 
 \section{smart-me authentication}
 \label{sec:smartme-auth}
@@ -37,7 +178,8 @@ it, but the binary builds OAuth client-credentials unconditionally and never con
 Basic credentials, so \code{SMARTME\_BASIC\_USER} and \code{SMARTME\_BASIC\_PASSWORD} have
 no effect whatever. Worse for anyone relying on the word \emph{fallback}: the OAuth pair is
 \emph{required}, so setting the Basic pair \emph{instead} of it makes \prog refuse to start
-with \code{missing environment variable SMARTME\_CLIENT\_ID}. Treat client credentials as
+with \code{smart-me client id (environment: SMARTME\_CLIENT\_ID): is missing or empty}.
+Treat client credentials as
 the only way in until this is either wired up or dropped from the design.
 \end{warning}
 
@@ -206,14 +348,17 @@ that can actually operate one.
 \label{sec:broker-config}
 
 \prog connects to an \emph{external} broker; it does not embed one. Host and port are
-deployment-specific, so they belong in \code{.env} alongside the credentials and never in
-a committed file:
+settings in \code{config.toml}, changed from the web UI or written by hand:
 
-\begin{lstlisting}[language=bash]
-# MQTT broker -- LOCAL ONLY, never commit
-SMARTME_BROKER_HOST=mqtt.example.lan   # host or IP of your broker
-SMARTME_BROKER_PORT=1883               # optional; defaults to 1883
+\begin{lstlisting}
+broker_host = "mqtt.example.lan"   # host or IP of your broker
+broker_port = 1883                 # optional; defaults to 1883
 \end{lstlisting}
+
+\begin{note}
+Changing either \textbf{costs a new Sparkplug session} --- see
+table~\ref{tab:changecost}. \prog keeps the session it has until it is restarted.
+\end{note}
 
 A port that is not a number makes the bridge refuse to start. It does not fall back to
 \code{1883} silently --- connecting to a different broker than intended is precisely the
@@ -276,9 +421,9 @@ and authentication are best enabled in the same change.
 The group and edge-node identifiers are \textbf{required}. There is no default, and
 \prog refuses to start without them:
 
-\begin{lstlisting}[language=bash]
-SMARTME_GROUP_ID=<your group>
-SMARTME_NODE_ID=<your node>
+\begin{lstlisting}
+group_id = "<your group>"
+node_id  = "<your node>"
 \end{lstlisting}
 
 \begin{warning}
@@ -297,28 +442,52 @@ most likely to be the production one.
 \end{warning}
 
 \section{Meter-to-topic mapping}
-\stub{default scheme, editing, first-run mapping confirmation.}
+Each \code{[[meters]]} table maps one smart-me device onto one Sparkplug device. The
+\code{serial} becomes the device level of the topic and the \code{meter\_id} becomes the
+metric path a SCADA host displays; \code{device\_id} is the smart-me UUID that is actually
+polled and never appears on the wire.
+
+Two serials that would produce the same topic are refused at startup, as is a serial that
+cannot be a topic level at all --- a mapping collision would merge two meters' histories
+into one curve, which is not recoverable by fixing the configuration afterwards.
+
+\stub{the editing screen and the first-run mapping confirmation, once Epic~6 exists.}
 
 \section{Poll interval, logging, and retention}
 
-\stub{configurable poll interval.}
+\code{publish\_period\_secs} is bounded at both ends and there is deliberately no value
+meaning ``off''. The minimum of 5 seconds keeps \prog from becoming a load generator
+against a cloud whose meters do not update that fast. The maximum of 300 is not a
+preference: the periodic publish is the mechanism by which a SCADA host that restarted
+notices a node whose BIRTH it never saw and asks for a rebirth, so a period of ``never''
+would not slow that repair down --- it would remove it.
+
+A change takes effect on the next tick, with nothing disturbed on the wire.
 
 \subsection{Logging to a file}
 
 The console always receives every line. File logging is \emph{additional} and opt-in: with
-\code{SMARTME\_LOG\_DIR} unset there is no log file at all, and \prog behaves exactly as it
-did before file logging existed.
+\code{log\_dir} unset there is no log file at all, and \prog behaves exactly as it did
+before file logging existed.
 
-\begin{lstlisting}[language=bash]
+\begin{lstlisting}
 # Turns file logging ON. Written as smartme_mqtt.<YYYY-MM-DD>.log, rotated daily.
-SMARTME_LOG_DIR=/data/logs
+log_dir = "/data/logs"
 
 # How many rotated files to keep. Default 7 (one week).
-SMARTME_LOG_KEEP=7
+log_keep = 7
 \end{lstlisting}
 
-\code{SMARTME\_LOG\_KEEP} must be a positive whole number. A value that is not one is
-refused rather than guessed at: \prog says so on stderr and keeps 7.
+\code{log\_keep} must be a positive whole number. A value that is not one is refused rather
+than guessed at: \prog says so on stderr and keeps 7.
+
+\begin{warning}
+\textbf{These two are the one pair that a running \prog cannot adopt.} The logging
+subscriber is built before the configuration is read --- it has to be, or a fault in the
+configuration would have nowhere to be reported --- and it cannot be re-pointed afterwards.
+Changing them is saved and takes effect at the \emph{next} start, and \prog says so rather
+than reporting a success it did not deliver.
+\end{warning}
 
 \begin{note}
 File logging can never stop the bridge. If the directory cannot be created or the file
