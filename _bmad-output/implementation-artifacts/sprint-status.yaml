@@ -787,3 +787,33 @@ development_status:
   #    server that was answering perfectly. It probes from the host now, over a port
   #    published to loopback for the duration of the check only.
   6-1-the-server-exists-in-every-state-the-bridge-can-be-in: review
+  #
+  # 2026-08-04 — 6.2 WRITTEN. It is where everything Epic 5 built finally gets a caller:
+  # Control::apply, Plan::cost(), Plan::needs_restart(), config::mapping_preview and
+  # store::confirm are all written, tested, falsified — and unreachable today.
+  #
+  # AC5 IS THE ONE NOBODY WOULD HAVE ASKED FOR, and it is not covered by "no auth".
+  # PRECISELY BECAUSE there is no login, any page in the operator's browser can POST to
+  # the bridge if that browser can reach it: a drive-by reconfiguration needs no
+  # credentials to steal, because there are none. The blast radius is a Sparkplug
+  # namespace a host persists. Recommended: a same-origin header check — no state, cannot
+  # desynchronise, and needs no session to hang a token on, which matters because ADR 0019
+  # deliberately has none. Whatever is chosen must be WRITTEN DOWN, or a future reader
+  # finds a no-auth UI and reasonably assumes nothing was considered.
+  #
+  # AC4 is the honesty one: #49 means a new-session change is saved but NOT carried out,
+  # so the screen must say "takes effect when you restart" and not "saved" — and must
+  # render Control::current(), which reports what is IN FORCE, rather than echoing the
+  # submission back.
+  #
+  # AC3: confirmation is its OWN submission. Folded into the save button it stops being a
+  # confirmation and becomes a click made for another reason, which is how a guard turns
+  # into a formality. 5.3's model already refuses to let a save assert it.
+  #
+  # The named trap: validating in the form. It will feel helpful and it is a second copy
+  # of every bound in app::config — the drift story 5.1 exists to prevent, showing up as a
+  # value the browser accepts and the bridge refuses to boot on.
+  #
+  # NFR11 (time-to-first-value under 15 min from a clean machine) becomes MEASURABLE for
+  # the first time with this story. Measure it and record the number rather than assert it.
+  6-2-the-configuration-screen: ready-for-dev
