@@ -7,6 +7,7 @@
 pub mod config;
 pub mod mqtt_driver;
 pub mod poll_publish;
+pub mod reconfigure;
 pub mod store;
 pub mod supervisor;
 

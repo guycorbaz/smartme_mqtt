@@ -80,6 +80,31 @@ other meters.
 > session by definition. Decide per field at drafting: hot, or requires-reconnect. **No field may be
 > left undecided** — an unlisted field will be assumed hot by whoever adds the form.
 
+**The per-field table, decided 2026-08-04.** Four costs, named for what the *operator* sees rather
+than for what the code does — "restarting the poll task" and "rebuilding the HTTP client" are the
+same event to someone watching Ignition, namely nothing.
+
+| setting | cost | why |
+| --- | --- | --- |
+| `publish_period_secs` | **hot** | the poll loop re-reads it each tick |
+| `api_base` | **hot** | rebuilds the source; nothing reaches the wire |
+| `meters[].device_id` | **hot** | changes which smart-me device is polled, not which Sparkplug device exists |
+| staleness policy, HTTP timeout | **hot** | read per tick |
+| `meters[].enabled` | **device certificate** | DBIRTH on enable, DDEATH on disable, same `bdSeq` |
+| `meters[].serial` | **device certificate** | the serial IS the device topic level, so it is one device replaced by another: DDEATH then DBIRTH |
+| `group_id`, `node_id` | **new session** | the topic namespace *and* the will registered in the CONNECT packet |
+| `broker_host`, `broker_port` | **new session** | self-evident |
+| state directory | **new session** | `bdSeq` is read at connect and written across restarts |
+| `log_dir`, `log_keep` | **process restart** | the tracing subscriber is installed before the configuration is read and cannot be re-pointed |
+| smart-me credential | **process restart** | it is not in the file at all ([ADR 0023]) |
+
+**The table is enforced by the compiler, not by this document.** `app::reconfigure::classify`
+destructures `BridgeConfig` exhaustively, with no `..` rest pattern, so adding a field stops the
+build until somebody says what changing it costs. A table alone would simply not mention the next
+field anybody added — which is the failure this AC's own note predicts.
+
+[ADR 0023]: ../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md
+
 **AC5 — an older file must not be silently misread by a newer binary** *(added)*
 
 **Given** an image update where the configuration schema has changed
@@ -140,11 +165,17 @@ one place a refactor could put it back without any test noticing.
   - [x] A version field, and `deny_unknown_fields` — the default of ignoring them is the defect.
   - [x] Decide migrate-or-refuse **now**, not when the first schema change happens.
 
-- [ ] **Task 4 — hot reload** (AC: 4)
-  - [ ] `ArcSwap` — **a new dependency.** It reaches `Cargo.lock` and `deny.toml`; stage those files
+- [~] **Task 4 — hot reload** (AC: 4) — *hot fields and device certificates DONE; a new-session
+      change is classified and reported but NOT carried out. Recorded as unmet:
+      [#49](https://github.com/guycorbaz/smartme_mqtt/issues/49).*
+  - [x] `ArcSwap` — **a new dependency.** It reaches `Cargo.lock` and `deny.toml`; stage those files
         by name. Never `git add` a directory after a dependency change.
-  - [ ] The per-field table: hot vs requires-reconnect, every field listed.
-  - [ ] DBIRTH on enable, DDEATH on disable, same `bdSeq`, DBIRTH before any DDATA.
+  - [x] The per-field table: above, and **enforced by an exhaustive destructure** rather than by
+        this document — a table alone would not mention the next field anybody adds.
+  - [x] DBIRTH on enable, DDEATH on disable, same `bdSeq`, DBIRTH before any DDATA. Proven against
+        a real broker by `chaos_device_certificates.rs`, which counts NBIRTHs and requires exactly
+        one. Conformant per `tck-id-message-flow-device-birth-publish-nbirth-wait`, read in the
+        vendored spec rather than remembered.
 
 - [ ] **Task 5 — falsification** (AC: all) — *five mutations run 2026-08-04, all red, records copied
       next to their tests. AC4's remain, and so does the log-search for the secret.*

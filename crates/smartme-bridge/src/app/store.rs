@@ -220,6 +220,8 @@ pub fn into_raw(config: StoredConfig, credential: Credential, dir: &Path) -> Raw
         broker_port: Some(config.broker_port.to_string()),
         state_dir: Some(dir.display().to_string()),
         publish_period_secs: Some(config.publish_period_secs.to_string()),
+        log_dir: config.log_dir,
+        log_keep: config.log_keep,
         meters: config
             .meters
             .into_iter()

@@ -328,6 +328,100 @@ impl SparkplugPublisher {
         Ok(())
     }
 
+    /// Announces ONE device on a session that is already alive, without
+    /// re-birthing the node (Story 5.2 AC4).
+    ///
+    /// # This is conformant, and the norm says so in as many words
+    ///
+    /// > *"A Device can publish a DBIRTH as long as an NBIRTH has been sent
+    /// > previously and the MQTT session is active."*
+    /// > — `Sparkplug_5_Operational_Behavior.adoc:409`
+    ///
+    /// with `tck-id-message-flow-device-birth-publish-nbirth-wait` requiring only
+    /// that *"the NBIRTH message MUST have been sent within the current MQTT
+    /// session prior to a DBIRTH being published"*. That precondition is exactly
+    /// what [`Session::Live`] means here, so enabling a meter costs one DBIRTH —
+    /// no NDEATH, no new `bdSeq`, no interruption to any other device.
+    ///
+    /// **Do not generalise this to metrics.** Adding a *metric* to an existing
+    /// device does need a full rebirth (`Sparkplug_5:695` — *"metrics can even be
+    /// added dynamically at runtime and with a new NBIRTH and DBIRTH sequence"*).
+    /// A device is a different granularity, and conflating the two is how a host
+    /// ends up with a tag it was never told about.
+    ///
+    /// Returns `false` when the session is not live: there is nothing to add a
+    /// device to, and the next connect will birth the current set anyway.
+    pub fn device_birth(
+        &mut self,
+        now: UtcMillis,
+        serial: &Serial,
+        sink: &mut impl Sink,
+    ) -> Result<bool, TopicError> {
+        // Validate the topic BEFORE touching the session, as `birth` does.
+        let topic = self
+            .node
+            .device_topic(MessageType::DBirth, serial.as_str())?;
+        let Session::Live(live) = &mut self.session else {
+            return Ok(false);
+        };
+        let timestamp = millis(now);
+        // A device declared for the first time has no reading yet, so it births
+        // cold — the same metrics a connect-time birth would give it. Anything
+        // else would assert a value nobody measured.
+        let payload = live.device_birth(timestamp, cold_start_metrics(timestamp));
+        sink.emit(Outbound {
+            topic,
+            payload: encode(&payload),
+            message: MessageType::DBirth,
+        });
+        self.declared.insert(serial.clone(), None);
+        Ok(true)
+    }
+
+    /// Buries ONE device while the node stays alive (Story 5.2 AC4).
+    ///
+    /// # Why disabling a meter owes a DDEATH rather than silence
+    ///
+    /// > *"If at any time the Sparkplug Device cannot provide real time
+    /// > information, the Sparkplug Specification requires that an DDEATH be
+    /// > published. This will inform the Primary Host Application that all metric
+    /// > information associated with that Sparkplug Device be set to a STALE data
+    /// > quality."* — `Sparkplug_5_Operational_Behavior.adoc:470`
+    ///
+    /// A meter an operator has just disabled is precisely a device that can no
+    /// longer provide real-time information. Stopping quietly would leave its
+    /// last value on the host's screen, current-looking and wrong, for as long as
+    /// the session lasts — which is the failure this whole project exists to
+    /// prevent.
+    ///
+    /// After the DDEATH the device is undeclared, so
+    /// [`Self::publish`] will drop any DDATA that still arrives for it rather
+    /// than sending data for a device the host has been told is offline.
+    pub fn device_death(
+        &mut self,
+        now: UtcMillis,
+        serial: &Serial,
+        sink: &mut impl Sink,
+    ) -> Result<bool, TopicError> {
+        let topic = self
+            .node
+            .device_topic(MessageType::DDeath, serial.as_str())?;
+        let Session::Live(live) = &mut self.session else {
+            return Ok(false);
+        };
+        // `tck-id-topics-ddeath-seq-num`: the DDEATH carries the next sequence
+        // number like any other message. `LiveSession::device_death` allocates
+        // it; the payload carries no metrics, by the same rule.
+        let payload = live.device_death(millis(now));
+        sink.emit(Outbound {
+            topic,
+            payload: encode(&payload),
+            message: MessageType::DDeath,
+        });
+        self.declared.remove(serial);
+        Ok(true)
+    }
+
     /// Publishes one judged reading as device DATA.
     ///
     /// The payload timestamp is the source `ValueDate` — when the values were

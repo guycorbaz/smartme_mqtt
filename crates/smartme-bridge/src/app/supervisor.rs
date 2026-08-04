@@ -14,8 +14,9 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::adapters::SmartMeCloudSource;
-use crate::app::mqtt_driver::{self, MqttConfig};
+use crate::app::mqtt_driver::{self, DeviceCommand, MqttConfig};
 use crate::app::poll_publish::{self, LastLoopTick, PollConfig};
+use crate::app::reconfigure::{self, Cost, Plan};
 use crate::core::clock::{Clock, SystemClock};
 use crate::core::state_machine::Policy;
 use smart_me_client::{Credentials, SmartMeClient};
@@ -54,6 +55,17 @@ pub struct BridgeConfig {
     pub poll: PollConfig,
     /// Staleness policy.
     pub policy: Policy,
+    /// Where rotated log files go, if anywhere. Absent means console only.
+    ///
+    /// **Carried here but not used by the runtime.** The tracing subscriber is
+    /// built in `main.rs` before this struct exists, and cannot be re-pointed
+    /// afterwards. It is part of the configuration all the same, because a
+    /// setting the model cannot see is a setting a reload cannot notice changed
+    /// — and [`crate::app::reconfigure`] has to be able to tell an operator that
+    /// this one needs a restart rather than silently doing nothing.
+    pub log_dir: Option<String>,
+    /// How many rotated files to keep. Same caveat as [`Self::log_dir`].
+    pub log_keep: Option<usize>,
 }
 
 /// Why the bridge could not start. Refusing to start beats starting wrong: a
@@ -77,6 +89,108 @@ pub enum StartupError {
     NoEnabledMeter,
 }
 
+/// Bound of the reconfiguration channel.
+///
+/// Small on purpose. A reconfiguration is an operator pressing Save, not a
+/// stream — anything that queued more than this would be a loop, and a bound
+/// that hides a loop is worse than one that reveals it.
+const DEVICE_QUEUE: usize = 8;
+
+/// The configuration in force, swappable without stopping anything (AR8).
+///
+/// `ArcSwap` rather than a lock, deliberately: the poll loop reads this on every
+/// tick and the driver reads it from another task, so a writer that blocked
+/// readers would put a web form on the critical path of the publish loop.
+pub type ConfigHandle = Arc<arc_swap::ArcSwap<BridgeConfig>>;
+
+/// The live control surface — what a reconfiguration needs in order to act
+/// (Story 5.2 AC4).
+///
+/// Held by whoever can change the configuration. Today that is a test; from
+/// Epic 6 it is the web UI. Nothing here knows about HTTP, which is the whole
+/// point of the Epic 5 / Epic 6 split.
+#[derive(Clone)]
+pub struct Control {
+    config: ConfigHandle,
+    devices: mpsc::Sender<DeviceCommand>,
+}
+
+impl Control {
+    /// The configuration **in force**.
+    ///
+    /// Not "the configuration the operator last saved" — those are two different
+    /// things and conflating them is how a screen comes to report a setting that
+    /// is not doing anything. `config.toml` holds what is *desired*; this holds
+    /// what the running process is *actually using*. [`Self::apply`] moves a
+    /// value from the first to the second only when it really took effect, and
+    /// says in its return value what it left behind.
+    pub fn current(&self) -> Arc<BridgeConfig> {
+        self.config.load_full()
+    }
+
+    /// Apply a new configuration to the running bridge, and report what it cost.
+    ///
+    /// Only changes this process can actually carry out are stored. A field
+    /// classified [`Cost::NewSession`] or [`Cost::ProcessRestart`] is left as it
+    /// was, and named in the returned [`Plan`] — so a caller can tell the
+    /// operator *"saved, and it takes effect when you restart"* instead of
+    /// *"saved"*, which would be a claim the bridge did not honour.
+    ///
+    /// The new configuration must already have been through
+    /// [`crate::app::config::validate`]; a `BridgeConfig` cannot be obtained any
+    /// other way except by hand.
+    pub async fn apply(&self, new: BridgeConfig) -> Plan {
+        let old = self.current();
+        let plan = reconfigure::classify(&old, &new);
+        if plan.is_empty() {
+            return plan;
+        }
+
+        // Certificates FIRST, and deaths before births.
+        //
+        // A death that arrived after its replacement's birth would leave the host
+        // holding a bury for a device that had just been announced. The driver
+        // publishes each one inline, so their order on the wire is this order.
+        for serial in &plan.deaths {
+            let _ = self
+                .devices
+                .send(DeviceCommand::Death(serial.clone()))
+                .await;
+        }
+        for serial in &plan.births {
+            let _ = self
+                .devices
+                .send(DeviceCommand::Birth(serial.clone()))
+                .await;
+        }
+
+        // Then the swap — but only of what is genuinely in force now.
+        let mut applied = (*old).clone();
+        applied.meters = new.meters;
+        applied.api_base = new.api_base;
+        applied.http_timeout = new.http_timeout;
+        applied.poll = new.poll;
+        applied.policy = new.policy;
+        self.config.store(Arc::new(applied));
+
+        let held_back = plan.needs_restart();
+        if !held_back.is_empty() {
+            tracing::warn!(
+                fields = ?held_back,
+                "saved but NOT in force: these take effect at the next process start"
+            );
+        }
+        if plan.cost() == Some(Cost::NewSession) {
+            tracing::warn!(
+                "saved but NOT in force: the Sparkplug identity or the broker changed, \
+                 which is a new session by definition. The bridge keeps the session it \
+                 has until it is restarted"
+            );
+        }
+        plan
+    }
+}
+
 /// Builds and runs the bridge until `shutdown` resolves.
 ///
 /// Both tasks are spawned together and the channel between them is created
@@ -85,6 +199,20 @@ pub enum StartupError {
 pub async fn run(
     config: BridgeConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), StartupError> {
+    run_with_control(config, shutdown, |_| {}).await
+}
+
+/// As [`run`], handing the caller the live [`Control`] before the tasks start.
+///
+/// Split out for one reason: AC4's mechanism has no caller until Epic 6 builds
+/// the screens, and a mechanism with no caller is a mechanism nothing exercises.
+/// `with_control` is how a test — and later the web server — gets hold of it
+/// without `run`'s signature growing a parameter every caller must ignore.
+pub async fn run_with_control(
+    config: BridgeConfig,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    with_control: impl FnOnce(Control),
 ) -> Result<(), StartupError> {
     let clock: Arc<dyn Clock + Send + Sync> = Arc::new(SystemClock::new());
     let node = sparkplug_b::EdgeNode::new(config.group_id.clone(), config.node_id.clone())?;
@@ -117,6 +245,15 @@ pub async fn run(
     let (tx, rx) = mpsc::channel(64);
     let heartbeat = LastLoopTick::new();
     let (death_tx, death_rx) = oneshot::channel();
+    // Reconfiguration gets its OWN channel, for the same reason inbound commands
+    // do: sharing the reading path would put an externally-driven, bursty
+    // sender behind a bound sized for readings.
+    let (device_tx, device_rx) = mpsc::channel(DEVICE_QUEUE);
+    let handle: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(config.clone()));
+    with_control(Control {
+        config: Arc::clone(&handle),
+        devices: device_tx,
+    });
 
     let mqtt = tokio::spawn(mqtt_driver::run(
         MqttConfig {
@@ -132,6 +269,7 @@ pub async fn run(
         vec![served.serial.clone()],
         Arc::clone(&clock),
         rx,
+        device_rx,
         death_rx,
     ));
 
@@ -139,8 +277,7 @@ pub async fn run(
         served.meter.clone(),
         source,
         Arc::clone(&clock),
-        config.policy,
-        config.poll,
+        Arc::clone(&handle),
         heartbeat,
         tx,
     ));
@@ -191,6 +328,103 @@ mod tests {
     use super::*;
     use crate::domain::{MeterId, Serial};
 
+    /// A [`Control`] with no bridge behind it: the channel is the observation
+    /// point, so what `apply` decides is visible without a broker.
+    fn control() -> (Control, mpsc::Receiver<DeviceCommand>) {
+        let (devices, rx) = mpsc::channel(8);
+        (
+            Control {
+                config: Arc::new(arc_swap::ArcSwap::from_pointee(config())),
+                devices,
+            },
+            rx,
+        )
+    }
+
+    /// AC4's heart, at the level where the decision is made.
+    #[tokio::test]
+    async fn disabling_a_meter_buries_it_and_enabling_it_births_it() {
+        let (control, mut devices) = control();
+
+        let mut off = config();
+        off.meters[0].enabled = false;
+        let plan = control.apply(off.clone()).await;
+        assert_eq!(plan.cost(), Some(Cost::DeviceCertificate));
+        assert_eq!(
+            devices.try_recv().expect("a certificate was owed"),
+            DeviceCommand::Death(Serial::new("30000001"))
+        );
+
+        let plan = control.apply(config()).await;
+        assert_eq!(plan.cost(), Some(Cost::DeviceCertificate));
+        assert_eq!(
+            devices.try_recv().expect("a certificate was owed"),
+            DeviceCommand::Birth(Serial::new("30000001"))
+        );
+    }
+
+    /// The period is genuinely in force after `apply`, with nothing disturbed.
+    ///
+    /// FALSIFIED 2026-08-04 by dropping `applied.poll = new.poll` from `apply`:
+    /// the plan still said `Hot` and `current()` still said 30 s.
+    #[tokio::test]
+    async fn the_publish_period_is_in_force_immediately_and_costs_no_certificate() {
+        let (control, mut devices) = control();
+        let mut faster = config();
+        faster.poll.interval = Duration::from_secs(15);
+
+        assert_eq!(control.apply(faster).await.cost(), Some(Cost::Hot));
+        assert_eq!(control.current().poll.interval, Duration::from_secs(15));
+        assert!(
+            devices.try_recv().is_err(),
+            "changing the period must not disturb a single device"
+        );
+    }
+
+    /// **`current()` describes what is IN FORCE, never what was merely saved.**
+    ///
+    /// FALSIFIED 2026-08-04 by storing `broker_host` and `log_dir` in `apply`
+    /// anyway — the change someone makes when "apply the new config" reads as
+    /// "store the new config". Both this test and
+    /// `a_log_setting_is_named_as_needing_a_restart_and_not_applied` went red.
+    ///
+    /// A screen that reads back the new broker would tell the operator the bridge
+    /// had moved when it had not. The file holds what is desired; this holds what
+    /// is running, and the plan is what carries the difference between them.
+    #[tokio::test]
+    async fn a_change_that_needs_a_new_session_is_reported_and_not_pretended() {
+        let (control, _devices) = control();
+        let mut elsewhere = config();
+        elsewhere.broker_host = "192.0.2.9".to_string();
+
+        let plan = control.apply(elsewhere).await;
+        assert_eq!(plan.cost(), Some(Cost::NewSession));
+        assert_eq!(
+            control.current().broker_host,
+            "127.0.0.1",
+            "the bridge is still connected to the old broker, so that is what \
+             current() must say"
+        );
+    }
+
+    /// Same rule, for the category that cannot be applied at all.
+    #[tokio::test]
+    async fn a_log_setting_is_named_as_needing_a_restart_and_not_applied() {
+        let (control, _devices) = control();
+        let mut logged = config();
+        logged.log_dir = Some("/data/logs".to_string());
+
+        let plan = control.apply(logged).await;
+        assert_eq!(plan.needs_restart(), vec!["log_dir"]);
+        assert_eq!(
+            control.current().log_dir,
+            None,
+            "the subscriber was built before this struct existed and cannot be \
+             re-pointed; claiming otherwise would make a form report a success \
+             the bridge never delivered"
+        );
+    }
+
     fn config() -> BridgeConfig {
         BridgeConfig {
             api_base: "https://api.smart-me.com".to_string(),
@@ -215,6 +449,8 @@ mod tests {
                 fetch_timeout: Duration::from_secs(2),
             },
             policy: Policy { max_age_ms: 90_000 },
+            log_dir: None,
+            log_keep: None,
         }
     }
 

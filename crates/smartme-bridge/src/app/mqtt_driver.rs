@@ -190,6 +190,24 @@ fn qos_for(_message: MessageType) -> (QoS, bool) {
     (QoS::AtMostOnce, false)
 }
 
+/// A change to the served device set, applied to a session that is already live
+/// (Story 5.2 AC4).
+///
+/// **Devices, not metrics.** The norm allows a DBIRTH mid-session provided the
+/// NBIRTH went out in the same session
+/// (`tck-id-message-flow-device-birth-publish-nbirth-wait`), which is what makes
+/// enabling a meter cost one certificate instead of a whole rebirth. Adding a
+/// *metric* to an existing device is a different thing and does need the full
+/// sequence (`Sparkplug_5:695`) — see [`SparkplugPublisher::device_birth`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeviceCommand {
+    /// A meter was enabled, or its serial changed: announce it.
+    Birth(Serial),
+    /// A meter was disabled, deleted, or re-serialised: bury it, so its last
+    /// value stops reading as current on the host's screen.
+    Death(Serial),
+}
+
 /// What the transport task saw.
 ///
 /// Deliberately no longer `Copy`: a SubAck carries the broker's answer, which is
@@ -969,9 +987,10 @@ fn trace_command_outcome(topic: &str, inbound: &Inbound) {
 pub async fn run(
     config: MqttConfig,
     node: sparkplug_b::EdgeNode,
-    meters: Vec<Serial>,
+    mut meters: Vec<Serial>,
     clock: std::sync::Arc<dyn Clock + Send + Sync>,
     mut inbox: mpsc::Receiver<MeterUpdate>,
+    mut devices: mpsc::Receiver<DeviceCommand>,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) {
     // The command topic, built from the same validated grammar as everything we
@@ -1014,6 +1033,11 @@ pub async fn run(
     // presented as live.
     let mut backoff = RECONNECT_FLOOR;
     let mut first_session = true;
+    // Whether the reconfiguration channel is still open. It belongs OUTSIDE the
+    // session loop: a supervisor that dropped its end stays dropped, and
+    // re-arming the branch on every reconnect would spin the new session
+    // instead.
+    let mut devices_open = true;
     loop {
         // 2. Advance for every session after the first, then persist BEFORE
         //    connecting: a crash between the CONNECT and the next boot must not
@@ -1175,6 +1199,76 @@ pub async fn run(
                             &meters,
                             BirthReason::RebirthRequested,
                         );
+                    }
+                }
+                // The device set changed while the session is alive (AC4).
+                //
+                // INLINE AND SYNCHRONOUS, for the same reason the rebirth answer
+                // above is: `select!` runs one branch to completion, so between
+                // the DBIRTH emitted here and the next `inbox` reading no DDATA
+                // can interleave. That IS the ordering AC4 asks for — a DDATA
+                // carrying a metric the host has not been told about is what
+                // `Sparkplug_5_Operational_Behavior.adoc:863` warns against, and
+                // publishing the certificate first is what avoids it. The shape
+                // enforces it; no check does.
+                command = devices.recv(), if devices_open => {
+                    let Some(command) = command else {
+                        // The supervisor dropped its end. `recv` on a closed
+                        // channel returns `None` immediately and forever, so an
+                        // unguarded branch would spin this loop at full speed.
+                        // Disarm it rather than break: losing the ability to
+                        // reconfigure is not a reason to end a healthy session.
+                        devices_open = false;
+                        continue;
+                    };
+                    let mut queue = Queue::default();
+                    let outcome = match &command {
+                        DeviceCommand::Birth(serial) => {
+                            if !meters.contains(serial) {
+                                meters.push(serial.clone());
+                            }
+                            publisher.device_birth(clock.wall(), serial, &mut queue)
+                        }
+                        DeviceCommand::Death(serial) => {
+                            // Drop it from the set BEFORE the certificate goes
+                            // out, so a reconnect racing this cannot re-birth a
+                            // device we are in the middle of burying.
+                            meters.retain(|s| s != serial);
+                            publisher.device_death(clock.wall(), serial, &mut queue)
+                        }
+                    };
+                    match outcome {
+                        Ok(true) => {
+                            let dropped = publish_all(&client, &mut queue);
+                            if dropped > 0 {
+                                tracing::error!(
+                                    ?command,
+                                    "the device certificate was NOT published: the \
+                                     outbound queue rejected it. The host still holds \
+                                     the previous view of this device"
+                                );
+                            } else {
+                                tracing::info!(?command, "device certificate published");
+                            }
+                        }
+                        Ok(false) => {
+                            // No live session, so there is nothing to amend. The
+                            // next connect births `meters`, which this branch has
+                            // already updated — so the change is not lost, it is
+                            // simply carried by the birth instead of a certificate.
+                            tracing::info!(
+                                ?command,
+                                "no live session; the change will be carried by the next BIRTH"
+                            );
+                        }
+                        Err(error) => {
+                            tracing::error!(
+                                %error,
+                                ?command,
+                                "the device identifier is not a usable topic level; \
+                                 the device set is unchanged on the wire"
+                            );
+                        }
                     }
                 }
                 update = inbox.recv() => {

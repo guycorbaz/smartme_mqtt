@@ -103,6 +103,8 @@ pub struct RawConfig {
     pub broker_port: Option<String>,
     pub state_dir: Option<String>,
     pub publish_period_secs: Option<String>,
+    pub log_dir: Option<String>,
+    pub log_keep: Option<usize>,
     pub meters: Vec<RawMeter>,
 }
 
@@ -132,6 +134,8 @@ impl std::fmt::Debug for RawConfig {
             .field("broker_port", &self.broker_port)
             .field("state_dir", &self.state_dir)
             .field("publish_period_secs", &self.publish_period_secs)
+            .field("log_dir", &self.log_dir)
+            .field("log_keep", &self.log_keep)
             .field("meters", &self.meters)
             .finish()
     }
@@ -606,6 +610,11 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
             fetch_timeout: Duration::from_secs(10),
         },
         policy: Policy { max_age_ms: 90_000 },
+        // Passed through unvalidated and unused by the runtime: `main.rs` has
+        // already acted on them by the time this runs. They are here so a
+        // reload can SEE them change — see `app::reconfigure`.
+        log_dir: present(&raw.log_dir).map(str::to_owned),
+        log_keep: raw.log_keep,
     })
 }
 

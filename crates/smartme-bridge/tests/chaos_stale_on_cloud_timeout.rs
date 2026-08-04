@@ -58,6 +58,8 @@ async fn chaos_stale_on_cloud_timeout() {
             fetch_timeout: Duration::from_millis(500),
         },
         policy: Policy { max_age_ms: 90_000 },
+        log_dir: None,
+        log_keep: None,
     };
 
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();

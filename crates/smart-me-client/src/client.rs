@@ -103,7 +103,13 @@ impl SmartMeError {
 
 /// Credentials, per ADR 0009. Client-credentials is primary; Basic is the
 /// documented fallback when no OAuth app is configured.
-#[derive(Clone)]
+///
+/// `PartialEq` is derived and `Debug` deliberately is **not**: the bridge needs
+/// to detect that a credential changed (`app::reconfigure`, Story 5.2 AC4) and
+/// must never be able to render one. The comparison is not constant-time, and
+/// does not need to be — it compares two configurations of this process against
+/// each other, and authenticates nothing.
+#[derive(Clone, PartialEq, Eq)]
 pub enum Credentials {
     /// OAuth2 client-credentials (the smart-me "Device" app type).
     ClientCredentials {

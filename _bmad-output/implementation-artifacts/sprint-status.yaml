@@ -602,4 +602,36 @@ development_status:
   # STILL OWED: AC4 (hot reload — ArcSwap is a new dependency, plus the per-field
   # hot/requires-reconnect table and DBIRTH-on-enable/DDEATH-on-disable), and Task 6
   # (the manual's chapters 4 and 9 still document the eleven withdrawn variables).
+  #
+  # 2026-08-04 later — AC4 landed, PARTIALLY, and the gap is recorded as [#49] rather
+  # than rounded up. arc-swap is the new dependency (Cargo.lock staged BY NAME; ci-local
+  # caught it unstaged, which is exactly what that check is for).
+  #
+  # WHAT WORKS: app::reconfigure::classify decides the cost of every field and the
+  # decision is COMPILER-ENFORCED — it destructures BridgeConfig with no `..`, so a new
+  # field breaks the build until someone classifies it. That is the answer to the story's
+  # own warning that "an unlisted field will be assumed hot by whoever adds the form": a
+  # table in a document would simply not mention the next field. Hot fields are really in
+  # force (the poll loop re-reads the period from the ArcSwap each tick). Device
+  # certificates work end to end against a real broker.
+  #
+  # WHAT DOES NOT: a Cost::NewSession change (identity, broker, state dir) is classified,
+  # reported and logged, but NOT carried out — rumqttc rebuilds its CONNECT from options
+  # captured at construction, so a new will means a new client, which means tearing down
+  # and respawning the driver mid-flight. Real work in the most delicate file here, and
+  # nothing calls apply() until Epic 6. Control::current() deliberately keeps reporting
+  # the OLD value: it describes what is IN FORCE, not what was saved, so nothing lies.
+  #
+  # THE NORM WAS READ, NOT REMEMBERED. tck-id-message-flow-device-birth-publish-nbirth-wait
+  # (Sparkplug_5:409) permits a mid-session DBIRTH provided the NBIRTH went out in the same
+  # session — which is what makes AC4's "no new NBIRTH" claim conformant rather than merely
+  # convenient. Sparkplug_5:470 is what makes the DDEATH owed on disable. And the
+  # distinction that matters: adding a METRIC does need a full rebirth (Sparkplug_5:695);
+  # adding a DEVICE does not. Conflating those is how a host gets a tag nobody declared.
+  #
+  # Four more mutations, all red — including one where the driver answers a device birth
+  # with a full announce, the plausible implementation that would look right in every log.
+  # The chaos test's first green run took 0.59s, which was suspicious enough to check
+  # rather than trust; the mutation failing at 31s is what proved the speed was a warm
+  # container and not a test measuring nothing.
   5-2-config-persists-and-reloads-without-a-restart: ready-for-dev

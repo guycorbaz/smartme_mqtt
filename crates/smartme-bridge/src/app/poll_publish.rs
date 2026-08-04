@@ -134,13 +134,20 @@ pub async fn run<S: Source + Send>(
     meter: MeterId,
     mut source: S,
     clock: Arc<dyn Clock + Send + Sync>,
-    policy: Policy,
-    config: PollConfig,
+    config: crate::app::supervisor::ConfigHandle,
     heartbeat: LastLoopTick,
     outbox: mpsc::Sender<MeterUpdate>,
 ) {
     let mut state = State::initial();
-    let mut ticker = tokio::time::interval(config.interval);
+    // The period is READ FROM THE HANDLE, not captured (Story 5.2 AC4).
+    //
+    // `tokio::time::interval` fixes its period at construction, so a hot change
+    // means noticing and rebuilding — there is no setter that would not also
+    // reset the schedule. Rebuilding only when the value actually differs is
+    // what keeps an unrelated reconfiguration from silently restarting the
+    // cadence.
+    let mut period = config.load().poll.interval;
+    let mut ticker = tokio::time::interval(period);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
@@ -148,11 +155,26 @@ pub async fn run<S: Source + Send>(
             tracing::info!(meter = %meter, "outbox closed; poll task stopping");
             return;
         }
+        let current = config.load();
+        if current.poll.interval != period {
+            tracing::info!(
+                from_secs = period.as_secs(),
+                to_secs = current.poll.interval.as_secs(),
+                "publish period changed; the next tick uses the new one"
+            );
+            period = current.poll.interval;
+            ticker = tokio::time::interval(period);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // `interval` fires immediately on its first tick, and that first tick
+            // is this rebuild's — so it is consumed here rather than letting a
+            // period change slip an extra unscheduled poll into the loop.
+            ticker.tick().await;
+        }
         let ctx = Context {
             meter: &meter,
             clock: clock.as_ref(),
-            policy,
-            config,
+            policy: current.policy,
+            config: current.poll,
             heartbeat: &heartbeat,
             outbox: &outbox,
         };

@@ -47,3 +47,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2.3"
 # Story 1.14 — chaos tests need a real broker, not a mock of one.
 testcontainers = "0.27"
+# Story 5.2 AC4 / AR8 — the running configuration, swapped without a restart.
+# A lock would do the job and is the reason this is not one: the poll loop reads
+# the period on every tick and the MQTT driver reads it from another task, so a
+# writer that blocks readers would put a web form on the critical path of the
+# publish loop. `ArcSwap` makes the read wait-free and the write a pointer store.
+arc-swap = "1"

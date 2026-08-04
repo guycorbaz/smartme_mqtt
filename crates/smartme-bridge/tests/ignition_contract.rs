@@ -257,6 +257,7 @@ async fn ignition_contract_v3() {
     let (tx, rx) = mpsc::channel(64);
     let (death_tx, death_rx) = oneshot::channel();
 
+    let (_device_tx, device_rx) = tokio::sync::mpsc::channel(4);
     let driver = tokio::spawn(mqtt_driver::run(
         MqttConfig {
             client_id: format!("{NODE_ID}-tier3"),
@@ -271,6 +272,10 @@ async fn ignition_contract_v3() {
         vec![Serial::new(SERIAL)],
         Arc::clone(&clock),
         rx,
+        // AC4's reconfiguration channel. These tests never send on it; the
+        // sender is kept alive so the driver's branch stays armed rather than
+        // disarming on a dropped end.
+        device_rx,
         death_rx,
     ));
 
