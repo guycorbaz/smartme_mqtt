@@ -38,6 +38,16 @@ use axum::response::{Html, IntoResponse};
 use axum::routing::get;
 
 use crate::app::poll_publish::LastLoopTick;
+use crate::app::supervisor::ConfigHandle;
+use crate::core::clock::Clock;
+
+/// How many publish periods the poll loop may miss before `/healthz` calls the
+/// bridge unhealthy (AR12's `N`).
+///
+/// Three, not one: a single missed tick is a slow cloud call, which is exactly
+/// the "honest STALE" AR12 says must never trigger a restart. Three consecutive
+/// misses is a loop that is not looping.
+pub const WEDGED_AFTER_PERIODS: u32 = 3;
 
 /// The port the UI listens on when the configuration does not say.
 ///
@@ -106,16 +116,56 @@ impl Lifecycle {
 #[derive(Clone)]
 pub struct UiState {
     lifecycle: Lifecycle,
-    /// Present only when there is a poll loop to have a heartbeat.
-    heartbeat: Option<LastLoopTick>,
+    /// Present only when there is a poll loop to have a heartbeat. Carries the
+    /// clock that reads it and the configuration that says how often it should
+    /// tick — all three are needed to answer AR12, and none of them alone is.
+    running: Option<Running>,
+}
+
+/// The three things `/healthz` needs to judge a live bridge.
+#[derive(Clone)]
+struct Running {
+    heartbeat: LastLoopTick,
+    clock: std::sync::Arc<dyn Clock + Send + Sync>,
+    config: ConfigHandle,
 }
 
 impl UiState {
-    pub fn new(lifecycle: Lifecycle, heartbeat: Option<LastLoopTick>) -> Self {
+    /// A bridge that is deliberately not publishing.
+    pub fn silent(lifecycle: Lifecycle) -> Self {
         Self {
             lifecycle,
-            heartbeat,
+            running: None,
         }
+    }
+
+    /// A bridge that is publishing, with everything needed to check that it is.
+    pub fn running(
+        heartbeat: LastLoopTick,
+        clock: std::sync::Arc<dyn Clock + Send + Sync>,
+        config: ConfigHandle,
+    ) -> Self {
+        Self {
+            lifecycle: Lifecycle::Running,
+            running: Some(Running {
+                heartbeat,
+                clock,
+                config,
+            }),
+        }
+    }
+
+    /// How long since the poll loop last started an iteration, and how long it is
+    /// allowed to be — `None` when there is no loop.
+    fn loop_age(&self) -> Option<(i64, i64)> {
+        let r = self.running.as_ref()?;
+        let last = r.heartbeat.last()?;
+        let age = r.clock.monotonic().0 - last.0;
+        let allowed = i64::try_from(
+            r.config.load().poll.interval.as_millis() * u128::from(WEDGED_AFTER_PERIODS),
+        )
+        .unwrap_or(i64::MAX);
+        Some((age, allowed))
     }
 }
 
@@ -133,22 +183,38 @@ pub fn router(state: UiState) -> Router {
 /// **Never fatal.** Every failure degrades to "no UI" and says so loudly on the
 /// console; the meters keep publishing. A bridge that stopped because a port was
 /// taken would have turned a diagnostic aid into an outage.
+/// Bind the UI's listener.
+///
+/// Split out of [`serve`] so a test can ask **production** which address it
+/// chose. The version of that test written first created its own listener and
+/// asserted a property of that, which is a tautology about a socket `serve`
+/// never touched.
+///
+/// `0.0.0.0` INSIDE THE CONTAINER — see the module docs before changing this.
+pub async fn bind(port: u16) -> std::io::Result<tokio::net::TcpListener> {
+    tokio::net::TcpListener::bind(std::net::SocketAddr::from(([0, 0, 0, 0], port))).await
+}
+
 pub async fn serve(port: u16, state: UiState) {
-    // 0.0.0.0 INSIDE THE CONTAINER — see the module docs before changing this.
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-    let listener = match tokio::net::TcpListener::bind(addr).await {
+    let listener = match bind(port).await {
         Ok(listener) => listener,
         Err(error) => {
             tracing::error!(
                 %error,
-                %addr,
+                port,
                 "the web UI could NOT start; the bridge keeps publishing without it. \
                  The usual cause is another process on this port"
             );
             return;
         }
     };
-    tracing::info!(%addr, "web UI ready");
+    // The BOUND address, not the requested one: with `ui_port = 0` the OS picks
+    // a port, and logging the request would name a port nothing is listening on.
+    // This is the line an operator greps to find the UI.
+    match listener.local_addr() {
+        Ok(addr) => tracing::info!(%addr, "web UI ready"),
+        Err(error) => tracing::info!(%error, port, "web UI ready (address unreadable)"),
+    }
     if let Err(error) = axum::serve(listener, router(state)).await {
         tracing::error!(%error, "the web UI stopped; the bridge keeps publishing without it");
     }
@@ -202,51 +268,216 @@ async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
 /// exactly as much as no mutation at all; the second attempt asserts that the
 /// text actually changed before running anything.
 async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
-    let heartbeat = state
-        .heartbeat
-        .as_ref()
-        .and_then(|h| h.last())
-        .map(|t| t.0.to_string())
-        .unwrap_or_else(|| "null".to_string());
+    let wedged = match state.loop_age() {
+        Some((age, allowed)) => age > allowed,
+        // No loop, or a loop that has not ticked once yet. Neither is a wedge:
+        // the silent states have no loop by design, and a bridge that has not
+        // completed its first iteration is starting, not stuck.
+        None => false,
+    };
+    let (age, allowed) = state
+        .loop_age()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .unwrap_or_else(|| ("null".to_string(), "null".to_string()));
 
+    // `intends_to_publish`, NOT `publishing`.
+    //
+    // It said `publishing` until a review on 2026-08-04, and reported `true` for
+    // any bridge that had reached the Running arm — including one whose broker
+    // was unreachable and which had put nothing on the wire. The value was a
+    // compile-time constant describing which branch of `main.rs` ran, presented
+    // as an observation. This project's whole purpose is not to report something
+    // as working when it is not, and the endpoint that exists to say so was
+    // saying it.
+    //
+    // Broker connectivity is not plumbed to the UI yet ([#53]); until it is, the
+    // honest report is what the bridge INTENDS plus the heartbeat, which a caller
+    // can check for itself.
     let body = format!(
-        "{{\"status\":\"{}\",\"publishing\":{},\"last_loop_tick_ms\":{},\
+        "{{\"status\":\"{}\",\"intends_to_publish\":{},\"wedged\":{},\
+          \"loop_age_ms\":{},\"loop_age_allowed_ms\":{},\
           \"version\":\"{}\",\"contract\":{}}}",
         state.lifecycle.slug(),
         !state.lifecycle.is_silent_on_purpose(),
-        heartbeat,
+        wedged,
+        age,
+        allowed,
         // Compile-time, so it describes the BINARY and not the tag it wears —
         // the two can drift, which is why the publish workflow guards them.
         env!("CARGO_PKG_VERSION"),
         crate::adapters::sparkplug_publisher::CONTRACT_VERSION,
     );
-    (StatusCode::OK, [("content-type", "application/json")], body)
+
+    // AR12, and the whole point of the status code.
+    //
+    // Unhealthy ONLY for a wedged poll loop. A deliberate silence answers 200
+    // because Epic 7 restarts on this, and looping a fresh deployment would
+    // destroy the screen needed to configure it. An honest STALE answers 200 too:
+    // the loop is running, the cloud is not answering, and restarting the
+    // container fixes nothing.
+    //
+    // Returned unconditionally 200 until a review on 2026-08-04 — so the
+    // healthcheck degraded to "the process accepts TCP", which HEALTHCHECK gives
+    // for free, and the restart AR12 exists to trigger could never fire.
+    let code = if wedged {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::OK
+    };
+    (code, [("content-type", "application/json")], body)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// AC2 — and the test exists because the change it catches is one somebody
-    /// makes ON PURPOSE, believing it an improvement.
+    /// A published bridge with a 30 s period — the allowance AR12 computes from.
+    fn running_config() -> crate::app::supervisor::BridgeConfig {
+        crate::app::supervisor::BridgeConfig {
+            api_base: "https://api.smart-me.com".to_string(),
+            credentials: smart_me_client::Credentials::Basic {
+                user: "u".to_string(),
+                password: "p".to_string(),
+            },
+            http_timeout: std::time::Duration::from_secs(10),
+            meters: Vec::new(),
+            group_id: "G".to_string(),
+            node_id: "N".to_string(),
+            broker_host: "b".to_string(),
+            broker_port: 1883,
+            bd_seq_path: std::path::PathBuf::from("/data/bdseq.toml"),
+            poll: crate::app::PollConfig {
+                interval: std::time::Duration::from_secs(30),
+                fetch_timeout: std::time::Duration::from_secs(10),
+            },
+            policy: crate::core::state_machine::Policy { max_age_ms: 90_000 },
+            log_dir: None,
+            log_keep: None,
+            ui_port: None,
+        }
+    }
+
+    /// AC2 — and it now asks PRODUCTION where it bound.
     ///
-    /// Binding to loopback would not reduce exposure: the container publishes no
-    /// host port, so nothing on the LAN can reach it either way. It would only
-    /// make the container unreachable from Traefik, which is the sole ingress.
+    /// **The first version of this test asserted nothing.** It created its own
+    /// listener on its own literal `0.0.0.0` and checked that *that* was not
+    /// loopback — which is a tautology (`local_addr()` of `0.0.0.0` is
+    /// unspecified, never loopback) about a socket `serve` never touched. Making
+    /// `serve` bind `127.0.0.1` left it green; found by review 2026-08-04.
+    ///
+    /// `bind` was split out of `serve` for this: the test can now ask the code
+    /// under review what address it chose.
     #[tokio::test]
-    async fn the_bind_address_is_not_loopback() {
-        // Port 0 asks the OS for a free one, so this asserts the ADDRESS without
-        // colliding with anything.
-        let listener = tokio::net::TcpListener::bind(std::net::SocketAddr::from(([0, 0, 0, 0], 0)))
-            .await
-            .expect("bind");
+    async fn the_bind_address_production_chooses_is_not_loopback() {
+        let listener = bind(0).await.expect("the UI binds");
         let bound = listener.local_addr().expect("addr");
         assert!(
-            !bound.ip().is_loopback(),
-            "the UI must not bind loopback: the container publishes no host port, \
-             so loopback protects nothing and makes it unreachable from Traefik, \
-             which is the only thing meant to reach it"
+            bound.ip().is_unspecified(),
+            "the UI must bind 0.0.0.0 INSIDE the container: it publishes no host \
+             port, so loopback protects nothing and makes it unreachable from \
+             Traefik, which is the only thing meant to reach it. It bound {bound}"
         );
+    }
+
+    /// AR12 — the half that was missing entirely until a review found it.
+    ///
+    /// `/healthz` returned 200 unconditionally, so the Docker healthcheck Epic 7
+    /// will wire to it degraded to "the process accepts TCP" and the restart
+    /// AR12 exists to trigger could never fire.
+    #[test]
+    fn a_wedged_poll_loop_is_unhealthy_and_a_slow_one_is_not() {
+        use crate::core::clock::{FakeClock, MonotonicMs};
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let clock = Arc::new(FakeClock::new(UtcMillis(1_784_984_793_000)));
+        let heartbeat = LastLoopTick::new();
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let state = UiState::running(heartbeat.clone(), clock.clone(), config);
+
+        // The loop ticks now, with a 30 s period, so 90 s is the allowance.
+        heartbeat.touch(clock.monotonic());
+
+        clock.advance_ms(60_000);
+        let (age, allowed) = state.loop_age().expect("a running bridge has an age");
+        assert_eq!((age, allowed), (60_000, 90_000));
+        assert!(
+            age <= allowed,
+            "two missed periods is a slow cloud — an HONEST STALE, which AR12 \
+             says must never trigger a restart"
+        );
+
+        clock.advance_ms(30_001);
+        let (age, _) = state.loop_age().expect("age");
+        assert!(
+            age > allowed,
+            "past three periods the loop is not looping, and that IS the case \
+             the healthcheck exists to restart"
+        );
+        let _: MonotonicMs = clock.monotonic();
+    }
+
+    /// **The handler itself**, because the tests above exercise `loop_age` and a
+    /// mutation that returned `StatusCode::OK` unconditionally left every one of
+    /// them green — which is exactly how the unconditional 200 shipped in the
+    /// first place.
+    #[tokio::test]
+    async fn the_status_code_follows_the_wedge_and_nothing_else() {
+        use crate::core::clock::FakeClock;
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let clock = Arc::new(FakeClock::new(UtcMillis(1_784_984_793_000)));
+        let heartbeat = LastLoopTick::new();
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let state = Arc::new(UiState::running(
+            heartbeat.clone(),
+            clock.clone(),
+            Arc::clone(&config),
+        ));
+        heartbeat.touch(clock.monotonic());
+
+        // Healthy: one period late.
+        clock.advance_ms(30_000);
+        let response = healthz(State(Arc::clone(&state))).await.into_response();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "one late tick is a slow cloud, and restarting the container fixes \
+             nothing about a slow cloud"
+        );
+
+        // Wedged: past three periods.
+        clock.advance_ms(61_000);
+        let response = healthz(State(Arc::clone(&state))).await.into_response();
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "AR12: a poll loop that has stopped looping is the ONE case the \
+             healthcheck exists to restart, and it returned 200 for it until a \
+             review on 2026-08-04"
+        );
+
+        // And a deliberate silence is still 200 — the case that would otherwise
+        // loop a fresh deployment and destroy the screen needed to configure it.
+        let silent = Arc::new(UiState::silent(Lifecycle::Unconfigured));
+        assert_eq!(
+            healthz(State(silent)).await.into_response().status(),
+            StatusCode::OK
+        );
+    }
+
+    /// A bridge with no poll loop has no age, and that must not read as wedged —
+    /// it is the state a fresh deployment sits in, and restarting it would
+    /// destroy the screen needed to leave it.
+    #[test]
+    fn a_deliberately_silent_bridge_has_no_loop_age() {
+        assert!(
+            UiState::silent(Lifecycle::Unconfigured)
+                .loop_age()
+                .is_none()
+        );
+        assert!(UiState::silent(Lifecycle::Unconfirmed).loop_age().is_none());
     }
 
     #[test]

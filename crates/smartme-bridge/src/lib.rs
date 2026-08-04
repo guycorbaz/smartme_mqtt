@@ -35,7 +35,11 @@ pub fn run(
                 if let Some(port) = ui_port {
                     tokio::spawn(ui::serve(
                         port,
-                        ui::UiState::new(ui::Lifecycle::Running, Some(control.heartbeat())),
+                        ui::UiState::running(
+                            control.heartbeat(),
+                            control.clock(),
+                            control.config_handle(),
+                        ),
                     ));
                 }
             },
@@ -80,7 +84,7 @@ pub fn run_without_publishing(
         // No heartbeat, because there is no poll loop to have one — and
         // `/healthz` says so rather than inventing a plausible instant.
         if let Some((port, lifecycle)) = ui {
-            tokio::spawn(ui::serve(port, ui::UiState::new(lifecycle, None)));
+            tokio::spawn(ui::serve(port, ui::UiState::silent(lifecycle)));
         }
         app::supervisor::shutdown_signal().await;
     });

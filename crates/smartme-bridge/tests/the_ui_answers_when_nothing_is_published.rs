@@ -188,8 +188,9 @@ fn healthz_does_not_call_a_deliberate_silence_unhealthy() {
     // And the body still says it is not doing anything — the status code answers
     // "is this process worth keeping", the body answers "is it working".
     assert!(
-        health.contains("\"publishing\":false"),
-        "200 must not mean 'working': the body has to say the bridge is silent, \
+        health.contains("\"intends_to_publish\":false"),
+        "200 must not mean 'working': the body has to say the bridge intends to \
+         publish nothing, or the endpoint has collapsed two different questions \
          or the endpoint has collapsed two different questions into one:\n{health}"
     );
     assert!(

@@ -150,13 +150,27 @@ pub fn classify(old: &BridgeConfig, new: &BridgeConfig) -> Plan {
     let mut plan = Plan::default();
     let mut note = |field, cost| plan.changes.push(Change { field, cost });
 
-    // HOT — the poll task picks these up and nothing reaches the wire because
-    // of them.
+    // PROCESS RESTART — and these three were classified `Hot` until a review
+    // caught it on 2026-08-04.
+    //
+    // `Cost::Hot` says "in force immediately". They were not: the smart-me
+    // client and the source that holds them are built ONCE, before the poll task
+    // is spawned (`supervisor.rs`, `SmartMeClient::new` / `SmartMeCloudSource::new`),
+    // and nothing rebuilds either. The poll loop reads exactly two things from
+    // the handle — the period and the staleness policy — so an `api_base` stored
+    // by `apply` changed what `current()` REPORTED while every request still went
+    // to the old endpoint. That is the precise lie this project exists to
+    // prevent, committed in the module whose job is to prevent it.
+    //
+    // Reclassified rather than implemented, deliberately: making them genuinely
+    // hot means rebuilding the source inside the poll task, which owns a generic
+    // `S: Source` chosen so tests can inject a fake. That is a design change and
+    // it is [#52], not a patch.
     if old_api_base != new_api_base {
-        note("api_base", Cost::Hot);
+        note("api_base", Cost::ProcessRestart);
     }
     if old_http_timeout != new_http_timeout {
-        note("http_timeout", Cost::Hot);
+        note("http_timeout", Cost::ProcessRestart);
     }
     if old_poll != new_poll {
         note("publish_period_secs", Cost::Hot);
@@ -255,12 +269,15 @@ fn classify_meters(old: &[MeterConfig], new: &[MeterConfig], plan: &mut Plan) {
                 });
             }
             Some(still) if still.device_id != gone.device_id => {
-                // Which smart-me device is polled. Nothing about the Sparkplug
-                // device changes, so no certificate is owed — only the poll
-                // task's source.
+                // Which smart-me device is polled. No Sparkplug certificate is
+                // owed — but this is NOT hot either, and said so until a review
+                // on 2026-08-04: `device_id` is moved into `SmartMeCloudSource`
+                // before the poll task is spawned and nothing rebuilds it, so a
+                // change here left the bridge polling the previous device while
+                // the model reported the new one. [#52].
                 plan.changes.push(Change {
                     field: "meters (device_id)",
-                    cost: Cost::Hot,
+                    cost: Cost::ProcessRestart,
                 });
             }
             Some(_) => {}

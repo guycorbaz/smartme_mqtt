@@ -116,6 +116,7 @@ pub struct Control {
     config: ConfigHandle,
     devices: mpsc::Sender<DeviceCommand>,
     heartbeat: LastLoopTick,
+    clock: Arc<dyn Clock + Send + Sync>,
 }
 
 impl Control {
@@ -134,6 +135,21 @@ impl Control {
     /// opinion about whether the bridge is alive.
     pub fn heartbeat(&self) -> LastLoopTick {
         self.heartbeat.clone()
+    }
+
+    /// The clock the heartbeat is recorded against.
+    ///
+    /// Handed out rather than reconstructed: `MonotonicMs` counts from a
+    /// process-start instant held INSIDE the clock, so a second `SystemClock`
+    /// would be a second origin and every age computed against it would be
+    /// wrong by the difference.
+    pub fn clock(&self) -> Arc<dyn Clock + Send + Sync> {
+        Arc::clone(&self.clock)
+    }
+
+    /// The live configuration, for a reader that needs the publish period.
+    pub fn config_handle(&self) -> ConfigHandle {
+        Arc::clone(&self.config)
     }
 
     pub fn current(&self) -> Arc<BridgeConfig> {
@@ -176,11 +192,28 @@ impl Control {
                 .await;
         }
 
-        // Then the swap — but only of what is genuinely in force now.
+        // Then the swap — but ONLY of what is genuinely in force now.
+        //
+        // `api_base` and `http_timeout` were stored here until 2026-08-04 and
+        // were never in force: the client that holds them is built once, before
+        // the poll task exists. Storing them made `current()` report an endpoint
+        // the bridge was not using. The meter list is stored because the DEVICE
+        // SET really does change (the certificates above are how), but a meter's
+        // `device_id` is carried by the source and is not — so the stored list
+        // keeps the old `device_id`s, and `classify` reports that field as
+        // `ProcessRestart` so nobody is told otherwise. [#52].
         let mut applied = (*old).clone();
-        applied.meters = new.meters;
-        applied.api_base = new.api_base;
-        applied.http_timeout = new.http_timeout;
+        applied.meters = new
+            .meters
+            .iter()
+            .map(|m| {
+                let mut m = m.clone();
+                if let Some(previous) = old.meters.iter().find(|o| o.meter == m.meter) {
+                    m.device_id = previous.device_id.clone();
+                }
+                m
+            })
+            .collect();
         applied.poll = new.poll;
         applied.policy = new.policy;
         self.config.store(Arc::new(applied));
@@ -192,7 +225,12 @@ impl Control {
                 "saved but NOT in force: these take effect at the next process start"
             );
         }
-        if plan.cost() == Some(Cost::NewSession) {
+        // `any`, not `cost()`. `cost()` is the MAXIMUM, and `ProcessRestart`
+        // outranks `NewSession` — so a form that changed the broker AND a log
+        // setting reported only the log setting and said nothing about the
+        // broker change it had also discarded. A "Save" button produces exactly
+        // that mixed plan. Found by review 2026-08-04.
+        if plan.changes.iter().any(|c| c.cost == Cost::NewSession) {
             tracing::warn!(
                 "saved but NOT in force: the Sparkplug identity or the broker changed, \
                  which is a new session by definition. The bridge keeps the session it \
@@ -266,6 +304,7 @@ pub async fn run_with_control(
         config: Arc::clone(&handle),
         devices: device_tx,
         heartbeat: heartbeat.clone(),
+        clock: Arc::clone(&clock),
     });
 
     let mqtt = tokio::spawn(mqtt_driver::run(
@@ -350,6 +389,7 @@ mod tests {
                 config: Arc::new(arc_swap::ArcSwap::from_pointee(config())),
                 devices,
                 heartbeat: LastLoopTick::new(),
+                clock: Arc::new(crate::core::clock::SystemClock::new()),
             },
             rx,
         )
@@ -419,6 +459,70 @@ mod tests {
             "the bridge is still connected to the old broker, so that is what \
              current() must say"
         );
+    }
+
+    /// **The lie a review found on 2026-08-04.** `api_base` was classified `Hot`
+    /// and stored by `apply`, so `current()` reported an endpoint the bridge was
+    /// not using — the client that holds it is built once, before the poll task
+    /// exists, and nothing rebuilds it.
+    ///
+    /// This test is the regression guard, and it pins the HONEST behaviour: the
+    /// change is reported as needing a restart, and `current()` keeps saying what
+    /// is actually in force. [#52] is where it becomes genuinely hot.
+    #[tokio::test]
+    async fn a_field_the_bridge_cannot_adopt_is_never_reported_as_in_force() {
+        let (control, _devices) = control();
+        let mut elsewhere = config();
+        elsewhere.api_base = "https://other.example.com".to_string();
+        elsewhere.http_timeout = Duration::from_secs(42);
+
+        let plan = control.apply(elsewhere).await;
+        assert_eq!(plan.cost(), Some(Cost::ProcessRestart));
+        assert_eq!(
+            plan.needs_restart(),
+            vec!["api_base", "http_timeout"],
+            "the operator must be told which fields are waiting, by name"
+        );
+        assert_eq!(
+            control.current().api_base,
+            "https://api.smart-me.com",
+            "every request still goes to the old endpoint, so that is what \
+             current() must say"
+        );
+        assert_eq!(
+            control.current().http_timeout,
+            Duration::from_secs(10),
+            "the client holding this was built before the poll task existed"
+        );
+    }
+
+    /// A mixed save must not swallow the new-session warning.
+    ///
+    /// FOUND BY REVIEW 2026-08-04: the warning was gated on `plan.cost()`, which
+    /// is the MAXIMUM, and `ProcessRestart` outranks `NewSession`. So changing the
+    /// broker and a log setting together reported only the log setting — and a
+    /// "Save" button is precisely what produces a mixed plan.
+    #[tokio::test]
+    async fn a_mixed_save_still_reports_the_new_session_change() {
+        let (control, _devices) = control();
+        let mut both = config();
+        both.broker_host = "192.0.2.9".to_string();
+        both.log_dir = Some("/data/logs".to_string());
+
+        let plan = control.apply(both).await;
+        assert_eq!(
+            plan.cost(),
+            Some(Cost::ProcessRestart),
+            "the maximum is still ProcessRestart — that part was right"
+        );
+        assert!(
+            plan.changes
+                .iter()
+                .any(|c| c.cost == Cost::NewSession && c.field == "broker_host"),
+            "and the broker change must still be IN the plan, or the caller \
+             cannot tell the operator it was discarded: {plan:?}"
+        );
+        assert_eq!(control.current().broker_host, "127.0.0.1");
     }
 
     /// Same rule, for the category that cannot be applied at all.

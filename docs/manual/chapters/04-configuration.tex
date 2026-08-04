@@ -174,8 +174,8 @@ Process restart & Nothing until the container is restarted. \\
 \normalfont\textbf{Setting} & \textbf{Cost} \\
 \midrule
 publish\_period\_secs   & Hot \\
-api\_base               & Hot \\
-meters[].device\_id     & Hot \\
+api\_base               & Process restart \\
+meters[].device\_id     & Process restart \\
 meters[].enabled        & Device certificate \\
 meters[].serial         & Device certificate \\
 group\_id, node\_id     & New session \\
@@ -197,6 +197,12 @@ is. Stopping quietly would leave its last reading on the host's screen looking c
 \end{note}
 
 \begin{warning}
+\textbf{Only the publish period and the staleness policy are genuinely hot today.}
+\code{api\_base}, the HTTP timeout and a meter's \code{device\_id} were listed as hot until a
+review on 2026-08-04 found they were not: the client that holds them is built once, before the
+polling starts, and nothing rebuilds it. They are process-restart settings, and \prog says so
+rather than reporting a change it did not make (issue~\#52).
+
 \textbf{A new-session change is currently saved but not carried out} (issue~\#49). \prog
 records it, reports it, and keeps the session it has until it is restarted. What it will
 never do is claim otherwise: the running configuration it reports back is what is

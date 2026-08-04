@@ -266,16 +266,34 @@ pub fn into_raw(config: StoredConfig, credential: Credential, dir: &Path) -> Raw
 
 /// Do these two configurations publish the same thing?
 ///
-/// Compared as a SET, not as a list: reordering the meters in a form changes
-/// nothing about what reaches the wire, and treating it as a change would make
-/// the confirmation lapse for no reason an operator could see — which is how a
-/// guard becomes noise and then becomes ignored. Same rule as
-/// [`crate::app::reconfigure::classify`].
+/// Order does not matter; multiplicity does.
+///
+/// Reordering the meters in a form changes nothing about what reaches the wire,
+/// and treating it as a change would make the confirmation lapse for no reason an
+/// operator could see — which is how a guard becomes noise and then becomes
+/// ignored.
+///
+/// **Written as `a.len() == b.len() && a.iter().all(|m| b.contains(m))` until a
+/// review caught it on 2026-08-04.** That is a SUBSET test, and equal length only
+/// makes a subset an equality when the left side has no duplicates. With a meter
+/// listed twice in the stored file, `[M, M]` compared against `[M, N]` returned
+/// true — so a brand-new device inherited a confirmation given for a mapping it
+/// was never part of, and was born on the wire under it. Reachable through this
+/// module's own public API, with no hand-editing.
+///
+/// **This is NOT the rule `crate::app::reconfigure::classify` uses**, and the
+/// difference is deliberate rather than an oversight: `classify` compares only
+/// *enabled* meters keyed by id, because it answers "what must the wire be told";
+/// this compares the whole list, because it answers "is this the mapping a human
+/// looked at". Editing a disabled meter's serial changes nothing on the wire and
+/// still deserves a fresh look.
 fn same_mapping(a: &[StoredMeter], b: &[StoredMeter]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.iter().all(|m| b.contains(m))
+    // Multiset equality by counting, which needs no `Ord` on `StoredMeter`.
+    a.iter()
+        .all(|m| a.iter().filter(|x| *x == m).count() == b.iter().filter(|x| *x == m).count())
 }
 
 /// Write the configuration atomically — temp file, `fsync`, `rename`,
@@ -538,6 +556,41 @@ mod tests {
         assert!(
             !read(&dir).expect("read").mapping_confirmed,
             "a mapping nobody has looked at was recorded as confirmed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A duplicated meter must not turn the comparison into a subset test.
+    ///
+    /// FOUND BY REVIEW 2026-08-04, against code that had been falsified three
+    /// times — none of the three mutations targeted `same_mapping`, which is why
+    /// it survived. `[M, M]` and `[M, N]` have equal length and every element of
+    /// the first appears in the second, so a subset test called them the same
+    /// mapping and carried the confirmation across.
+    #[test]
+    fn a_duplicated_meter_does_not_carry_a_confirmation_across_a_changed_mapping() {
+        let dir = dir("dup");
+        let mut doubled = sound();
+        doubled.meters = vec![doubled.meters[0].clone(), doubled.meters[0].clone()];
+        save(&dir, &doubled).expect("save");
+        confirm(&dir).expect("confirm the doubled mapping");
+
+        let mut changed = sound();
+        changed.meters = vec![
+            doubled.meters[0].clone(),
+            StoredMeter {
+                meter_id: "cellar".into(),
+                device_id: "dev-new".into(),
+                serial: "9209999".into(),
+                enabled: true,
+            },
+        ];
+        save(&dir, &changed).expect("save");
+
+        assert!(
+            !read(&dir).expect("read").mapping_confirmed,
+            "a device nobody has ever seen was about to be born under a \
+             confirmation given for a different mapping"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -87,9 +87,10 @@ same event to someone watching Ignition, namely nothing.
 | setting | cost | why |
 | --- | --- | --- |
 | `publish_period_secs` | **hot** | the poll loop re-reads it each tick |
-| `api_base` | **hot** | rebuilds the source; nothing reaches the wire |
-| `meters[].device_id` | **hot** | changes which smart-me device is polled, not which Sparkplug device exists |
-| staleness policy, HTTP timeout | **hot** | read per tick |
+| `api_base` | **process restart** | *(was `hot`, corrected by review 2026-08-04 — [#52])* the client holding it is built once, before the poll task exists, and **nothing rebuilds it** |
+| `meters[].device_id` | **process restart** | *(was `hot`, same correction)* it is moved into the source at construction |
+| staleness policy, fetch timeout | **hot** | genuinely re-read from the handle on every tick |
+| HTTP timeout | **process restart** | *(was `hot`, same correction)* consumed by the client at construction |
 | `meters[].enabled` | **device certificate** | DBIRTH on enable, DDEATH on disable, same `bdSeq` |
 | `meters[].serial` | **device certificate** | the serial IS the device topic level, so it is one device replaced by another: DDEATH then DBIRTH |
 | `group_id`, `node_id` | **new session** | the topic namespace *and* the will registered in the CONNECT packet |
