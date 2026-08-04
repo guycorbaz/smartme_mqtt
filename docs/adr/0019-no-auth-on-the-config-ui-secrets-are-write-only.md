@@ -1,7 +1,17 @@
 # ADR 0019 — The configuration UI carries no authentication; secrets are write-only
 
-- **Status:** Accepted
+- **Status:** Accepted. **The no-authentication decision stands untouched. The write-only rule lost
+  its subject on 2026-08-04** — see the note.
 - **Date:** 2026-08-03 *(recording a decision Guy took on 2026-08-01)*
+
+  > **Amended 2026-08-04 by [ADR 0023](0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md).**
+  > This ADR's write-only rule assumes a secret is *submitted through the UI and stored*. None now
+  > is: the smart-me credential stays in the environment and never reaches a form, a file, or a
+  > request. **The strongest form of "never rendered" turned out to be "never present."**
+  >
+  > What survives, and matters: the *never rendered* clauses below become a **guard** rather than a
+  > feature — a rule about what must not be reintroduced, still worth stating because the UI has no
+  > login in front of it. Nothing about the no-auth posture changes.
 - **Implements:** **NFR14** — *"Web UI exposure safe-by-default (bind/auth posture decided in
   architecture); credentials never re-shown in clear"*. The write-only rule below is not a new
   requirement; it is NFR14's second clause made testable, and the *"decided in architecture"* of its

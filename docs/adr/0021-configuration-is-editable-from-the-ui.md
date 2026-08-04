@@ -3,6 +3,10 @@
 - **Status:** Accepted
 - **Date:** 2026-08-03
 - **Decided by:** Guy, on two questions put to him while drafting Epic 5's first story
+- **Amended 2026-08-04** by [ADR 0023](0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md):
+  **FR46 no longer covers the smart-me credentials**, which stay in the environment. Everything else
+  this ADR decides — that configuration is editable from the UI at all, and the Epic 5 model /
+  Epic 6 screens split — is unchanged. FR23 is rescoped a second time, to the credential alone.
 - **Related:** **FR46** (new), FR23 (rescoped to bootstrap), **NFR14**,
   [ADR 0019](0019-no-auth-on-the-config-ui-secrets-are-write-only.md),
   [ADR 0020](0020-the-publish-period-is-bounded-and-cannot-be-turned-off.md), Epics 5 and 6

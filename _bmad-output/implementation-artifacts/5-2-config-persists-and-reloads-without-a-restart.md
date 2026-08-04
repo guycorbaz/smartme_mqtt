@@ -2,6 +2,17 @@
 
 Status: ready-for-dev
 
+> **Amended 2026-08-04 — [ADR 0023](../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md)
+> supersedes ADR 0022.** `config.toml` is the whole configuration; the smart-me credential
+> (`SMARTME_CLIENT_ID` + `SMARTME_CLIENT_SECRET`) stays in the environment and never descends to
+> disk. **AC2 and AC3 are withdrawn** — there is no second file to protect and none to
+> desynchronise. A **new AC2** takes their place, for the state the decision creates: a bridge with
+> no configuration at all. **AC6 is retargeted** at the environment, where the secret now enters.
+>
+> **And the story is no longer blocked.** [#41] blocked it because a `0600` file sat in a
+> world-writable directory; with nothing confidential in `/data`, that argument is spent. What
+> remains is integrity, which is real and is nobody's prerequisite.
+
 ## Story
 
 As the operator,
@@ -25,30 +36,29 @@ The epic contributes **FR27** (*"persist configuration across restarts and image
 > the same process wrote; an image update replaces the binary that reads it. The second is what
 > FR40 promises the operator and what a schema change would break — see AC5.
 
-**AC2 — the split from ADR 0022, with the mode VERIFIED** *(added)*
+**AC2 — no configuration is not an invalid configuration** *(replaces the withdrawn AC2/AC3, [ADR 0023](../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md) §5)*
 
-**Given** [ADR 0022](../../docs/adr/0022-secrets-rest-in-a-separate-0600-file.md)
+**Given** a state directory with **no** `config.toml`
 **When** the bridge starts
-**Then** non-sensitive settings live in `config.toml` and secrets in a **separate** `secrets.toml`
-created `0600`
-**And** the bridge **stat**s that file and **refuses to start** if it is readable by group or other,
-naming the file.
+**Then** the process comes up and **stays** up, ready to serve the web UI
+**And** it opens **no MQTT session**: no CONNECT, no will registered, no NBIRTH, no DBIRTH, nothing
+published
+**And** the reason is traced at a level visible under the **default** filter, saying the bridge is
+unconfigured and where the file will be written.
 
-> Verified, not assumed. [#41](https://github.com/guycorbaz/smartme_mqtt/issues/41) already produced
-> a case in this deployment where the mode bits read `drwxrwxrwx` while a Synology ACL denied uid
-> 10002 — **the displayed mode was not the enforced permission.** A mode this process set at
-> creation says nothing about what a restore, a remount, an `umask` or a `docker cp` did afterwards.
+**And, separately:** given a `config.toml` that **exists** and is invalid, the bridge refuses to
+start, exactly as Story 5.1 specifies. **The two cases must be distinguishable in the code, not
+merged** — collapsing them either bricks the first run or lets a corrupt file be treated as a fresh
+install and silently overwritten.
 
-**AC3 — the two files may desynchronise, and that is a validation fault** *(added)*
-
-**Given** two files that are written separately
-**When** one names a meter the other does not, or one is missing entirely
-**Then** it is reported through the **same fault collection as Story 5.1**, with the file named
-**And** the bridge refuses to start rather than running with a meter whose credential it cannot find.
-
-> This is the cost ADR 0022 accepted in exchange for a diagnosable `config.toml`. Accepting a cost
-> means handling it, not hoping it does not happen — and a missing credential must not surface later
-> as an authentication error that looks like a smart-me outage.
+> Everything but the credential arrives through a browser, so a bridge that refuses to start without
+> a configuration can never be configured. **Absence is not invalidity.** The trace level is called
+> out because this project has already shipped two acceptance criteria written in terms of a level
+> that sat below the default filter, so nobody could see them.
+>
+> **The absence assertion here is the load-bearing one and it is falsifiable the wrong way:** "no
+> NBIRTH appeared" holds trivially over a broker nothing ever connected to. Prove the harness sees a
+> CONNECT when a configuration *is* present, then prove it sees none when it is not.
 
 **AC4 — a change takes effect without a restart, and the meter set is a special case** *(added)*
 
@@ -86,14 +96,19 @@ for fields it did not understand
 
 **AC6 — no secret reaches the log, the error, or the state** *(added)*
 
-**Given** a fault in `secrets.toml`
+**Given** a fault involving `SMARTME_CLIENT_SECRET` *(retargeted at the environment — the secret no
+longer rests in a file)*
 **When** it is reported
-**Then** the message carries the **field name and the file**, never the value
-**And** a test asserts the secret string appears in no log line, no error, and no published payload.
+**Then** the message carries the **variable name**, never the value
+**And** a test asserts the secret string appears in no log line, no error, and no published payload
+**And** `config.toml`, having been written by this process, is asserted **not to contain it** — the
+one place a refactor could put it back without any test noticing.
 
-> ADR 0019's rule, tested here rather than in Epic 6, because this is where the value enters the
-> process. A `Debug` derive on the secrets struct would defeat it silently, and no template is
-> involved — which is the whole argument for the Epic 5 / Epic 6 split.
+> ADR 0019's rule, tested here rather than in Epic 6, because the environment is where the value
+> enters the process. A `Debug` derive on a struct carrying it would defeat this silently, and no
+> template is involved — which is the whole argument for the Epic 5 / Epic 6 split. `RawConfig`'s
+> hand-written `Debug` **stays**: the struct the secret arrives through is exactly where the leak of
+> Story 1.6 happened.
 
 ## Tasks / Subtasks
 
@@ -102,13 +117,24 @@ for fields it did not understand
         rename + fsync(dir), and it already exists. Do not write a second writer.
   - [ ] `main.rs:233` — the state directory and its `/data` default.
   - [ ] Story 5.1's fault collection: this story adds to it, it does not start a second one.
-  - [ ] ADR 0022, including *The blocker*.
+  - [ ] [ADR 0023](../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md)
+        in full. **Not ADR 0022** — it is superseded, and its `secrets.toml` no longer exists.
 
-- [ ] **Task 2 — the two files** (AC: 2, 3)
-  - [ ] `secrets.toml` created `0600` **before** the first secret is written to it, not tightened
-        afterwards — creating `0644` and fixing it leaves a window.
-  - [ ] The startup `stat` check, with its refusal.
-  - [ ] Cross-file consistency into 5.1's faults.
+- [ ] **Task 2 — one file, and the unconfigured state** (AC: 2)
+  - [ ] **Delete what ADR 0022 left behind**, committed at `6476412`: `StoredSecrets`,
+        `secrets_path`, `check_mode`, `persist_atomic_with_mode`, and the three `store.rs` tests
+        that exercise them. Deleting a test is a claim; say in the commit which AC each one served
+        and why that AC is gone.
+  - [ ] **Keep** `RawConfig`'s hand-written `Debug` (AC6) — the secret still transits it.
+  - [ ] Wire `store::load` into `main.rs`, which today has no caller for it. `store::exists`
+        is the seam: absent → serve the UI and stay off the wire; present → load, validate, refuse
+        on fault.
+  - [ ] Withdraw the eleven environment variables from `main.rs`; keep `SMARTME_STATE_DIR`,
+        `SMARTME_CLIENT_ID`, `SMARTME_CLIENT_SECRET`.
+  - [ ] **Logging is initialised before the configuration is read today, and `LOG_DIR`/`LOG_KEEP`
+        are moving into the file.** That ordering has to invert. `main.rs` already writes faults to
+        `stderr` as well as the log precisely for a start with no log destination — check that the
+        no-configuration and invalid-configuration paths both still reach a human.
 
 - [ ] **Task 3 — versioned schema** (AC: 5)
   - [ ] A version field, and `deny_unknown_fields` — the default of ignoring them is the defect.
@@ -121,21 +147,39 @@ for fields it did not understand
   - [ ] DBIRTH on enable, DDEATH on disable, same `bdSeq`, DBIRTH before any DDATA.
 
 - [ ] **Task 5 — falsification** (AC: all)
-  - [ ] Mode check: create the file `0644` and confirm the bridge refuses. Copy the message.
   - [ ] Schema: rename a field in the file and confirm refusal rather than a silent default.
   - [ ] Secrets: assert absence from logs by **searching for the value**, having first confirmed the
         search finds it when deliberately leaked — an absence assertion over a stream that never
         carried it proves nothing.
-  - [ ] `./scripts/ci-local.sh`, full.
+  - [ ] **The unconfigured state (AC2), both directions.** First prove the harness *observes* a
+        CONNECT when `config.toml` is present; only then assert none appears when it is absent.
+        Reversed, the test passes against a bridge that never connects under any circumstances.
+  - [ ] `./scripts/ci-local.sh`, full. Never piped — the exit code becomes `tail`'s.
+
+- [ ] **Task 6 — the manual, and the deployment** (AC: 2, 6)
+  - [ ] `docs/manual/chapters/04-configuration.tex` and `09-appendix-config-reference.tex` document
+        the eleven withdrawn variables. The manual documents behaviour that **exists**, so it is
+        amended in the same commit as the code, not before and not after. Its statement that secrets
+        live in `.env` at `0600` was right all along and stays.
+  - [ ] The manual gains `config.toml`: its schema, its version field, and the fact that **writing it
+        by hand is the supported headless bring-up** (rescoped FR23).
+  - [ ] `.env.example` loses the same eleven. Guy's deployment `.env` on panoramix does too — flag
+        it rather than assume, since the file is not in the repository.
 
 ## Dev Notes
 
-### The blocker this story inherits
+### The blocker this story inherited, and no longer does
 
-**ADR 0022 is accepted; its prerequisite is not met.** `/data` on the deployment is world-writable
-([#41]). A `0600` file inside a directory anyone can write to is a claim about one inode in a
-directory where files can be replaced. **This story cannot be closed as done while that holds**, and
-the honest handling is to record the AC as unmet with the issue rather than to weaken the AC.
+~~**ADR 0022 is accepted; its prerequisite is not met.**~~ **Lifted 2026-08-04.** The blocker was
+that a `0600` file sat inside a world-writable `/data` ([#41]) — a claim about one inode in a
+directory where files can be replaced. [ADR 0023](../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md)
+removes the file: nothing confidential rests in `/data` at all, so the confidentiality argument has
+no subject.
+
+**What is left is integrity, and it is not nothing:** whoever can write `/data` can replace
+`config.toml` and point the bridge at another broker. It is a lesser risk, it is not this story's
+prerequisite, and it is recorded in ADR 0023 under *What this ADR does not decide* rather than
+dropped. [#41] stays open as a deployment task.
 
 ### What this story does NOT do
 

@@ -547,4 +547,30 @@ development_status:
   # Writing 5.2 also found architecture.md contradicting itself: line 73 said config is
   # "restart-only (YAGNI hot-reload)" while line 426 assumed ArcSwap. FR46 settles it —
   # line 73 was the stale one.
+  #
+  # 2026-08-04 — ADR 0023 SUPERSEDES 0022, and the story is UNBLOCKED. Guy: the API key
+  # lives in an environment variable, everything else is configured from the web UI, the
+  # file is the configuration. So: ONE config.toml, no secrets.toml, and the credential
+  # never descends to disk. #41 stops blocking — with nothing confidential in /data the
+  # confidentiality argument has no subject; the integrity half (anyone who can write the
+  # directory can redirect the bridge) is real, lesser, and nobody's prerequisite.
+  #
+  # The finding that matters more than the decision: the SPECIFICATION was already in
+  # three-way disagreement and nobody had noticed. NFR12 and architecture.md:204 said
+  # "credentials only in .env/env vars" from the start; FR46 (2026-08-03) put credentials
+  # in the UI; ADR 0022 (same day) put them in a 0600 file. architecture.md resolved its
+  # own open item 5 two OPPOSITE ways at lines 121 and 204 for a day. Guy's decision
+  # RESTORES the older passages rather than departing from them — FR46 and ADR 0022 are
+  # what move. Second self-contradiction found in that file in two days.
+  #
+  # Story 5.2 AC2 and AC3 withdrawn (no second file to protect, none to desynchronise). A
+  # new AC2 covers the state the decision creates: NO configuration is not an INVALID
+  # configuration — the bridge starts, serves the UI, and opens no MQTT session, or the
+  # screen that writes the first configuration is unreachable. 5.1's refuse-to-start is
+  # untouched: it governs a configuration that exists.
+  #
+  # client_id was not specified by Guy; he asked me to decide and document. Both halves go
+  # to the environment: a credential is a pair, a pair split across two sources can be
+  # rotated by halves, and a mismatched pair presents as a smart-me OUTAGE rather than a
+  # configuration fault.
   5-2-config-persists-and-reloads-without-a-restart: ready-for-dev

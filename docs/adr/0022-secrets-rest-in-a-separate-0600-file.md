@@ -1,7 +1,19 @@
 # ADR 0022 — Secrets rest in a separate `0600` file, and the bridge verifies the mode rather than assuming it
 
-- **Status:** Accepted. **Carries an operational prerequisite that is not yet met** — see
-  *The blocker*.
+- **Status:** **SUPERSEDED 2026-08-04 by [ADR 0023](0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md).**
+  There is no `secrets.toml`. The smart-me credential stays in the environment and never descends to
+  disk, so the file this ADR designs, the `0600` mode it verifies, and the desynchronisation it
+  accepts as a cost all have no object.
+
+  > **Why it was wrong, and not merely overtaken.** This ADR was written against FR46 and never
+  > checked it against **NFR12** (*"Credentials only in `.env`/env vars"*) or
+  > **`architecture.md:204`** (*"Secrets: `.env` / env vars only — the UI never reads, writes, or
+  > re-displays secrets"*). It contradicted both, and left `architecture.md` resolving its own open
+  > item ⑤ two opposite ways at lines 121 and 204. ADR 0023 restores those passages rather than
+  > departing from them. **Read it, not this.** What survives below is the reasoning about verifying
+  > a mode instead of assuming it — [#41] showed `drwxrwxrwx` while an ACL denied access — which is
+  > still true and still worth keeping, about a file that no longer exists.
+
 - **Date:** 2026-08-03
 - **Decided by:** Guy
 - **Closes:** architecture **open item 5** — *"Broker/token secrets-at-rest boundary when stored via
