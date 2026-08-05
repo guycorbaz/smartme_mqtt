@@ -37,9 +37,10 @@ use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse};
 use axum::routing::get;
 
-use crate::app::poll_publish::LastLoopTick;
-use crate::app::supervisor::ConfigHandle;
-use crate::core::clock::Clock;
+use crate::app::supervisor::Control;
+
+mod origin;
+mod screens;
 
 /// How many publish periods the poll loop may miss before `/healthz` calls the
 /// bridge unhealthy (AR12's `N`).
@@ -112,25 +113,32 @@ impl Lifecycle {
     }
 }
 
-/// What every handler can see.
+/// Which phase the process is in, and what that phase makes observable.
+///
+/// **One value, swapped in place** rather than one server per phase. Story 6.2
+/// AC7 requires that confirming a mapping starts the publishing bridge with no
+/// human intervention, so the process now loops over its phases — and the web
+/// surface has to outlive that loop, because it is the thing the operator is
+/// looking at while it turns. Rebuilding the server per phase would close the
+/// listener and re-bind it, and a `bind` that failed would degrade to "no UI"
+/// at exactly the moment the operator had just used it.
+///
+/// It is still ONE source of truth: `main.rs` decides the phase and stores it
+/// here; nothing re-derives it from what it can see.
 #[derive(Clone)]
-pub struct UiState {
+pub struct Phase {
     lifecycle: Lifecycle,
-    /// Present only when there is a poll loop to have a heartbeat. Carries the
-    /// clock that reads it and the configuration that says how often it should
-    /// tick — all three are needed to answer AR12, and none of them alone is.
-    running: Option<Running>,
+    /// Present only when there is a poll loop to have a heartbeat — it carries
+    /// the heartbeat, the clock that reads it and the configuration that says
+    /// how often it should tick, all three of which AR12 needs and none of which
+    /// answers alone.
+    running: Option<Control>,
 }
 
-/// The three things `/healthz` needs to judge a live bridge.
-#[derive(Clone)]
-struct Running {
-    heartbeat: LastLoopTick,
-    clock: std::sync::Arc<dyn Clock + Send + Sync>,
-    config: ConfigHandle,
-}
+/// The phase, shared between `main.rs`'s lifecycle loop and the running server.
+pub type PhaseHandle = Arc<arc_swap::ArcSwap<Phase>>;
 
-impl UiState {
+impl Phase {
     /// A bridge that is deliberately not publishing.
     pub fn silent(lifecycle: Lifecycle) -> Self {
         Self {
@@ -139,33 +147,92 @@ impl UiState {
         }
     }
 
-    /// A bridge that is publishing, with everything needed to check that it is.
-    pub fn running(
-        heartbeat: LastLoopTick,
-        clock: std::sync::Arc<dyn Clock + Send + Sync>,
-        config: ConfigHandle,
-    ) -> Self {
+    /// A bridge that is publishing.
+    ///
+    /// Carries the whole [`Control`] rather than the three fields `/healthz`
+    /// happens to read. Story 6.2 AC4 needs the screens to say what a change
+    /// COSTS before it is made, and only the control surface can answer that —
+    /// `Control::apply` is what returns the [`Plan`], and `Control::current` is
+    /// what reports the configuration genuinely in force rather than the one
+    /// just posted.
+    pub fn running(control: Control) -> Self {
         Self {
             lifecycle: Lifecycle::Running,
-            running: Some(Running {
-                heartbeat,
-                clock,
-                config,
-            }),
+            running: Some(control),
         }
+    }
+
+    /// The live control surface, when there is a running bridge to control.
+    pub(crate) fn control(&self) -> Option<&Control> {
+        self.running.as_ref()
+    }
+
+    /// A handle holding this phase, for a process that has not started looping.
+    pub fn into_handle(self) -> PhaseHandle {
+        Arc::new(arc_swap::ArcSwap::from_pointee(self))
     }
 
     /// How long since the poll loop last started an iteration, and how long it is
     /// allowed to be — `None` when there is no loop.
     fn loop_age(&self) -> Option<(i64, i64)> {
-        let r = self.running.as_ref()?;
-        let last = r.heartbeat.last()?;
-        let age = r.clock.monotonic().0 - last.0;
+        let control = self.running.as_ref()?;
+        let last = control.heartbeat().last()?;
+        let age = control.clock().monotonic().0 - last.0;
         let allowed = i64::try_from(
-            r.config.load().poll.interval.as_millis() * u128::from(WEDGED_AFTER_PERIODS),
+            control.current().poll.interval.as_millis() * u128::from(WEDGED_AFTER_PERIODS),
         )
         .unwrap_or(i64::MAX);
         Some((age, allowed))
+    }
+}
+
+/// What every handler can see.
+#[derive(Clone)]
+pub struct UiState {
+    phase: PhaseHandle,
+    /// Where `config.toml` lives. The screens write through
+    /// [`crate::app::store`], which needs the directory rather than the parsed
+    /// configuration — and in the unconfigured phase there is no parsed
+    /// configuration to carry it.
+    state_dir: std::path::PathBuf,
+    /// How a screen tells the lifecycle loop that the configuration became
+    /// ready. **A nudge, never the configuration itself**: the loop re-reads the
+    /// file, because the file is the configuration and a loop that trusted a
+    /// message would be a second source (Story 6.2 Task 7).
+    ready: Arc<tokio::sync::Notify>,
+}
+
+impl UiState {
+    pub fn new(
+        phase: PhaseHandle,
+        state_dir: std::path::PathBuf,
+        ready: Arc<tokio::sync::Notify>,
+    ) -> Self {
+        Self {
+            phase,
+            state_dir,
+            ready,
+        }
+    }
+
+    /// The phase as it is right now.
+    pub(crate) fn phase(&self) -> arc_swap::Guard<Arc<Phase>> {
+        self.phase.load()
+    }
+
+    /// Where `config.toml` lives.
+    pub(crate) fn state_dir(&self) -> &std::path::Path {
+        &self.state_dir
+    }
+
+    /// Tell the lifecycle loop to look at the file again.
+    ///
+    /// **Carries nothing.** The loop re-reads and re-validates; a screen that
+    /// handed it the values it had just posted would make the process a second
+    /// source of the configuration, and the two would part company at the first
+    /// write that did not come through a browser.
+    pub(crate) fn notify_ready(&self) {
+        self.ready.notify_waiters();
     }
 }
 
@@ -175,6 +242,17 @@ pub fn router(state: UiState) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/healthz", get(healthz))
+        .route(
+            "/config",
+            get(screens::config_form).post(screens::save_config),
+        )
+        // Confirming is its OWN route and its OWN submission (AC3). A
+        // confirmation folded into the save would be a click the operator makes
+        // for a different reason, which is how a guard becomes a formality.
+        .route(
+            "/confirm",
+            get(screens::confirm_form).post(screens::confirm_mapping),
+        )
         .with_state(Arc::new(state))
 }
 
@@ -226,6 +304,7 @@ pub async fn serve(port: u16, state: UiState) {
 /// surface that exists in the states they will be used in, and an operator who
 /// opens the address should never meet a blank page or a connection refusal.
 async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
+    let lifecycle = state.phase().lifecycle;
     Html(format!(
         "<!doctype html><meta charset=utf-8>\
          <title>smartme_mqtt</title>\
@@ -233,8 +312,8 @@ async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
          <p><strong>{}</strong></p>\
          <p>{}</p>\
          <hr><p>version {} · contract {}</p>",
-        state.lifecycle.headline(),
-        state.lifecycle.detail(),
+        lifecycle.headline(),
+        lifecycle.detail(),
         env!("CARGO_PKG_VERSION"),
         crate::adapters::sparkplug_publisher::CONTRACT_VERSION,
     ))
@@ -268,14 +347,15 @@ async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
 /// exactly as much as no mutation at all; the second attempt asserts that the
 /// text actually changed before running anything.
 async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
-    let wedged = match state.loop_age() {
+    let phase = state.phase();
+    let wedged = match phase.loop_age() {
         Some((age, allowed)) => age > allowed,
         // No loop, or a loop that has not ticked once yet. Neither is a wedge:
         // the silent states have no loop by design, and a bridge that has not
         // completed its first iteration is starting, not stuck.
         None => false,
     };
-    let (age, allowed) = state
+    let (age, allowed) = phase
         .loop_age()
         .map(|(a, b)| (a.to_string(), b.to_string()))
         .unwrap_or_else(|| ("null".to_string(), "null".to_string()));
@@ -297,8 +377,8 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
         "{{\"status\":\"{}\",\"intends_to_publish\":{},\"wedged\":{},\
           \"loop_age_ms\":{},\"loop_age_allowed_ms\":{},\
           \"version\":\"{}\",\"contract\":{}}}",
-        state.lifecycle.slug(),
-        !state.lifecycle.is_silent_on_purpose(),
+        phase.lifecycle.slug(),
+        !phase.lifecycle.is_silent_on_purpose(),
         wedged,
         age,
         allowed,
@@ -330,6 +410,30 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::LastLoopTick;
+    use crate::app::supervisor::ConfigHandle;
+    use crate::core::clock::Clock;
+
+    /// A publishing phase built from the three things `/healthz` reads, wrapped
+    /// in the detached control surface that carries them.
+    fn publishing(
+        heartbeat: LastLoopTick,
+        clock: std::sync::Arc<dyn Clock + Send + Sync>,
+        config: ConfigHandle,
+    ) -> Phase {
+        Phase::running(Control::detached(config, heartbeat, clock))
+    }
+
+    /// Wrap a phase in the state a handler sees. The state directory and the
+    /// readiness nudge are irrelevant to `/healthz`, which is what these tests
+    /// exercise.
+    fn ui(phase: Phase) -> Arc<UiState> {
+        Arc::new(UiState::new(
+            phase.into_handle(),
+            std::path::PathBuf::from("/nonexistent"),
+            Arc::new(tokio::sync::Notify::new()),
+        ))
+    }
 
     /// A published bridge with a 30 s period — the allowance AR12 computes from.
     fn running_config() -> crate::app::supervisor::BridgeConfig {
@@ -393,13 +497,13 @@ mod tests {
         let clock = Arc::new(FakeClock::new(UtcMillis(1_784_984_793_000)));
         let heartbeat = LastLoopTick::new();
         let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
-        let state = UiState::running(heartbeat.clone(), clock.clone(), config);
+        let phase = publishing(heartbeat.clone(), clock.clone(), config);
 
         // The loop ticks now, with a 30 s period, so 90 s is the allowance.
         heartbeat.touch(clock.monotonic());
 
         clock.advance_ms(60_000);
-        let (age, allowed) = state.loop_age().expect("a running bridge has an age");
+        let (age, allowed) = phase.loop_age().expect("a running bridge has an age");
         assert_eq!((age, allowed), (60_000, 90_000));
         assert!(
             age <= allowed,
@@ -408,7 +512,7 @@ mod tests {
         );
 
         clock.advance_ms(30_001);
-        let (age, _) = state.loop_age().expect("age");
+        let (age, _) = phase.loop_age().expect("age");
         assert!(
             age > allowed,
             "past three periods the loop is not looping, and that IS the case \
@@ -430,7 +534,7 @@ mod tests {
         let clock = Arc::new(FakeClock::new(UtcMillis(1_784_984_793_000)));
         let heartbeat = LastLoopTick::new();
         let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
-        let state = Arc::new(UiState::running(
+        let state = ui(publishing(
             heartbeat.clone(),
             clock.clone(),
             Arc::clone(&config),
@@ -460,7 +564,7 @@ mod tests {
 
         // And a deliberate silence is still 200 — the case that would otherwise
         // loop a fresh deployment and destroy the screen needed to configure it.
-        let silent = Arc::new(UiState::silent(Lifecycle::Unconfigured));
+        let silent = ui(Phase::silent(Lifecycle::Unconfigured));
         assert_eq!(
             healthz(State(silent)).await.into_response().status(),
             StatusCode::OK
@@ -472,12 +576,8 @@ mod tests {
     /// destroy the screen needed to leave it.
     #[test]
     fn a_deliberately_silent_bridge_has_no_loop_age() {
-        assert!(
-            UiState::silent(Lifecycle::Unconfigured)
-                .loop_age()
-                .is_none()
-        );
-        assert!(UiState::silent(Lifecycle::Unconfirmed).loop_age().is_none());
+        assert!(Phase::silent(Lifecycle::Unconfigured).loop_age().is_none());
+        assert!(Phase::silent(Lifecycle::Unconfirmed).loop_age().is_none());
     }
 
     #[test]

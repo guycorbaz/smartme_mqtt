@@ -328,10 +328,16 @@ fn check_serial(
     // #44 had just demonstrated about warnings nobody can see. If a meter with a
     // genuine leading zero ever appears, this is a code change and not a
     // configuration one, and that is the accepted cost rather than an oversight.
+    // The source names the exact key, as every other meter fault does. It said
+    // `None` until Story 6.2: the configuration screen binds a fault to its input
+    // by `Source::File`, so a fault with no source could only be shown in the
+    // lump at the top of the form — for the one setting whose whole purpose is
+    // to be checked against a specific row.
+    let key = Some(Source::File(format!("meters[{index}].serial")));
     if raw.len() > 1 && raw.starts_with('0') {
         faults.push(Fault {
             field: field.clone(),
-            source: None,
+            source: key.clone(),
             problem: format!(
                 "has a leading zero ({} digits). smart-me reports it without one, so every \
                  reading would be discarded as DroppedUndeclaredDevice — the bridge would \
@@ -347,7 +353,7 @@ fn check_serial(
         if let Err(error) = node.device_topic(sparkplug_b::MessageType::DBirth, raw) {
             faults.push(Fault {
                 field,
-                source: None,
+                source: key,
                 problem: format!(
                     "cannot be a Sparkplug topic level ({error}); the node would connect, \
                      never birth, and publish nothing"

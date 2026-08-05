@@ -14,7 +14,10 @@
 //! [ADR 0023]: ../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use smartme_bridge::Ended;
+use smartme_bridge::app::phase::{Decision, decide};
 use smartme_bridge::app::store::{self, Credential, StoredConfig};
 use smartme_bridge::ui;
 
@@ -143,6 +146,148 @@ where
     )
 }
 
+/// The lifecycle loop (Story 6.2 AC7).
+///
+/// # Why the process loops instead of running once
+///
+/// Until 2026-08-05 the phase was decided once, before a runner that could do
+/// nothing but wait to be killed. So an operator who saved a configuration and
+/// confirmed the mapping in the browser was met by a bridge that kept saying
+/// *"nothing is published"* until somebody restarted the container — which turned
+/// Story 6.2's own promise, *a first run completed entirely in the browser*, into
+/// a first run completed in the browser and a terminal.
+///
+/// The alternative considered and rejected was exiting so a restart policy picks
+/// the process up: that depends on a deployment setting the bridge cannot see,
+/// and it looks like a crash in the logs.
+///
+/// # The web server outlives every phase
+///
+/// Started once, here. Rebuilding it per phase would close the listener and
+/// re-bind it, and a `bind` that failed degrades to "no UI" — at exactly the
+/// moment the operator had just used it. The phase it renders is swapped in
+/// place, so there is still one source of truth for the state.
+///
+/// # Every turn re-reads the FILE
+///
+/// [`decide`] is never handed what a form posted. The file is the configuration
+/// ([ADR 0023]), and a loop that trusted the nudge's contents would drift from it
+/// at the first write that did not come through the screen.
+///
+/// [ADR 0023]: ../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md
+async fn lifecycle(state_dir: PathBuf, ui_port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    let ready = Arc::new(tokio::sync::Notify::new());
+    let phase = ui::Phase::silent(ui::Lifecycle::Unconfigured).into_handle();
+
+    // Spawned, never awaited: the UI is a diagnostic aid and must not be able to
+    // hold the bridge up or bring it down.
+    tokio::spawn(ui::serve(
+        ui_port,
+        ui::UiState::new(Arc::clone(&phase), state_dir.clone(), Arc::clone(&ready)),
+    ));
+
+    let mut first_turn = true;
+    loop {
+        // The credential joins the file here, and only here — the two sources
+        // have no field in common, so this is a join and never a merge
+        // (ADR 0023 §4). Re-read each turn so a phase never runs on a value the
+        // process merely remembers.
+        let credential = Credential {
+            client_id: std::env::var("SMARTME_CLIENT_ID").ok(),
+            client_secret: std::env::var("SMARTME_CLIENT_SECRET").ok(),
+        };
+
+        match decide(&state_dir, credential) {
+            // A first run. Not a fault, and not reported as one — the operator
+            // has done nothing wrong, they have simply not done it yet.
+            Decision::Unconfigured => {
+                tracing::info!(
+                    path = %store::config_path(&state_dir).display(),
+                    "no configuration yet — the bridge is up and will publish nothing \
+                     until one exists. Configure it in the web UI; it is written here"
+                );
+                phase.store(Arc::new(ui::Phase::silent(ui::Lifecycle::Unconfigured)));
+            }
+
+            // Valid, and nobody has said the mapping is right (Story 5.3).
+            //
+            // NO SESSION AT ALL, not merely no DDATA: an NBIRTH on its own
+            // creates the node's folder in a Sparkplug host's tag tree, and that
+            // folder outlives the process and is deleted by hand. Withholding
+            // only the data would leave the irreversible half already done.
+            Decision::Unconfirmed => {
+                tracing::warn!(
+                    path = %store::config_path(&state_dir).display(),
+                    "the meter mapping has NOT been confirmed, so nothing is \
+                     published — no connection, no birth. Check each meter's \
+                     serial against its topic in the web UI and confirm it; \
+                     a mapping that is merely well-formed can still be wrong, \
+                     and a SCADA host keeps the tags it discovers"
+                );
+                phase.store(Arc::new(ui::Phase::silent(ui::Lifecycle::Unconfirmed)));
+            }
+
+            // A configuration that exists and is refused.
+            //
+            // **On the FIRST turn this is a refusal to start**, and the UI is not
+            // served — decided in Story 6.1 AC1, not left to be discovered. The
+            // refusal is FR26's whole point; the faults reach `docker compose
+            // logs` and stderr without a browser; and a bridge that stayed up on
+            // a configuration it had REJECTED is one restart away from somebody
+            // believing it is running.
+            //
+            // **On a later turn it is not**, and the asymmetry is deliberate.
+            // Later turns happen because an operator is in the browser right now;
+            // killing the process would destroy the screen that is the repair
+            // tool, over a file the bridge itself had just been asked about. The
+            // startup rule is untouched — this only declines to extend it to a
+            // situation it was never written for. The faults are logged and the
+            // screen re-reads and shows them.
+            Decision::Invalid(errors) if first_turn => {
+                tracing::error!("{errors}");
+                eprintln!("{errors}");
+                return Err(errors.to_string().into());
+            }
+            Decision::Invalid(errors) => {
+                tracing::error!(
+                    "the saved configuration is not usable, so the phase is unchanged \
+                     and nothing new is published: {errors}"
+                );
+            }
+
+            // Valid and confirmed. This arm does not return to the top of the
+            // loop except to stop: going back — a confirmation withdrawn while
+            // publishing — means tearing the session down, which is [#49]'s
+            // problem and not this story's.
+            Decision::Publish(config) => {
+                match smartme_bridge::publish_until_shutdown(*config, Arc::clone(&phase)).await? {
+                    Ended::Shutdown => return Ok(()),
+                    // Unreachable today and not an `unreachable!()`: a panic here
+                    // would take the bridge down over a control-flow surprise.
+                    Ended::ConfigurationReady => {
+                        tracing::warn!(
+                            "the publishing phase ended asking to be reconfigured, \
+                             which it has no way to do yet; stopping"
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        first_turn = false;
+        match smartme_bridge::wait_without_publishing(&ready).await {
+            Ended::Shutdown => {
+                tracing::info!("shutdown signalled");
+                return Ok(());
+            }
+            Ended::ConfigurationReady => {
+                tracing::info!("the configuration changed — re-reading it from disk");
+            }
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // INFO by default, and NOT `fmt::init()`.
     //
@@ -233,92 +378,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!(directory = %log.directory.display(), "logging to file");
     }
 
-    // PHASE 3 — act on what phase 1 found, now that it can be said out loud.
+    // PHASE 3 — the lifecycle loop, now that what phase 1 found can be said out
+    // loud.
     //
     // Every fault goes to stderr as well as the log. That is not belt-and-braces:
     // a run that fails here may have no file destination configured, and reaching
     // an operator who is watching `docker compose logs` is the whole point of
     // saying anything at all.
-    let outcome = match stored {
-        // A first run. Not a fault, and not reported as one — the operator has
-        // done nothing wrong, they have simply not done it yet.
-        None => {
-            tracing::info!(
-                path = %store::config_path(&state_dir).display(),
-                "no configuration yet — the bridge is up and will publish nothing \
-                 until one exists. Configure it in the web UI; it is written here"
-            );
-            smartme_bridge::run_without_publishing(Some((ui_port, ui::Lifecycle::Unconfigured)))
-        }
-
-        // A configuration that exists and cannot be read. Refusing beats starting
-        // on defaults nobody chose (Story 5.1).
-        //
-        // AND THE UI IS NOT SERVED HERE — decided in Story 6.1 AC1, not left to
-        // be discovered. The refusal is FR26's whole point; the faults already
-        // reach `docker compose logs` and stderr without a browser; and a bridge
-        // that stayed up on a configuration it had REJECTED is one restart away
-        // from somebody believing it is running. Serving a repair page would also
-        // need the listener up before the configuration is read, inverting the
-        // ordering this file was given for the log settings.
-        //
-        // The documented repair is to fix the file. The manual says so.
-        Some(Err(errors)) => {
-            tracing::error!("{errors}");
-            eprintln!("{errors}");
-            return Err(errors.to_string().into());
-        }
-
-        // A configuration that exists and parses. The credential joins it here,
-        // and only here — the two sources have no field in common, so this is a
-        // join and never a merge (ADR 0023 §4).
-        Some(Ok(stored)) => {
-            let confirmed = stored.mapping_confirmed;
-            let credential = Credential {
-                client_id: std::env::var("SMARTME_CLIENT_ID").ok(),
-                client_secret: std::env::var("SMARTME_CLIENT_SECRET").ok(),
-            };
-            let raw = store::into_raw(stored, credential, &state_dir);
-
-            // Read, then validate — and nothing in between. Every rule lives in
-            // `app::config`, because FR46 gives the configuration a SECOND
-            // consumer (the web UI), and two places applying the same rules is
-            // how they drift apart.
-            match smartme_bridge::app::config::validate(raw) {
-                // Valid, and nobody has said the mapping is right (Story 5.3).
-                //
-                // NO SESSION AT ALL, not merely no DDATA: an NBIRTH on its own
-                // creates the node's folder in a Sparkplug host's tag tree, and
-                // that folder outlives the process and is deleted by hand.
-                // Withholding only the data would leave the irreversible half
-                // already done.
-                //
-                // This is the guard against the one error validation cannot see
-                // — a mapping that is well-formed, unique, complete and pointed
-                // at the wrong meter.
-                Ok(_) if !confirmed => {
-                    tracing::warn!(
-                        path = %store::config_path(&state_dir).display(),
-                        "the meter mapping has NOT been confirmed, so nothing is \
-                         published — no connection, no birth. Check each meter's \
-                         serial against its topic in the web UI and confirm it; \
-                         a mapping that is merely well-formed can still be wrong, \
-                         and a SCADA host keeps the tags it discovers"
-                    );
-                    smartme_bridge::run_without_publishing(Some((
-                        ui_port,
-                        ui::Lifecycle::Unconfirmed,
-                    )))
-                }
-                Ok(config) => smartme_bridge::run(config, Some(ui_port)),
-                Err(errors) => {
-                    tracing::error!("{errors}");
-                    eprintln!("{errors}");
-                    return Err(errors.to_string().into());
-                }
-            }
-        }
-    };
+    //
+    // `stored` is deliberately NOT reused past this point — it was read for the
+    // log settings and the UI port, both of which are fixed for the life of the
+    // process. The loop re-reads, because a loop that carried its own copy would
+    // be a second source of the configuration.
+    drop(stored);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let outcome = runtime.block_on(lifecycle(state_dir, ui_port));
 
     // Report the loss before the guard is dropped. A dropped line is a line the
     // FILE never received; the console has them all. Saying nothing here would

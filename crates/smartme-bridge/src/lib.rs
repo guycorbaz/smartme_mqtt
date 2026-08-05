@@ -12,41 +12,41 @@ pub mod domain;
 pub mod persist;
 pub mod ui;
 
-/// Application entry point: build the runtime and run until the process is
-/// asked to stop. `main.rs` is a thin shell over this.
-pub fn run(
+/// Why a phase ended.
+///
+/// **The process loops over its phases** (Story 6.2 AC7), so ending is no longer
+/// the same thing as stopping. An operator who saves a configuration and
+/// confirms the mapping in the browser must be publishing without touching a
+/// terminal — which means the silent phase has to be able to end for a reason
+/// other than shutdown, and say which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ended {
+    /// The process was asked to stop. Nothing follows.
+    Shutdown,
+    /// The operator finished configuring. The caller must **re-read the file**
+    /// and decide the next phase from it.
+    ConfigurationReady,
+}
+
+/// Run the publishing bridge until the process is asked to stop.
+///
+/// Takes the shared phase rather than a port: the web server is started once by
+/// `main.rs` and outlives every phase, so what this owes it is the observability
+/// a running bridge has and a silent one does not — the heartbeat, the clock and
+/// the live configuration.
+///
+/// The heartbeat comes FROM the supervisor rather than being made here, so
+/// `/healthz` reports the instant the poll loop actually recorded and not a
+/// second opinion about it.
+pub async fn publish_until_shutdown(
     config: app::BridgeConfig,
-    ui_port: Option<u16>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(async move {
-        app::supervisor::run_with_control(
-            config,
-            app::supervisor::shutdown_signal(),
-            move |control| {
-                // Spawned, never awaited: the UI is a diagnostic aid and must not
-                // be able to hold the bridge up or bring it down (AC5).
-                //
-                // The heartbeat comes FROM the supervisor rather than being made
-                // here, so `/healthz` reports the instant the poll loop actually
-                // recorded and not a second opinion about it.
-                if let Some(port) = ui_port {
-                    tokio::spawn(ui::serve(
-                        port,
-                        ui::UiState::running(
-                            control.heartbeat(),
-                            control.clock(),
-                            control.config_handle(),
-                        ),
-                    ));
-                }
-            },
-        )
-        .await
-    })?;
-    Ok(())
+    phase: ui::PhaseHandle,
+) -> Result<Ended, app::supervisor::StartupError> {
+    app::supervisor::run_with_control(config, app::supervisor::shutdown_signal(), move |control| {
+        phase.store(std::sync::Arc::new(ui::Phase::running(control)));
+    })
+    .await?;
+    Ok(Ended::Shutdown)
 }
 
 /// Come up, stay up, and put nothing on the wire (Story 5.2 AC2, [ADR 0023] §5;
@@ -73,24 +73,28 @@ pub fn run(
 /// assertion — it is a structural property, and nothing tested it. What tests it
 /// now is `unconfirmed_publishes_nothing.rs`, against a real broker.
 ///
-/// **The web UI is served here** (Story 6.1) — which is the point: these are the
-/// two states in which nothing is published, and therefore the two in which an
-/// operator most needs a screen to tell them why.
+/// **The web UI is served across this** (Story 6.1) — which is the point: these
+/// are the two states in which nothing is published, and therefore the two in
+/// which an operator most needs a screen to tell them why. The server itself is
+/// started once by `main.rs` and outlives every phase.
+///
+/// **It no longer waits only for shutdown** (Story 6.2 AC7). Until 2026-08-05 it
+/// could do nothing but wait to be killed, so an operator who configured and
+/// confirmed in the browser was met by a bridge that kept saying *"nothing is
+/// published"* until somebody restarted the container — which turned *a first
+/// run completed entirely in the browser* into a first run completed in the
+/// browser and a terminal.
+///
+/// The nudge carries **no configuration**. It says only *"look again"*; the
+/// caller re-reads the file, because the file is the configuration and a loop
+/// that trusted the message would be a second source of it.
 ///
 /// [ADR 0023]: ../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md
-pub fn run_without_publishing(
-    ui: Option<(u16, ui::Lifecycle)>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(async move {
-        // No heartbeat, because there is no poll loop to have one — and
-        // `/healthz` says so rather than inventing a plausible instant.
-        if let Some((port, lifecycle)) = ui {
-            tokio::spawn(ui::serve(port, ui::UiState::silent(lifecycle)));
-        }
-        app::supervisor::shutdown_signal().await;
-    });
-    Ok(())
+pub async fn wait_without_publishing(ready: &tokio::sync::Notify) -> Ended {
+    // No heartbeat, because there is no poll loop to have one — and `/healthz`
+    // says so rather than inventing a plausible instant.
+    tokio::select! {
+        () = app::supervisor::shutdown_signal() => Ended::Shutdown,
+        () = ready.notified() => Ended::ConfigurationReady,
+    }
 }

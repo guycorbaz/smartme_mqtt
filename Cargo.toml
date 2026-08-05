@@ -50,7 +50,11 @@ testcontainers = "0.27"
 # Epic 6 — the embedded web UI and the health endpoint (AR11, FR33). Default
 # features only: no TLS here, because Traefik terminates it (ADR 0019) and a
 # second TLS stack in this binary would be one more thing to keep patched.
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"] }
+# `form` for the configuration screens (Story 6.2): the browser posts
+# `application/x-www-form-urlencoded`, which is what a server-rendered form with
+# no JavaScript sends. Still no default features — nothing here needs multipart,
+# websockets or the tower-http stack.
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "form"] }
 # Story 5.2 AC4 / AR8 — the running configuration, swapped without a restart.
 # A lock would do the job and is the reason this is not one: the poll loop reads
 # the period on every tick and the MQTT driver reads it from another task, so a

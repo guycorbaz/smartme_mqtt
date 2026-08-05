@@ -119,6 +119,33 @@ pub struct Control {
     clock: Arc<dyn Clock + Send + Sync>,
 }
 
+#[cfg(test)]
+impl Control {
+    /// A control surface whose device commands go nowhere, for tests that need
+    /// a [`Control`] to read from rather than to act through.
+    ///
+    /// **Test-only and crate-private on purpose.** A `Control` that silently
+    /// drops births and deaths is exactly the object this project must never
+    /// hand to production code: it would report a device certificate as sent
+    /// while nothing reached the wire.
+    pub(crate) fn detached(
+        config: ConfigHandle,
+        heartbeat: LastLoopTick,
+        clock: Arc<dyn Clock + Send + Sync>,
+    ) -> Self {
+        let (devices, receiver) = mpsc::channel(1);
+        // Kept alive, so a send fails by filling rather than by closing — the
+        // failure mode a real driver has.
+        std::mem::forget(receiver);
+        Self {
+            config,
+            devices,
+            heartbeat,
+            clock,
+        }
+    }
+}
+
 impl Control {
     /// The configuration **in force**.
     ///
