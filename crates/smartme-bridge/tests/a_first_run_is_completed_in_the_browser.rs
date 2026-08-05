@@ -437,9 +437,20 @@ fn from_an_empty_directory_to_publishing_without_touching_a_terminal() {
                  a change the bridge did not make:\n{costly}"
             ));
         }
-        if !costly.contains("broker_host") {
+        // The WAITING LIST, not the change table.
+        //
+        // This asserted `costly.contains("broker_host")` until 2026-08-05 — the
+        // third hollow assertion in this file, and the same shape as the two
+        // before it: the change table prints `broker_host` on its own row, so the
+        // substring was satisfied whether or not any "waiting for a restart" line
+        // was emitted. And none was: `needs_restart()` filtered on
+        // `ProcessRestart` alone, so every `NewSession` field was silently
+        // missing from the one list a form renders. Fixing the assertion is what
+        // exposed the omission.
+        if !costly.contains("Waiting for a restart: <code>broker_host</code>") {
             return Err(format!(
-                "AC4: and it must name WHICH setting is waiting:\n{costly}"
+                "AC4: the setting still waiting must be NAMED in the waiting list, \
+                 not merely appear somewhere on the page:\n{costly}"
             ));
         }
         // And the bridge must still be publishing on the broker it actually has:

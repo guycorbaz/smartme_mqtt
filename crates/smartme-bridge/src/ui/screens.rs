@@ -614,6 +614,24 @@ fn cost_report(plan: &crate::app::reconfigure::Plan, period_in_force: u64) -> St
             .collect();
         format!("<p>Waiting for a restart: {}</p>", names.join(", "))
     };
+    // Certificates the driver never accepted. Empty is the normal case and the
+    // claim; naming them is what stops the screen reporting a bury that was
+    // dropped on the floor.
+    let undelivered = if plan.undelivered.is_empty() {
+        String::new()
+    } else {
+        let names: Vec<String> = plan
+            .undelivered
+            .iter()
+            .map(|s| format!("<code>{}</code>", escape(s.as_str())))
+            .collect();
+        format!(
+            "<p class=fault>These devices were NOT announced to the broker: {}. \
+             The bridge could not reach its own publishing task, so a SCADA host \
+             still shows whatever it last saw. Check the log.</p>",
+            names.join(", ")
+        )
+    };
     let changes: String = plan
         .changes
         .iter()
@@ -631,7 +649,7 @@ fn cost_report(plan: &crate::app::reconfigure::Plan, period_in_force: u64) -> St
         })
         .collect();
     format!(
-        "<p><strong>{headline}</strong></p>{waiting}\
+        "<p><strong>{headline}</strong></p>{undelivered}{waiting}\
          <table><tr><th>Setting</th><th>What happened</th></tr>{changes}</table>\
          <p>The publish period in force is {period_in_force} s.</p>"
     )

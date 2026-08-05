@@ -85,6 +85,15 @@ pub struct Plan {
     pub births: Vec<Serial>,
     /// Devices to bury.
     pub deaths: Vec<Serial>,
+    /// Certificates the driver did NOT accept.
+    ///
+    /// **Empty is the claim, not the default.** `Control::apply` used to discard
+    /// the result of every device send with `let _ =`, so a plan could report
+    /// *"one device re-announced"* while nothing reached the wire — which is
+    /// verbatim what `Control::detached`'s own documentation says must never be
+    /// handed to production code. A screen that says a device was buried when the
+    /// bury was dropped is the SIGTERM-NO-LIE failure with a different door.
+    pub undelivered: Vec<Serial>,
 }
 
 impl Plan {
@@ -104,10 +113,22 @@ impl Plan {
 
     /// Fields that cannot be applied without restarting the process, so the UI
     /// can say so instead of reporting a success the bridge did not deliver.
+    ///
+    /// **`NewSession` counts too**, and it did not until 2026-08-05. The filter
+    /// was `ProcessRestart` alone, so a change to the broker or the Sparkplug
+    /// identity — which [#49] means this process cannot carry out either — was
+    /// missing from the one list a form renders under *"waiting for a restart"*.
+    /// The headline said "NOT in force" while the list beneath it was silently
+    /// empty, and a test that searched the page for `broker_host` passed on the
+    /// change table instead.
+    ///
+    /// If #49 is ever closed — a new session opened without a process restart —
+    /// this filter narrows again, and the test named for the broker is what will
+    /// say so.
     pub fn needs_restart(&self) -> Vec<&'static str> {
         self.changes
             .iter()
-            .filter(|c| c.cost == Cost::ProcessRestart)
+            .filter(|c| matches!(c.cost, Cost::ProcessRestart | Cost::NewSession))
             .map(|c| c.field)
             .collect()
     }
@@ -252,65 +273,133 @@ pub fn classify(old: &BridgeConfig, new: &BridgeConfig) -> Plan {
 
 /// The meter set, which is the only part where the cost depends on *which* way
 /// the field moved.
+/// What a change to the meter set costs, in the terms the RUNTIME can honour.
+///
+/// # Only the served meter's on/off switch is a certificate
+///
+/// This function used to answer as though the meter set were live. It is not.
+/// `supervisor::run_with_control` picks the **first enabled meter** once, at
+/// startup, and hands that meter's id and `device_id` to the poll task and that
+/// meter's serial to the driver. Nothing re-reads the set. So of everything an
+/// operator can do to a meter, exactly one thing takes effect on a running
+/// bridge: enabling or disabling **the meter already being served**.
+///
+/// Three lies followed from getting this wrong, all found by a fresh-context
+/// review on 2026-08-05 and all reported to the operator as success:
+///
+/// - **Renaming a meter** read as "one meter gone, another arrived" — two
+///   certificates — and `apply`'s `device_id`-preservation lookup keys on the
+///   name, so on a rename it found nothing and stored the NEW `device_id` while
+///   the poll loop kept fetching the old one. That is [#52] reachable through
+///   the front door.
+/// - **Correcting a serial** un-declared the old device and declared the new
+///   one, after which every reading — which carries the serial the smart-me API
+///   reports, not the configured one — was dropped as `DroppedUndeclaredDevice`.
+///   Total silence until a restart, announced as *"one device re-announced"*.
+/// - **Moving `enabled` from one meter to another** passed validation (still one
+///   enabled), birthed the new device and buried the old, and then published
+///   nothing at all, because the poll task was still bound to the first.
+///
+/// The honest classification is therefore narrow, and narrowness is the point: a
+/// cost table exists to let an operator act on it.
 fn classify_meters(old: &[MeterConfig], new: &[MeterConfig], plan: &mut Plan) {
-    let served = |meters: &[MeterConfig]| -> Vec<MeterConfig> {
-        meters.iter().filter(|m| m.enabled).cloned().collect()
-    };
-    let (was, now) = (served(old), served(new));
+    // The meter the runtime is actually serving.
+    //
+    // `supervisor::run_with_control` picks the first ENABLED meter at startup —
+    // but disabling it does not unbind the poll task, it only sends a DDEATH. So
+    // once the served meter has been disabled, `old` has nothing enabled and the
+    // binding is still to the first meter in the list. Falling back to it is what
+    // makes disable-then-re-enable a certificate rather than a restart, which is
+    // the cycle `chaos_device_certificates` exercises against a real broker.
+    let served = old.iter().find(|m| m.enabled).or_else(|| old.first());
 
-    // A meter is identified by its METER ID, not its position: reordering the
-    // list in a form must not read as "one device died and another was born".
-    let find = |set: &[MeterConfig], id: &crate::domain::MeterId| {
-        set.iter().find(|m| &m.meter == id).cloned()
-    };
+    fn find<'a>(set: &'a [MeterConfig], id: &crate::domain::MeterId) -> Option<&'a MeterConfig> {
+        set.iter().find(|m| &m.meter == id)
+    }
+    fn restart(plan: &mut Plan, field: &'static str) {
+        plan.changes.push(Change {
+            field,
+            cost: Cost::ProcessRestart,
+        });
+    }
 
-    for gone in &was {
-        match find(&now, &gone.meter) {
+    // Anything about a meter that is not the served one's on/off switch.
+    for before in old {
+        match find(new, &before.meter) {
+            Some(after) => {
+                // EXHAUSTIVE, deliberately — no `..`. A new field on
+                // `MeterConfig` breaks this line, and breaking it is the point:
+                // the guarantee `classify` gives for `BridgeConfig` stopped at
+                // the outer struct until 2026-08-05, so `meter_id` had no row in
+                // the table at all.
+                let MeterConfig {
+                    meter: _,
+                    device_id,
+                    serial,
+                    enabled,
+                } = after;
+                if *device_id != before.device_id {
+                    restart(plan, "meters (device_id)");
+                }
+                if *serial != before.serial {
+                    // NOT a device certificate: the DDATA serial comes from the
+                    // smart-me response, never from the file, so re-declaring
+                    // under a new one silences the meter until a restart.
+                    restart(plan, "meters (serial)");
+                }
+                if *enabled != before.enabled {
+                    match served {
+                        // The one genuinely live change. Disabling buries the
+                        // device; re-enabling births it again, and the poll task
+                        // is still bound to it either way.
+                        Some(s) if s.meter == before.meter => {
+                            if before.enabled {
+                                plan.deaths.push(before.serial.clone());
+                            } else {
+                                plan.births.push(before.serial.clone());
+                            }
+                            plan.changes.push(Change {
+                                field: "meters (enabled)",
+                                cost: Cost::DeviceCertificate,
+                            });
+                        }
+                        // Enabling some OTHER meter declares a device nothing
+                        // polls. Refusing to call that a certificate is what
+                        // stops the screen reporting a silence as a success.
+                        _ => restart(plan, "meters (enabled)"),
+                    }
+                }
+            }
+            // Removed from the configuration entirely. If it was the served
+            // meter, the device must be buried; either way nothing takes its
+            // place without a restart.
             None => {
-                // Disabled or deleted. Either way the device stops existing for
-                // the host, and saying so is what keeps the last value from
-                // being read as current forever.
-                plan.deaths.push(gone.serial.clone());
-                plan.changes.push(Change {
-                    field: "meters (disabled)",
-                    cost: Cost::DeviceCertificate,
-                });
+                // A death is owed only if that DEVICE stops existing. A rename
+                // arrives here as removed-plus-added while the serial — which is
+                // the device level of the topic — is unchanged, so burying it
+                // would tell a host that a device it can still see has gone.
+                let device_survives = new.iter().any(|m| m.serial == before.serial && m.enabled);
+                if before.enabled && !device_survives {
+                    plan.deaths.push(before.serial.clone());
+                    plan.changes.push(Change {
+                        field: "meters (removed)",
+                        cost: Cost::DeviceCertificate,
+                    });
+                }
+                restart(plan, "meters (removed)");
             }
-            Some(still) if still.serial != gone.serial => {
-                // The serial IS the device's topic level, so changing it is not
-                // an edit to a device — it is one device replaced by another.
-                // Both certificates, and the death first: the old topic must
-                // stop being current before the new one starts.
-                plan.deaths.push(gone.serial.clone());
-                plan.births.push(still.serial.clone());
-                plan.changes.push(Change {
-                    field: "meters (serial)",
-                    cost: Cost::DeviceCertificate,
-                });
-            }
-            Some(still) if still.device_id != gone.device_id => {
-                // Which smart-me device is polled. No Sparkplug certificate is
-                // owed — but this is NOT hot either, and said so until a review
-                // on 2026-08-04: `device_id` is moved into `SmartMeCloudSource`
-                // before the poll task is spawned and nothing rebuilds it, so a
-                // change here left the bridge polling the previous device while
-                // the model reported the new one. [#52].
-                plan.changes.push(Change {
-                    field: "meters (device_id)",
-                    cost: Cost::ProcessRestart,
-                });
-            }
-            Some(_) => {}
         }
     }
 
-    for arrived in &now {
-        if find(&was, &arrived.meter).is_none() {
-            plan.births.push(arrived.serial.clone());
-            plan.changes.push(Change {
-                field: "meters (enabled)",
-                cost: Cost::DeviceCertificate,
-            });
+    for after in new {
+        if find(old, &after.meter).is_none() {
+            // Same reasoning in the other direction: a renamed meter is not a
+            // new device, so nothing is born for it.
+            // A meter the process has never seen. Nothing polls it until the
+            // runtime is rebuilt, so no birth is claimed here: a DBIRTH for a
+            // device that will never carry a reading is the silence-reported-as-
+            // success case in its purest form.
+            restart(plan, "meters (added)");
         }
     }
 }
@@ -413,6 +502,60 @@ mod tests {
         assert!(gone.births.is_empty());
     }
 
+    /// **Moving `enabled` from one meter to another is NOT a certificate**, and
+    /// calling it one reported a total silence as a success.
+    ///
+    /// The runtime binds the first enabled meter once, at startup. Enabling a
+    /// different one declares a device nothing polls and buries the only one that
+    /// was working: `validate` accepts it (still one enabled), the wire gets a
+    /// DDEATH and a DBIRTH, and from the next tick every reading is dropped as
+    /// `DroppedUndeclaredDevice`. Found by a fresh-context review, 2026-08-05.
+    #[test]
+    fn moving_the_enabled_flag_to_another_meter_needs_a_restart() {
+        let mut old = base();
+        old.meters = vec![
+            meter("garage", "9202685", true),
+            meter("cellar", "9202686", false),
+        ];
+        let mut new = old.clone();
+        new.meters[0].enabled = false;
+        new.meters[1].enabled = true;
+
+        let plan = classify(&old, &new);
+        assert!(
+            plan.needs_restart().contains(&"meters (enabled)"),
+            "enabling a meter the poll task is not bound to must be reported as \
+             needing a restart, or the operator is told a silence is a success: \
+             {plan:?}"
+        );
+        assert!(
+            !plan.births.contains(&Serial::new("9202686")),
+            "a DBIRTH for a device that will never carry a reading is the \
+             silence-reported-as-success case in its purest form: {plan:?}"
+        );
+        assert_eq!(plan.cost(), Some(Cost::ProcessRestart));
+    }
+
+    /// **Renaming a meter needs a restart**, and it had no row in the table at
+    /// all until `classify_meters` destructured `MeterConfig`.
+    ///
+    /// A rename used to read as "one meter gone, another arrived" — two
+    /// certificates — and `Control::apply`'s `device_id`-preservation lookup keys
+    /// on the name, so on a rename it found nothing and stored the NEW
+    /// `device_id` while the poll loop kept fetching the old one. [#52] through
+    /// the front door.
+    #[test]
+    fn renaming_a_meter_needs_a_restart_and_claims_no_certificate() {
+        let mut new = base();
+        new.meters[0].meter = MeterId::new("garage-1");
+        let plan = classify(&base(), &new);
+        assert_eq!(plan.cost(), Some(Cost::ProcessRestart));
+        assert!(
+            plan.births.is_empty() && plan.deaths.is_empty(),
+            "a label change alters nothing on the wire: {plan:?}"
+        );
+    }
+
     /// A meter is identified by its id, not its index. Without this, sorting the
     /// list in a form would read as every device dying and being reborn.
     #[test]
@@ -435,12 +578,22 @@ mod tests {
     /// device — and the order matters, because the old topic must stop being
     /// current before the new one starts.
     #[test]
-    fn changing_a_serial_buries_the_old_device_and_births_the_new_one() {
+    fn changing_a_serial_needs_a_restart_rather_than_a_certificate() {
         let mut new = base();
         new.meters[0].serial = Serial::new("9202699");
         let plan = classify(&base(), &new);
-        assert_eq!(plan.deaths, vec![Serial::new("9202685")]);
-        assert_eq!(plan.births, vec![Serial::new("9202699")]);
+        assert!(
+            plan.needs_restart().contains(&"meters (serial)"),
+            "the DDATA serial comes from the smart-me RESPONSE, never from the \
+             file, so re-declaring under a new one drops every reading as \
+             DroppedUndeclaredDevice — total silence until a restart, and it was \
+             announced as 'one device re-announced': {plan:?}"
+        );
+        assert!(
+            plan.births.is_empty() && plan.deaths.is_empty(),
+            "burying the working device and birthing one nothing can feed is \
+             worse than doing nothing: {plan:?}"
+        );
     }
 
     /// A mixed change must report the WORST cost. Reporting "hot" because one

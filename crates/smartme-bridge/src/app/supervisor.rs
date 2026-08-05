@@ -196,7 +196,7 @@ impl Control {
     /// other way except by hand.
     pub async fn apply(&self, new: BridgeConfig) -> Plan {
         let old = self.current();
-        let plan = reconfigure::classify(&old, &new);
+        let mut plan = reconfigure::classify(&old, &new);
         if plan.is_empty() {
             return plan;
         }
@@ -206,18 +206,41 @@ impl Control {
         // A death that arrived after its replacement's birth would leave the host
         // holding a bury for a device that had just been announced. The driver
         // publishes each one inline, so their order on the wire is this order.
+        // The send result is CHECKED, not discarded.
+        //
+        // It was `let _ =` until 2026-08-05, so a closed or dead driver produced
+        // a plan claiming certificates that never reached the broker — the host
+        // would go on showing a buried device's last value as current. Whatever
+        // is not delivered is named in the plan, and the caller renders it.
+        let mut undelivered = Vec::new();
         for serial in &plan.deaths {
-            let _ = self
+            if self
                 .devices
                 .send(DeviceCommand::Death(serial.clone()))
-                .await;
+                .await
+                .is_err()
+            {
+                undelivered.push(serial.clone());
+            }
         }
         for serial in &plan.births {
-            let _ = self
+            if self
                 .devices
                 .send(DeviceCommand::Birth(serial.clone()))
-                .await;
+                .await
+                .is_err()
+            {
+                undelivered.push(serial.clone());
+            }
         }
+        if !undelivered.is_empty() {
+            tracing::error!(
+                ?undelivered,
+                "device certificates were NOT delivered to the driver; the broker \
+                 has not been told, and a host will keep showing what it last saw"
+            );
+        }
+        plan.undelivered = undelivered;
 
         // Then the swap — but ONLY of what is genuinely in force now.
         //
