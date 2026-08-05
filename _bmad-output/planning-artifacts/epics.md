@@ -214,7 +214,26 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 
 *Structure adopted after a party-mode stress-test (Winston, John, Amelia, Murat): **walking-skeleton-first**. The pure "functional core" (no `tokio` in truth-deciding code) is not a temporal milestone but a **compile-time invariant** enforced across every slice from the socle onward — "no truth is ever decided inside an `async fn`". Epics 2–4 are independent thickening axes over the skeleton; each stands alone and requires no future epic to function.*
 
-> **Execution order: 0 → 1 → 4 → 2 → 3 → 5 → 6 → 7 → 8.**
+> **Execution order ACTUALLY FOLLOWED: `0 → 1 → 4.1–4.10 → 5 → 6 → …`**
+>
+> **From here: `6 → 3 → 2 → 7 → 8`**, with two insertions — the five stories in `review`
+> (5.1, 5.2, 5.3, 6.1, 6.2) are reviewed before anything new is built, and **Story 4.17 runs
+> before Epic 7** because it fixes a confirmed norm violation
+> (`tck-id-message-flow-edge-node-birth-publish-will-message-qos`, `Sparkplug_5:184` — the will
+> MUST be QoS 1, [#26](https://github.com/guycorbaz/smartme_mqtt/issues/26)) and the wire is only
+> cheap to break while nothing is in production.
+>
+> **This line said `0 → 1 → 4 → 2 → 3 → 5 → 6 → 7 → 8` until 2026-08-05, and had been wrong for a
+> month.** Epic 4 was abandoned at 4.10 (4.11–4.19 are `backlog`, and **4.16 is BLOCKED**, not
+> merely deferred) and Epics 2 and 3 were skipped entirely — neither has a single story written.
+> The reasons were good and went unrecorded, which is the actual defect: ADR 0016 wrote up a
+> reordering *inside* Epic 4 while a far larger one *between* epics went unwritten, and a plan
+> that contradicts the repository is worse than no plan, because it is a document that will be
+> believed. See [ADR 0025](../../docs/adr/0025-the-execution-order-actually-followed.md) and
+> [#55](https://github.com/guycorbaz/smartme_mqtt/issues/55) — **including what skipping Epics 2
+> and 3 costs**, which is a cost in absence and therefore easy to lose: the four runtime oracles
+> do not exist, so *"never lies"* rests on the freshness state machine alone, and fifteen items in
+> `deferred-work.md` are parked on epics that have themselves been deferred.
 >
 > **Inside Epic 4, stories 4.6 and 4.7 run before 4.5** — [ADR 0016](../../docs/adr/0016-rebirth-before-primary-host-wait.md),
 > [#37](https://github.com/guycorbaz/smartme_mqtt/issues/37). Story 4.4 measured that the
@@ -222,7 +241,8 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 > does not have, so PHID-wait alone would preserve no measurement; Rebirth is what actually restores
 > a consumer's view. Story numbers, like epic numbers, are identifiers rather than sequence.
 >
-> Epic numbers are **identifiers, not sequence**. Epic 4 was pulled ahead of Epic 2 at the Epic 1 retrospective (2026-07-26) for three reasons: it owns the Sparkplug conformance audit, and Epic 1 demonstrated what stacking on an unverified channel costs; Epic 2 will define many oracle→quality mappings (AR16), which are cheaper to land on a settled publishing machine than to revisit after rebirth and anti-replay change republication semantics; and Epic 4 carries NFR3 / AC-LEAK-01, so a resource leak surfaces before two more epics are built on top of it.
+> Epic numbers are **identifiers, not sequence** — and by 2026-08-05 they were not the *followed*
+> sequence either; see the amendment above. Epic 4 was pulled ahead of Epic 2 at the Epic 1 retrospective (2026-07-26) for three reasons: it owns the Sparkplug conformance audit, and Epic 1 demonstrated what stacking on an unverified channel costs; Epic 2 will define many oracle→quality mappings (AR16), which are cheaper to land on a settled publishing machine than to revisit after rebirth and anti-replay change republication semantics; and Epic 4 carries NFR3 / AC-LEAK-01, so a resource leak surfaces before two more epics are built on top of it.
 >
 > The epics were deliberately **not renumbered**: seventeen references to epic numbers live in Rust doc comments, plus the coverage map, the manual and the issue tracker. Renumbering would invalidate all of them for a cosmetic gain.
 >

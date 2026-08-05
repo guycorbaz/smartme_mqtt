@@ -7,20 +7,16 @@ descends to disk; \code{SMARTME\_STATE\_DIR}, because a file cannot say where it
 \code{RUST\_LOG}, which has to be readable \emph{before} the configuration is, since raising
 the level is what one does to diagnose a configuration that will not load.
 
-\begin{warning}
-\textbf{As of this build, \code{config.toml} is written BY HAND. There is no editing screen
-yet.} The web UI exists and answers --- it tells you which state the bridge is in and serves
-\code{/healthz} --- but the forms that write this file are specified and not built
-(story~6.2).
+\begin{note}
+\textbf{You do not have to write this file by hand.} Since story~6.2 the configuration and
+confirmation screens exist: open the bridge in a browser, fill the form, check the mapping
+and confirm it, and the bridge starts publishing --- without a text editor and without
+restarting the container. See section~\ref{sec:screens}.
 
-This matters more than it sounds, because of \code{mapping\_confirmed}
-(section~\ref{sec:confirm}): a configuration that is valid but unconfirmed publishes
-\emph{nothing at all}. So a first run done by hand must set
-\code{mapping\_confirmed = true} in the file, or the bridge will come up, serve its page,
-and stay silent for ever while looking healthy.
-
-This warning is removed by story~6.2, not before.
-\end{warning}
+This chapter still documents the file, because the file \emph{is} the configuration: the
+screens write it, and reading it is how you find out what a running bridge was told. A
+headless bring-up (section~\ref{sec:headless}) writes it directly, and is still supported.
+\end{note}
 
 The two sources have no setting in common, and that is deliberate. Any overlap would need
 a rule about which wins, and such a rule is a place where one source loses silently ---
@@ -127,10 +123,13 @@ writes the first one would sit behind a process that had already exited.
 untouched --- defaults nobody chose are still nobody's configuration.
 
 \subsection{Bringing one up without a browser}
+\label{sec:headless}
 
 Write the file by hand. It is a documented format with a version field, which is a better
 headless surface than eleven environment variables ever were: put the file in the state
-directory, set the credential in \code{.env}, and start the container.
+directory, set the credential in \code{.env}, and start the container. Remember
+\code{mapping\_confirmed = true} --- typing the mapping out \emph{is} having looked at it,
+and without the key the bridge comes up, serves its page, and stays silent.
 
 \subsection{The schema version, and why an old file is refused}
 

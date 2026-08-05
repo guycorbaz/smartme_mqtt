@@ -1,6 +1,6 @@
 # Story 6.2: The configuration screen — and the click that ends the silence
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -131,52 +131,52 @@ implies publishing has begun.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — read before writing**
-  - [ ] `app::supervisor::Control` — the whole API, and why `current()` reports what is IN FORCE.
-  - [ ] `app::reconfigure::Plan` — `cost()`, `needs_restart()`, and the four costs.
-  - [ ] `app::config::{validate, Fault, Source, mapping_preview}`.
-  - [ ] `app::store::{save, confirm}` — and **why `confirm` bypasses `save`**.
-  - [ ] `ui/mod.rs` — `Lifecycle` is the single source of truth; do not add a second.
+- [x] **Task 1 — read before writing**
+  - [x] `app::supervisor::Control` — the whole API, and why `current()` reports what is IN FORCE.
+  - [x] `app::reconfigure::Plan` — `cost()`, `needs_restart()`, and the four costs.
+  - [x] `app::config::{validate, Fault, Source, mapping_preview}`.
+  - [x] `app::store::{save, confirm}` — and **why `confirm` bypasses `save`**.
+  - [x] `ui/mod.rs` — `Lifecycle` is the single source of truth; do not add a second.
 
-- [ ] **Task 2 — the form** (AC: 1, 2, 6)
-  - [ ] Server-rendered, no SPA (`architecture.md:217`). `axum`'s `Form` extractor.
-  - [ ] Faults rendered from `ConfigErrors`, never re-derived.
-  - [ ] No credential field. Assert its absence from the response body.
+- [x] **Task 2 — the form** (AC: 1, 2, 6)
+  - [x] Server-rendered, no SPA (`architecture.md:217`). `axum`'s `Form` extractor.
+  - [x] Faults rendered from `ConfigErrors`, never re-derived.
+  - [x] No credential field. Assert its absence from the response body.
 
-- [ ] **Task 3 — confirmation** (AC: 3)
-  - [ ] Its own route and its own submission.
-  - [ ] The table shows serial, device id and the exact topic, from `mapping_preview`.
+- [x] **Task 3 — confirmation** (AC: 3)
+  - [x] Its own route and its own submission.
+  - [x] The table shows serial, device id and the exact topic, from `mapping_preview`.
 
-- [ ] **Task 4 — cost reporting** (AC: 4)
-  - [ ] `Plan::cost()` rendered in the operator's terms.
-  - [ ] **Re-read `Control::current()` after applying** and render THAT, not the submission.
+- [x] **Task 4 — cost reporting** (AC: 4)
+  - [x] `Plan::cost()` rendered in the operator's terms.
+  - [x] **Re-read `Control::current()` after applying** and render THAT, not the submission.
 
-- [ ] **Task 5 — same-origin** (AC: 5)
-  - [ ] The chosen mechanism, applied to every mutating route, with the decision written down.
-  - [ ] A test that a cross-origin POST is refused **and** that a same-origin one is not — the
+- [x] **Task 5 — same-origin** (AC: 5)
+  - [x] The chosen mechanism, applied to every mutating route, with the decision written down.
+  - [x] A test that a cross-origin POST is refused **and** that a same-origin one is not — the
         second half matters, or a guard that refuses everything would pass.
 
-- [ ] **Task 6 — falsification** (AC: all)
-  - [ ] Accept a period outside ADR 0020's bounds through the form and confirm the test catches it
+- [x] **Task 6 — falsification** (AC: all)
+  - [x] Accept a period outside ADR 0020's bounds through the form and confirm the test catches it
         — that is the "the form validates too" defect.
-  - [ ] Report a new-session change as in force and confirm the test catches it.
-  - [ ] Fold confirmation into the save and confirm the test catches it.
-  - [ ] **Assert every mutation actually applied before running it.** On 2026-08-04 a mutation
+  - [x] Report a new-session change as in force and confirm the test catches it.
+  - [x] Fold confirmation into the save and confirm the test catches it.
+  - [x] **Assert every mutation actually applied before running it.** On 2026-08-04 a mutation
         matched nothing because `rustfmt` had reflowed the target, and the test stayed green.
-  - [ ] `./scripts/ci-local.sh`, **full**.
+  - [x] `./scripts/ci-local.sh`, **full**.
 
-- [ ] **Task 7 — the lifecycle loop** (AC: 7)
-  - [ ] `run_without_publishing` returns a reason rather than `()`.
-  - [ ] `main.rs` loops: re-read the file, re-decide the state, enter the right runner.
-  - [ ] **The re-read is a full `store::read` + `validate`**, not a patch of what was posted — the
+- [x] **Task 7 — the lifecycle loop** (AC: 7)
+  - [x] `run_without_publishing` returns a reason rather than `()`.
+  - [x] `main.rs` loops: re-read the file, re-decide the state, enter the right runner.
+  - [x] **The re-read is a full `store::read` + `validate`**, not a patch of what was posted — the
         file is the configuration, and a loop that trusted its own memory would be a second source.
-  - [ ] Falsify by signalling the transition without writing the file, and confirming the bridge
+  - [x] Falsify by signalling the transition without writing the file, and confirming the bridge
         does not publish.
 
-- [ ] **Task 8 — the consequences**
-  - [ ] `docker-smoke.sh`: a first run can be configured over HTTP end to end.
-  - [ ] The manual's chapter 6 is a stub; it gains the screens.
-  - [ ] NFR11 — *time-to-first-value under 15 minutes from a clean machine* — becomes measurable for
+- [x] **Task 8 — the consequences**
+  - [x] `docker-smoke.sh`: a first run can be configured over HTTP end to end.
+  - [x] The manual's chapter 6 is a stub; it gains the screens.
+  - [x] NFR11 — *time-to-first-value under 15 minutes from a clean machine* — becomes measurable for
         the first time. **Measure it and record the number**, rather than asserting it.
 
 ## Dev Notes
@@ -198,3 +198,70 @@ faults; add nothing.
 Five times on 2026-08-04 a change to how the binary starts made a check go **quiet rather than
 red**. This story changes what the binary serves rather than how it starts, which is safer — but
 `docker-smoke.sh` is still the file that catches it, and `--fast` still does not build the image.
+
+---
+
+## Implementation record — 2026-08-05
+
+**All seven acceptance criteria met.** Fourteen mutations, all red; falsification records live
+beside the tests (`tests/a_first_run_is_completed_in_the_browser.rs`, `app/phase.rs`).
+
+### What was decided while building
+
+- **AC5: a same-origin header check**, per the story's own recommendation. Recorded as
+  **ADR 0024** and **[#54]**, because the story required it to be written down. Two details
+  the story could not have known: the *scheme* must not be compared (Traefik terminates TLS
+  in front of a plain-HTTP bridge, so `Origin` says `https` and the listener sees `http`),
+  and a request with **no** `Origin` must be allowed — that is `curl`, which is how FR23's
+  headless bring-up and `docker-smoke.sh` drive this surface.
+- **The web server is started once and outlives every phase**, rather than being rebuilt per
+  phase. Rebuilding would close and re-bind the listener, and a failed bind degrades to
+  "no UI" at exactly the moment the operator has just used it.
+- **A configuration that becomes invalid mid-session does not kill the process.** The startup
+  rule (6.1 AC1) is untouched: a file present and invalid *at startup* still refuses to
+  start. Later turns of the loop only happen because an operator is in the browser right now,
+  and killing the process would destroy the repair tool over a file the bridge itself had
+  just been asked about. This declines to extend a rule to a situation it was not written
+  for; it does not weaken it.
+
+### NFR11, measured rather than asserted
+
+**1 second** from a clean state directory to a publishing bridge, container only — excluding
+the image pull and the operator's typing. `docker-smoke.sh` prints the number on every run, so
+a creep from seconds to minutes is visible rather than merely under a 900 s budget.
+
+### Two hollow assertions, and what they were hiding
+
+Both were written by the same hand that wrote the code, and both passed until they were
+falsified — see [[tests-i-write-to-check-my-own-fix-are-hollow]].
+
+- **AC2** searched the page for `"group_id"`, `"publish_period_secs"` and `"serial"`, which
+  are the form's own input names and are present whether a fault was rendered or not. The
+  green hid a real defect: the screen bound faults by `Fault::field` (a human label,
+  `"publish period"`) instead of `Fault::source` (the key, `publish_period_secs`), so
+  **nothing was ever shown beside its field** — which is exactly what AC2 asks for. Fixing
+  the assertion is what exposed the code. `check_serial` carried no source at all and now
+  does.
+- **AC4** searched for `"in force now"`, which the change *table* prints on every hot row, so
+  a mutation making the verdict above it say the opposite left the test green.
+
+### A deployment trap the image smoke test found
+
+The state directory is unwritable to uid 10002 unless it was `chown`ed — the documented step
+everyone forgets, and Guy's own outstanding action on panoramix. Every earlier check only
+*read* the state directory, so nothing had tried to write one. The bridge behaves correctly
+(*"the configuration was NOT written… Nothing has changed"*, and it changes nothing), and that
+behaviour now has its own check: a save that could not be written must never report success.
+
+### Also added
+
+A cross-binary **port lock**. A first run has no file to read a port from, so every test of an
+unconfigured bridge wants `DEFAULT_PORT`, and `cargo test` runs test binaries in parallel.
+Without it the loser reports "the UI never answered" — a flake that impersonates the very
+defect these tests exist to catch.
+
+### Not done here, deliberately
+
+The runtime still serves **one** meter (`RUNTIME_METER_LIMIT`). Four meters publishing is
+**Epic 3** (*The Full Fleet*), which the execution order places before Epics 5–6 and which has
+been skipped; bringing it forward to make this story's testing more convenient was declined.

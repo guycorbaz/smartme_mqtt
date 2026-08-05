@@ -72,9 +72,25 @@ development_status:
   1-15-tier-3-ignition-contract-test-manual-runbook: done
   epic-1-retrospective: done
   # Epic 4 runs BEFORE Epic 2 — decided at the Epic 1 retrospective (2026-07-26).
-  # Execution order: 0 -> 1 -> 4 -> 2 -> 3 -> 5 -> 6 -> 7 -> 8. Epic numbers are
-  # identifiers, not sequence; see the note in epics.md.
-  epic-4: in-progress
+  #
+  # AMENDED 2026-08-05 (ADR 0025, [#55]). This comment said the execution order was
+  # 0 -> 1 -> 4 -> 2 -> 3 -> 5 -> 6 -> 7 -> 8 and had been wrong for a month.
+  #
+  # ACTUALLY FOLLOWED:  0 -> 1 -> 4.1-4.10 -> 5 -> 6 -> ...
+  # FROM HERE:          6 -> 3 -> 2 -> 7 -> 8
+  #   ... with the five stories in `review` reviewed before anything new is built,
+  #   and Story 4.17 pulled forward to run before Epic 7 — it fixes a confirmed norm
+  #   violation (tck-id-message-flow-edge-node-birth-publish-will-message-qos,
+  #   Sparkplug_5:184: the will MUST be QoS 1, [#26]) and the wire is only cheap to
+  #   break while nothing is in production.
+  #
+  # Epic 4 stopped at 4.10 and Epics 2 and 3 were skipped entirely — neither has a
+  # single story written. The reasons were good (see ADR 0025); going unrecorded was
+  # the defect. What it costs is a cost in ABSENCE and therefore easy to lose: the
+  # four runtime oracles do not exist, so "never lies" rests on the freshness state
+  # machine alone, and ~15 items in deferred-work.md are parked on epics that have
+  # themselves been deferred.
+  epic-4: in-progress  # 4.1-4.10 done; 4.11-4.19 backlog; 4.16 BLOCKED, not deferred
   4-1-conformance-matrix-namespace-and-topics: done
   # 4.2 was worked before it had a story file: the chapter-6 quality rows landed
   # with the quality-code fix (d28bb02), which is why it read 'in-progress' with
@@ -816,4 +832,40 @@ development_status:
   #
   # NFR11 (time-to-first-value under 15 min from a clean machine) becomes MEASURABLE for
   # the first time with this story. Measure it and record the number rather than assert it.
-  6-2-the-configuration-screen: ready-for-dev
+  #
+  # 2026-08-05 — 6.2 IMPLEMENTED. All seven ACs met. `main.rs` is now a loop over the
+  # lifecycle: `phase::decide` re-reads and re-validates the FILE every turn and cannot be
+  # handed what a form posted, so the loop structurally cannot become a second source of
+  # the configuration. The web server is started once and outlives every phase — rebuilding
+  # it per phase would close and re-bind the listener, and a failed bind degrades to "no UI"
+  # at exactly the moment the operator had just used it.
+  #
+  # AC5 decided and RECORDED: same-origin header check, ADR 0024 + [#54]. The scheme is
+  # deliberately not compared (Traefik terminates TLS in front of a plain-HTTP bridge) and a
+  # request with no Origin is allowed (that is curl, i.e. FR23's headless path).
+  #
+  # NFR11 MEASURED rather than asserted: 1 s from a clean state directory to a publishing
+  # bridge, container only. Printed by docker-smoke.sh on every run, so a creep from seconds
+  # to minutes is visible instead of merely under budget.
+  #
+  # FOURTEEN MUTATIONS, ALL RED — and two of the assertions were HOLLOW until they ran:
+  #  - AC2 searched the page for "group_id"/"publish_period_secs"/"serial", which are the
+  #    form's own input names and are present whether a fault was rendered or not. The green
+  #    hid a REAL DEFECT: the screen bound faults by `Fault::field` (a human label, "publish
+  #    period") instead of `Fault::source` (the key, `publish_period_secs`), so nothing was
+  #    ever shown beside its field — which is precisely what AC2 asks for. Fixing the
+  #    assertion is what exposed the code. `check_serial` also carried no source and now does.
+  #  - AC4 searched for "in force now", which the change TABLE prints on every hot row, so a
+  #    mutation making the verdict say the opposite left it green.
+  #    Same family as `log.contains('3')` satisfied by the log's own timestamp.
+  #
+  # AND THE IMAGE SMOKE TEST FOUND A DEPLOYMENT TRAP no unit test could: the state directory
+  # is unwritable to uid 10002 unless it was chowned, which is the documented step everyone
+  # forgets — every earlier check only READ it. The screen says "the configuration was NOT
+  # written" and changes nothing; that behaviour is now locked in by its own check.
+  #
+  # A cross-binary port lock was added: a first run has no file to read a port from, so every
+  # test of an unconfigured bridge wants DEFAULT_PORT, and cargo runs test binaries in
+  # parallel. Without it the loser reports "the UI never answered" — a flake that impersonates
+  # the very defect these tests exist to catch.
+  6-2-the-configuration-screen: review

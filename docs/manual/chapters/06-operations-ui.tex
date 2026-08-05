@@ -1,16 +1,123 @@
 \chapter{Operations \& the web UI}
 \label{ch:ops}
 
-\section{The unified screen}
-\stub{per-meter live value, unit, freshness age, target topic, serial, published status.}
+\section{Reaching it}
+\label{sec:screens}
 
-\section{Dual source/sink health}
-\stub{independent smart-me (source) and MQTT (sink) health indicators.}
+The bridge serves a web interface on port \code{8080} \emph{inside} the container. It
+publishes no host port: the reverse proxy reaches it over a shared Docker network and is the
+only thing that can. There is \textbf{no login} --- the trust boundary is the proxy, not this
+process.
 
-\section{The “state of the bridge” screen}
-\stub{human-readable timestamps, broken-link localization, culprit classification
-(world / you / bridge), auto-written context line.}
+The interface answers in every state the bridge can be in, and that is deliberate rather
+than convenient: since \code{config.toml} became the configuration, a browser is the only
+way in, so a server that only ran alongside a healthy session would be absent from exactly
+the situations it exists for.
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Page} & \textbf{What it is for} & \textbf{Available when} \\
+\midrule
+\code{/}         & Which state the bridge is in, and why & always \\
+\code{/config}   & Every setting, and the faults in one  & always \\
+\code{/confirm}  & The mapping, to check before publishing & a valid file exists \\
+\code{/healthz}  & The machine-facing answer & always \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{A first run, start to finish}
+
+\begin{enumerate}
+  \item Start the container with the credential in \code{.env} and nothing else configured.
+        It comes up, publishes nothing, and says so.
+  \item Open it in a browser and go to \textbf{Configuration}. Fill in the Sparkplug group
+        and node, the broker, the publish period, and one meter --- its name, its smart-me
+        device id and its serial. Tick \emph{Published}.
+  \item Save. If anything is wrong, \textbf{every fault is shown at once}, each beside the
+        field it belongs to, in the same words the bridge would have used had it read the
+        value from the file. There is one set of rules, not two: a value this form accepts
+        is a value the bridge will start on.
+  \item Go to \textbf{Confirm the meter mapping}. Check each \textbf{serial against its
+        topic}. This is the one error no machine can catch --- a mapping can be
+        well-formed, unique, complete and pointed at the wrong meter --- so it is a separate
+        page and a separate click, never a checkbox on the save form.
+  \item Confirm. The bridge starts publishing. \textbf{You do not restart anything.}
+\end{enumerate}
+
+\begin{note}
+There is \textbf{no credential field} on any screen, and that is not an oversight: the
+smart-me credential lives in the environment and never descends to disk, so the strongest
+form of \emph{never rendered} turned out to be \emph{never present}. If a fault names
+\code{SMARTME\_CLIENT\_ID} or \code{SMARTME\_CLIENT\_SECRET} it is reported as an
+environment problem, not drawn as a box you can type in --- because you cannot fix it here.
+\end{note}
+
+\begin{warning}
+\textbf{The state directory must be writable by the container's user.} It runs as uid
+\code{10002}, so a bind mount created by anyone else is read-only to it and the save will
+fail. The screen says so plainly --- \emph{``the configuration was NOT written''} --- and
+changes nothing, rather than reporting a success that never reached the disk. The fix is
+\code{chown 10002:10002} on the directory, once, before the first run.
+\end{warning}
+
+\section{Changing a setting on a running bridge}
+
+Not every setting costs the same, and the screen says which before you believe it happened.
+After a save it reports one of four verdicts:
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Verdict} & \textbf{What actually happened} \\
+\midrule
+Saved, and in force now          & The running bridge is already using it \\
+One device re-announced          & Same session, same \code{bdSeq}, one fresh DBIRTH \\
+Saved --- but NOT in force       & Needs a new Sparkplug session; restart to apply \\
+Saved --- but NOT in force       & Needs a process restart; the setting is on disk \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The distinction is the point. Changing the broker, the group id or the node id is a
+\emph{new session} by definition, and this build cannot open one without being restarted.
+Changing the web UI port likewise: a listener cannot move without dropping what is connected
+to it. The screen names each setting still waiting, and re-reads what is genuinely in force
+rather than echoing back what you typed --- so it never reports a change the bridge did not
+make.
+
+\begin{warning}
+\textbf{Withdrawing a confirmation still costs a restart.} Editing the mapping clears
+\code{mapping\_confirmed} --- correctly, since it is a different mapping and nobody has
+looked at it --- but a bridge that is already publishing keeps its session until it is
+restarted. Confirming moves you forward without a restart; going back does not.
+\end{warning}
+
+\section{Submissions from elsewhere are refused}
+
+Because there is no login, any page open in your browser could otherwise post to the bridge
+if that browser can reach it --- a reconfiguration needs no credential to steal when there
+are none. Every submission is therefore checked against the page it claims to come from, and
+one that came from somewhere else is refused with \emph{Refused}, changing nothing.
+
+A caller that sends no \code{Origin} at all --- \code{curl}, a script, the container smoke
+test --- is allowed: it is not a browser, and refusing it would break the headless path
+while stopping no attack. See
+\code{docs/adr/0024-the-config-ui-refuses-submissions-from-other-origins.md}.
+
+\section{What is not here yet}
+
+\stub{per-meter live values, dual source/sink health, the ``state of the bridge''
+orientation screen, culprit classification and on-demand end-to-end validation are later
+stories in this epic. Today the interface configures the bridge and reports which state it
+is in; it does not yet show what the meters are reading.}
 
 \section{The health endpoint}
-\stub{\code{GET /healthz}: per-meter last-success, resource usage, running version, and the
-liveness heartbeat used by the Docker healthcheck.}
+
+\code{GET /healthz} is the machine-facing answer and is described with the rest of
+diagnosis in chapter~\ref{ch:trouble}. The short version: the \emph{status code} answers
+``is this process worth keeping?'' and the \emph{body} answers ``is it doing anything?''.
+They are two different questions, and a bridge that is deliberately silent --- unconfigured,
+or waiting for you to confirm --- answers \code{200}, because the healthcheck restarts the
+container and restarting one would destroy the very screen needed to configure it.
