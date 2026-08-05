@@ -9,20 +9,33 @@ publishes no host port: the reverse proxy reaches it over a shared Docker networ
 only thing that can. There is \textbf{no login} --- the trust boundary is the proxy, not this
 process.
 
-The interface answers in every state the bridge can be in, and that is deliberate rather
-than convenient: since \code{config.toml} became the configuration, a browser is the only
-way in, so a server that only ran alongside a healthy session would be absent from exactly
-the situations it exists for.
+The interface answers in every state the bridge can be in \emph{once it is running}, and that
+is deliberate rather than convenient: since \code{config.toml} became the configuration, a
+browser is the only way in, so a server that only ran alongside a healthy session would be
+absent from exactly the situations it exists for.
+
+\begin{warning}
+\textbf{There is one state with no web interface at all: a \code{config.toml} that is present
+and invalid \emph{at startup}.} The bridge refuses to start, and refusing means no screen ---
+so the repair is to fix the file on the host, not in a browser. The faults are printed on
+\code{stderr} and in \code{docker compose logs}, each naming the key to edit.
+
+This matters most after an image update that changes \code{schema\_version}: the previous
+version's file is refused, and under a restart policy the container will loop. If instead the
+file becomes unusable \emph{while the bridge is already running}, it stays up and says so ---
+the screens remain available, because an operator is at the keyboard and the screen is the
+repair tool.
+\end{warning}
 
 \begin{center}
 \begin{tabular}{@{}lll@{}}
 \toprule
 \textbf{Page} & \textbf{What it is for} & \textbf{Available when} \\
 \midrule
-\code{/}         & Which state the bridge is in, and why & always \\
-\code{/config}   & Every setting, and the faults in one  & always \\
+\code{/}         & Which state the bridge is in, and why & see below \\
+\code{/config}   & Every setting, and the faults in one  & see below \\
 \code{/confirm}  & The mapping, to check before publishing & a valid file exists \\
-\code{/healthz}  & The machine-facing answer & always \\
+\code{/healthz}  & The machine-facing answer & see below \\
 \bottomrule
 \end{tabular}
 \end{center}

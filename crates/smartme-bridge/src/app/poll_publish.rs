@@ -38,25 +38,51 @@ pub struct PollConfig {
 /// (the health check, Story 1.13/Epic 7). A heartbeat written AFTER the call
 /// would look healthy exactly when it is not.
 #[derive(Debug, Clone)]
-pub struct LastLoopTick(Arc<std::sync::atomic::AtomicI64>);
+pub struct LastLoopTick(Arc<(std::sync::atomic::AtomicI64, std::sync::atomic::AtomicI64)>);
 
 impl LastLoopTick {
     /// A heartbeat that has never ticked.
     pub fn new() -> Self {
-        Self(Arc::new(std::sync::atomic::AtomicI64::new(i64::MIN)))
+        Self(Arc::new((
+            std::sync::atomic::AtomicI64::new(i64::MIN),
+            std::sync::atomic::AtomicI64::new(0),
+        )))
     }
 
-    /// Records that an iteration has just started.
-    pub fn touch(&self, now: MonotonicMs) {
-        self.0.store(now.0, std::sync::atomic::Ordering::Relaxed);
+    /// Records that an iteration has just started, **and the period it is
+    /// actually pacing at**.
+    ///
+    /// # Why the period is recorded and not merely read
+    ///
+    /// AR12's allowance is `N × poll_interval`, and `/healthz` used to take that
+    /// interval from the live configuration. A hot period change moves the
+    /// configuration IMMEDIATELY and the loop only notices at its next tick,
+    /// because it is parked in `ticker.tick().await` for the OLD period. So an
+    /// operator dropping the period from 300 s to 5 s — a change the screen
+    /// truthfully calls *"in force now"* — made `/healthz` report `wedged: true`
+    /// for up to five minutes about a loop behaving exactly as designed. Epic 7
+    /// wires that to a container restart, so the reward for a supported
+    /// reconfiguration would be a killed Sparkplug session.
+    ///
+    /// The observed cadence is the only honest denominator.
+    pub fn touch(&self, now: MonotonicMs, period_ms: i64) {
+        self.0.0.store(now.0, std::sync::atomic::Ordering::Relaxed);
+        self.0
+            .1
+            .store(period_ms, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// The last recorded instant, or `None` if the loop has never run.
     pub fn last(&self) -> Option<MonotonicMs> {
-        match self.0.load(std::sync::atomic::Ordering::Relaxed) {
+        match self.0.0.load(std::sync::atomic::Ordering::Relaxed) {
             i64::MIN => None,
             v => Some(MonotonicMs(v)),
         }
+    }
+
+    /// The period the loop was pacing at when it last ticked.
+    pub fn period_ms(&self) -> i64 {
+        self.0.1.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -101,7 +127,7 @@ pub async fn step_once<S: Source + Send>(
     } = ctx;
     let (policy, config) = (*policy, *config);
     // Heartbeat FIRST: before anything that can block.
-    heartbeat.touch(clock.monotonic());
+    heartbeat.touch(clock.monotonic(), config.interval.as_millis() as i64);
 
     let tick: Tick = match tokio::time::timeout(config.fetch_timeout, source.fetch(meter)).await {
         Ok(result) => result,

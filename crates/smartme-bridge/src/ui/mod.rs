@@ -240,14 +240,17 @@ impl Phase {
 
     /// How long since the poll loop last started an iteration, and how long it is
     /// allowed to be — `None` when there is no loop.
+    /// The allowance comes from the cadence the loop RECORDED, not from the
+    /// period the configuration currently asks for — see [`LastLoopTick::touch`]
+    /// for the false 503 that produced.
     fn loop_age(&self) -> Option<(i64, i64)> {
         let control = self.running.as_ref()?;
-        let last = control.heartbeat().last()?;
+        let heartbeat = control.heartbeat();
+        let last = heartbeat.last()?;
         let age = control.clock().monotonic().0 - last.0;
-        let allowed = i64::try_from(
-            control.current().poll.interval.as_millis() * u128::from(WEDGED_AFTER_PERIODS),
-        )
-        .unwrap_or(i64::MAX);
+        let allowed = heartbeat
+            .period_ms()
+            .saturating_mul(i64::from(WEDGED_AFTER_PERIODS));
         Some((age, allowed))
     }
 }
@@ -424,15 +427,18 @@ async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
 /// text actually changed before running anything.
 async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
     let phase = state.phase();
-    let wedged = match phase.loop_age() {
-        Some((age, allowed)) => age > allowed,
-        // No loop, or a loop that has not ticked once yet. Neither is a wedge:
-        // the silent states have no loop by design, and a bridge that has not
-        // completed its first iteration is starting, not stuck.
-        None => false,
-    };
-    let (age, allowed) = phase
-        .loop_age()
+    // ONE reading, used for both the verdict and the body.
+    //
+    // `loop_age()` was called twice — once to decide the status code and once to
+    // print the numbers — each re-reading the clock and the atomic. A body
+    // reporting `age < allowed` beside a 503 was reachable at the boundary, on
+    // the one endpoint whose whole job is that the number and the verdict agree.
+    let reading = phase.loop_age();
+    // No loop, or a loop that has not ticked once yet. Neither is a wedge: the
+    // silent states have no loop by design, and a bridge that has not completed
+    // its first iteration is starting, not stuck.
+    let wedged = matches!(reading, Some((age, allowed)) if age > allowed);
+    let (age, allowed) = reading
         .map(|(a, b)| (a.to_string(), b.to_string()))
         .unwrap_or_else(|| ("null".to_string(), "null".to_string()));
 
@@ -576,7 +582,7 @@ mod tests {
         let phase = publishing(heartbeat.clone(), clock.clone(), config);
 
         // The loop ticks now, with a 30 s period, so 90 s is the allowance.
-        heartbeat.touch(clock.monotonic());
+        heartbeat.touch(clock.monotonic(), 30_000);
 
         clock.advance_ms(60_000);
         let (age, allowed) = phase.loop_age().expect("a running bridge has an age");
@@ -615,7 +621,7 @@ mod tests {
             clock.clone(),
             Arc::clone(&config),
         ));
-        heartbeat.touch(clock.monotonic());
+        heartbeat.touch(clock.monotonic(), 30_000);
 
         // Healthy: one period late.
         clock.advance_ms(30_000);
@@ -650,6 +656,44 @@ mod tests {
     /// A bridge with no poll loop has no age, and that must not read as wedged —
     /// it is the state a fresh deployment sits in, and restarting it would
     /// destroy the screen needed to leave it.
+    /// A supported hot change must not make a healthy loop look wedged.
+    ///
+    /// The allowance came from the configuration's CURRENT period, which moves
+    /// the instant `Control::apply` stores it — while the loop is still parked in
+    /// `tick().await` for the old one. Dropping 300 s to 5 s therefore reported
+    /// `wedged: true` for up to five minutes about a loop doing exactly what it
+    /// was told, and Epic 7 wires that to a container restart.
+    #[test]
+    fn a_hot_period_change_does_not_make_a_healthy_loop_look_wedged() {
+        use crate::core::clock::FakeClock;
+        use crate::domain::UtcMillis;
+
+        let clock = Arc::new(FakeClock::new(UtcMillis(1_784_984_793_000)));
+        let heartbeat = LastLoopTick::new();
+        let mut slow = running_config();
+        slow.poll.interval = std::time::Duration::from_secs(300);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(slow));
+        let phase = publishing(heartbeat.clone(), clock.clone(), Arc::clone(&config));
+
+        // The loop ticks at 300 s and then sleeps.
+        heartbeat.touch(clock.monotonic(), 300_000);
+
+        // The operator drops the period to the minimum. In force in the model
+        // immediately; the loop cannot notice until its next tick.
+        let mut fast = (*config.load_full()).clone();
+        fast.poll.interval = std::time::Duration::from_secs(5);
+        config.store(Arc::new(fast));
+
+        clock.advance_ms(60_000);
+        let (age, allowed) = phase.loop_age().expect("age");
+        assert!(
+            age <= allowed,
+            "a loop sleeping out the period it was told to use is not wedged; \
+             restarting the container would kill a Sparkplug session over a \
+             supported reconfiguration. age {age} vs allowed {allowed}"
+        );
+    }
+
     #[test]
     fn a_deliberately_silent_bridge_has_no_loop_age() {
         assert!(Phase::silent(Lifecycle::Unconfigured).loop_age().is_none());
