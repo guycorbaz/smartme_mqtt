@@ -41,7 +41,7 @@ use crate::ui::UiState;
 /// into the form it came from would turn the configuration screen into the
 /// delivery mechanism for anything a drive-by request could save (see the
 /// same-origin guard in `ui::origin`).
-fn escape(value: &str) -> String {
+pub(super) fn escape(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for c in value.chars() {
         match c {
@@ -440,11 +440,32 @@ fn current_or_blank(state_dir: &std::path::Path) -> StoredConfig {
 
 pub(super) async fn config_form(State(state): State<Arc<UiState>>) -> Response {
     let values = current_or_blank(state.state_dir());
-    // A file that exists and cannot be read is shown as the fault it is, rather
-    // than as a blank form whose Save would overwrite it.
-    let errors = store::read(state.state_dir())
-        .err()
-        .filter(|_| store::exists(state.state_dir()));
+    // THE FAULTS COME FROM `validate`, NOT ONLY FROM `read`.
+    //
+    // This used to be `store::read(...).err()`, which covers a TOML parse
+    // failure and a schema mismatch and nothing else. A file that parses but
+    // that the bridge refuses to boot on — the exact file a `publish_period_secs
+    // = 0` produced — was therefore rendered with **zero faults** and the
+    // offending value shown as if it were fine. The one screen an operator opens
+    // to find out why the bridge is silent was the one screen that did not run
+    // the validation.
+    //
+    // A file that is absent is not a fault: that is a first run, and the form is
+    // blank on purpose.
+    let errors = if store::exists(state.state_dir()) {
+        match store::read(state.state_dir()) {
+            Err(errors) => Some(errors),
+            Ok(stored) => {
+                let credential = Credential {
+                    client_id: std::env::var("SMARTME_CLIENT_ID").ok(),
+                    client_secret: std::env::var("SMARTME_CLIENT_SECRET").ok(),
+                };
+                config::validate(store::into_raw(stored, credential, state.state_dir())).err()
+            }
+        }
+    } else {
+        None
+    };
     page(
         "Configuration — smartme_mqtt",
         &form(&values, errors.as_ref()),

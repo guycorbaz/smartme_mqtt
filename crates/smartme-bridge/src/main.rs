@@ -214,6 +214,18 @@ async fn lifecycle(state_dir: PathBuf, ui_port: u16) -> Result<(), Box<dyn std::
                 phase.store(Arc::new(ui::Phase::silent(ui::Lifecycle::Unconfirmed)));
             }
             Decision::Publish(_) => phase.store(Arc::new(ui::Phase::starting())),
+            // On the FIRST turn nothing is stored and no server is spawned: the
+            // process is about to refuse to start (Story 6.1 AC1).
+            //
+            // On a later turn the phase must move, and until 2026-08-05 it did
+            // not. The comment here claimed "the phase in force is still true" —
+            // which was false for `Unconfirmed`, whose page says *"The
+            // configuration is valid, but nobody has checked that each meter
+            // points at the right device"* about a file `decide` had just
+            // refused. An operator was told the only thing missing was a click.
+            Decision::Invalid(_) if !first_turn => {
+                phase.store(Arc::new(ui::Phase::silent(ui::Lifecycle::Misconfigured)));
+            }
             Decision::Invalid(_) => {}
         }
 

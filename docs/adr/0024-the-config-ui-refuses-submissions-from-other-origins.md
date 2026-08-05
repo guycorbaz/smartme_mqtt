@@ -59,6 +59,48 @@ being defensible the moment a `POST` could change what reaches a SCADA host, and
 trusted" is an assumption about the operator's browser rather than about the LAN — the
 browser is the thing that carries the hostile page in.
 
+## What this does NOT stop, and what actually stops it
+
+*(Added 2026-08-05 after a fresh-context review. The original text read as though
+the header check stood alone; it does not, and a reader who believed it would
+mis-assess the deployment.)*
+
+**A DNS rebinding attack defeats it, by construction.** `Origin`'s authority is
+compared against `Host` — and both are supplied by the same request. That works
+against an ordinary hostile page because the browser derives `Host` from the URL
+the attacker's page used, and the attacker's own name is not the bridge's. It
+does not work against an attacker who controls a name:
+
+1. `attack.example` resolves, with a one-second TTL, to the attacker's server,
+   which serves a page.
+2. It re-resolves to the bridge's address.
+3. The page posts to `http://attack.example:8080/config`.
+4. The bridge sees `Origin: http://attack.example`, `Host: attack.example:8080`,
+   `Sec-Fetch-Site: same-origin` — **and allows it**.
+
+§4's claim that *"an attacker's browser sends one and it is wrong"* holds only
+while the attacker cannot choose the name the browser used.
+
+**What blocks it in the intended deployment is Traefik's `Host(...)` router
+rule**, which drops a request whose `Host` is not the one it is configured for —
+plus the fact that the container publishes no host port, so nothing outside the
+shared Docker network can reach the listener at all. That is a property of the
+reverse-proxy configuration, not of this code, and it belongs in Epic 7's
+deployment artefacts as a requirement rather than as an accident.
+
+A check against a *known expected host* would survive rebinding without Traefik.
+It is not taken here because the bridge has no way to learn that name: it would
+be a new configuration key, and therefore a schema bump, which is currently a
+refusal-to-start on an older file. If the bridge is ever exposed by any route
+other than a host-matching proxy, this is the first thing to revisit.
+
+**Two smaller limits, recorded rather than fixed.** A request whose `Origin` is
+not valid UTF-8 falls through the same `?` as an absent one and is allowed — not
+browser-reachable, but the "absent means non-browser" reasoning silently covers
+"unparseable" too. And `Sec-Fetch-Site: none` is accepted; browsers send it only
+for user-initiated navigations, so it is unreachable for a `POST` and costs
+nothing either way.
+
 ## Consequences
 
 - The origin check adds **no configuration key and no schema bump**. That was a factor in

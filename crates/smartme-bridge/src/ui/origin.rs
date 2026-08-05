@@ -88,6 +88,15 @@ pub(super) fn refusal(headers: &HeaderMap) -> Option<Response> {
     }
 }
 
+/// The refusal page.
+///
+/// **`why` is escaped**, and that is not belt-and-braces: it interpolates raw
+/// request headers. Until 2026-08-05 it did not, and this was the single
+/// unescaped sink on the whole web surface — in the one file whose sibling module
+/// says escaping *"is not optional"*. `Origin` and `Sec-Fetch-Site` are forbidden
+/// header names, so no page could set them and the practical reach was `curl`
+/// only; the reason to fix it is that the next person to reflect a path, a query
+/// parameter or a `Referer` here would inherit a live hole.
 fn refuse(why: &str) -> Response {
     tracing::warn!(
         reason = why,
@@ -98,9 +107,10 @@ fn refuse(why: &str) -> Response {
         [("content-type", "text/html; charset=utf-8")],
         format!(
             "<!doctype html><meta charset=utf-8><title>Refused</title>\
-             <h1>Refused</h1><p>{why}.</p><p>Nothing was changed. This bridge has no \
+             <h1>Refused</h1><p>{}.</p><p>Nothing was changed. This bridge has no \
              login, so it refuses submissions that did not come from its own pages — \
              otherwise any page open in your browser could reconfigure it.</p>",
+            super::screens::escape(why)
         ),
     )
         .into_response()
@@ -179,6 +189,21 @@ mod tests {
     #[test]
     fn a_non_browser_caller_with_no_origin_is_allowed() {
         assert!(refusal(&headers(&[("host", "localhost:8080")])).is_none());
+    }
+
+    /// The refusal page reflects request headers, so it must escape them.
+    #[test]
+    fn a_hostile_origin_cannot_escape_the_refusal_page() {
+        let response = refusal(&headers(&[
+            ("origin", "http://x\"><script>alert(1)</script>"),
+            ("host", "smartme.home.arpa"),
+        ]))
+        .expect("a foreign origin is refused");
+        let body = format!("{response:?}");
+        assert!(
+            !body.contains("<script>"),
+            "the one unescaped sink on the whole surface was here: {body}"
+        );
     }
 
     /// The header that actually distinguishes the case, where it is sent.

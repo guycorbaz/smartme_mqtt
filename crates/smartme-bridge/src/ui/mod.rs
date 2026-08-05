@@ -70,6 +70,16 @@ pub enum Lifecycle {
     Unconfirmed,
     /// Configured, confirmed, publishing.
     Running,
+    /// The file on disk stopped being usable while the process was up.
+    ///
+    /// **Not a startup state.** A configuration that is present and invalid *at
+    /// startup* makes the bridge refuse to start (Story 6.1 AC1) and serves no
+    /// screen at all. This is the case where an operator is in the browser right
+    /// now and something — a hand-edit, another writer — invalidated the file
+    /// underneath them. The phase used to be left alone in that case, so `/` went
+    /// on saying *"The configuration is valid, but nobody has checked…"* about a
+    /// file the bridge had just refused.
+    Misconfigured,
 }
 
 impl Lifecycle {
@@ -77,7 +87,10 @@ impl Lifecycle {
     ///
     /// **Not the same as unhealthy** — see [`healthz`].
     pub const fn is_silent_on_purpose(self) -> bool {
-        matches!(self, Lifecycle::Unconfigured | Lifecycle::Unconfirmed)
+        matches!(
+            self,
+            Lifecycle::Unconfigured | Lifecycle::Unconfirmed | Lifecycle::Misconfigured
+        )
     }
 
     const fn headline(self) -> &'static str {
@@ -85,6 +98,7 @@ impl Lifecycle {
             Lifecycle::Unconfigured => "Not configured yet",
             Lifecycle::Unconfirmed => "Waiting for you to confirm the meter mapping",
             Lifecycle::Running => "Running",
+            Lifecycle::Misconfigured => "The saved configuration is not usable",
         }
     }
 
@@ -99,7 +113,29 @@ impl Lifecycle {
                  points at the right device. Nothing is published — not even a \
                  birth — until it is confirmed."
             }
-            Lifecycle::Running => "The bridge is connected and publishing.",
+            // NOT "connected and publishing".
+            //
+            // It said exactly that until 2026-08-05 — a compile-time constant
+            // describing which branch of `main.rs` ran, presented to an operator
+            // as an observation. That is word for word the claim removed from
+            // `/healthz` on 2026-08-04 (`publishing` → `intends_to_publish`), and
+            // it survived on the surface a human actually reads, in its stronger
+            // form: *connected* AND *publishing*. `Phase::starting()` then made it
+            // reachable before any socket had been opened at all.
+            //
+            // Broker connectivity is still not plumbed to the UI ([#53]). Until
+            // it is, what this page can honestly say is what the bridge is
+            // trying to do.
+            Lifecycle::Running => {
+                "The bridge is configured and confirmed, so it is polling the meters \
+                 and publishing what it reads. Whether the broker is actually \
+                 reachable is not reported here yet — the log says so."
+            }
+            Lifecycle::Misconfigured => {
+                "The bridge is still running on the configuration it started with, \
+                 but the file on disk has since become unusable and cannot be \
+                 loaded. Correct it below; nothing new is published until it reads."
+            }
         }
     }
 
@@ -109,6 +145,7 @@ impl Lifecycle {
             Lifecycle::Unconfigured => "unconfigured",
             Lifecycle::Unconfirmed => "unconfirmed",
             Lifecycle::Running => "running",
+            Lifecycle::Misconfigured => "misconfigured",
         }
     }
 }
@@ -619,6 +656,34 @@ mod tests {
         assert!(Phase::silent(Lifecycle::Unconfirmed).loop_age().is_none());
     }
 
+    /// The page must never claim a connection it cannot observe.
+    ///
+    /// `Running`'s text said *"The bridge is connected and publishing."* until
+    /// 2026-08-05 — a compile-time constant describing which branch of `main.rs`
+    /// ran, handed to an operator as an observation. It is word for word the
+    /// claim removed from `/healthz` on 2026-08-04, left standing on the surface
+    /// a human reads, and `Phase::starting()` then made it reachable before any
+    /// socket existed. Broker connectivity is not plumbed to the UI ([#53]), so
+    /// no page may assert it.
+    #[test]
+    fn no_page_claims_a_connection_the_bridge_cannot_observe() {
+        for state in [
+            Lifecycle::Unconfigured,
+            Lifecycle::Unconfirmed,
+            Lifecycle::Running,
+            Lifecycle::Misconfigured,
+        ] {
+            let said = format!("{} {}", state.headline(), state.detail());
+            assert!(
+                !said.contains("is connected"),
+                "{state:?} claims a connection nothing here can see: {said}"
+            );
+        }
+        // And the positive half, so a page that said nothing at all would not
+        // pass: the running state must still describe what it is doing.
+        assert!(Lifecycle::Running.detail().contains("publishing"));
+    }
+
     #[test]
     fn a_deliberate_silence_is_not_a_failure() {
         assert!(Lifecycle::Unconfigured.is_silent_on_purpose());
@@ -639,6 +704,7 @@ mod tests {
             Lifecycle::Unconfigured,
             Lifecycle::Unconfirmed,
             Lifecycle::Running,
+            Lifecycle::Misconfigured,
         ]
         .iter()
         .map(|s| (s.headline(), s.detail(), s.slug()))

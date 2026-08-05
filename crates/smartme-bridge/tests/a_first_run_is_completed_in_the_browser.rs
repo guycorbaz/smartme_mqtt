@@ -310,6 +310,25 @@ fn from_an_empty_directory_to_publishing_without_touching_a_terminal() {
             return Err("a refused cross-origin submission must write nothing".into());
         }
 
+        // ---- AC5, the other route. The guard was tested only on /config, and
+        // /confirm is the route that STARTS PUBLISHING — deleting its three
+        // guard lines left the whole suite green.
+        let foreign_confirm = request(
+            port,
+            &format!("POST /confirm HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close"),
+            Some((
+                "origin: http://evil.example\r\n",
+                "mapping=deadbeefdeadbeef",
+            )),
+        )
+        .ok_or("a cross-origin POST to /confirm must still answer")?;
+        if !foreign_confirm.contains("403 Forbidden") {
+            return Err(format!(
+                "AC5: /confirm is the route that starts publishing, so it is the one \
+                 whose guard matters most:\n{foreign_confirm}"
+            ));
+        }
+
         // ---- AC1: the real save.
         let saved = post(port, "/config", &valid_form(port)).ok_or("the save must answer")?;
         if !saved.contains("200 OK") {
