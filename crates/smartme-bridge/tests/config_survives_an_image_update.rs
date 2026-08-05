@@ -190,12 +190,44 @@ fn a_configuration_this_build_wrote_survives_being_read_again() {
     std::fs::write(store::config_path(&dir), hand_written(SCHEMA_VERSION, "")).expect("write");
 
     let first = store::read(&dir).expect("read");
-    store::save(&dir, &first).expect("rewrite it as this build would");
+
+    // SOMETHING IS CHANGED between the two reads, and that is the whole test.
+    //
+    // It read, rewrote and re-read the SAME struct until 2026-08-05, asserting
+    // `first == second` with nothing mutated in between — an `x == x` in
+    // disguise. One-line mutation that left it green: replace `save`'s last line
+    // with `Ok(())`. A test named for the restart half of AC1 passed against a
+    // writer that wrote nothing at all.
+    let mut edited = first.clone();
+    edited.broker_host = "elsewhere.lan".to_string();
+    edited.publish_period_secs = 45;
+    edited.ui_port = Some(9091);
+    edited.meters[0].device_id = "a-different-device".to_string();
+    store::save(&dir, &edited).expect("rewrite it as this build would");
     let second = store::read(&dir).expect("read back");
 
-    assert_eq!(
+    assert_ne!(
         first, second,
-        "a configuration must not drift by being written and read by the same build"
+        "the writer wrote nothing: the file still holds what it held before"
+    );
+    // Every field, not a spot check — "it loaded" would also be true of a reader
+    // that substituted its own defaults.
+    assert_eq!(second.broker_host, "elsewhere.lan");
+    assert_eq!(second.publish_period_secs, 45);
+    assert_eq!(
+        second.ui_port,
+        Some(9091),
+        "an unasserted field is one an image update can silently move back to its \
+         default, and the UI's port is the one that decides whether the operator \
+         can reach anything at all"
+    );
+    assert_eq!(second.meters[0].device_id, "a-different-device");
+    assert_eq!(second.meters[0].meter_id, first.meters[0].meter_id);
+    assert_eq!(second.group_id, first.group_id);
+    assert_eq!(second.node_id, first.node_id);
+    assert!(
+        !second.mapping_confirmed,
+        "the mapping changed, so the confirmation must not have survived it"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

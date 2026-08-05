@@ -56,8 +56,18 @@ ok "clippy -D warnings"
 
 step "ci.yml — test"
 if (( fast )); then
-    cargo test --workspace -- --skip chaos_
-    ok "tests (chaos skipped — run without --fast before pushing)"
+    # Skipped by NAME, so every Docker-dependent test must carry one of these.
+    #
+    # `unconfirmed_publishes_nothing.rs` (Story 5.3) needs testcontainers and is
+    # named after its property rather than after its harness, so `--fast` stopped
+    # skipping what it promises: on a machine without Docker it panicked at
+    # "broker container starts" instead of being skipped, and the documented
+    # no-Docker path was broken by a story that never touched this file.
+    cargo test --workspace -- --skip chaos_ \
+        --skip a_confirmed_mapping_does_birth \
+        --skip an_unconfirmed_mapping_never_reaches \
+        --skip an_unconfigured_bridge_never_reaches
+    ok "tests (broker-dependent tests skipped — run without --fast before pushing)"
 else
     cargo test --workspace
     ok "tests"

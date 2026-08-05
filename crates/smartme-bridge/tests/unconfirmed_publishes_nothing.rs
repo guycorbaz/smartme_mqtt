@@ -74,10 +74,63 @@ fn spawn(dir: &std::path::Path) -> std::process::Child {
         .env("SMARTME_STATE_DIR", dir)
         .env("SMARTME_CLIENT_ID", "x")
         .env("SMARTME_CLIENT_SECRET", "x")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("the bridge binary runs")
+}
+
+/// Wait until the bridge SAYS it is in the state under test, and fail if it is
+/// not there within the deadline.
+///
+/// # Why an absence test needs this
+///
+/// `an_unconfirmed_mapping_never_reaches_the_broker` proved only that nothing
+/// arrived. It never checked that the process it spawned was **alive and silent
+/// on purpose** — so deleting one `.env("SMARTME_CLIENT_ID", "x")` made the
+/// configuration invalid, the binary exited on its first turn, and "nothing
+/// reached the broker" still held, over a process that had died before it could
+/// have published. One line, and the test proved nothing.
+///
+/// Reading the log is also what stops a silence caused by a crash from reading as
+/// a silence caused by the guard.
+fn wait_until_it_says(child: &mut std::process::Child, needle: &str) -> String {
+    use std::io::Read as _;
+    let mut out = child.stdout.take().expect("piped");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        let mut seen = String::new();
+        while let Ok(n) = out.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+            let _ = tx.send(seen.clone());
+        }
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let mut last = String::new();
+    while std::time::Instant::now() < deadline {
+        match rx.recv_timeout(Duration::from_millis(500)) {
+            Ok(seen) => {
+                last = seen;
+                if last.contains(needle) {
+                    return last;
+                }
+            }
+            Err(_) => {
+                if let Ok(Some(status)) = child.try_wait() {
+                    panic!(
+                        "the bridge EXITED ({status}) instead of sitting in the state \
+                         under test, so any silence below would be the silence of a \
+                         dead process. It said:\n{last}"
+                    );
+                }
+            }
+        }
+    }
+    panic!("the bridge never said {needle:?}; it said:\n{last}");
 }
 
 /// THE PREMISE. Without it, the silence asserted below would also be the silence
@@ -136,13 +189,28 @@ async fn an_unconfirmed_mapping_never_reaches_the_broker() {
     );
 
     let mut bridge = spawn(&dir);
+    // The bridge must be ALIVE and in the unconfirmed state before its silence
+    // means anything — see `wait_until_it_says`. Deleting one environment
+    // variable used to make the binary exit on its first turn, and "nothing
+    // reached the broker" still held.
+    let log = wait_until_it_says(&mut bridge, "has NOT been confirmed");
 
     // NOTHING, not merely no DDATA. An NBIRTH alone creates the node folder a
     // host keeps, so waiting only for data would let the irreversible half pass.
-    let anything = common::wait_for(&mut seen, Duration::from_secs(10), |s| {
+    //
+    // THIRTY seconds, matching the harness's own presence budget above. It was
+    // ten — so this file admitted a birth could take up to 30 s and then declared
+    // its absence after 10, and a guard that failed open at 12 s would have read
+    // as a pass under CI load.
+    let anything = common::wait_for(&mut seen, Duration::from_secs(30), |s| {
         s.topic.contains("ChaosUnconfirmed")
     })
     .await;
+    assert!(
+        bridge.try_wait().expect("wait").is_none(),
+        "the bridge exited rather than sitting unconfirmed; its silence proves \
+         nothing:\n{log}"
+    );
     assert!(
         anything.is_none(),
         "an unconfirmed mapping put {:?} on the wire. Nothing may be published \
@@ -171,15 +239,31 @@ async fn an_unconfigured_bridge_never_reaches_the_broker_either() {
 
     let mut bridge = spawn(&dir);
 
-    let anything = common::wait_for(&mut seen, Duration::from_secs(10), |s| {
+    // THE PREMISE, and this test had none.
+    //
+    // The state directory is empty, so the bridge has no broker host and no port:
+    // it could not reach the harness whatever the code did. Deleting the entire
+    // `Decision::Unconfigured` arm would have left this green. What the test can
+    // honestly assert is that the bridge REACHED that state, said so, stayed up
+    // — and that the subscriber, which is proved above to be able to see a birth,
+    // saw nothing.
+    let log = wait_until_it_says(&mut bridge, "no configuration yet");
+
+    let anything = common::wait_for(&mut seen, Duration::from_secs(30), |s| {
         s.topic.starts_with("spBv1.0/")
     })
     .await;
 
+    let alive = bridge.try_wait().expect("wait").is_none();
     let _ = bridge.kill();
     let _ = bridge.wait();
     let _ = std::fs::remove_dir_all(&dir);
 
+    assert!(
+        alive,
+        "the bridge exited rather than staying up to serve the first-run screen; \
+         a silence from a dead process proves nothing:\n{log}"
+    );
     assert!(
         anything.is_none(),
         "an unconfigured bridge put {:?} on the wire. It has no group and no node \

@@ -189,6 +189,9 @@ ok "the UI answers on 8080 while the bridge is unconfigured"
 # against 900 s would stay green while the real figure crept from seconds to
 # minutes, and the creep is the thing worth seeing.
 PORT=18098
+# Distinctive enough to search for: a secret of "x" is unsearchable, which is why
+# the check below used to look for the variable's NAME instead.
+SMOKE_SECRET="s3cr3t-smoke-do-not-print"
 mkdir -p "$TMP/firstrun"
 http() {  # method path [body]
     local method=$1 path=$2 body=${3-}
@@ -249,7 +252,7 @@ chmod 0777 "$TMP/firstrun"
 started=$(date +%s)
 cid=$(docker run -d --rm \
     -p 127.0.0.1:$PORT:8080 \
-    -e SMARTME_CLIENT_ID=x -e SMARTME_CLIENT_SECRET=x \
+    -e SMARTME_CLIENT_ID=x -e "SMARTME_CLIENT_SECRET=$SMOKE_SECRET" \
     -e SMARTME_STATE_DIR=/state \
     -v "$TMP/firstrun:/state" \
     "$IMAGE")
@@ -298,9 +301,19 @@ trap 'rm -rf "$TMP"' EXIT
 
 [[ -n "$running" ]] \
     || { tail -25 "$TMP/firstrun.log"; fail "AC7: confirming must start the publishing bridge with no human intervention. The container was still silent — which is the defect Story 6.2 was written to remove, and it survives only in the image"; }
-# NFR12: and nothing along the way rendered the credential.
-grep -q 'SMARTME_CLIENT_SECRET' "$TMP/firstrun.log" \
-    && fail "the container log names the credential variable in a context worth reading"
+# NFR12, and searched for the VALUE with a positive control.
+#
+# It grepped for the variable NAME until 2026-08-05, which cannot detect a leak
+# at all — and it used the `&&`-list shape this same file spends four lines
+# explaining is how three earlier checks went quiet. The secret is now a value
+# distinctive enough to search for, and the search is proved able to find it
+# before it is asked to prove it is absent.
+if ! grep -q "$SMOKE_SECRET" <<<"leak:$SMOKE_SECRET"; then
+    fail "the search itself is broken; this check proves nothing"
+fi
+if grep -q "$SMOKE_SECRET" "$TMP/firstrun.log"; then
+    fail "the credential reached the container log"
+fi
 ok "a first run is completed entirely over HTTP against the image"
 printf '  \033[36mNFR11\033[0m time from a clean state directory to a publishing bridge: \033[1m%s s\033[0m\n' "$elapsed"
 printf '        (budget is 900 s. This is the container only — it excludes pulling\n'

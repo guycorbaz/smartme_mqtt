@@ -24,6 +24,9 @@ use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[path = "common/port_lock.rs"]
+mod port_lock;
+
 /// A port nobody else in this test binary is using.
 ///
 /// Fixed per case rather than allocated: the bridge reads its port from
@@ -82,6 +85,25 @@ fn spawn(dir: &std::path::Path) -> Child {
         .expect("the bridge binary runs")
 }
 
+/// As [`spawn`], but capturing what the bridge says.
+///
+/// Separate rather than piping in `spawn` itself: an unread pipe fills and blocks
+/// the child, and every other test here kills its bridge without reading a word.
+fn spawn_listening(dir: &std::path::Path) -> Child {
+    Command::new(env!("CARGO_BIN_EXE_smartme-bridge"))
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("SMARTME_STATE_DIR", dir)
+        .env("SMARTME_CLIENT_ID", "x")
+        .env("SMARTME_CLIENT_SECRET", "x")
+        // The subscriber's fmt layer writes to STDOUT, so that is where the
+        // failure is said.
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the bridge binary runs")
+}
+
 fn write_config(dir: &std::path::Path, port: u16, confirmed: bool) {
     std::fs::write(
         dir.join("config.toml"),
@@ -112,6 +134,14 @@ fn write_config(dir: &std::path::Path, port: u16, confirmed: bool) {
 /// AC1 — a first run, which is the whole reason this story came before a screen.
 #[test]
 fn with_no_configuration_the_ui_answers_and_says_so() {
+    // The lock exists for this port and this test did not take it.
+    //
+    // At least four other test binaries spawn an unconfigured bridge, which also
+    // binds `DEFAULT_PORT`. Without the lock, the loser's bridge logs "the web UI
+    // could NOT start" — the exact AC1 failure — and this test is then answered by
+    // the OTHER bridge, sees "Not configured yet", and reports green. A test for
+    // "the server exists" passing while the server under test did not start.
+    let _lock = port_lock::PortLock::acquire(smartme_bridge::ui::DEFAULT_PORT);
     let dir = state_dir("unconfigured");
     // No config.toml at all, so the port must come from the default.
     let mut child = spawn(&dir);
@@ -197,6 +227,25 @@ fn healthz_does_not_call_a_deliberate_silence_unhealthy() {
         health.contains("\"status\":\"unconfirmed\""),
         "and it must say WHICH silence:\n{health}"
     );
+    // AC4's machine-facing half, unasserted anywhere until 2026-08-05: deleting
+    // both fields from the JSON left the whole suite green.
+    //
+    // Named with their keys, deliberately. `CONTRACT_VERSION` is 3 and the
+    // package version is 0.3.1, so a naive `contains("3")` would pass on the
+    // version string alone — the hollow-assertion shape this file already
+    // carries three records of.
+    assert!(
+        health.contains(&format!("\"version\":\"{}\"", env!("CARGO_PKG_VERSION"))),
+        "AC4: /healthz must carry the running version:\n{health}"
+    );
+    assert!(
+        health.contains(&format!(
+            "\"contract\":{}",
+            smartme_bridge::adapters::sparkplug_publisher::CONTRACT_VERSION
+        )),
+        "AC4: and the contract version, which is what a consumer actually sees \
+         when a tag looks wrong in Ignition:\n{health}"
+    );
 }
 
 /// AC5, half of it — and the honest half.
@@ -219,7 +268,7 @@ fn a_taken_port_does_not_cost_the_meters() {
     let squatter = std::net::TcpListener::bind(("0.0.0.0", port)).expect("hold the port");
 
     write_config(&dir, port, true);
-    let mut child = spawn(&dir);
+    let mut child = spawn_listening(&dir);
 
     // The premise: the process is up despite the port being unavailable. It is
     // asserted by outliving a wait long enough for a bind to have failed.
@@ -227,10 +276,25 @@ fn a_taken_port_does_not_cost_the_meters() {
     let still_running = child.try_wait().expect("wait").is_none();
 
     let _ = child.kill();
-    let _ = child.wait();
+    let output = child.wait_with_output().expect("wait");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     drop(squatter);
     let _ = std::fs::remove_dir_all(&dir);
 
+    // AC5's SECOND clause, unasserted until 2026-08-05: the failure must be
+    // traced, at a level the default filter shows. `stderr` went to /dev/null,
+    // so deleting the `tracing::error!` kept the suite green — and the operator
+    // would meet a dead URL with an empty log, which is the whole point of the
+    // clause.
+    assert!(
+        said.contains("the web UI could NOT start"),
+        "the bridge must SAY the UI is absent, or an operator meets a dead \
+         address and no explanation. stderr was:\n{said}"
+    );
     assert!(
         still_running,
         "the bridge exited because the web UI could not bind. A diagnostic aid \
