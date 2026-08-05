@@ -522,3 +522,103 @@ fn a_confirmation_does_not_carry_over_to_a_mapping_the_operator_never_saw() {
         panic!("{why}");
     }
 }
+
+/// **The UI must never describe a configured bridge as unconfigured — not for one
+/// request, not for one millisecond.**
+///
+/// Story 6.2 made the web server outlive every phase, which is what lets a
+/// confirmation start publishing without a restart. It also means the server
+/// answers *before* `run_with_control` hands back the `Control` — and in that
+/// window the phase was still the handle's initial `Unconfigured`. A bridge with a
+/// valid, confirmed configuration, busy opening its MQTT session, served a page
+/// saying "Not configured yet".
+///
+/// **It was found by CI, not by this suite**, and not by design: the window never
+/// opened on a developer machine and opened on every GitHub run. An operator who
+/// met it would reasonably have gone and rewritten a configuration that was
+/// already correct — the exact class of lie this project exists to prevent, told
+/// by the screen built to prevent it.
+///
+/// So this asks the question the way it has to be asked: hammer `/` from the
+/// instant the socket accepts and require that **no** answer, ever, claims the
+/// bridge is unconfigured. A test that waited for a settled state would have
+/// watched the window close and reported success.
+///
+/// FALSIFIED 2026-08-05 by restoring the defect exactly — `Decision::Publish`
+/// stores no phase, so the handle keeps its initial value. Output copied:
+///
+/// ```text
+/// test a_confirmed_bridge_is_never_described_as_unconfigured_even_for_one_request ... FAILED
+/// panicked at tests/a_first_run_is_completed_in_the_browser.rs:598:9:
+/// after 1 request(s) the bridge described itself as UNCONFIGURED while holding
+/// a valid, confirmed configuration.
+/// ```
+///
+/// **`after 1 request(s)` is the number worth reading.** The window was not
+/// narrow and lucky to hit — it was the very first answer the server gave. It
+/// stayed invisible only because every existing test polled until the page said
+/// what it wanted, and threw away everything the bridge said on the way.
+#[test]
+fn a_confirmed_bridge_is_never_described_as_unconfigured_even_for_one_request() {
+    let _lock = port_lock::PortLock::acquire(18097);
+    let port = 18097u16;
+    let dir = state_dir("never_unconfigured");
+    std::fs::write(
+        dir.join("config.toml"),
+        format!(
+            "schema_version = {}\ngroup_id = \"Plant\"\nnode_id = \"Bridge01\"\n\
+             broker_host = \"192.0.2.1\"\nbroker_port = 1883\n\
+             publish_period_secs = 30\napi_base = \"https://192.0.2.1\"\n\
+             mapping_confirmed = true\nui_port = {port}\n\n\
+             [[meters]]\nmeter_id = \"garage\"\n\
+             device_id = \"a1a1a1a1-b2b2-c3c3-d4d4-000000000001\"\n\
+             serial = \"9202685\"\nenabled = true\n",
+            smartme_bridge::app::store::SCHEMA_VERSION
+        ),
+    )
+    .expect("write config");
+
+    let mut child = spawn(&dir);
+    // No sleep between attempts: the whole point is to catch the earliest answer
+    // the server is capable of giving.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut answers = 0usize;
+    let mut liar: Option<String> = None;
+    let mut reached_running = false;
+    while Instant::now() < deadline {
+        match get(port, "/") {
+            Some(page) => {
+                answers += 1;
+                if page.contains("Not configured yet") {
+                    liar = Some(page);
+                    break;
+                }
+                if page.contains("Running") {
+                    reached_running = true;
+                    break;
+                }
+            }
+            None => {
+                if child.try_wait().expect("wait").is_some() {
+                    break;
+                }
+            }
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    if let Some(page) = liar {
+        panic!(
+            "after {answers} request(s) the bridge described itself as UNCONFIGURED \
+             while holding a valid, confirmed configuration. An operator meeting \
+             this would go and rewrite a file that was already correct:\n{page}"
+        );
+    }
+    assert!(
+        reached_running,
+        "the premise failed: the bridge never reached Running at all, so this test \
+         proved nothing about the window between phases"
+    );
+}

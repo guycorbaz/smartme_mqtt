@@ -178,13 +178,7 @@ where
 async fn lifecycle(state_dir: PathBuf, ui_port: u16) -> Result<(), Box<dyn std::error::Error>> {
     let ready = Arc::new(tokio::sync::Notify::new());
     let phase = ui::Phase::silent(ui::Lifecycle::Unconfigured).into_handle();
-
-    // Spawned, never awaited: the UI is a diagnostic aid and must not be able to
-    // hold the bridge up or bring it down.
-    tokio::spawn(ui::serve(
-        ui_port,
-        ui::UiState::new(Arc::clone(&phase), state_dir.clone(), Arc::clone(&ready)),
-    ));
+    let mut serving = false;
 
     let mut first_turn = true;
     loop {
@@ -196,8 +190,42 @@ async fn lifecycle(state_dir: PathBuf, ui_port: u16) -> Result<(), Box<dyn std::
             client_id: std::env::var("SMARTME_CLIENT_ID").ok(),
             client_secret: std::env::var("SMARTME_CLIENT_SECRET").ok(),
         };
+        let decision = decide(&state_dir, credential);
 
-        match decide(&state_dir, credential) {
+        // THE PHASE IS STORED BEFORE THE SERVER CAN BE ASKED, and the ordering
+        // here is the whole fix.
+        //
+        // The server outlives every phase — that is what lets a confirmation
+        // start the bridge without a restart — so for a while it was spawned
+        // above this loop, holding the handle's initial value. A bridge with a
+        // valid, confirmed configuration therefore served "Not configured yet"
+        // until `run_with_control` handed back its `Control`. The window never
+        // opened on a developer machine and opened on every CI run.
+        //
+        // `Invalid` deliberately stores nothing: on the first turn the process is
+        // about to refuse to start and the server has not been spawned at all
+        // (Story 6.1 AC1); on a later turn the phase in force is still true, and
+        // overwriting it with a guess would be the same class of lie.
+        match &decision {
+            Decision::Unconfigured => {
+                phase.store(Arc::new(ui::Phase::silent(ui::Lifecycle::Unconfigured)));
+            }
+            Decision::Unconfirmed => {}
+            Decision::Publish(_) => phase.store(Arc::new(ui::Phase::starting())),
+            Decision::Invalid(_) => {}
+        }
+
+        // Spawned once, and only now — never awaited: the UI is a diagnostic aid
+        // and must not be able to hold the bridge up or bring it down.
+        if !serving && !matches!(decision, Decision::Invalid(_)) {
+            tokio::spawn(ui::serve(
+                ui_port,
+                ui::UiState::new(Arc::clone(&phase), state_dir.clone(), Arc::clone(&ready)),
+            ));
+            serving = true;
+        }
+
+        match decision {
             // A first run. Not a fault, and not reported as one — the operator
             // has done nothing wrong, they have simply not done it yet.
             Decision::Unconfigured => {
@@ -206,7 +234,6 @@ async fn lifecycle(state_dir: PathBuf, ui_port: u16) -> Result<(), Box<dyn std::
                     "no configuration yet — the bridge is up and will publish nothing \
                      until one exists. Configure it in the web UI; it is written here"
                 );
-                phase.store(Arc::new(ui::Phase::silent(ui::Lifecycle::Unconfigured)));
             }
 
             // Valid, and nobody has said the mapping is right (Story 5.3).

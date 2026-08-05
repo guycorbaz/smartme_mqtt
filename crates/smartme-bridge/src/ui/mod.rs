@@ -162,6 +162,35 @@ impl Phase {
         }
     }
 
+    /// A bridge that is configured, confirmed, and **building its runtime** —
+    /// past every silence, not yet holding a control surface.
+    ///
+    /// # This exists because the UI told a lie, and CI caught it
+    ///
+    /// Story 6.2 made the web server outlive every phase, which is what lets a
+    /// confirmation start the bridge without a restart. It also means the server
+    /// answers **before** `run_with_control` hands back the [`Control`] — and in
+    /// that window the phase was still the handle's initial value,
+    /// `Unconfigured`. So a bridge with a valid, confirmed configuration, busy
+    /// opening its MQTT session, served a page saying *"Not configured yet"*.
+    ///
+    /// The window is short. It never opened on a developer machine and opened on
+    /// every CI run, which is the only reason it was found before a deployment
+    /// met it — and an operator meeting it would reasonably have gone and
+    /// rewritten a configuration that was already correct.
+    ///
+    /// `lifecycle: Running` with no control is not a fudge: it says *this bridge
+    /// intends to publish*, which is true, while `loop_age()` stays `None` so
+    /// `/healthz` reports no heartbeat rather than inventing a plausible instant.
+    /// That is the same shape as a poll loop that has not completed its first
+    /// iteration, which `healthz` already treats as starting rather than stuck.
+    pub fn starting() -> Self {
+        Self {
+            lifecycle: Lifecycle::Running,
+            running: None,
+        }
+    }
+
     /// The live control surface, when there is a running bridge to control.
     pub(crate) fn control(&self) -> Option<&Control> {
         self.running.as_ref()
