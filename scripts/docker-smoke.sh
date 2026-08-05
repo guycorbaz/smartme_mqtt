@@ -173,3 +173,136 @@ trap 'rm -rf "$TMP"' EXIT
 [[ -n "$ui_ok" ]] \
     || fail "the image serves no web UI while unconfigured — which is the one state that can only be left THROUGH the web UI"
 ok "the UI answers on 8080 while the bridge is unconfigured"
+
+# --- a first run, completed entirely over HTTP, against the real image -------
+#
+# Story 6.2 AC1 and AC7, and the only place they are checked against the thing
+# that ships. The integration test drives the same journey against the binary;
+# this drives it against the IMAGE, which is what a fresh deployment on panoramix
+# actually runs — different filesystem ownership, different shell, a state
+# directory that is a bind mount.
+#
+# It is also where NFR11 stops being an assertion. *"Time to first value under
+# fifteen minutes from a clean machine"* has never been measurable, because until
+# this story there was no way to reach a publishing bridge without editing a file
+# by hand. The number is PRINTED, not merely bounded: a check that only compared
+# against 900 s would stay green while the real figure crept from seconds to
+# minutes, and the creep is the thing worth seeing.
+PORT=18098
+mkdir -p "$TMP/firstrun"
+http() {  # method path [body]
+    local method=$1 path=$2 body=${3-}
+    exec 3<>/dev/tcp/127.0.0.1/$PORT || return 1
+    if [[ -n "$body" ]]; then
+        printf '%s %s HTTP/1.0\r\nHost: 127.0.0.1:%s\r\nOrigin: http://127.0.0.1:%s\r\n' \
+            "$method" "$path" "$PORT" "$PORT" >&3
+        printf 'Content-Type: application/x-www-form-urlencoded\r\nContent-Length: %s\r\n\r\n%s' \
+            "${#body}" "$body" >&3
+    else
+        printf '%s %s HTTP/1.0\r\nHost: 127.0.0.1:%s\r\n\r\n' "$method" "$path" "$PORT" >&3
+    fi
+    cat <&3
+    exec 3<&- 2>/dev/null || true
+}
+
+# An UNWRITABLE state directory first, because it is the failure a real
+# deployment meets before it meets any other.
+#
+# The container runs as uid 10002 and the bind mount belongs to whoever created
+# it — which is why `chown 10002:10002 ./data` is a documented deployment step
+# and why forgetting it is the first thing that happens. Found by writing this
+# check: the previous checks all READ the state directory, so nothing had ever
+# tried to write one.
+#
+# The requirement is not that it succeed. It is that the screen say so. A form
+# that reported "saved" over a write that failed would send an operator away
+# believing the bridge is configured, and this whole project exists to not do
+# that.
+mkdir -p "$TMP/unwritable"
+chmod 0555 "$TMP/unwritable"
+cid=$(docker run -d --rm -p 127.0.0.1:$PORT:8080 \
+    -e SMARTME_CLIENT_ID=x -e SMARTME_CLIENT_SECRET=x \
+    -e SMARTME_STATE_DIR=/state -v "$TMP/unwritable:/state" "$IMAGE")
+# shellcheck disable=SC2064
+trap "docker rm -f $cid >/dev/null 2>&1 || true; chmod 0755 $TMP/unwritable 2>/dev/null; rm -rf $TMP" EXIT
+for _ in $(seq 1 30); do
+    [[ "$(http GET /config || true)" == *"200 OK"* ]] && break
+    sleep 1
+done
+denied=$(http POST /config 'group_id=Plant&node_id=Bridge01&broker_host=192.0.2.1&broker_port=1883&publish_period_secs=30&meter.0.meter_id=garage&meter.0.device_id=d&meter.0.serial=9202685&meter.0.enabled=1' || true)
+docker rm -f "$cid" >/dev/null 2>&1 || true
+case "$denied" in
+    *"200 OK"*)
+        fail "a save that could not be written reported SUCCESS. On a deployment whose /data was never chowned to uid 10002 — the documented step everyone forgets — the operator would leave believing the bridge is configured" ;;
+    *"NOT written"*) ;;
+    *)
+        echo "$denied"
+        fail "a save onto an unwritable state directory must say so in the operator's own words" ;;
+esac
+ok "a save that cannot be written says so, and claims nothing"
+
+# Now the journey, on a directory the container can actually write. 0777 rather
+# than a chown: this script must run unprivileged, on a CI runner and on a
+# laptop, and the uid inside the image is not one the host necessarily has.
+chmod 0777 "$TMP/firstrun"
+
+started=$(date +%s)
+cid=$(docker run -d --rm \
+    -p 127.0.0.1:$PORT:8080 \
+    -e SMARTME_CLIENT_ID=x -e SMARTME_CLIENT_SECRET=x \
+    -e SMARTME_STATE_DIR=/state \
+    -v "$TMP/firstrun:/state" \
+    "$IMAGE")
+# shellcheck disable=SC2064
+trap "docker rm -f $cid >/dev/null 2>&1 || true; rm -rf $TMP" EXIT
+
+up=""
+for _ in $(seq 1 30); do
+    if [[ "$(http GET /config || true)" == *"200 OK"* ]]; then up=yes; break; fi
+    sleep 1
+done
+[[ -n "$up" ]] || { docker logs "$cid" 2>&1 | tail -20; fail "the configuration screen never answered"; }
+
+# TEST-NET-1 (RFC 5737) throughout: unroutable, so nothing can reach a broker or
+# the smart-me cloud. What is under test is that the PHASE turns, not that a
+# reading arrives.
+form='group_id=Plant&node_id=Bridge01&broker_host=192.0.2.1&broker_port=1883'
+form+='&publish_period_secs=30&api_base=https%3A%2F%2F192.0.2.1'
+form+='&meter.0.meter_id=garage&meter.0.device_id=a1a1a1a1-b2b2-c3c3-d4d4-000000000001'
+form+='&meter.0.serial=9202685&meter.0.enabled=1'
+saved=$(http POST /config "$form" || true)
+[[ "$saved" == *"200 OK"* ]] \
+    || { echo "$saved"; docker logs "$cid" 2>&1 | tail -20; fail "the image refused a configuration the binary accepts — the difference is the image, and that is what this check exists for"; }
+[[ -f "$TMP/firstrun/config.toml" ]] \
+    || fail "the browser reported a save that never reached the bind mount; on a real deployment this is the /data ownership trap, and it must never pass silently"
+
+preview=$(http GET /confirm || true)
+[[ "$preview" == *"spBv1.0/Plant/DDATA/Bridge01/9202685"* ]] \
+    || { echo "$preview"; fail "the confirmation screen must show the exact topic beside the serial"; }
+mapping=$(printf '%s' "$preview" | grep -o 'name=mapping value="[0-9a-f]*"' | head -1 | sed 's/.*value="\(.*\)"/\1/')
+[[ -n "$mapping" ]] || fail "the confirmation form carries no mapping fingerprint, so the click would bless whatever is on disk"
+
+confirmed=$(http POST /confirm "mapping=$mapping" || true)
+[[ "$confirmed" == *"303 See Other"* || "$confirmed" == *"200 OK"* ]] \
+    || { echo "$confirmed"; fail "the confirmation was refused"; }
+
+running=""
+for _ in $(seq 1 40); do
+    if [[ "$(http GET /healthz || true)" == *'"status":"running"'* ]]; then running=yes; break; fi
+    sleep 1
+done
+elapsed=$(( $(date +%s) - started ))
+docker logs "$cid" > "$TMP/firstrun.log" 2>&1 || true
+docker rm -f "$cid" >/dev/null 2>&1 || true
+trap 'rm -rf "$TMP"' EXIT
+
+[[ -n "$running" ]] \
+    || { tail -25 "$TMP/firstrun.log"; fail "AC7: confirming must start the publishing bridge with no human intervention. The container was still silent — which is the defect Story 6.2 was written to remove, and it survives only in the image"; }
+# NFR12: and nothing along the way rendered the credential.
+grep -q 'SMARTME_CLIENT_SECRET' "$TMP/firstrun.log" \
+    && fail "the container log names the credential variable in a context worth reading"
+ok "a first run is completed entirely over HTTP against the image"
+printf '  \033[36mNFR11\033[0m time from a clean state directory to a publishing bridge: \033[1m%s s\033[0m\n' "$elapsed"
+printf '        (budget is 900 s. This is the container only — it excludes pulling\n'
+printf '         the image and the operator typing, which are the other two terms.)\n'
+[[ "$elapsed" -lt 900 ]] || fail "NFR11: $elapsed s exceeds the fifteen-minute budget"
