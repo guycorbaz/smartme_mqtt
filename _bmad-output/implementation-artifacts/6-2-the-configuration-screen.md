@@ -265,3 +265,64 @@ defect these tests exist to catch.
 The runtime still serves **one** meter (`RUNTIME_METER_LIMIT`). Four meters publishing is
 **Epic 3** (*The Full Fleet*), which the execution order places before Epics 5–6 and which has
 been skipped; bringing it forward to make this story's testing more convenient was declined.
+
+---
+
+## Review round — 2026-08-05, later
+
+**Five fresh-context reviews (5.1, 5.2, 5.3, 6.1, 6.2), ~60 findings, all fixed.** Six
+commits, +1452/−181. Full `ci-local.sh` green including the image; all three workflows green.
+None of the review agents wrote to the tree — verified with `git status` after each.
+
+**The story remains in `review`.** These corrections have been reviewed by nobody, which is
+the same debt the round was run to clear.
+
+### The four that mattered most, all introduced by this story
+
+1. **The browser could brick the container.** Clearing the publish-period or broker-port box
+   submits an empty string; `validate` reads it as unset and supplies its default, so the
+   submission was accepted — and the writer re-derived the number from the raw string as
+   `"".parse().ok().unwrap_or_default()`, which is **zero**. The page said "Saved", the file
+   said `publish_period_secs = 0`, and the next start refused it. Story 6.1 AC1 serves no UI
+   for an invalid file, so the operator was left with a crash-looping container and a
+   hand-edit over SSH — in one click, through the supported path. **AC1's exact negation.**
+   Fixed structurally: `StoredConfig` is derived `From<&BridgeConfig>`, so what reaches disk
+   is what `validate` returned. The old function is `as_typed` and is for redisplay only.
+2. **The configuration screen could be saved exactly once.** The always-rendered blank "Add a
+   meter" row is submitted by a browser as three empty strings and was refused. Every edit
+   after the first run needed a text editor — the thing this story exists to remove.
+3. **A change that withdrew the confirmation was still carried to the wire.** `save` cleared
+   `mapping_confirmed`; `apply` ran anyway, four lines later, on the same submission. FR25
+   defeated through the screen built to enforce it.
+4. **`Decision::Unconfirmed => {}`** — an automated substitution removed the wrong occurrence
+   while cleaning up redundant stores, leaving for the third phase exactly the defect
+   `b36f42d` had just fixed for the other two.
+
+### Three hollow assertions in one file, and the third was my fix for the second
+
+`contains("in force now")` was satisfied by the change table; I documented that, then wrote
+`contains("broker_host")` — satisfied by the same table. Under it was a real gap:
+`needs_restart()` omitted every `NewSession` field, which [#49] makes equally inapplicable.
+
+**No test posted what the rendered form actually contains.** Every one hand-crafted a body
+with `meter.0.*` only, which is why the one-shot form survived. The round-trip test exists now
+and submits the page twice, because once proves only what was never broken.
+
+### Also fixed, from the other four reviews
+
+The cost table called a total silence *"one device re-announced"* (rename, serial change,
+enabled-swap); `Control::apply` discarded its send results; `store::exists` reported a
+permission error as *absent*; `save` wrote the caller's schema version and overwrote unreadable
+files; two checks were skipped whenever another field was already wrong; duplicate faults named
+neither offender; a hot period change made `/healthz` answer 503 about a healthy loop; *"The
+bridge is connected and publishing"* was a compile-time constant; `origin::refuse` reflected raw
+headers unescaped; the AC5 guard was untested on `/confirm`; an absence test proved nothing
+because it never checked the process was alive; another was vacuous by construction; a restart
+test was an `x == x`; `ci-local --fast` had stopped skipping what it promises.
+
+ADR 0024 amended: the origin guard does **not** survive DNS rebinding, because it compares two
+headers the same request supplies. What blocks that is Traefik's `Host(...)` rule and the
+absence of a published host port — a deployment property Epic 7 must carry as a requirement.
+
+**[#56] opened:** nothing inside the image can consume `/healthz` — no `curl`, no `wget`, and
+the shell is not bash — so AC3 was falsified against nobody's implementation.

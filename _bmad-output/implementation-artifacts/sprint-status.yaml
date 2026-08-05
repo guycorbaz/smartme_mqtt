@@ -868,4 +868,31 @@ development_status:
   # test of an unconfigured bridge wants DEFAULT_PORT, and cargo runs test binaries in
   # parallel. Without it the loser reports "the UI never answered" — a flake that impersonates
   # the very defect these tests exist to catch.
+  #
+  # 2026-08-05, later — FIVE FRESH-CONTEXT REVIEWS RUN (5.1, 5.2, 5.3, 6.1, 6.2).
+  # ~60 findings, ALL FIXED, six commits (+1452/-181), full ci-local green, all
+  # three workflows green. No review agent wrote to the tree (verified).
+  #
+  # STILL `review`, not `done`: the corrections themselves have been reviewed by
+  # nobody, which is the debt the round was run to clear.
+  #
+  # The four worst were introduced by story 6.2 itself:
+  #  - THE BROWSER COULD BRICK THE CONTAINER. A cleared numeric box was accepted
+  #    by `validate` (default) and written as 0 by a writer that re-derived it
+  #    from the raw string. The next start refuses, and 6.1 AC1 serves no UI for
+  #    an invalid file — so the repair was a hand-edit over SSH. AC1's exact
+  #    negation, in one click, through the supported path.
+  #  - THE FORM SAVED EXACTLY ONCE: the blank "Add a meter" row is submitted by a
+  #    browser and was refused. No test in the tree ever posted what the page
+  #    actually contains, and the unit test named for the property asserted its
+  #    opposite while never calling `validate`.
+  #  - THE CONFIRMATION WITHDRAWAL NEVER REACHED THE WIRE: `save` cleared the
+  #    flag and `apply` ran anyway. FR25 defeated by the screen enforcing it.
+  #  - `Decision::Unconfirmed => {}` — an automated substitution took the wrong
+  #    occurrence of a line being cleaned up.
+  #
+  # THREE hollow assertions in one file, and the third was the fix for the
+  # second: `contains("broker_host")` was satisfied by the change table, exactly
+  # as `contains("in force now")` had been. Under it, `needs_restart()` omitted
+  # every NewSession field.
   6-2-the-configuration-screen: review
