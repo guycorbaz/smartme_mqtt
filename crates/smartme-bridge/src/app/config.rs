@@ -104,8 +104,14 @@ pub struct RawConfig {
     pub state_dir: Option<String>,
     pub publish_period_secs: Option<String>,
     pub log_dir: Option<String>,
-    pub log_keep: Option<usize>,
-    pub ui_port: Option<u16>,
+    /// **Strings, like everything else here.** They were `Option<usize>` and
+    /// `Option<u16>` until 2026-08-05, which broke this struct's own contract —
+    /// a rule had already been applied, outside `validate`, by whoever filled it
+    /// — and both callers applied it as `.parse().ok()`, which DISCARDS failure.
+    /// An operator who typed `8O80` (letter O) in the web UI's port box got no
+    /// fault, a page saying "Saved", and a setting that had silently vanished.
+    pub log_keep: Option<String>,
+    pub ui_port: Option<String>,
     pub meters: Vec<RawMeter>,
 }
 
@@ -266,6 +272,31 @@ fn required<'a>(
     }
 }
 
+/// Parse an optional whole number, reporting a fault rather than dropping it.
+fn number<T: std::str::FromStr>(
+    raw: &Option<String>,
+    field: &str,
+    key: &str,
+    faults: &mut Vec<Fault>,
+) -> Option<T> {
+    let text = present(raw)?;
+    match text.parse() {
+        Ok(value) => Some(value),
+        Err(_) => {
+            faults.push(Fault {
+                field: field.to_string(),
+                source: Some(Source::File(key.to_string())),
+                problem: format!(
+                    "is not a whole number: {text:?}. It is reported rather than \
+                     ignored — a setting that silently vanishes is worse than one \
+                     that is refused"
+                ),
+            });
+            None
+        }
+    }
+}
+
 /// The publish period, bounded per ADR 0020.
 fn period(raw: &Option<String>, faults: &mut Vec<Fault>) -> Duration {
     let Some(text) = present(raw) else {
@@ -349,7 +380,22 @@ fn check_serial(
     }
     // Reuse the topic grammar rather than restating it: a second copy of these
     // rules is a second place for them to drift.
-    if let Some(node) = node {
+    //
+    // **Checked even when the Sparkplug identity is itself faulty**, and it was
+    // not until 2026-08-05. `node` is `None` whenever `group_id`/`node_id` are
+    // missing or malformed, and this whole block was skipped — so `group_id = ""`
+    // with `serial = "meter/1"` reported the group id, the operator fixed it and
+    // restarted, and only then learnt the serial cannot be a topic level. Two
+    // edit-restart cycles, on the one rule AC7 exists for, in the story written
+    // to abolish them.
+    //
+    // A serial's grammar does not depend on the node it hangs under, so a
+    // placeholder identity exercises exactly the same rule. It is never used for
+    // anything but this check.
+    let grammar = node
+        .cloned()
+        .or_else(|| sparkplug_b::EdgeNode::new("g".to_string(), "n".to_string()).ok());
+    if let Some(node) = grammar.as_ref() {
         if let Err(error) = node.device_topic(sparkplug_b::MessageType::DBirth, raw) {
             faults.push(Fault {
                 field,
@@ -447,9 +493,16 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
             Ok(node) => Some(node),
             Err(error) => {
                 faults.push(Fault {
+                    // Sourced on `group_id` rather than left unbound: a fault
+                    // with no source cannot be drawn beside an input, so this
+                    // one landed in the lump at the top of the form for a value
+                    // the operator types into a specific box.
                     field: "Sparkplug group id / node id".to_string(),
-                    source: None,
-                    problem: format!("cannot form a topic: {error}"),
+                    source: Some(Source::File("group_id".into())),
+                    problem: format!(
+                        "cannot form a topic: {error}. Both identifiers are \
+                         checked together; the fault may be in either."
+                    ),
                 });
                 None
             }
@@ -514,25 +567,52 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
     // Uniqueness. Two meters sharing a serial share a Sparkplug device topic, so
     // whichever publishes last wins and the other silently disappears — the
     // reading is not wrong, it is attributed to the wrong device.
+    // AC5 asks that the fault "names BOTH offenders", and it named neither until
+    // 2026-08-05: it reported the duplicated *value* once and left an operator
+    // with four meters to work out which two rows collided. The offending rows
+    // are listed by index and by name, and the fault is sourced on the first of
+    // them so a form can draw it beside a box.
+    let offenders = |matching: Vec<usize>| -> String {
+        matching
+            .iter()
+            .map(|i| format!("meter {i} ({})", meters[*i].meter.as_str()))
+            .collect::<Vec<_>>()
+            .join(" and ")
+    };
     duplicates(meters.iter().map(|m| m.serial.as_str()))
         .into_iter()
         .for_each(|serial| {
+            let rows: Vec<usize> = meters
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.serial.as_str() == serial)
+                .map(|(i, _)| i)
+                .collect();
+            let first = rows.first().copied().unwrap_or(0);
             faults.push(Fault {
                 field: "meter serials".to_string(),
-                source: None,
+                source: Some(Source::File(format!("meters[{first}].serial"))),
                 problem: format!(
-                    "{serial:?} is used by more than one meter; they would share one \
-                     Sparkplug device topic and overwrite each other"
+                    "{serial:?} is used by {}; they would share one Sparkplug \
+                     device topic and overwrite each other",
+                    offenders(rows)
                 ),
             })
         });
     duplicates(meters.iter().map(|m| m.meter.as_str()))
         .into_iter()
         .for_each(|meter| {
+            let rows: Vec<usize> = meters
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.meter.as_str() == meter)
+                .map(|(i, _)| i)
+                .collect();
+            let first = rows.first().copied().unwrap_or(0);
             faults.push(Fault {
                 field: "meter ids".to_string(),
-                source: None,
-                problem: format!("{meter:?} is used by more than one meter"),
+                source: Some(Source::File(format!("meters[{first}].meter_id"))),
+                problem: format!("{meter:?} is used by {}", offenders(rows)),
             })
         });
 
@@ -549,7 +629,8 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
                 "{enabled} are enabled and the runtime serves {RUNTIME_METER_LIMIT}. The \
                  configuration model accepts more so the UI can be built against its final \
                  shape, but serving them is not implemented yet — refusing here beats \
-                 publishing a subset that looks complete"
+                 publishing a subset that looks complete. Epic 3 (The Full Fleet) lifts \
+                 this limit; see docs/adr/0025-the-execution-order-actually-followed.md"
             ),
         });
     }
@@ -577,23 +658,50 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
     let api_base = present(&raw.api_base)
         .unwrap_or(SmartMeClient::DEFAULT_BASE)
         .to_string();
-    if let (Some(id), Some(secret)) = (&client_id, &client_secret) {
-        if let Err(error) = SmartMeClient::new(
-            api_base.clone(),
-            Credentials::ClientCredentials {
-                client_id: id.clone(),
-                client_secret: secret.clone(),
-            },
-            Duration::from_secs(10),
-        ) {
-            faults.push(Fault {
-                field: "smart-me API base".to_string(),
-                source: Some(Source::File("api_base".into())),
-                // `SmartMeError`'s Display is asserted elsewhere never to embed
-                // credentials, which is why it is safe to interpolate here.
-                problem: format!("was refused: {error}"),
-            });
-        }
+    // NOT guarded by the credential, and it was until 2026-08-05.
+    //
+    // The comment above says this check lives here so that a bad endpoint and a
+    // missing group id are reported together rather than over two restarts. The
+    // guard reinstated exactly that, one field over: on a genuine first run the
+    // credential is the MOST likely thing to be absent, so the endpoint fault was
+    // withheld until it had been supplied. And it bought nothing —
+    // `SmartMeClient::new` never inspects the credentials; every rejection is a
+    // function of the base URL and the timeout alone.
+    // Parsed HERE rather than by whoever filled `RawConfig`, so a value that is
+    // not a number is a fault the operator can see instead of a setting that
+    // quietly disappeared.
+    let log_keep = number(&raw.log_keep, "log retention", "log_keep", &mut faults);
+    let ui_port: Option<u16> = number(&raw.ui_port, "web UI port", "ui_port", &mut faults);
+    if ui_port == Some(0) {
+        faults.push(Fault {
+            field: "web UI port".to_string(),
+            source: Some(Source::File("ui_port".into())),
+            problem: "is 0, which asks the operating system to pick a port at \
+                      random — the address would change at every restart and \
+                      nothing could be configured to reach it"
+                .to_string(),
+        });
+    }
+
+    //
+    // The credential handed to the probe is a placeholder for the same reason:
+    // it is never read, and using the real one would make an endpoint fault
+    // depend on a value that has nothing to do with it.
+    if let Err(error) = SmartMeClient::new(
+        api_base.clone(),
+        Credentials::ClientCredentials {
+            client_id: String::new(),
+            client_secret: String::new(),
+        },
+        Duration::from_secs(10),
+    ) {
+        faults.push(Fault {
+            field: "smart-me API base".to_string(),
+            source: Some(Source::File("api_base".into())),
+            // `SmartMeError`'s Display never embeds credentials — and it cannot
+            // embed these, which are empty.
+            problem: format!("was refused: {error}"),
+        });
     }
 
     if !faults.is_empty() {
@@ -622,8 +730,8 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
         // already acted on them by the time this runs. They are here so a
         // reload can SEE them change — see `app::reconfigure`.
         log_dir: present(&raw.log_dir).map(str::to_owned),
-        log_keep: raw.log_keep,
-        ui_port: raw.ui_port,
+        log_keep,
+        ui_port,
     })
 }
 

@@ -176,7 +176,31 @@ fn fault(field: &str, problem: String) -> Fault {
 /// either bricks the first run or lets a corrupt file be mistaken for a fresh
 /// install and silently overwritten.
 pub fn exists(dir: &Path) -> bool {
-    config_path(dir).exists()
+    // `try_exists`, NOT `Path::exists()`.
+    //
+    // `Path::exists()` returns `false` on ANY metadata error, permission
+    // included — so a `/data` bind-mounted from a directory the container's uid
+    // cannot traverse made a fully configured, confirmed bridge report itself as
+    // a first run, log *"no configuration yet"* at INFO, serve the first-run
+    // screen and publish nothing. That is exactly the merge this function exists
+    // to prevent, performed by the function itself. The chown to uid 10002 is a
+    // documented deployment step, which is to say it is one people forget.
+    //
+    // An error is treated as PRESENT: it is the direction that refuses rather
+    // than overwrites.
+    match std::fs::exists(config_path(dir)) {
+        Ok(present) => present,
+        Err(error) => {
+            tracing::warn!(
+                path = %config_path(dir).display(),
+                %error,
+                "cannot tell whether a configuration exists; assuming it does, so \
+                 nothing overwrites it. This is usually the state directory's \
+                 ownership — it must belong to the uid the container runs as"
+            );
+            true
+        }
+    }
 }
 
 /// Read the file, and nothing more.
@@ -250,8 +274,8 @@ pub fn into_raw(config: StoredConfig, credential: Credential, dir: &Path) -> Raw
         state_dir: Some(dir.display().to_string()),
         publish_period_secs: Some(config.publish_period_secs.to_string()),
         log_dir: config.log_dir,
-        log_keep: config.log_keep,
-        ui_port: config.ui_port,
+        log_keep: config.log_keep.map(|v| v.to_string()),
+        ui_port: config.ui_port.map(|v| v.to_string()),
         meters: config
             .meters
             .into_iter()
@@ -388,12 +412,40 @@ fn same_mapping(a: &[StoredMeter], b: &[StoredMeter]) -> bool {
 pub fn save(dir: &Path, config: &StoredConfig) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let mut to_write = config.clone();
+    // THE CONSTANT IS STAMPED HERE, never taken from the caller.
+    //
+    // `save` wrote back whatever `schema_version` it was handed, so it was a
+    // public path to persisting a file this build then refuses — and `main.rs`
+    // exits on such a file before the UI is spawned, which makes it unrepairable
+    // through the browser. Nothing in production passed a wrong version, but a
+    // contract that holds only because every current caller is careful is the
+    // kind this repository keeps paying for.
+    to_write.schema_version = SCHEMA_VERSION;
     to_write.mapping_confirmed = match read(dir) {
         Ok(stored) if same_mapping(&stored.meters, &config.meters) => stored.mapping_confirmed,
         // Unreadable, absent, or a different mapping — all three mean nobody has
         // confirmed what is about to be written.
         _ => false,
     };
+
+    // A file that is THERE and cannot be READ is not overwritten.
+    //
+    // `save` consulted `read` and, on any error, cleared the confirmation and
+    // wrote anyway — performing the very overwrite this module's own
+    // documentation says must never happen ("lets a corrupt file be mistaken for
+    // a fresh install and silently overwritten"). Only `phase::decide` upheld the
+    // rule; the writer did not.
+    if exists(dir) && read(dir).is_err() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{} exists and cannot be read, so it was NOT overwritten. \
+                 Fix or remove it; refusing beats destroying a configuration \
+                 that may only be unreadable by this build",
+                config_path(dir).display()
+            ),
+        ));
+    }
     persist::persist_atomic(&config_path(dir), &to_write)
 }
 
@@ -498,9 +550,23 @@ mod tests {
     #[test]
     fn a_file_from_another_schema_version_is_refused_rather_than_defaulted() {
         let dir = dir("schema");
+        // Written as TEXT, by hand — never through `save`.
+        //
+        // `save` stamps the constant (since 2026-08-05), which is what stops a
+        // caller persisting a file this build refuses. That makes it structurally
+        // incapable of producing the file under test here, and it should be: a
+        // foreign-schema file is written by ANOTHER BUILD, which is the situation
+        // this test is about. The previous version wrote it through `save` and
+        // was therefore coupled to the defect — stamping the constant would have
+        // "broken" it.
         let mut config = sound();
         config.schema_version = SCHEMA_VERSION + 1;
-        save(&dir, &config).expect("save");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::write(
+            config_path(&dir),
+            toml::to_string(&config).expect("serialize"),
+        )
+        .expect("write");
         let errors = load(&dir, credential()).expect_err("a future schema must be refused");
         assert!(
             format!("{errors}").contains("no migration"),
@@ -529,13 +595,14 @@ mod tests {
     /// one inside a meter as well.
     #[test]
     fn an_unknown_field_is_refused_rather_than_ignored() {
-        let dir = dir("unknown");
+        let root_dir = dir("unknown");
+        let meter_dir = dir("unknown_meter");
+        let dir = root_dir;
         let config = sound();
-        save(&dir, &config).expect("save");
-
+        std::fs::create_dir_all(&dir).expect("dir");
+        let text = toml::to_string(&config).expect("serialize");
         // At the ROOT — before any table header, or TOML makes it a member of the
         // last table and this asserts something else entirely.
-        let text = std::fs::read_to_string(config_path(&dir)).expect("read");
         std::fs::write(
             config_path(&dir),
             format!("publish_period_seconds = 300\n{text}"),
@@ -549,11 +616,16 @@ mod tests {
         );
 
         // And inside a meter, which is a different struct and a different derive.
-        save(&dir, &config).expect("save");
-        let mut text = std::fs::read_to_string(config_path(&dir)).expect("read");
+        //
+        // A FRESH directory: `save` now refuses to overwrite a file that exists
+        // and cannot be read, which is the point of the previous half. Reusing
+        // this one would test the refusal instead of the derive.
+        let mut text = toml::to_string(&config).expect("serialize");
         text.push_str("\nserial_number = \"9202685\"\n");
-        std::fs::write(config_path(&dir), text).expect("write");
-        let errors = load(&dir, credential()).expect_err("an unknown METER field must be refused");
+        std::fs::create_dir_all(&meter_dir).expect("dir");
+        std::fs::write(config_path(&meter_dir), text).expect("write");
+        let errors =
+            load(&meter_dir, credential()).expect_err("an unknown METER field must be refused");
         assert!(
             errors.0.iter().any(|f| f.field == "stored configuration"),
             "got {:?}",
@@ -561,6 +633,7 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&meter_dir);
     }
 
     /// AC6, and the strongest form of it: not *redacted* on the way to disk, but

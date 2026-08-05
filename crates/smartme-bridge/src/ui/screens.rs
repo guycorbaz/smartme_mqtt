@@ -145,8 +145,10 @@ fn posted(fields: &Fields, state_dir: &std::path::Path) -> RawConfig {
         state_dir: Some(state_dir.display().to_string()),
         publish_period_secs: field(fields, "publish_period_secs").map(str::to_string),
         log_dir: field(fields, "log_dir").map(str::to_string),
-        log_keep: field(fields, "log_keep").and_then(|v| v.parse().ok()),
-        ui_port: field(fields, "ui_port").and_then(|v| v.parse().ok()),
+        // Carried through as typed. Parsing here with `.ok()` is what made a
+        // mistyped port vanish without a word.
+        log_keep: field(fields, "log_keep").map(str::to_string),
+        ui_port: field(fields, "ui_port").map(str::to_string),
         meters: meters(fields),
     }
 }
@@ -183,9 +185,9 @@ fn as_typed(fields: &Fields, raw: &RawConfig) -> StoredConfig {
             .unwrap_or_default(),
         api_base: raw.api_base.clone(),
         log_dir: raw.log_dir.clone(),
-        log_keep: raw.log_keep,
+        log_keep: raw.log_keep.as_deref().and_then(|v| v.parse().ok()),
         mapping_confirmed: false,
-        ui_port: raw.ui_port,
+        ui_port: raw.ui_port.as_deref().and_then(|v| v.parse().ok()),
         meters: meters(fields)
             .into_iter()
             .map(|m| StoredMeter {
