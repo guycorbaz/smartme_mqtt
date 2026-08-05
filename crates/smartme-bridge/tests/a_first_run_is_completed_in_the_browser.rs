@@ -622,3 +622,203 @@ fn a_confirmed_bridge_is_never_described_as_unconfigured_even_for_one_request() 
          proved nothing about the window between phases"
     );
 }
+
+/// A minimal valid, *unconfirmed* configuration on a chosen port.
+///
+/// Every test that is not about the first run needs one: a bridge with no
+/// `config.toml` has nowhere to read a port from and binds `DEFAULT_PORT`, so
+/// spawning one here would collide with the journey test that owns that port.
+fn seed_config(dir: &std::path::Path, port: u16) {
+    std::fs::write(
+        dir.join("config.toml"),
+        format!(
+            "schema_version = {}\ngroup_id = \"Plant\"\nnode_id = \"Bridge01\"\n\
+             broker_host = \"192.0.2.1\"\nbroker_port = 1883\n\
+             publish_period_secs = 30\napi_base = \"https://192.0.2.1\"\n\
+             mapping_confirmed = false\nui_port = {port}\n\n\
+             [[meters]]\nmeter_id = \"garage\"\n\
+             device_id = \"a1a1a1a1-b2b2-c3c3-d4d4-000000000001\"\n\
+             serial = \"9202685\"\nenabled = true\n",
+            smartme_bridge::app::store::SCHEMA_VERSION
+        ),
+    )
+    .expect("write config");
+}
+
+/// Extract what a browser would submit from a rendered page: every text input by
+/// name and value, plus every *checked* checkbox. An unchecked box sends nothing.
+fn as_a_browser_would_submit(page: &str) -> String {
+    let mut pairs: Vec<String> = Vec::new();
+    let mut rest = page;
+    while let Some(at) = rest.find("<input type=") {
+        rest = &rest[at..];
+        let Some(end) = rest.find('>') else { break };
+        let tag = &rest[..end];
+        rest = &rest[end + 1..];
+
+        let name = tag
+            .find("name=")
+            .map(|i| &tag[i + 5..])
+            .map(|s| s.trim_start_matches('"'))
+            .and_then(|s| s.split(['"', ' ']).next())
+            .unwrap_or("");
+        if name.is_empty() {
+            continue;
+        }
+        if tag.starts_with("<input type=checkbox") {
+            if tag.contains("checked") {
+                pairs.push(format!("{name}=1"));
+            }
+            continue;
+        }
+        let value = tag
+            .find("value=\"")
+            .map(|i| &tag[i + 7..])
+            .and_then(|s| s.split('"').next())
+            .unwrap_or("");
+        // Percent-encode the handful of characters this form's values can carry.
+        let encoded: String = value
+            .chars()
+            .map(|c| match c {
+                ':' => "%3A".to_string(),
+                '/' => "%2F".to_string(),
+                '&' => "%26".to_string(),
+                '=' => "%3D".to_string(),
+                ' ' => "+".to_string(),
+                c => c.to_string(),
+            })
+            .collect();
+        pairs.push(format!("{name}={encoded}"));
+    }
+    pairs.join("&")
+}
+
+/// **The form the bridge served must be acceptable when sent straight back.**
+///
+/// No test in the tree did this before 2026-08-05: every one hand-crafted a body
+/// containing only `meter.0.*`. So nobody noticed that the always-rendered blank
+/// "Add a meter" row is *submitted* by a browser as three empty strings, became a
+/// meter of three `None`s, and was refused — which meant **the configuration
+/// screen could be saved exactly once**. Every later edit needed a text editor,
+/// which is the thing this story exists to remove. Found by a fresh-context
+/// review, then reproduced.
+///
+/// It compounded: the refusal re-rendered the empty row as a real one plus a new
+/// blank, so the second attempt produced six faults and the third nine.
+///
+/// This test posts what the page contains, twice over, because once proves only
+/// that the first save works — which was never the broken part.
+#[test]
+fn the_form_the_bridge_rendered_can_be_sent_straight_back_to_it() {
+    let _lock = port_lock::PortLock::acquire(18096);
+    let port = 18096u16;
+    let dir = state_dir("roundtrip");
+    seed_config(&dir, port);
+    let mut child = spawn(&dir);
+
+    let outcome = (|| -> Result<(), String> {
+        wait_for_ui(port, &mut child).ok_or("the UI must answer")?;
+
+        for attempt in 1..=2 {
+            let page = get(port, "/config").ok_or("/config must answer")?;
+            let body = as_a_browser_would_submit(&page);
+            if !body.contains("meter.0.serial=9202685") {
+                return Err(format!(
+                    "the extractor did not find the configured meter, so this test \
+                     would prove nothing. Submitted body was: {body}"
+                ));
+            }
+            let answer = post(port, "/config", &body).ok_or("resubmit must answer")?;
+            if !answer.contains("200 OK") {
+                return Err(format!(
+                    "resubmit #{attempt}: the bridge refused the form it had just \
+                     rendered. The operator changed nothing and pressed Save.\n\
+                     submitted: {body}\n\nanswer:\n{answer}"
+                ));
+            }
+        }
+        Ok(())
+    })();
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Err(why) = outcome {
+        panic!("{why}");
+    }
+}
+
+/// **A value the browser accepted must be a value the bridge will boot on** —
+/// AC1's own words, and it was false.
+///
+/// Clearing the publish-period or broker-port box submits an empty string.
+/// `validate` reads that as *unset* and supplies its default, so the submission
+/// is accepted — and the writer re-derived the number from the raw string as
+/// `"".parse().ok().unwrap_or_default()`, which is **zero**. The page said
+/// "Saved" and the file said `publish_period_secs = 0`, which the next start
+/// refuses. Story 6.1 AC1 serves no UI for an invalid file, so the operator was
+/// left with a crash-looping container and a hand-edit over SSH as the only
+/// repair — reachable in one click, through the supported path.
+///
+/// The test asserts against the FILE, not against the page, because the page was
+/// never the thing that lied.
+#[test]
+fn the_browser_cannot_write_a_file_the_bridge_would_refuse() {
+    let _lock = port_lock::PortLock::acquire(18095);
+    let port = 18095u16;
+    let dir = state_dir("cleared_fields");
+    seed_config(&dir, port);
+    let mut child = spawn(&dir);
+
+    let outcome = (|| -> Result<(), String> {
+        wait_for_ui(port, &mut child).ok_or("the UI must answer")?;
+        // Every optional numeric box cleared, exactly as a browser sends them.
+        let cleared = "group_id=Plant&node_id=Bridge01&broker_host=192.0.2.1\
+                       &broker_port=&publish_period_secs=&api_base=&log_dir=&log_keep=\
+                       &meter.0.meter_id=garage\
+                       &meter.0.device_id=a1a1a1a1-b2b2-c3c3-d4d4-000000000001\
+                       &meter.0.serial=9202685&meter.0.enabled=1";
+        let answer = post(port, "/config", cleared).ok_or("save must answer")?;
+        if !answer.contains("200 OK") {
+            // Refusing is also acceptable — what must not happen is accepting
+            // and then writing something unbootable.
+            return Ok(());
+        }
+
+        let written = std::fs::read_to_string(dir.join("config.toml"))
+            .map_err(|e| format!("the save reported success but wrote nothing: {e}"))?;
+        for forbidden in ["publish_period_secs = 0", "broker_port = 0"] {
+            if written.contains(forbidden) {
+                return Err(format!(
+                    "the browser reported 'Saved' and wrote `{forbidden}`, which the \
+                     next start refuses — and an invalid file at startup serves no \
+                     UI, so the repair is a hand-edit on the host:\n{written}"
+                ));
+            }
+        }
+
+        // The strongest form of the claim: hand the file straight back to the
+        // validation the bridge boots on.
+        let stored = smartme_bridge::app::store::read(&dir)
+            .map_err(|e| format!("the file the browser wrote cannot be read back: {e}"))?;
+        let credential = smartme_bridge::app::store::Credential {
+            client_id: Some("client-id".into()),
+            client_secret: Some(SECRET.into()),
+        };
+        let raw = smartme_bridge::app::store::into_raw(stored, credential, &dir);
+        smartme_bridge::app::config::validate(raw).map_err(|errors| {
+            format!(
+                "the browser accepted a submission and wrote a file the bridge \
+                 refuses to boot on — AC1's exact negation:\n{errors}"
+            )
+        })?;
+        Ok(())
+    })();
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+    if let Err(why) = outcome {
+        panic!("{why}");
+    }
+}

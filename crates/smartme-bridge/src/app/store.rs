@@ -41,6 +41,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::app::config::{ConfigErrors, Fault, RawConfig, RawMeter};
+use crate::app::supervisor::BridgeConfig;
 use crate::persist;
 
 /// The shape of what is on disk. Bumped whenever a field is added, renamed or
@@ -261,6 +262,83 @@ pub fn into_raw(config: StoredConfig, credential: Credential, dir: &Path) -> Raw
                 enabled: Some(m.enabled),
             })
             .collect(),
+    }
+}
+
+/// Derive the stored shape from a configuration that has **been validated**.
+///
+/// # This is the only way a writer should build a `StoredConfig`
+///
+/// The web form used to re-derive the numbers from its own raw strings, and the
+/// two paths disagreed on exactly the case that matters: an operator who clears
+/// the publish-period box submits nothing, `validate` reads that as *unset* and
+/// supplies `PERIOD_DEFAULT`, and the re-derivation read it as
+/// `"".parse().ok().unwrap_or_default()` — **zero**. The browser said "Saved",
+/// the file said `publish_period_secs = 0`, and the next start refused it. With
+/// [Story 6.1 AC1] refusing to serve a UI for an invalid file, the operator was
+/// left with a crash-looping container and a hand-edit over SSH as the only
+/// repair. Reachable in one click, through the supported path.
+///
+/// Going through the validated struct makes that class impossible rather than
+/// unlikely: whatever `validate` returned is what reaches the disk, defaults
+/// resolved and all.
+///
+/// `mapping_confirmed` is set to `false` and it does not matter what it is set
+/// to — [`save`] discards the caller's value and computes its own (Story 5.3
+/// AC3). `false` merely says out loud that a conversion is not where a
+/// confirmation can come from.
+///
+/// **`api_base` is written resolved**, not left absent. The file then records
+/// the endpoint actually in force rather than relying on a default the operator
+/// cannot see — and a value that came from a default reads back through
+/// `validate` unchanged.
+///
+/// [Story 6.1 AC1]: ../../../_bmad-output/implementation-artifacts/6-1-the-server-exists-in-every-state-the-bridge-can-be-in.md
+impl From<&BridgeConfig> for StoredConfig {
+    fn from(config: &BridgeConfig) -> Self {
+        // EXHAUSTIVE, deliberately — no `..`. A new field on `BridgeConfig`
+        // breaks this line, and breaking it is the point: the writer must say
+        // whether the new setting is persisted, rather than silently dropping it
+        // on the next save. `reconfigure::classify` is guarded the same way.
+        let BridgeConfig {
+            api_base,
+            credentials: _,  // ADR 0023: never on disk.
+            http_timeout: _, // not configurable; hardcoded by `validate`.
+            meters,
+            group_id,
+            node_id,
+            broker_host,
+            broker_port,
+            bd_seq_path: _, // derived from the state directory, not stored.
+            poll,
+            policy: _, // not configurable; hardcoded by `validate`.
+            log_dir,
+            log_keep,
+            ui_port,
+        } = config;
+
+        Self {
+            schema_version: SCHEMA_VERSION,
+            group_id: group_id.clone(),
+            node_id: node_id.clone(),
+            broker_host: broker_host.clone(),
+            broker_port: *broker_port,
+            publish_period_secs: poll.interval.as_secs(),
+            api_base: Some(api_base.clone()),
+            log_dir: log_dir.clone(),
+            log_keep: *log_keep,
+            mapping_confirmed: false,
+            ui_port: *ui_port,
+            meters: meters
+                .iter()
+                .map(|m| StoredMeter {
+                    meter_id: m.meter.as_str().to_string(),
+                    device_id: m.device_id.clone(),
+                    serial: m.serial.as_str().to_string(),
+                    enabled: m.enabled,
+                })
+                .collect(),
+        }
     }
 }
 

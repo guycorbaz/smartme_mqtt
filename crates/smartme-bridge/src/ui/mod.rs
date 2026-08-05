@@ -261,7 +261,17 @@ impl UiState {
     /// source of the configuration, and the two would part company at the first
     /// write that did not come through a browser.
     pub(crate) fn notify_ready(&self) {
-        self.ready.notify_waiters();
+        // `notify_one`, NOT `notify_waiters`.
+        //
+        // `notify_waiters` stores no permit: a nudge issued while the loop is
+        // between `decide()` and its next `notified()` — and `decide` re-reads
+        // the file, re-validates, and builds a whole HTTP client — is dropped on
+        // the floor. Two submissions back to back, which is exactly what a
+        // scripted bring-up and `docker-smoke.sh` do, lose the second. The
+        // operator confirms, is redirected, and the page still says the mapping
+        // is unconfirmed — AC7 failing in the shape of a flake. `notify_one`
+        // holds a permit for a waiter that has not arrived yet.
+        self.ready.notify_one();
     }
 }
 

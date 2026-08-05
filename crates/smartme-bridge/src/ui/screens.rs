@@ -77,7 +77,30 @@ fn field<'a>(fields: &'a Fields, key: &str) -> Option<&'a str> {
         .filter(|v| !v.is_empty())
 }
 
-/// Collect the indexed meter rows, in index order.
+/// Collect the indexed meter rows, in index order, **dropping the ones nobody
+/// filled in**.
+///
+/// # An empty row is a row the operator did not enter
+///
+/// The form always renders one blank "Add a meter" row so that adding a meter
+/// needs no JavaScript. A browser submits empty text inputs, so that row arrives
+/// as three present keys with empty values — and until 2026-08-05 it became a
+/// `RawMeter` of three `None`s, which `validate` correctly refused with three
+/// *"is missing or empty"* faults about a meter nobody had typed.
+///
+/// **The configuration screen could therefore be saved exactly once.** Every
+/// later edit — changing the publish period, correcting the broker — was refused
+/// on the operator's first press of Save, and it compounded: the refusal
+/// re-rendered the empty row as a real one plus a fresh blank, so the next
+/// attempt produced six faults, then nine. The story exists to remove the text
+/// editor from the loop and it put it back on the second visit.
+///
+/// **A row with nothing in it and its box unticked is dropped**, and the two
+/// halves of that rule are both deliberate. Dropping on emptiness alone would
+/// silently discard a row somebody ticked and then forgot to fill, turning a
+/// fault they could act on into a value that vanished. Clearing a row's three
+/// fields is therefore also how a meter is *removed*, which is the behaviour the
+/// blank row already implied.
 fn meters(fields: &Fields) -> Vec<RawMeter> {
     let mut indices: Vec<usize> = fields
         .iter()
@@ -96,6 +119,12 @@ fn meters(fields: &Fields) -> Vec<RawMeter> {
             // disabled, and that is the safe direction: a meter is published
             // because somebody ticked it, never because a value went missing.
             enabled: Some(field(fields, &format!("meter.{i}.enabled")).is_some()),
+        })
+        .filter(|m| {
+            m.meter_id.is_some()
+                || m.device_id.is_some()
+                || m.serial.is_some()
+                || m.enabled == Some(true)
         })
         .collect()
 }
@@ -122,13 +151,21 @@ fn posted(fields: &Fields, state_dir: &std::path::Path) -> RawConfig {
     }
 }
 
-/// Turn a validated submission back into the stored shape.
+/// What the operator typed, in the stored shape, **for redisplay only**.
 ///
-/// `mapping_confirmed` is set to `false` here and it does not matter what it is
-/// set to: [`store::save`] discards the caller's value and computes its own
-/// (Story 5.3 AC3). Passing `false` merely says out loud that this call is not
-/// where a confirmation can come from.
-fn to_stored(fields: &Fields, raw: &RawConfig) -> StoredConfig {
+/// # This value must never be written to disk
+///
+/// It exists so that a refused submission comes back with the boxes still full,
+/// rather than making the operator retype what they entered. It is therefore a
+/// record of *strings*, including ones `validate` rejected — and re-deriving
+/// numbers from them is how the browser came to write `publish_period_secs = 0`
+/// over a submission `validate` had accepted as the 30 s default, leaving a
+/// container that refused to start and served no UI to repair it.
+///
+/// What gets written is [`StoredConfig::from(&BridgeConfig)`](store), built from
+/// the struct `validate` returned. If you find yourself passing this function's
+/// result to [`store::save`], that is the defect coming back.
+fn as_typed(fields: &Fields, raw: &RawConfig) -> StoredConfig {
     StoredConfig {
         schema_version: store::SCHEMA_VERSION,
         group_id: raw.group_id.clone().unwrap_or_default(),
@@ -434,14 +471,17 @@ pub(super) async fn save_config(
                 StatusCode::BAD_REQUEST,
                 page(
                     "Configuration — smartme_mqtt",
-                    &form(&to_stored(&fields, &raw), Some(&errors)),
+                    &form(&as_typed(&fields, &raw), Some(&errors)),
                 ),
             )
                 .into_response();
         }
     };
 
-    if let Err(error) = store::save(state.state_dir(), &to_stored(&fields, &raw)) {
+    // Built from the VALIDATED struct, never from the raw strings — see
+    // `as_typed`'s docs for the container-bricking defect that came of the
+    // latter.
+    if let Err(error) = store::save(state.state_dir(), &StoredConfig::from(&validated)) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             page(
@@ -456,12 +496,44 @@ pub(super) async fn save_config(
             .into_response();
     }
 
+    // Did this write withdraw the confirmation?
+    //
+    // `save` computes the flag rather than taking it, so the only honest way to
+    // know is to ask the file it just wrote. Absent or unreadable is treated as
+    // withdrawn, which is the safe direction.
+    let withdrawn = !matches!(store::read(state.state_dir()), Ok(s) if s.mapping_confirmed);
+
     // AC4 — what it cost, and what it did NOT cost.
     //
     // Only a running bridge has a control surface to apply to. A silent one has
     // nothing in force to compare against, so the honest report is that the
     // saved values take effect when it starts publishing.
     let report = match state.phase().control() {
+        // A CHANGE THAT WITHDREW THE CONFIRMATION IS NOT CARRIED TO THE WIRE.
+        //
+        // `store::save` clears `mapping_confirmed` when the meter set changed,
+        // and until 2026-08-05 this handler then called `apply` anyway — four
+        // lines later, on the same submission. The withdrawal was written to
+        // disk and had no effect at all: the bridge published `DDEATH` for the
+        // old device and `DBIRTH` for the new one immediately, so a SCADA host
+        // acquired a persisted tag folder for a mapping no human had ever
+        // vouched for. That is FR25 defeated through the very screen built to
+        // enforce it — `prd.md:136` calls the confirmation *"the only guard
+        // against a mis-map the machine cannot detect"*, and a guard that the
+        // save path walks straight past is not a guard.
+        //
+        // The bridge keeps publishing what it was already publishing. Nothing on
+        // the wire changes until a human has looked at the new mapping.
+        Some(_) if withdrawn => "<p><strong>Saved — but NOT in force, and the meter \
+             mapping is no longer confirmed.</strong></p>\
+             <p>What you changed alters which meter is published where, so the \
+             confirmation given for the previous mapping no longer applies to it. \
+             The bridge is still publishing the <em>old</em> mapping and will keep \
+             doing so.</p>\
+             <p>Review the new mapping below and confirm it, then restart the \
+             bridge to put it in force. Until you do, a restart would bring the \
+             bridge up publishing nothing.</p>"
+            .to_string(),
         Some(control) => {
             let plan = control.apply(validated).await;
             // Re-read what is IN FORCE, rather than echoing the submission.
@@ -805,9 +877,29 @@ mod tests {
     /// A blank trailing row must contribute nothing, or every save would add an
     /// empty meter and `validate` would refuse a form the operator filled in
     /// correctly.
+    ///
+    /// **This test asserted the exact opposite until 2026-08-05** — `assert_eq!(
+    /// parsed.len(), 2, "the empty row is still a row here")` — and never called
+    /// `validate`, which is the only thing that could have shown the harm. It
+    /// was named for the property and codified its absence, and the
+    /// configuration screen was therefore saveable exactly once. It now ends at
+    /// `validate`, because "the row is dropped" is not the claim; "the form the
+    /// bridge served can be sent back to it" is.
     #[test]
     fn the_blank_add_a_meter_row_contributes_nothing() {
+        // SAFETY: single-threaded test setup. `validate` joins the credential
+        // from the environment, so the row-dropping claim would otherwise be
+        // masked by a missing-credential fault.
+        unsafe {
+            std::env::set_var("SMARTME_CLIENT_ID", "id");
+            std::env::set_var("SMARTME_CLIENT_SECRET", "secret");
+        }
         let fields: Fields = vec![
+            ("group_id".into(), "Plant".into()),
+            ("node_id".into(), "Bridge01".into()),
+            ("broker_host".into(), "broker".into()),
+            ("broker_port".into(), "1883".into()),
+            ("publish_period_secs".into(), "30".into()),
             ("meter.0.meter_id".into(), "garage".into()),
             ("meter.0.device_id".into(), "dev".into()),
             ("meter.0.serial".into(), "111".into()),
@@ -817,12 +909,42 @@ mod tests {
             ("meter.1.serial".into(), "".into()),
         ];
         let parsed = meters(&fields);
-        assert_eq!(parsed.len(), 2, "the empty row is still a row here");
+        assert_eq!(
+            parsed.len(),
+            1,
+            "the untouched row must not become a meter: {parsed:?}"
+        );
+        assert_eq!(parsed[0].serial.as_deref(), Some("111"));
+
+        // And the claim that actually matters — `validate` accepts it. The
+        // previous version of this test stopped one call short of the only
+        // function that could refuse.
+        let raw = posted(&fields, std::path::Path::new("/data"));
         assert!(
-            parsed[1].meter_id.is_none()
-                && parsed[1].device_id.is_none()
-                && parsed[1].serial.is_none(),
-            "an untouched row must arrive entirely unset, so validate can drop it"
+            config::validate(raw).is_ok(),
+            "the form the bridge itself rendered must be acceptable when sent \
+             back unchanged, or the screen can be saved exactly once"
+        );
+    }
+
+    /// A row with nothing typed but its box ticked is NOT dropped.
+    ///
+    /// Dropping on emptiness alone would turn a fault the operator can act on
+    /// into a value that silently vanished — they said "publish this" and would
+    /// be shown a page with no meter and no complaint.
+    #[test]
+    fn a_ticked_but_empty_row_is_kept_so_its_faults_are_reported() {
+        let fields: Fields = vec![
+            ("meter.0.meter_id".into(), "".into()),
+            ("meter.0.device_id".into(), "".into()),
+            ("meter.0.serial".into(), "".into()),
+            ("meter.0.enabled".into(), "1".into()),
+        ];
+        assert_eq!(meters(&fields).len(), 1);
+        let raw = posted(&fields, std::path::Path::new("/data"));
+        assert!(
+            config::validate(raw).is_err(),
+            "a row somebody ticked must produce faults, never silence"
         );
     }
 

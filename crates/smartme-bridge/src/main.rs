@@ -210,7 +210,9 @@ async fn lifecycle(state_dir: PathBuf, ui_port: u16) -> Result<(), Box<dyn std::
             Decision::Unconfigured => {
                 phase.store(Arc::new(ui::Phase::silent(ui::Lifecycle::Unconfigured)));
             }
-            Decision::Unconfirmed => {}
+            Decision::Unconfirmed => {
+                phase.store(Arc::new(ui::Phase::silent(ui::Lifecycle::Unconfirmed)));
+            }
             Decision::Publish(_) => phase.store(Arc::new(ui::Phase::starting())),
             Decision::Invalid(_) => {}
         }
