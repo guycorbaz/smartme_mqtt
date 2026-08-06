@@ -71,6 +71,54 @@ development_status:
   1-14-chaos-stale-on-death-stale-on-cloud-timeout: done
   1-15-tier-3-ignition-contract-test-manual-runbook: done
   epic-1-retrospective: done
+  # OPENED 2026-08-06, on Guy's instruction, and it is the next epic per ADR 0025's
+  # forward order (6 -> 3 -> 2 -> 7 -> 8).
+  #
+  # WHY NOW, AND IT IS NOT "because the fleet is next": Guy set the gate for the
+  # panoramix deployment test on 2026-08-06 — *"the next tests on panoramix when the
+  # web UI works with all the meters"*. That gate lands here and nowhere else.
+  # Story 5.1's AC6 makes the bridge REFUSE to start when more meters are enabled
+  # than the runtime serves (`config::RUNTIME_METER_LIMIT = 1`), deliberately, so
+  # the screen cannot be made to accept four meters by touching Epic 6 alone.
+  #
+  # THREE DECISIONS TAKEN AT DRAFTING, because this repository has already paid for
+  # deferring one to an artifact that did not exist (AR13, all of Epic 1):
+  #
+  #  1. **The republish comes into Epic 3, from Epic 2.** ADR 0027 decided the rule —
+  #     every poll cycle publishes a verdict for every enabled meter, or a device
+  #     certificate; never silence — and left the mechanism with Epic 2, which has no
+  #     story. At ONE meter a withheld verdict is a bridge that looks healthy and says
+  #     nothing (the defect ADR 0027 was written for). At FOUR it is worse in kind:
+  #     three silences hide behind one meter that works, and one of Guy's four is
+  #     physically unplugged, so the silent case is the PERMANENT case here. Shipping
+  #     the fleet on top of it would make per-meter isolation unobservable. Story 3.2
+  #     owns it. ADR 0025 warned that deferring to a deferred epic is how an item
+  #     stops being tracked; this is that warning being acted on rather than repeated.
+  #  2. **A silent meter gets a non-good quality on DDATA, not a DDEATH.** The norm
+  #     allows the DDEATH (`Sparkplug_4_Topics.adoc:460` makes it the edge node's job
+  #     on behalf of an unavailable device) but ADR 0012 already chose `Bad_Stale` for
+  #     exactly this, verified against a live Ignition on 2026-08-03 across a
+  #     Good->Stale transition. A DDEATH additionally destroys the device's online
+  #     state in the host, which is a heavier claim than "this reading is old" and is
+  #     not undone by the next good poll. DDEATH stays reserved for disable and for
+  #     disappearance-from-discovery (story 3.5).
+  #  3. **Discovery (FR2) is NOT a prerequisite for the fleet.** The mapping is typed
+  #     or pasted today and that works; discovery makes it pleasant and makes FR6
+  #     possible. Sequencing it first would put an API-shaped story between Guy and
+  #     the thing he asked for.
+  #
+  # Stories are listed and only 3.1 is detailed — story creation is just-in-time
+  # here. The ~15 items parked on "Epic 3" in deferred-work.md must be swept into
+  # these stories as they are written; `Policy::max_age_ms` validation and the
+  # command path are the two named ones.
+  epic-3: in-progress
+  3-1-the-runtime-serves-every-enabled-meter: ready-for-dev
+  3-2-a-meters-silence-is-published-not-withheld: backlog
+  3-3-per-meter-staleness-isolation-and-its-latency-bound: backlog
+  3-4-discovery-the-accounts-meters-by-name-and-serial: backlog
+  3-5-a-known-meter-that-disappears-from-discovery: backlog
+  3-6-orphan-retained-purge-on-a-mapping-change: backlog
+  epic-3-retrospective: optional
   # Epic 4 runs BEFORE Epic 2 — decided at the Epic 1 retrospective (2026-07-26).
   #
   # AMENDED 2026-08-05 (ADR 0025, [#55]). This comment said the execution order was
