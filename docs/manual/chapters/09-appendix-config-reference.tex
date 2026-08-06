@@ -16,8 +16,8 @@ two reserved names the bridge does not read. Everything else \prog has is in
 \toprule
 \normalfont\textbf{Variable} & \textbf{Req.} & \textbf{Effect} \\
 \midrule
-SMARTME\_CLIENT\_ID     & yes & smart-me OAuth client-credentials ID. Missing: \prog refuses to start. \\
-SMARTME\_CLIENT\_SECRET & yes & smart-me OAuth client-credentials secret. Missing: \prog refuses to start. \\
+SMARTME\_CLIENT\_ID     & yes & smart-me OAuth client-credentials ID. Missing: \prog refuses to publish and says so on the screen. \\
+SMARTME\_CLIENT\_SECRET & yes & smart-me OAuth client-credentials secret. Missing: \prog refuses to publish and says so on the screen. \\
 \addlinespace
 SMARTME\_STATE\_DIR     & no  & Where \code{config.toml} and \code{bdseq.toml} live. Default \code{/data}. \\
 \addlinespace
@@ -33,7 +33,7 @@ SMARTME\_BASIC\_PASSWORD& --- & HTTP Basic fallback password. \textbf{Not read b
 environment.} \code{smart-me-client} implements it (ADR~0009), but the binary constructs
 OAuth client-credentials unconditionally and never builds Basic credentials, so setting
 these two variables has no effect --- and because the OAuth pair is required, omitting it in
-their favour makes \prog refuse to start. Wiring it up, or dropping it from the design, is an
+their favour makes \prog refuse to publish. Wiring it up, or dropping it from the design, is an
 open decision.\normalsize
 
 \begin{warning}
@@ -66,9 +66,9 @@ api\_base            & no  & smart-me endpoint. Default \code{https://api.smart-
 log\_dir             & no  & Directory for the log file. Unset: no file at all, console only. Set: \code{smartme\_mqtt.<date>.log}, rotated daily. \\
 log\_keep            & no  & Rotated files kept. Default \code{7}. Not a positive number: refused on stderr, keeps 7. \\
 \addlinespace
-ui\_port             & no  & Port the embedded web UI listens on \emph{inside} the container. Default \code{8080}. The container publishes no host port --- Traefik reaches it over a shared Docker network and is the only thing that can. Changing it takes effect at the next restart --- the listener is started once. It does \emph{not} disturb the Sparkplug session. \\
+ui\_port             & no  & Port the embedded web UI listens on \emph{inside} the container. Default \code{8080}. The container publishes no host port --- Traefik reaches it over a shared Docker network and is the only thing that can. Changing it takes effect at the next restart --- the listener is started once. It does \emph{not} disturb the Sparkplug session. \code{0} is refused, and so is anything below \code{1024}: the bridge runs unprivileged and could never listen there, and since this screen is the only place the value can be changed, accepting it would remove the only way to undo it. \\
 \addlinespace
-mapping\_confirmed   & no  & \textbf{Set this by hand on a first run, or nothing is ever published.} Whether a human has checked the meter→topic mapping. \textbf{Absent means \code{false}}, and nothing is published until it is \code{true} --- no connection, no birth. Editing the mapping withdraws it automatically; editing anything else does not. Writing the file by hand and setting it counts as confirming it. See section~\ref{sec:confirm}. \\
+mapping\_confirmed   & no  & \textbf{Set this by hand on a first run, or nothing is ever published.} Whether a human has checked the meter→topic mapping. \textbf{Absent means \code{false}}, and nothing is published until it is \code{true} --- no connection, no birth. Editing the mapping withdraws it automatically --- and so does editing \code{group\_id} or \code{node\_id}, which are in every topic; editing anything else does not. Writing the file by hand and setting it counts as confirming it. See section~\ref{sec:confirm}. \\
 \bottomrule
 \end{tabular}
 \end{center}

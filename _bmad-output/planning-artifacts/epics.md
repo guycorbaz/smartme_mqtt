@@ -54,7 +54,7 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 - FR23: The operator can provide credentials and broker details via environment/`.env`.
 - FR24: The operator can configure the meter→topic/tag mapping, with sensible defaults.
 - FR25: The operator can confirm the meter→topic mapping before data is published (first-run confirmation).
-- FR26: The bridge can validate the full configuration at startup (topic uniqueness, well-formed serials, completeness) and refuse to start on invalid config rather than start partially.
+- FR26: The bridge can validate the full configuration at startup (topic uniqueness, well-formed serials, completeness) and **refuse to publish** on invalid config rather than start partially — opening no session, emitting no birth, and saying so on the configuration screen. *(Amended 2026-08-06, [ADR 0026](../../docs/adr/0026-a-configuration-it-cannot-use-stops-the-bridge-publishing-not-serving.md): it read "refuse to start", and exiting took down the screen that repairs the configuration.)*
 - FR27: The bridge can persist configuration across restarts and image updates.
 
 **Observability & Diagnostics**
@@ -189,7 +189,7 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 - FR23: Epic 5 — credentials + broker details via `.env`
 - FR24: Epic 5 — meter→topic/tag mapping with defaults
 - FR25: Epic 5 — first-run mapping confirmation before publish
-- FR26: Epic 5 — startup config validation, refuse-to-start on invalid
+- FR26: Epic 5 — startup config validation, refuse-to-**publish** on invalid (ADR 0026; was refuse-to-start)
 - FR27: Epic 5 — config persists across restarts + image updates
 - FR28: Epic 6 — unified per-meter live view (value/unit/age/topic/serial/status)
 - FR29: Epic 6 — independent source (smart-me) vs sink (MQTT) health

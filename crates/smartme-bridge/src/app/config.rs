@@ -682,6 +682,36 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
                 .to_string(),
         });
     }
+    // A PRIVILEGED PORT IS A ONE-WAY DOOR, and that is why it is refused here
+    // rather than left to fail at bind time.
+    //
+    // The image runs as uid 10002, so a port below 1024 cannot be bound. `serve`
+    // treats that as "no UI" and lets the bridge publish on — deliberately, since
+    // a diagnostic aid must not be able to cause an outage. But `ui_port` is the
+    // one setting whose only editor is the web UI: accept 80, restart, and the
+    // screen is gone with no way to change the value that removed it, short of
+    // hand-editing the file on the volume.
+    //
+    // So the refusal has to happen while the operator still has a screen to read
+    // it on. Note this catches the deterministic case only; a port already in use,
+    // or one the reverse proxy is not routing to, has the same effect and cannot
+    // be seen from here.
+    if let Some(port) = ui_port
+        && (1..1024).contains(&port)
+    {
+        faults.push(Fault {
+            field: "web UI port".to_string(),
+            source: Some(Source::File("ui_port".into())),
+            problem: format!(
+                "is {port}. Ports below 1024 are privileged and this bridge runs \
+                 unprivileged, so it could never listen there — and since this \
+                 screen is the only place the web UI port can be changed, \
+                 accepting it would remove the only way to undo it. Use 1024 or \
+                 above; the reverse proxy is what publishes a low port to the \
+                 outside"
+            ),
+        });
+    }
 
     //
     // The credential handed to the probe is a placeholder for the same reason:
@@ -820,6 +850,67 @@ mod tests {
 
     fn fields(errors: &ConfigErrors) -> Vec<&str> {
         errors.0.iter().map(|f| f.field.as_str()).collect()
+    }
+
+    /// `ui_port` is the only setting whose sole editor is the screen it governs,
+    /// so a value the process cannot bind is a one-way door: accept 80, restart,
+    /// and there is no screen left to change 80 back.
+    ///
+    /// The assertion names the *source* `ui_port`, not merely "an error".
+    /// `validate` has a dozen other ways to fail, and `is_err()` would be
+    /// satisfied by any of them — the shape that let a duplicate-serial fault
+    /// point at the wrong row.
+    ///
+    /// FALSIFIED 2026-08-06 by widening the guard to `(1..1).contains(&port)`,
+    /// so no port is privileged. Copied from the run:
+    ///
+    /// ```text
+    /// test app::config::tests::a_privileged_ui_port_is_refused_while_a_screen_still_exists ... FAILED
+    ///
+    /// thread '…a_privileged_ui_port_is_refused_while_a_screen_still_exists' (353) panicked at
+    /// crates/smartme-bridge/src/app/config.rs:883:18:
+    /// a port an unprivileged process cannot bind must be refused: BridgeConfig { …
+    /// client_secret: "<redacted>", … ui_port: Some(1) }
+    ///
+    /// test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 166 filtered out
+    /// ```
+    ///
+    /// It dies on port 1, the first case, at the `expect_err` — not at the
+    /// source-naming assertion below it, which is therefore proved only against
+    /// the guard being present at all. (The dump also shows the hand-written
+    /// `Debug` doing its job: `client_secret: "<redacted>"`.)
+    #[test]
+    fn a_privileged_ui_port_is_refused_while_a_screen_still_exists() {
+        for port in ["1", "80", "443", "1023"] {
+            let raw = RawConfig {
+                ui_port: Some(port.into()),
+                ..sound()
+            };
+            let errors = validate(raw)
+                .expect_err("a port an unprivileged process cannot bind must be refused");
+            assert!(
+                errors
+                    .0
+                    .iter()
+                    .any(|f| f.source == Some(Source::File("ui_port".into()))),
+                "port {port} cannot be bound by an unprivileged process, and accepting \
+                 it removes the only screen that could undo it; got {:?}",
+                fields(&errors)
+            );
+        }
+
+        // The other side, and it is the one that makes the test mean something: a
+        // guard that refused every port would pass the half above and make the UI
+        // unconfigurable.
+        for port in ["1024", "8080", "65535"] {
+            let raw = RawConfig {
+                ui_port: Some(port.into()),
+                ..sound()
+            };
+            let config = validate(raw)
+                .unwrap_or_else(|e| panic!("port {port} is bindable and must be accepted: {e:?}"));
+            assert_eq!(config.ui_port, Some(port.parse().expect("a u16")));
+        }
     }
 
     #[test]

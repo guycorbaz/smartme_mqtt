@@ -90,9 +90,12 @@ history configuration of everything beneath it.
 
 \textbf{Changing the mapping withdraws the confirmation automatically.} Adding, removing, enabling
 or disabling a meter, or editing its name, device or serial, sets \code{mapping\_confirmed} back to
-\code{false}. Changing something that is not the mapping --- the publish period, the broker, the log
-settings --- does not, because it costs you a click for a change you can already see is unrelated,
-and a guard that fires for no visible reason is a guard that gets switched off.
+\code{false}. \textbf{So does changing \code{group\_id} or \code{node\_id}}: both appear in every
+topic the bridge publishes, so changing one moves every device to a namespace nobody has looked
+at --- which is the same thing as re-mapping them all. Changing something that is not the mapping
+--- the publish period, the broker, the log settings --- does not, because it costs you a click
+for a change you can already see is unrelated, and a guard that fires for no visible reason is a
+guard that gets switched off.
 
 \begin{note}
 \textbf{Writing the file by hand counts as confirming it.} A headless bring-up sets
@@ -114,10 +117,11 @@ problem: \prog says so in different words, because one of the two is a click awa
 and the other is not. See section~\ref{sec:confirm}.
 
 That is not the same as a configuration that exists and is wrong. \textbf{A file that is
-present and invalid makes \prog refuse to start}, listing every fault at once
-(chapter~\ref{ch:trouble}). Absence is not invalidity: a bridge that refused to
-start without a configuration could never be configured at all, because the screen that
-writes the first one would sit behind a process that had already exited.
+present and invalid makes \prog refuse to publish} --- no connection, no birth, nothing on
+the wire --- while it stays up and lists every fault at once, on the configuration screen and
+in the log (chapter~\ref{ch:trouble}). Absence is not invalidity, and neither is a reason to
+exit: the screen that writes the first configuration, and the screen that repairs a broken
+one, are the same screen, and a process that had exited would be sitting in front of both.
 
 \prog never writes a configuration it invented. A first run leaves the state directory
 untouched --- defaults nobody chose are still nobody's configuration.
@@ -142,6 +146,13 @@ and let missing ones take a default value, so a renamed key would read as \emph{
 quietly take its default, and \prog would run happily on a configuration nobody wrote ---
 publishing every 30 seconds because the period had silently reverted. Refusing is the only
 honest answer until a migration exists to be the other one.
+
+Refusing to \emph{read} such a file is not the same as refusing to \emph{replace} it, and the
+two are decided separately. The configuration screen may overwrite a file whose version is
+older than the running build's, because the operator is replacing it wholesale with a document
+the build wrote itself. It may not overwrite one whose version is \emph{newer}: that file came
+from a later image and carries keys this build has no representation for, so writing over it
+would drop them without saying so.
 
 \subsection{What a change costs}
 \label{sec:changecost}
@@ -241,7 +252,7 @@ headless devices.
 it, but the binary builds OAuth client-credentials unconditionally and never constructs
 Basic credentials, so \code{SMARTME\_BASIC\_USER} and \code{SMARTME\_BASIC\_PASSWORD} have
 no effect whatever. Worse for anyone relying on the word \emph{fallback}: the OAuth pair is
-\emph{required}, so setting the Basic pair \emph{instead} of it makes \prog refuse to start
+\emph{required}, so setting the Basic pair \emph{instead} of it makes \prog refuse to publish
 with \code{smart-me client id (environment: SMARTME\_CLIENT\_ID): is missing or empty}.
 Treat client credentials as
 the only way in until this is either wired up or dropped from the design.
@@ -424,7 +435,7 @@ Changing either \textbf{costs a new Sparkplug session} --- see
 table~\ref{tab:changecost}. \prog keeps the session it has until it is restarted.
 \end{note}
 
-A port that is not a number makes the bridge refuse to start. It does not fall back to
+A port that is not a number makes the bridge refuse to publish. It does not fall back to
 \code{1883} silently --- connecting to a different broker than intended is precisely the
 kind of quiet wrong answer this project avoids.
 
@@ -483,7 +494,7 @@ and authentication are best enabled in the same change.
 \subsection{Sparkplug identity}
 
 The group and edge-node identifiers are \textbf{required}. There is no default, and
-\prog refuses to start without them:
+\prog refuses to publish without them:
 
 \begin{lstlisting}
 group_id = "<your group>"

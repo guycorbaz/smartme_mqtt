@@ -855,6 +855,31 @@ pub(super) async fn confirm_mapping(
 mod tests {
     use super::*;
 
+    /// Serialises the two tests that write `SMARTME_CLIENT_*`.
+    ///
+    /// **They used to claim "single-threaded test setup" and race.** `cargo test`
+    /// runs unit tests on a thread pool, and the two set `SMARTME_CLIENT_SECRET`
+    /// to *different* values before asserting on what [`posted`] read back — so
+    /// whichever wrote last decided both outcomes. Observed 2026-08-06 in
+    /// `ci-local.sh`, having passed five consecutive local runs first:
+    ///
+    /// ```text
+    /// ---- ui::screens::tests::a_posted_credential_is_ignored_because_the_form_has_no_such_field ----
+    /// assertion `left == right` failed: a browser must not be able to set the credential
+    ///   left: Some("secret")
+    ///  right: Some("from-the-environment")
+    /// ```
+    ///
+    /// `Some("secret")` is the *other* test's value, which is the whole diagnosis.
+    ///
+    /// **What this lock does not fix**, and it should not be mistaken for it: the
+    /// `unsafe` on `set_var` is about concurrent *readers*, and other tests in
+    /// this module call [`posted`], which reads these variables. The lock makes
+    /// the assertions deterministic; it does not make the write sound. The real
+    /// repair is for `posted` to take a [`Credential`] instead of reading the
+    /// process environment — a production change, deliberately not made here.
+    static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn markup_in_a_meter_name_cannot_escape_the_attribute_it_is_rendered_into() {
         let hostile = "\"><script>alert(1)</script>";
@@ -898,8 +923,11 @@ mod tests {
     /// the credential — it comes from the environment or not at all.
     #[test]
     fn a_posted_credential_is_ignored_because_the_form_has_no_such_field() {
-        // SAFETY: single-threaded test setup; the variable is read below.
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: see `ENV`. Both variables are set, so this test does not depend
+        // on what the other one left behind.
         unsafe {
+            std::env::set_var("SMARTME_CLIENT_ID", "from-the-environment-id");
             std::env::set_var("SMARTME_CLIENT_SECRET", "from-the-environment");
         }
         let fields: Fields = vec![
@@ -928,9 +956,10 @@ mod tests {
     /// bridge served can be sent back to it" is.
     #[test]
     fn the_blank_add_a_meter_row_contributes_nothing() {
-        // SAFETY: single-threaded test setup. `validate` joins the credential
-        // from the environment, so the row-dropping claim would otherwise be
-        // masked by a missing-credential fault.
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: see `ENV`. `validate` joins the credential from the
+        // environment, so the row-dropping claim would otherwise be masked by a
+        // missing-credential fault.
         unsafe {
             std::env::set_var("SMARTME_CLIENT_ID", "id");
             std::env::set_var("SMARTME_CLIENT_SECRET", "secret");
@@ -987,6 +1016,100 @@ mod tests {
             config::validate(raw).is_err(),
             "a row somebody ticked must produce faults, never silence"
         );
+    }
+
+    /// **The defect neither module could see alone.** `store::save` decides
+    /// whether a confirmation survives a write; `mapping_fingerprint` decides
+    /// whether a click still refers to what the screen displayed. They are two
+    /// encodings of one question — *"is this the same mapping?"* — and for a month
+    /// they disagreed: the fingerprint covered `group_id` and `node_id`, the
+    /// withdrawal rule did not. Confirm, correct the node id, restart, and the
+    /// bridge published into a namespace nobody had ever seen.
+    ///
+    /// Neither module's own tests could catch that, because each was internally
+    /// consistent. This is the only test that puts them side by side, so it must
+    /// stay exhaustive over the fields either one reads.
+    ///
+    /// FALSIFIED 2026-08-06 by removing the identity comparison from
+    /// `store::same_mapping` — the exact state of the code before today. Copied:
+    ///
+    /// ```text
+    /// test ui::screens::tests::the_withdrawal_rule_and_the_fingerprint_answer_the_same_question ... FAILED
+    ///
+    /// thread '…the_withdrawal_rule_and_the_fingerprint_answer_the_same_question' (353) panicked at
+    /// crates/smartme-bridge/src/ui/screens.rs:1097:13:
+    /// assertion `left == right` failed: "the node id" moves the fingerprint but not the
+    /// withdrawal rule, or the reverse: the operator's click and the stored confirmation
+    /// would disagree about whether this is the same mapping.
+    /// fingerprint moved: true, same_mapping: true
+    ///   left: true
+    ///  right: false
+    ///
+    /// test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 165 filtered out
+    /// ```
+    #[test]
+    fn the_withdrawal_rule_and_the_fingerprint_answer_the_same_question() {
+        let base = StoredConfig {
+            schema_version: store::SCHEMA_VERSION,
+            group_id: "Site".into(),
+            node_id: "Bridge".into(),
+            broker_host: "b".into(),
+            broker_port: 1883,
+            publish_period_secs: 30,
+            api_base: None,
+            log_dir: None,
+            log_keep: None,
+            mapping_confirmed: false,
+            ui_port: None,
+            meters: vec![
+                StoredMeter {
+                    meter_id: "garage".into(),
+                    device_id: "dev-a".into(),
+                    serial: "111".into(),
+                    enabled: true,
+                },
+                StoredMeter {
+                    meter_id: "cellar".into(),
+                    device_id: "dev-b".into(),
+                    serial: "222".into(),
+                    enabled: false,
+                },
+            ],
+        };
+
+        /// One named edit to a stored configuration.
+        type Case = (&'static str, fn(&mut StoredConfig));
+
+        // Every field either rule reads, plus two that neither may react to.
+        let cases: Vec<Case> = vec![
+            ("the node id", |c| c.node_id = "Other".into()),
+            ("the group id", |c| c.group_id = "Other".into()),
+            ("a meter id", |c| c.meters[0].meter_id = "attic".into()),
+            ("a device id", |c| c.meters[0].device_id = "dev-z".into()),
+            ("a serial", |c| c.meters[0].serial = "999".into()),
+            ("an enabled flag", |c| c.meters[1].enabled = true),
+            ("a meter added", |c| c.meters.push(c.meters[0].clone())),
+            ("a meter removed", |c| {
+                c.meters.pop();
+            }),
+            ("the row order", |c| c.meters.swap(0, 1)),
+            ("the broker host", |c| c.broker_host = "elsewhere".into()),
+            ("the publish period", |c| c.publish_period_secs = 45),
+        ];
+
+        for (what, mutate) in cases {
+            let mut edited = base.clone();
+            mutate(&mut edited);
+            let fingerprint_moved = mapping_fingerprint(&edited) != mapping_fingerprint(&base);
+            let still_same = store::same_mapping(&base, &edited);
+            assert_eq!(
+                fingerprint_moved, !still_same,
+                "{what:?} moves the fingerprint but not the withdrawal rule, or the \
+                 reverse: the operator's click and the stored confirmation would \
+                 disagree about whether this is the same mapping. \
+                 fingerprint moved: {fingerprint_moved}, same_mapping: {still_same}"
+            );
+        }
     }
 
     /// The fingerprint exists to bind a click to a mapping. If it did not move

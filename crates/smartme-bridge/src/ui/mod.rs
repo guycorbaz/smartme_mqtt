@@ -70,15 +70,20 @@ pub enum Lifecycle {
     Unconfirmed,
     /// Configured, confirmed, publishing.
     Running,
-    /// The file on disk stopped being usable while the process was up.
+    /// The configuration on disk cannot be turned into settings.
     ///
-    /// **Not a startup state.** A configuration that is present and invalid *at
-    /// startup* makes the bridge refuse to start (Story 6.1 AC1) and serves no
-    /// screen at all. This is the case where an operator is in the browser right
-    /// now and something — a hand-edit, another writer — invalidated the file
-    /// underneath them. The phase used to be left alone in that case, so `/` went
-    /// on saying *"The configuration is valid, but nobody has checked…"* about a
-    /// file the bridge had just refused.
+    /// **A startup state since [ADR 0026]**, and that is the point of it. It used
+    /// to be reachable only from a later turn — an operator in the browser whose
+    /// hand-edit invalidated the file underneath them — because a configuration
+    /// present and invalid *at startup* exited the process (Story 6.1 AC1) and
+    /// served no screen at all. The commonest way to reach it is now the first
+    /// thing that happens on a deployment whose state directory nobody `chown`ed.
+    ///
+    /// Two distinct repairs land here, and the faults say which: a file that was
+    /// read and rejected is fixed in the form; one that could not be read at all
+    /// is fixed on the host, because nothing here can write there either.
+    ///
+    /// [ADR 0026]: ../../../docs/adr/0026-a-configuration-it-cannot-use-stops-the-bridge-publishing-not-serving.md
     Misconfigured,
 }
 
@@ -131,10 +136,23 @@ impl Lifecycle {
                  and publishing what it reads. Whether the broker is actually \
                  reachable is not reported here yet — the log says so."
             }
+            // NOT "still running on the configuration it started with".
+            //
+            // It said that until 2026-08-06, and the control flow forbade it: this
+            // state was reachable only from `Unconfigured` and `Unconfirmed`,
+            // where nothing had ever been published, because the publishing arm
+            // never returns to the top of the loop. Since [ADR 0026] it is also
+            // the state a bridge STARTS in when `/data` cannot be read — the very
+            // first thing an operator sees after a forgotten `chown`, described to
+            // them as a bridge that is running.
+            //
+            // What is true in every way this state is reached: nothing is being
+            // published, and the faults below say why.
             Lifecycle::Misconfigured => {
-                "The bridge is still running on the configuration it started with, \
-                 but the file on disk has since become unusable and cannot be \
-                 loaded. Correct it below; nothing new is published until it reads."
+                "The configuration on disk cannot be used, so nothing is published — \
+                 no connection, no birth. The faults below say what is wrong with \
+                 it; correct them and save, or fix the file on the host if that is \
+                 what they point at."
             }
         }
     }

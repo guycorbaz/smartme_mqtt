@@ -39,6 +39,14 @@ configuration, and it is the only way to obtain one
 against each
 **And** the process exits non-zero without opening a socket, publishing anything, or writing state.
 
+> **AMENDED 2026-08-06 — [ADR 0026](../../docs/adr/0026-a-configuration-it-cannot-use-stops-the-bridge-publishing-not-serving.md),
+> [#57](https://github.com/guycorbaz/smartme_mqtt/issues/57).** The process **no longer exits**. It
+> stays up, opens no socket, publishes nothing and writes no state — every guarantee this criterion
+> was written to buy — and serves the configuration screen so the fault can be repaired in a
+> browser. The exit was taking down the only repair path there is on a deployment with no shell.
+> FR26 is amended in the same motion: *refuse to start* → *refuse to publish, and say so on the
+> screen*.
+
 > Today `require()` (`main.rs:17`) returns on the first missing variable. With six required values
 > and no example that fills them, a first run is up to six edit-restart cycles, each revealing
 > exactly one more thing. This is the acceptance criterion the story exists for; FR26's *"refuse to

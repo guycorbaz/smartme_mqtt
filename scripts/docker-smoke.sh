@@ -35,14 +35,21 @@ timeout 60 docker run --rm --entrypoint ls "$IMAGE" \
     || fail "no CA bundle — every HTTPS call to the smart-me cloud would fail, and the bridge would publish a permanent, honest STALE that looks exactly like a cloud outage"
 ok "CA bundle present"
 
-# --- refuses to start on an INVALID configuration --------------------------
+# --- refuses to PUBLISH on an INVALID configuration, and stays up ----------
 #
 # No default for group_id / node_id is a deliberate guard: a Sparkplug host
 # PERSISTS what it discovers, so publishing into the wrong namespace is not
 # undone by restarting with better settings.
 #
 # The identity is written EMPTY rather than omitted. Present-and-invalid is the
-# case that refuses; absent is the case below, which serves the UI instead.
+# case under test; absent is the case below.
+#
+# **Since ADR 0026 the container no longer exits here**, and this step had to
+# change with it or it would have gone on passing while taking a minute to do
+# it — `timeout 60` plus `|| true` would have swallowed the difference entirely.
+# That is the drift this file's header is about, arriving a second time. So the
+# check now uses the same shape as the two below: the fault must be named, AND
+# the container must still be running when the clock runs out.
 mkdir -p "$TMP/invalid"
 cat > "$TMP/invalid/config.toml" <<'TOML'
 schema_version = 4
@@ -59,14 +66,26 @@ device_id = "d"
 serial = "9202685"
 enabled = true
 TOML
-out=$(timeout 60 docker run --rm \
+# NAMED, and force-removed below. `timeout -s KILL` kills the `docker run`
+# CLIENT; the container it started keeps running, `--rm` never fires, and the
+# next step then shares the machine with a bridge nobody is watching. That was
+# tolerable while this step's container exited on its own — it does not any more,
+# so the step that made it stay up is the step that has to clean up after it.
+inv="smartme_smoke_invalid_$$"
+out=$(timeout -s KILL 20 docker run --rm --name "$inv" \
     -e SMARTME_CLIENT_ID=x -e SMARTME_CLIENT_SECRET=x \
     -e SMARTME_STATE_DIR=/state \
     -v "$TMP/invalid:/state:ro" \
-    "$IMAGE" 2>&1 || true)
+    "$IMAGE" 2>&1; echo "EXIT:$?")
+docker rm -f "$inv" >/dev/null 2>&1 || true
 echo "$out" | grep -q 'config.toml: group_id' \
-    || { echo "$out"; fail "the image started without a group id; the guard is gone"; }
-ok "refuses an invalid configuration, naming the key the operator edits"
+    || { echo "$out"; fail "the image published without a group id; the guard is gone"; }
+echo "$out" | grep -q 'NOTHING is published' \
+    || { echo "$out"; fail "the image must SAY it is withholding everything: now that it no longer exits to make the point, this line is the whole difference between a refused configuration and a working one"; }
+# HAVING TO KILL IT IS THE PASS — see the note below on 124 vs 137.
+echo "$out" | grep -qE 'EXIT:(124|137)' \
+    || { echo "$out"; fail "the image exited on an invalid configuration; ADR 0026 keeps it up so the configuration screen can repair the file, and on a deployment with no shell that screen is the only repair there is"; }
+ok "refuses to publish an invalid configuration, names the key, and stays up to be repaired"
 
 # --- with NO configuration it comes up and STAYS up ------------------------
 #
@@ -74,11 +93,14 @@ ok "refuses an invalid configuration, naming the key the operator edits"
 # configured at all: every setting but the credential arrives through the web
 # UI, so the screen that writes the first config.toml sits behind this process.
 mkdir -p "$TMP/empty"
-out=$(timeout -s KILL 20 docker run --rm \
+# Named and force-removed, for the reason given at the invalid step above.
+emp="smartme_smoke_empty_$$"
+out=$(timeout -s KILL 20 docker run --rm --name "$emp" \
     -e SMARTME_CLIENT_ID=x -e SMARTME_CLIENT_SECRET=x \
     -e SMARTME_STATE_DIR=/state \
     -v "$TMP/empty:/state" \
     "$IMAGE" 2>&1; echo "EXIT:$?")
+docker rm -f "$emp" >/dev/null 2>&1 || true
 # PRESENCE first. Without this, "it did not exit" would also be true of an image
 # wedged on something else entirely.
 echo "$out" | grep -q 'no configuration yet' \
@@ -118,11 +140,14 @@ device_id = "a1a1a1a1-b2b2-c3c3-d4d4-000000000001"
 serial = "9202685"
 enabled = true
 TOML
-out=$(timeout -s KILL 20 docker run --rm \
+# Named and force-removed, for the reason given at the invalid step above.
+unc="smartme_smoke_unconfirmed_$$"
+out=$(timeout -s KILL 20 docker run --rm --name "$unc" \
     -e SMARTME_CLIENT_ID=x -e SMARTME_CLIENT_SECRET=x \
     -e SMARTME_STATE_DIR=/state \
     -v "$TMP/unconfirmed:/state:ro" \
     "$IMAGE" 2>&1; echo "EXIT:$?")
+docker rm -f "$unc" >/dev/null 2>&1 || true
 echo "$out" | grep -q 'has NOT been confirmed' \
     || { echo "$out"; fail "a valid but unconfirmed mapping must say SO — and not in the same words as an absent configuration, which is a different problem with a different fix"; }
 # Written as an explicit `if`, not `grep -q … && fail`. This is a NEGATIVE

@@ -165,6 +165,107 @@ fn with_no_configuration_the_ui_answers_and_says_so() {
     );
 }
 
+/// [ADR 0026] — **the state that had no screen at all until 2026-08-06.**
+///
+/// A configuration that exists and is refused used to kill the process before the
+/// server was spawned, so the screen that repairs it was behind the refusal. On a
+/// deployment with a restart policy that is a loop, and the commonest way to
+/// reach it is the `chown` everybody forgets.
+///
+/// The assertions are on the FIRST answer the bridge gives, not on a polled one:
+/// `wait_for_ui` returns the earliest response it gets. A helper that retried
+/// until the page said the right thing would hide a bridge that answered
+/// something else first — which is exactly how a "Not configured yet" on the
+/// first request survived five green tests and two full local CI runs.
+///
+/// FALSIFIED 2026-08-06 by restoring the exit — `Decision::Invalid(errors) if
+/// first_turn => return Err(...)` — in `main.rs`. Copied from the run:
+///
+/// ```text
+/// test an_invalid_configuration_still_serves_the_screen_that_repairs_it ... FAILED
+///
+/// thread 'an_invalid_configuration_still_serves_the_screen_that_repairs_it' (251) panicked at
+/// crates/smartme-bridge/tests/the_ui_answers_when_nothing_is_published.rs:230:25:
+/// ADR 0026: a configuration that cannot be used must not take the screen down with
+/// it — the process exited instead of serving
+///
+/// test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out
+/// ```
+///
+/// It dies in 0.10 s rather than hanging, because `wait_for_ui` gives up the
+/// moment the child exits. That is deliberate on its part and worth keeping: the
+/// same mutation against a helper that only polled would have gone quiet.
+///
+/// [ADR 0026]: ../../../docs/adr/0026-a-configuration-it-cannot-use-stops-the-bridge-publishing-not-serving.md
+#[test]
+fn an_invalid_configuration_still_serves_the_screen_that_repairs_it() {
+    let dir = state_dir("misconfigured");
+    let port = port_for(7);
+    // Parses and matches the schema, so `ui_port` is readable and this test does
+    // not have to fall back to the shared default port. Refused by `validate`,
+    // because the Sparkplug identity is empty.
+    std::fs::write(
+        dir.join("config.toml"),
+        format!(
+            "schema_version = {}\n\
+             group_id = \"\"\n\
+             node_id = \"\"\n\
+             broker_host = \"192.0.2.1\"\n\
+             broker_port = 1883\n\
+             publish_period_secs = 30\n\
+             mapping_confirmed = true\n\
+             ui_port = {port}\n\
+             \n\
+             [[meters]]\n\
+             meter_id = \"garage\"\n\
+             device_id = \"a1a1a1a1-b2b2-c3c3-d4d4-000000000001\"\n\
+             serial = \"9202685\"\n\
+             enabled = true\n",
+            smartme_bridge::app::store::SCHEMA_VERSION
+        ),
+    )
+    .expect("write config");
+
+    let mut child = spawn(&dir);
+    let answer = wait_for_ui(port, &mut child);
+    let health = get(port, "/healthz");
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let answer = answer.expect(
+        "ADR 0026: a configuration that cannot be used must not take the screen \
+         down with it — the process exited instead of serving",
+    );
+    assert!(
+        answer.contains("The saved configuration is not usable"),
+        "the page must name this state, and not borrow another's words:\n{answer}"
+    );
+    assert!(
+        !answer.contains("Not configured yet") && !answer.contains("confirm the meter mapping"),
+        "a refused configuration is neither absent nor merely unconfirmed, and an \
+         operator who cannot tell the three apart cannot act:\n{answer}"
+    );
+    assert!(
+        !answer.contains("still running on the configuration it started with"),
+        "this state is reached at STARTUP now, where nothing was ever published — \
+         the old wording described a bridge that was running:\n{answer}"
+    );
+
+    let health = health.expect("/healthz must answer in this state too");
+    assert!(
+        health.contains("200 OK"),
+        "ADR 0026: Epic 7 wires this endpoint to a container restart, and a restart \
+         cannot repair a configuration fault — a 503 here would destroy the screen \
+         that can, every few seconds:\n{health}"
+    );
+    assert!(
+        health.contains("\"intends_to_publish\":false"),
+        "a 200 must not be mistaken for a bridge that is working: the body has to \
+         say nothing is being published:\n{health}"
+    );
+}
+
 /// AC1 — and the unconfirmed state must not describe itself in the same words.
 #[test]
 fn with_an_unconfirmed_mapping_the_ui_answers_differently() {

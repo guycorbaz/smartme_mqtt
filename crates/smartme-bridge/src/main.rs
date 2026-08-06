@@ -202,10 +202,10 @@ async fn lifecycle(state_dir: PathBuf, ui_port: u16) -> Result<(), Box<dyn std::
         // until `run_with_control` handed back its `Control`. The window never
         // opened on a developer machine and opened on every CI run.
         //
-        // `Invalid` deliberately stores nothing: on the first turn the process is
-        // about to refuse to start and the server has not been spawned at all
-        // (Story 6.1 AC1); on a later turn the phase in force is still true, and
-        // overwriting it with a guess would be the same class of lie.
+        // `Invalid` stores `Misconfigured` on EVERY turn since [ADR 0026]. It used
+        // to store nothing on the first one, because the process was about to
+        // exit and no server had been spawned — that exit is gone, so the phase
+        // the server will serve has to be the true one from the outset.
         match &decision {
             Decision::Unconfigured => {
                 phase.store(Arc::new(ui::Phase::silent(ui::Lifecycle::Unconfigured)));
@@ -214,24 +214,28 @@ async fn lifecycle(state_dir: PathBuf, ui_port: u16) -> Result<(), Box<dyn std::
                 phase.store(Arc::new(ui::Phase::silent(ui::Lifecycle::Unconfirmed)));
             }
             Decision::Publish(_) => phase.store(Arc::new(ui::Phase::starting())),
-            // On the FIRST turn nothing is stored and no server is spawned: the
-            // process is about to refuse to start (Story 6.1 AC1).
+            // The phase must move here, and until 2026-08-05 it did not on a later
+            // turn. The comment then claimed "the phase in force is still true" —
+            // false for `Unconfirmed`, whose page says *"The configuration is
+            // valid, but nobody has checked that each meter points at the right
+            // device"* about a file `decide` had just refused. An operator was
+            // told the only thing missing was a click.
             //
-            // On a later turn the phase must move, and until 2026-08-05 it did
-            // not. The comment here claimed "the phase in force is still true" —
-            // which was false for `Unconfirmed`, whose page says *"The
-            // configuration is valid, but nobody has checked that each meter
-            // points at the right device"* about a file `decide` had just
-            // refused. An operator was told the only thing missing was a click.
-            Decision::Invalid(_) if !first_turn => {
+            // Since [ADR 0026] it moves on the first turn too, because the first
+            // turn no longer exits.
+            Decision::Invalid(_) => {
                 phase.store(Arc::new(ui::Phase::silent(ui::Lifecycle::Misconfigured)));
             }
-            Decision::Invalid(_) => {}
         }
 
         // Spawned once, and only now — never awaited: the UI is a diagnostic aid
         // and must not be able to hold the bridge up or bring it down.
-        if !serving && !matches!(decision, Decision::Invalid(_)) {
+        //
+        // **`Invalid` no longer excludes itself here** ([ADR 0026]): the state
+        // where the configuration cannot be used is the state where the screen
+        // that repairs it matters most, and it is reachable on the very first turn
+        // by the deployment step people forget.
+        if !serving {
             tokio::spawn(ui::serve(
                 ui_port,
                 ui::UiState::new(Arc::clone(&phase), state_dir.clone(), Arc::clone(&ready)),
@@ -268,32 +272,42 @@ async fn lifecycle(state_dir: PathBuf, ui_port: u16) -> Result<(), Box<dyn std::
                 phase.store(Arc::new(ui::Phase::silent(ui::Lifecycle::Unconfirmed)));
             }
 
-            // A configuration that exists and is refused.
+            // A configuration that exists and cannot be turned into settings.
             //
-            // **On the FIRST turn this is a refusal to start**, and the UI is not
-            // served — decided in Story 6.1 AC1, not left to be discovered. The
-            // refusal is FR26's whole point; the faults reach `docker compose
-            // logs` and stderr without a browser; and a bridge that stayed up on
-            // a configuration it had REJECTED is one restart away from somebody
-            // believing it is running.
+            // **The process stays up and publishes nothing** ([ADR 0026]). It used
+            // to exit here on the first turn, and only on the first turn — Story
+            // 6.1 AC1, decided deliberately on 2026-08-04 and obsolete since 6.2
+            // shipped the screens.
             //
-            // **On a later turn it is not**, and the asymmetry is deliberate.
-            // Later turns happen because an operator is in the browser right now;
-            // killing the process would destroy the screen that is the repair
-            // tool, over a file the bridge itself had just been asked about. The
-            // startup rule is untouched — this only declines to extend it to a
-            // situation it was never written for. The faults are logged and the
-            // screen re-reads and shows them.
-            Decision::Invalid(errors) if first_turn => {
-                tracing::error!("{errors}");
-                eprintln!("{errors}");
-                return Err(errors.to_string().into());
-            }
+            // The argument for exiting was that a bridge staying up on a
+            // configuration it had REJECTED is one restart from somebody believing
+            // it runs. That was a real hazard exactly as long as no surface could
+            // say otherwise. `Lifecycle::Misconfigured` is that surface, and it
+            // says *"The saved configuration is not usable"* on the page and in
+            // `/healthz`.
+            //
+            // The argument against exiting was already written 20 lines below, for
+            // later turns only: *killing the process would destroy the screen that
+            // is the repair tool*. Nothing in that sentence depends on which turn
+            // it is — and the first turn is the one where the screen is needed
+            // most, because a `/data` nobody chowned never reaches a second.
+            //
+            // FR26 is honoured, and amended: it names its harm as "rather than
+            // start partially", and nothing is published here.
+            //
+            // [ADR 0026]: ../../docs/adr/0026-a-configuration-it-cannot-use-stops-the-bridge-publishing-not-serving.md
             Decision::Invalid(errors) => {
                 tracing::error!(
-                    "the saved configuration is not usable, so the phase is unchanged \
-                     and nothing new is published: {errors}"
+                    "the saved configuration is not usable, so NOTHING is published — \
+                     no connection, no birth. The bridge stays up and serves the web \
+                     UI so it can be repaired there: {errors}"
                 );
+                // Once, on stderr, for the operator reading `docker compose logs`
+                // after a container that would previously have exited. Repeating it
+                // on every nudge would bury the screen's own report.
+                if first_turn {
+                    eprintln!("{errors}");
+                }
             }
 
             // Valid and confirmed. This arm does not return to the top of the
@@ -358,8 +372,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //
     // `exists` separates two states that must not be merged. Absent is a first
     // run — the bridge comes up and serves the UI. Present-but-unreadable is a
-    // refusal to start. Merged, this either bricks the first run or treats a
-    // corrupt file as a fresh install and overwrites it.
+    // refusal to PUBLISH ([ADR 0026]): it also comes up and serves the UI, but it
+    // says the configuration cannot be used and puts nothing on the wire. Merged,
+    // this either treats a corrupt file as a fresh install and overwrites it, or
+    // reports a configured bridge as a first run.
     let state_dir = PathBuf::from(
         std::env::var("SMARTME_STATE_DIR").unwrap_or_else(|_| DEFAULT_STATE_DIR.to_string()),
     );

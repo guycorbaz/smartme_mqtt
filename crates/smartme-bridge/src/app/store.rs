@@ -172,7 +172,8 @@ fn fault(field: &str, problem: String) -> Fault {
 ///
 /// **This is the seam between two states that must not be merged.** Absent means
 /// a first run: the bridge comes up, serves the UI, and puts nothing on the wire.
-/// Present-but-invalid means a refusal to start (Story 5.1). Collapsing them
+/// Present-but-invalid means a refusal to publish (Story 5.1, amended by
+/// ADR 0026 — the process stays up and serves the repair screen). Collapsing them
 /// either bricks the first run or lets a corrupt file be mistaken for a fresh
 /// install and silently overwritten.
 pub fn exists(dir: &Path) -> bool {
@@ -215,12 +216,38 @@ pub fn read(dir: &Path) -> Result<StoredConfig, ConfigErrors> {
 
     let config: Option<StoredConfig> = match persist::load(&config_path(dir)) {
         Ok(config) => Some(config),
+        // THE TWO FAILURES HAVE DIFFERENT REPAIRS, and only one of them is in the
+        // browser ([ADR 0026]). Telling an operator to correct a field, when what
+        // is wrong is that the process cannot read the directory at all, sends
+        // them to a form that can never succeed.
+        //
+        // `InvalidData` is the content: `persist::load` wraps every TOML error in
+        // it, and `read_to_string` uses it for bytes that are not UTF-8. Both are
+        // repairable by writing the file again, which the form does. Anything else
+        // — permissions above all — is the filesystem, and the repair is on the
+        // host.
+        Err(error) if error.kind() != std::io::ErrorKind::InvalidData => {
+            faults.push(fault(
+                "stored configuration",
+                format!(
+                    "{} could not be read at all: {error}. This is almost always the \
+                     state directory's ownership — it must belong to the uid the \
+                     container runs as (10002), so the fix is `chown -R 10002:10002` \
+                     on the directory mounted at {}, on the host. Nothing here can \
+                     repair it, because nothing here can write there either",
+                    config_path(dir).display(),
+                    dir.display()
+                ),
+            ));
+            None
+        }
         Err(error) => {
             faults.push(fault(
                 "stored configuration",
                 format!(
-                    "{} could not be read: {error}. Refusing to start beats starting on \
-                     defaults nobody chose",
+                    "{} could not be read: {error}. Refusing to publish beats publishing \
+                     on defaults nobody chose — correct it in the form below and save, \
+                     which replaces the file wholesale",
                     config_path(dir).display()
                 ),
             ));
@@ -389,13 +416,113 @@ impl From<&BridgeConfig> for StoredConfig {
 /// this compares the whole list, because it answers "is this the mapping a human
 /// looked at". Editing a disabled meter's serial changes nothing on the wire and
 /// still deserves a fresh look.
-fn same_mapping(a: &[StoredMeter], b: &[StoredMeter]) -> bool {
+///
+/// # The node identity is part of the mapping
+///
+/// **It compared meters alone until 2026-08-06**, while `ui::screens`'
+/// `mapping_fingerprint` — the value that binds the operator's click to what the
+/// screen showed them — had always included `group_id` and `node_id`. Two rules
+/// for one question, disagreeing.
+///
+/// The gap was reachable through the path the manual recommends: confirm the
+/// mapping, then correct the node id. `save` carried the confirmation over,
+/// `classify` called it a new session, the screen honestly said "waiting for a
+/// restart", and the bridge came back publishing into a namespace no human had
+/// ever seen — which is precisely the harm FR25 exists to prevent, *"the only
+/// guard against a mis-map the machine cannot detect"*.
+///
+/// Every identifier here appears in every topic the bridge publishes. Changing
+/// one changes where every device lands, so it is exactly as much a mapping
+/// change as swapping a serial.
+/// Visible to the crate for ONE reason: `ui::screens` derives the fingerprint that
+/// binds the operator's click, and the two must answer the same question. They
+/// disagreed for a month because nothing could compare them. See
+/// `ui::screens::tests::the_withdrawal_rule_and_the_fingerprint_answer_the_same_question`.
+pub(crate) fn same_mapping(a: &StoredConfig, b: &StoredConfig) -> bool {
+    if a.group_id != b.group_id || a.node_id != b.node_id {
+        return false;
+    }
+    let (a, b) = (&a.meters, &b.meters);
     if a.len() != b.len() {
         return false;
     }
     // Multiset equality by counting, which needs no `Ord` on `StoredMeter`.
     a.iter()
         .all(|m| a.iter().filter(|x| *x == m).count() == b.iter().filter(|x| *x == m).count())
+}
+
+/// What a caller stands to destroy by overwriting the stored configuration.
+///
+/// **The distinction this carries is the whole point.** "Cannot be read" is not
+/// one state but two, and refusing both locked the operator out of the screen
+/// that exists to repair the first:
+///
+/// - a file this build has fully diagnosed as broken — bad TOML, a field it does
+///   not know, a version older than its own — is exactly what the `Misconfigured`
+///   screen renders, fault by fault, into a form. An explicit submission from
+///   that form **is** the repair, and refusing it leaves no way out that does not
+///   involve a shell on the volume;
+/// - a file whose contents this build cannot account for — unreadable bytes, or a
+///   schema *newer* than its own — is somebody else's. Overwriting it drops
+///   settings this build cannot even represent.
+#[derive(Debug, PartialEq, Eq)]
+enum Overwrite {
+    /// Nothing is there, or what is there is broken in a way this build
+    /// understands and a form can replace.
+    IsTheRepair,
+    /// Refuse, and say what is being protected.
+    WouldDestroy(String),
+}
+
+/// Decide which of the two [`Overwrite`] cases a directory is in.
+///
+/// Note this deliberately does **not** consult [`read`]. `read` collapses every
+/// failure into one `Err`, and the collapse is what caused the lock-out: a
+/// syntax error and a file from a future image were treated identically.
+fn overwrite(dir: &Path) -> Overwrite {
+    let path = config_path(dir);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        // Absent is not a state to protect: there is nothing to destroy.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Overwrite::IsTheRepair;
+        }
+        Err(error) => {
+            return Overwrite::WouldDestroy(format!(
+                "{} could not be read at all ({error}), so there is no telling what \
+                 overwriting it would throw away. This is usually the state directory's \
+                 ownership — it must belong to the uid the container runs as",
+                path.display()
+            ));
+        }
+    };
+
+    // Only the version is probed, and **leniently on purpose**: a file written by
+    // a newer image carries fields `StoredConfig`'s `deny_unknown_fields` rejects,
+    // so parsing it as a `StoredConfig` would fail and hide the very thing that has
+    // to be detected. A struct with one field and no `deny_unknown_fields` reads the
+    // version out of a document whose remainder this build knows nothing about.
+    #[derive(Deserialize)]
+    struct Probe {
+        schema_version: u32,
+    }
+
+    match toml::from_str::<Probe>(&text) {
+        Ok(Probe { schema_version }) if schema_version > SCHEMA_VERSION => {
+            Overwrite::WouldDestroy(format!(
+                "{} was written by schema version {schema_version} and this build writes \
+                 {SCHEMA_VERSION}, so it comes from a NEWER image. It was NOT overwritten: \
+                 doing so would silently drop settings this build cannot represent. Roll \
+                 the image forward again, or move the file aside deliberately",
+                path.display()
+            ))
+        }
+        // Everything else — an older version, an unknown field, unparseable TOML, no
+        // version at all — is a file this build can say is wrong. A document too
+        // damaged to yield even a version number carries no evidence that a newer
+        // image owns it, and the operator submitting the form has seen the fault.
+        _ => Overwrite::IsTheRepair,
+    }
 }
 
 /// Write the configuration atomically — temp file, `fsync`, `rename`,
@@ -422,29 +549,26 @@ pub fn save(dir: &Path, config: &StoredConfig) -> std::io::Result<()> {
     // kind this repository keeps paying for.
     to_write.schema_version = SCHEMA_VERSION;
     to_write.mapping_confirmed = match read(dir) {
-        Ok(stored) if same_mapping(&stored.meters, &config.meters) => stored.mapping_confirmed,
+        Ok(stored) if same_mapping(&stored, config) => stored.mapping_confirmed,
         // Unreadable, absent, or a different mapping — all three mean nobody has
         // confirmed what is about to be written.
         _ => false,
     };
 
-    // A file that is THERE and cannot be READ is not overwritten.
+    // A file whose contents this build cannot account for is not overwritten.
     //
-    // `save` consulted `read` and, on any error, cleared the confirmation and
-    // wrote anyway — performing the very overwrite this module's own
-    // documentation says must never happen ("lets a corrupt file be mistaken for
-    // a fresh install and silently overwritten"). Only `phase::decide` upheld the
-    // rule; the writer did not.
-    if exists(dir) && read(dir).is_err() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "{} exists and cannot be read, so it was NOT overwritten. \
-                 Fix or remove it; refusing beats destroying a configuration \
-                 that may only be unreadable by this build",
-                config_path(dir).display()
-            ),
-        ));
+    // `save` once consulted `read` and, on any error, cleared the confirmation and
+    // wrote anyway — performing the very overwrite this module's own documentation
+    // says must never happen ("lets a corrupt file be mistaken for a fresh install
+    // and silently overwritten"). Only `phase::decide` upheld the rule; the writer
+    // did not.
+    //
+    // The first repair of that went too far the other way: it refused on ANY `read`
+    // error, and a syntax error is a `read` error — so the operator corrected the
+    // form the `Misconfigured` screen had rendered for them, pressed Save, and was
+    // told nothing had changed, for ever. See [`Overwrite`] for the line now drawn.
+    if let Overwrite::WouldDestroy(why) = overwrite(dir) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, why));
     }
     persist::persist_atomic(&config_path(dir), &to_write)
 }
@@ -593,6 +717,176 @@ mod tests {
     ///
     /// Both structs are covered, deliberately: the second half of the test puts
     /// one inside a meter as well.
+    /// FR25 reached through the path the manual recommends: confirm, then correct
+    /// the node id, then restart.
+    ///
+    /// Both identifiers are exercised, and separately — a rule that caught
+    /// `group_id` and missed `node_id` would pass a test that only tried one.
+    ///
+    /// FALSIFIED 2026-08-06 by restoring the meters-only comparison
+    /// (`same_mapping(&stored.meters, &config.meters)` over the old signature).
+    /// Copied from the run:
+    ///
+    /// ```text
+    /// test app::store::tests::changing_the_node_identity_withdraws_the_confirmation ... FAILED
+    ///
+    /// thread '…changing_the_node_identity_withdraws_the_confirmation' (353) panicked at
+    /// crates/smartme-bridge/src/app/store.rs:730:13:
+    /// node_id is in every topic the bridge publishes, so changing it changes where every
+    /// device lands: the confirmation must not survive it
+    ///
+    /// test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 164 filtered out
+    /// ```
+    ///
+    /// It dies on the `node_id` iteration, which is the first — so the `group_id`
+    /// half is proved by the same mutation only in that it shares the rule, not by
+    /// having been reached. Both are asserted; only one is falsified.
+    #[test]
+    fn changing_the_node_identity_withdraws_the_confirmation() {
+        for (label, mutate) in [
+            (
+                "node_id",
+                (|c: &mut StoredConfig| c.node_id = "Bridge02".into()) as fn(&mut StoredConfig),
+            ),
+            ("group_id", |c: &mut StoredConfig| {
+                c.group_id = "OtherPlant".into()
+            }),
+        ] {
+            let dir = dir(&format!("identity_{label}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            let confirmed = sound();
+            assert!(
+                confirmed.mapping_confirmed,
+                "the premise: the stored file must be confirmed, or this proves nothing"
+            );
+            save(&dir, &confirmed).expect("the first write");
+            confirm(&dir).expect("confirm");
+
+            let mut edited = sound();
+            mutate(&mut edited);
+            save(&dir, &edited).expect("the edit");
+
+            let back = read(&dir).expect("read back");
+            assert!(
+                !back.mapping_confirmed,
+                "{label} is in every topic the bridge publishes, so changing it changes \
+                 where every device lands: the confirmation must not survive it"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// The lock-out the second review round found: the screen that exists to
+    /// repair a broken file could not write the repair.
+    ///
+    /// The assertion ends at `read`, not at `save`'s `Ok`. A `save` that returned
+    /// `Ok(())` and wrote nothing — or wrote an empty document — would satisfy
+    /// "the repair was accepted" while leaving the operator exactly as stuck, so
+    /// the test demands the corrected settings back out of the file.
+    ///
+    /// FALSIFIED 2026-08-06 by restoring the guard this replaces
+    /// (`if exists(dir) && read(dir).is_err()`). Copied from the run, and note it
+    /// dies on the `save` under repair — not on the premise above it:
+    ///
+    /// ```text
+    /// test app::store::tests::a_syntactically_broken_file_can_be_repaired_through_save ... FAILED
+    ///
+    /// thread '…a_syntactically_broken_file_can_be_repaired_through_save' (353) panicked at
+    /// crates/smartme-bridge/src/app/store.rs:706:13:
+    /// the Misconfigured screen renders this file into a form; the form must be able to write
+    /// it back: Custom { kind: InvalidData, error: "/tmp/…/smartme_store_352_repairable/config.toml
+    /// exists and cannot be read, so it was NOT overwritten. Fix or remove it; refusing beats
+    /// destroying a configuration that may only be unreadable by this build" }
+    ///
+    /// test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 163 filtered out
+    /// ```
+    #[test]
+    fn a_syntactically_broken_file_can_be_repaired_through_save() {
+        let dir = dir("repairable");
+        std::fs::create_dir_all(&dir).expect("dir");
+        // Unterminated string: `read` fails, and this is precisely the shape a
+        // hand-edited file takes when FR23's headless bring-up goes wrong.
+        std::fs::write(config_path(&dir), "schema_version = 4\ngroup_id = \"Grou\n")
+            .expect("write");
+        read(&dir).expect_err("the premise: this file must be unreadable, or the test is vacuous");
+
+        let repaired = StoredConfig {
+            group_id: "Repaired".into(),
+            ..sound()
+        };
+        save(&dir, &repaired).unwrap_or_else(|e| {
+            panic!(
+                "the Misconfigured screen renders this file into a form; the form must \
+                 be able to write it back: {e:?}"
+            )
+        });
+
+        let back = read(&dir).expect("the repaired file must now read");
+        assert_eq!(back.group_id, "Repaired");
+        assert_eq!(back.broker_host, "broker");
+        assert_eq!(
+            back.schema_version, SCHEMA_VERSION,
+            "the repair must carry this build's version, not the broken file's"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The half that must keep refusing, and the reason the guard existed at all:
+    /// a file from a NEWER image holds fields this build cannot represent, so
+    /// writing over it destroys settings rather than repairing them.
+    ///
+    /// The assertion names the version, not merely "an error". `save` has three
+    /// other ways to fail (`create_dir_all`, the serializer, `persist_atomic`),
+    /// and `is_err()` would be satisfied by any of them.
+    ///
+    /// FALSIFIED 2026-08-06 by weakening the comparison in [`overwrite`] to
+    /// `schema_version == 0`, so the newer file is treated as repairable. Copied
+    /// from the run — it dies on the `expect_err`, which is the line under repair:
+    ///
+    /// ```text
+    /// test app::store::tests::a_file_from_a_newer_image_is_still_not_overwritten ... FAILED
+    ///
+    /// thread '…a_file_from_a_newer_image_is_still_not_overwritten' (353) panicked at
+    /// crates/smartme-bridge/src/app/store.rs:743:42:
+    /// a newer image's file must be protected, and the refusal must name the version: ()
+    ///
+    /// test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 163 filtered out
+    /// ```
+    ///
+    /// (`()` and not `Ok(())`: `expect_err` prints the `Ok` value, and `save`
+    /// returns `io::Result<()>`. The first draft of this record said `Ok(())`,
+    /// which is how a record that is written rather than copied reads.)
+    #[test]
+    fn a_file_from_a_newer_image_is_still_not_overwritten() {
+        let dir = dir("from_the_future");
+        std::fs::create_dir_all(&dir).expect("dir");
+        // Valid TOML, a version beyond this build, and a field it has never heard
+        // of — which is why the probe must not use `deny_unknown_fields`.
+        let future = format!(
+            "schema_version = {}\ngroup_id = \"G\"\nnode_id = \"N\"\nbroker_host = \"b\"\n\
+             broker_port = 1883\npublish_period_secs = 30\nsomething_new = \"kept\"\nmeters = []\n",
+            SCHEMA_VERSION + 1
+        );
+        std::fs::write(config_path(&dir), &future).expect("write");
+
+        let error = save(&dir, &sound()).expect_err(
+            "a newer image's file must be protected, and the refusal must name the version",
+        );
+        let said = error.to_string();
+        assert!(
+            said.contains(&format!("schema version {}", SCHEMA_VERSION + 1)),
+            "the refusal must name the version that owns the file, so the operator \
+             knows to roll the image forward rather than delete it; got: {said}"
+        );
+
+        let on_disk = std::fs::read_to_string(config_path(&dir)).expect("read back");
+        assert_eq!(
+            on_disk, future,
+            "refusing is only half of it — the file must be byte-for-byte untouched"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn an_unknown_field_is_refused_rather_than_ignored() {
         let root_dir = dir("unknown");

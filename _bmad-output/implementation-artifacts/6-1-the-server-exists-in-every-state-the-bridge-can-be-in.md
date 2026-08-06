@@ -47,6 +47,18 @@ a server that only runs alongside a healthy session would be useless in all thre
 > **DECIDED 2026-08-04: (a), keep refusing.** Written into `main.rs` beside the refusal, and into
 > the manual. The reasoning below is what was weighed.
 >
+> **SUPERSEDED 2026-08-06 by [ADR 0026](../../docs/adr/0026-a-configuration-it-cannot-use-stops-the-bridge-publishing-not-serving.md)
+> ([#57](https://github.com/guycorbaz/smartme_mqtt/issues/57)): (b), serve the screen.** The
+> decision was sound when taken and its strongest reason expired. *"Somebody may believe it is
+> running"* was a hazard exactly as long as no surface could say otherwise — story 6.2 built that
+> surface, and the correction round of 2026-08-05 built `Lifecycle::Misconfigured`, whose headline
+> is *"The saved configuration is not usable"* and which already answers `/healthz` with 200 so
+> Epic 7 cannot restart-loop it away. The objection that (b) *"needs the server to start before the
+> configuration is read"* turned out not to bite either: the port is read from the file when there
+> is one and defaults when there is not, which this story itself established. What decided it in
+> the end is that the commonest first-run mistake — a state directory nobody `chown`ed — reached
+> this arm on the **first** turn, and so was a restart loop with no browser path out.
+>
 > **Recommendation: (a), keep refusing.** The refusal is Story 5.1's whole point and FR26's, the
 > faults are already legible without a browser, and a bridge that stays up on a configuration it has
 > rejected is one restart away from somebody believing it is running. (b) also needs the server to

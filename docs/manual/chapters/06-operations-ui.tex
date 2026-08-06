@@ -14,18 +14,36 @@ is deliberate rather than convenient: since \code{config.toml} became the config
 browser is the only way in, so a server that only ran alongside a healthy session would be
 absent from exactly the situations it exists for.
 
-\begin{warning}
-\textbf{There is one state with no web interface at all: a \code{config.toml} that is present
-and invalid \emph{at startup}.} The bridge refuses to start, and refusing means no screen ---
-so the repair is to fix the file on the host, not in a browser. The faults are printed on
+\begin{note}
+\textbf{There is no state without a web interface.} A \code{config.toml} that is present and
+unusable --- malformed, carrying a key this build does not know, from another schema version,
+or unreadable altogether --- does \emph{not} stop the bridge. It comes up, opens no connection
+to the broker, emits no birth, publishes nothing, and serves the configuration screen with
+every fault rendered against the field it belongs to. \code{/healthz} answers \code{200}, so a
+container healthcheck cannot restart away the screen you need.
+
+\textbf{Until 2026-08-06 it refused to start}, and refusing meant no screen --- which made the
+commonest first-run mistake, a state directory nobody \code{chown}ed, a restart loop with no
+way out that did not involve a shell on the volume. The faults are still printed on
 \code{stderr} and in \code{docker compose logs}, each naming the key to edit.
 
-This matters most after an image update that changes \code{schema\_version}: the previous
-version's file is refused, and under a restart policy the container will loop. If instead the
-file becomes unusable \emph{while the bridge is already running}, it stays up and says so ---
-the screens remain available, because an operator is at the keyboard and the screen is the
-repair tool.
-\end{warning}
+The distinction that matters is \emph{where the repair is}. A file the bridge could read and
+rejected is repaired in the form: correct the fields, press \emph{Save}, and the unusable file
+is replaced wholesale. A file it could not read \emph{at all} is a filesystem problem --- the
+fault says so, and names the \code{chown} --- and no amount of typing in the browser will fix
+it, because the bridge cannot write there either.
+
+Correcting the fields and pressing \emph{Save} overwrites the unusable file: a
+file this build can diagnose as broken --- malformed TOML, a key it does not know, a
+\code{schema\_version} older than its own --- is exactly what the form was rendered from, and
+writing it back is the repair.
+
+\textbf{One file is still not overwritten, and deliberately:} one carrying a
+\code{schema\_version} \emph{newer} than this build's, which is to say one written by a later
+image. It holds settings this build cannot represent, so replacing it would discard them
+silently. The refusal names the version, and the answer is to roll the image forward again
+rather than to delete the file.
+\end{note}
 
 \begin{center}
 \begin{tabular}{@{}lll@{}}
@@ -101,9 +119,10 @@ rather than echoing back what you typed --- so it never reports a change the bri
 make.
 
 \begin{warning}
-\textbf{Withdrawing a confirmation still costs a restart.} Editing the mapping clears
-\code{mapping\_confirmed} --- correctly, since it is a different mapping and nobody has
-looked at it --- but a bridge that is already publishing keeps its session until it is
+\textbf{Withdrawing a confirmation still costs a restart.} Editing the mapping --- the meters,
+or \code{group\_id} or \code{node\_id}, which are in every topic --- clears
+\code{mapping\_confirmed}, correctly, since it is a different mapping and nobody has
+looked at it. But a bridge that is already publishing keeps its session until it is
 restarted. Confirming moves you forward without a restart; going back does not.
 \end{warning}
 
