@@ -177,6 +177,22 @@ A cold-start device BIRTH declares the tag set with \textbf{no value} and qualit
 report, and declaring a placeholder zero would be indistinguishable from a meter reading
 zero.
 
+\subsection{A meter that stops answering says so}
+
+When a poll fails --- the cloud is silent, the credentials are refused, the deadline elapses
+--- the bridge republishes that meter's \textbf{last known value} carrying the new quality,
+stamped with that value's own \code{ValueDate}. It does \emph{not} fall silent.
+
+The reason is that silence on a Sparkplug wire is not a statement. It is indistinguishable
+from ``nothing has changed'', so a host goes on displaying the last value it received, at the
+quality it received it with. A meter that had published \textsc{good} and then stopped would
+have been shown as good indefinitely --- which is precisely the failure this bridge exists to
+prevent. It behaved that way until 2026-08-07.
+
+A meter that has \emph{never} answered is a different case and gets nothing: its device BIRTH
+already declared it valueless and \textsc{stale}, which is the truth, and inventing a reading
+to carry a quality would be the same lie facing the other way.
+
 \subsection{A rebirth never promotes a value}
 
 The bridge re-declares its tags on a reconnect, and also whenever a host requests a rebirth

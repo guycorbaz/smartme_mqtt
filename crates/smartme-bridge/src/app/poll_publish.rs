@@ -183,6 +183,7 @@ pub async fn step_once<S: Source + Send>(
     ctx: &Context<'_>,
     source: &mut S,
     previous: State,
+    last: &mut Option<crate::domain::Measurement>,
 ) -> State {
     let Context {
         meter,
@@ -205,19 +206,53 @@ pub async fn step_once<S: Source + Send>(
 
     let (next, published) = policy.step(previous, &tick, clock.wall());
 
-    if let Ok(reading) = tick {
-        let update = MeterUpdate::new((*meter).clone(), reading.value, published);
-        if outbox.send(update).await.is_err() {
-            tracing::warn!(
-                meter = %meter,
-                "mqtt task is gone; dropping the judged reading"
+    // EVERY TICK PUBLISHES A VERDICT, or there is nothing to publish one about
+    // (Story 3.2, [ADR 0027] §3).
+    //
+    // Until 2026-08-07 this sent an update only when the fetch SUCCEEDED, and
+    // traced the verdict otherwise — with a comment promising that "the mqtt task
+    // republishes the last known value with this quality", which no code did. So
+    // a meter that had published `Good` and then went silent left the host
+    // displaying that value, at that quality, indefinitely: silence on a Sparkplug
+    // wire is indistinguishable from "nothing has changed".
+    //
+    // The republish carries the LAST KNOWN measurement, untouched, with the new
+    // verdict — never a synthesised value, and never `now` as its timestamp.
+    // `publish()` stamps `value_date`, so the wire says when the reading was TRUE,
+    // and the quality says it is no longer proven. The same reasoning as the
+    // rebirth re-declaration path, which had it right first.
+    //
+    // A meter that has NEVER answered has no last measurement, and gets nothing:
+    // its DBIRTH already declared it valueless and non-good, which is the truth.
+    // Reaching for something to send here would be the defect this fixes, wearing
+    // the other face.
+    //
+    // [ADR 0027]: ../../../docs/adr/0027-a-failed-source-is-a-fault-the-screen-must-name.md
+    let to_publish = match &tick {
+        Ok(reading) => {
+            *last = Some(reading.value.clone());
+            Some(reading.value.clone())
+        }
+        Err(_) => last.clone(),
+    };
+
+    match to_publish {
+        Some(measurement) => {
+            let update = MeterUpdate::new((*meter).clone(), measurement, published);
+            if outbox.send(update).await.is_err() {
+                tracing::warn!(
+                    meter = %meter,
+                    "mqtt task is gone; dropping the judged reading"
+                );
+            }
+        }
+        None => {
+            tracing::info!(
+                meter = %meter, ?next, ?published,
+                "no reading this tick and none ever, so there is no value to \
+                 re-publish; the device birth already declared it valueless"
             );
         }
-    } else {
-        // No reading to carry, but the verdict still matters: the mqtt task
-        // republishes the last known value with this quality (Epic 2 wires the
-        // republish; here the verdict is traced so a wedge is never silent).
-        tracing::info!(meter = %meter, ?next, ?published, "no reading this tick");
     }
     next
 }
@@ -232,6 +267,9 @@ pub async fn run<S: Source + Send>(
     outbox: mpsc::Sender<MeterUpdate>,
 ) {
     let mut state = State::initial();
+    // The last measurement this meter produced, carried so a failed tick can
+    // publish a verdict about it rather than say nothing (Story 3.2).
+    let mut last: Option<crate::domain::Measurement> = None;
     // The period is READ FROM THE HANDLE, not captured (Story 5.2 AC4).
     //
     // `tokio::time::interval` fixes its period at construction, so a hot change
@@ -271,7 +309,7 @@ pub async fn run<S: Source + Send>(
             heartbeat: &heartbeat,
             outbox: &outbox,
         };
-        state = step_once(&ctx, &mut source, state).await;
+        state = step_once(&ctx, &mut source, state, &mut last).await;
     }
 }
 
@@ -310,6 +348,129 @@ mod tests {
         }
     }
 
+    /// **Story 3.2 AC1 and AC2** — a meter that answered and then stopped must be
+    /// published stale, not withheld.
+    ///
+    /// The lie this closes: its last DDATA said `Good`, then nothing followed, and
+    /// silence on a Sparkplug wire is indistinguishable from *"nothing has
+    /// changed"* — so the host went on showing that value at that quality
+    /// indefinitely. Until 2026-08-07 the task sent an update only when the fetch
+    /// SUCCEEDED, under a comment promising a republish no code performed.
+    ///
+    /// **The premise is checked, not assumed.** The first tick must actually reach
+    /// the wire as `Good`, or the second assertion would be about a stream that
+    /// never flowed — the shape that made three of story 3.1's attempts worthless.
+    ///
+    /// AC2 is asserted as the QUALITY and the VALUE, not as "a message appeared":
+    /// a republish that emitted `Good`, or a synthesised zero, would satisfy a
+    /// count.
+    ///
+    /// FALSIFIED 2026-08-07 by restoring the `if let Ok(reading)` guard, so a
+    /// failed tick publishes nothing. Copied from the run:
+    ///
+    /// ```text
+    /// test app::poll_publish::tests::a_meter_that_goes_silent_is_republished_stale ... FAILED
+    ///
+    /// thread '…a_meter_that_goes_silent_is_republished_stale' (57) panicked at
+    /// crates/smartme-bridge/src/app/poll_publish.rs:413:9:
+    /// assertion `left == right` failed: a meter that stops answering must be published
+    /// stale, not withheld: the host otherwise keeps showing its last Good value for ever
+    ///   left: 1
+    ///  right: 2
+    /// ```
+    ///
+    /// `left: 1` is the premise reading alone — so the mutation removed exactly the
+    /// republish and nothing else.
+    #[tokio::test]
+    async fn a_meter_that_goes_silent_is_republished_stale() {
+        let clock = FakeClock::new(UtcMillis(SANE_NOW));
+        let heartbeat = LastLoopTick::new();
+        let (tx, mut rx) = mpsc::channel(8);
+        let meter = MeterId::new("garage");
+        let mut source = FakeSource::new()
+            .then(Ok(reading(Quality::Good, 950)))
+            .then(Err(SourceError::Timeout));
+        let ctx = Context {
+            meter: &meter,
+            clock: &clock,
+            policy: policy(),
+            config: config(),
+            heartbeat: &heartbeat,
+            outbox: &tx,
+        };
+
+        let mut last = None;
+        let good = step_once(&ctx, &mut source, State::initial(), &mut last).await;
+        assert_eq!(
+            good,
+            State::Fresh,
+            "the premise: the meter must first be proven fresh"
+        );
+
+        let after = step_once(&ctx, &mut source, good, &mut last).await;
+        assert_eq!(after, State::Stale);
+        drop(tx);
+
+        let mut got = Vec::new();
+        while let Some(u) = rx.recv().await {
+            got.push(u);
+        }
+        assert_eq!(
+            got.len(),
+            2,
+            "a meter that stops answering must be published stale, not withheld: the \
+             host otherwise keeps showing its last Good value for ever"
+        );
+        assert_eq!(
+            got[0].published,
+            Quality::Good,
+            "the premise reached the wire"
+        );
+        assert_eq!(
+            got[1].published,
+            Quality::Stale,
+            "the republish carries the ORACLE's new verdict; re-asserting Good would \
+             be the same lie with more messages"
+        );
+        assert_eq!(
+            got[1].measurement, got[0].measurement,
+            "the value and its ValueDate are the last KNOWN ones, untouched — not a \
+             synthesised zero, and not stamped `now`, which would turn an outage \
+             into a fresh-looking reading"
+        );
+    }
+
+    /// **Story 3.2 AC4** — a meter that has never answered is given nothing.
+    ///
+    /// Guy's fourth meter is unplugged, permanently. Its DBIRTH already declares it
+    /// valueless and non-good, which is true; the risk this test guards is a
+    /// republish path that reaches for *something* to send.
+    ///
+    /// FALSIFIED 2026-08-07 by making the `None` arm forward a default
+    /// `Measurement`. Copied from the run:
+    ///
+    /// ```text
+    /// test app::poll_publish::tests::a_meter_that_never_answered_is_given_no_value ... FAILED
+    ///
+    /// thread '…a_meter_that_never_answered_is_given_no_value' (57) panicked at
+    /// crates/smartme-bridge/src/app/poll_publish.rs:470:9:
+    /// assertion `left == right` failed: a meter with no reading has no value to
+    /// re-publish; inventing one is the defect this story fixes wearing its other face
+    ///   left: 1
+    ///  right: 0
+    /// ```
+    #[tokio::test]
+    async fn a_meter_that_never_answered_is_given_no_value() {
+        let (state, got) = drive(FakeSource::new().then(Err(SourceError::Timeout))).await;
+        assert_eq!(state, State::Stale);
+        assert_eq!(
+            got.len(),
+            0,
+            "a meter with no reading has no value to re-publish; inventing one is \
+             the defect this story fixes wearing its other face"
+        );
+    }
+
     async fn drive(source: FakeSource) -> (State, Vec<MeterUpdate>) {
         let clock = FakeClock::new(UtcMillis(SANE_NOW));
         let heartbeat = LastLoopTick::new();
@@ -324,7 +485,7 @@ mod tests {
             heartbeat: &heartbeat,
             outbox: &tx,
         };
-        let state = step_once(&ctx, &mut source, State::initial()).await;
+        let state = step_once(&ctx, &mut source, State::initial(), &mut None).await;
         drop(tx);
         let mut got = Vec::new();
         while let Some(u) = rx.recv().await {
@@ -407,7 +568,7 @@ mod tests {
             heartbeat: &heartbeat,
             outbox: &tx,
         };
-        let _ = step_once(&ctx, &mut source, State::initial()).await;
+        let _ = step_once(&ctx, &mut source, State::initial(), &mut None).await;
         assert_eq!(
             heartbeat.last(),
             Some(MonotonicMs(7_000)),
@@ -444,7 +605,7 @@ mod tests {
     /// test app::poll_publish::tests::a_hanging_meter_does_not_cost_the_others_their_cadence ... FAILED
     ///
     /// thread '…a_hanging_meter_does_not_cost_the_others_their_cadence' (355) panicked at
-    /// crates/smartme-bridge/src/app/poll_publish.rs:558:9:
+    /// crates/smartme-bridge/src/app/poll_publish.rs:614:9:
     /// assertion `left == right` failed: a meter that never answers must not cost another
     /// meter its cadence: three periods must produce three readings each
     ///   left: [2, 2, 2]
@@ -452,6 +613,10 @@ mod tests {
     ///
     /// test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 168 filtered out
     /// ```
+    ///
+    /// **Re-run 2026-08-07** after story 3.2 shortened the window to exactly three
+    /// ticks: a failed tick now republishes, so the fourth tick at 15 s made the
+    /// count 4 and the old window stopped measuring what it named.
     ///
     /// Two rounds were needed, and the first is the instructive one: the mutation
     /// compiled and the test stayed GREEN, because the pacing made a serialised
@@ -541,9 +706,13 @@ mod tests {
         }
         drop(tx);
 
-        // Three periods of 5 s, with a little slack for the final tick to be
-        // forwarded. Virtual time, so this costs nothing and cannot flake on load.
-        tokio::time::sleep(Duration::from_millis(15_500)).await;
+        // EXACTLY three ticks: `interval` fires immediately, so 0 s, 5 s and 10 s,
+        // and the window stops before the fourth at 15 s. It used to run to 15.5 s
+        // and expect three — which held only while a failed tick published
+        // nothing. Since story 3.2 the fourth tick exhausts the scripted source and
+        // REPUBLISHES the last value with a stale verdict, so the count became 4.
+        // Virtual time, so this costs nothing and cannot flake on load.
+        tokio::time::sleep(Duration::from_millis(12_000)).await;
         for task in &tasks {
             task.abort();
         }
@@ -590,10 +759,11 @@ mod tests {
             heartbeat: &heartbeat,
             outbox: &tx,
         };
-        let after_timeout = step_once(&ctx, &mut source, State::initial()).await;
+        let mut last = None;
+        let after_timeout = step_once(&ctx, &mut source, State::initial(), &mut last).await;
         assert_eq!(after_timeout, State::Stale);
 
-        let after_good = step_once(&ctx, &mut source, after_timeout).await;
+        let after_good = step_once(&ctx, &mut source, after_timeout, &mut last).await;
         assert_eq!(after_good, State::Fresh);
         drop(tx);
         let u = rx.recv().await.expect("the good reading was forwarded");
