@@ -123,11 +123,14 @@ development_status:
   # `supervisor` spawns one task per meter — the cadence test spawns them itself.
   # The heartbeat count is the seam that would prove it.
   3-1-the-runtime-serves-every-enabled-meter: review
-  # 2026-08-07: AC1/AC2/AC4 implemented and falsified — a meter that answered and
-  # then stopped is republished with the oracle's verdict and its own ValueDate,
-  # and one that never answered is still given nothing. AC3 (per-meter verdicts
-  # across the fleet) and AC5 (the screen agrees with the wire, ADR 0027 section 1)
-  # are NOT done; AC5 needs the oracle state plumbed to the UI.
+  # 2026-08-07: AC1/AC2/AC4/AC5 implemented and falsified. A meter that answered and
+  # then stopped is republished with the oracle's verdict and its own ValueDate;
+  # one that never answered is still given nothing; and the verdict now reaches the
+  # UI, so `/` names a failed meter and `/healthz` carries `failed_sources` while
+  # keeping its 200 (ADR 0027 section 2 — a restart cannot clear a refused
+  # credential). AC5's test brought a `body()` helper that reads the RENDERED
+  # BYTES: every prior /healthz test asserted only a status code.
+  # AC3 (per-meter verdicts across the fleet) is NOT done.
   3-2-a-meters-silence-is-published-not-withheld: in-progress
   3-3-per-meter-staleness-isolation-and-its-latency-bound: backlog
   3-4-discovery-the-accounts-meters-by-name-and-serial: backlog

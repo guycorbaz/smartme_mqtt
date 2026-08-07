@@ -129,14 +129,21 @@ nothing. Two mutations, both red at the assertion under repair: withholding the 
 `left: 1, right: 2` — the premise reading alone, so the mutation removed exactly the republish —
 and inventing a value for a meter that never answered gives `left: 1, right: 0`.
 
-**AC3 and AC5 are NOT done.**
+**AC5 is done** (2026-08-07, second pass). The oracle verdict is recorded in the same per-meter
+cell the heartbeat lives in, so the page and `/healthz` read what the task writes rather than a
+second opinion. `/` names the failed meters — *"one meter is not being read: cellar"* — and
+`/healthz` carries `failed_sources`, an empty list when all is well. The status code stays `200`
+per ADR 0027 §2. Falsified by making `failed_sources` return nothing: the page reverts to its
+unqualified claim and the test dies on it.
 
-- **AC3** (four meters, each carrying its own serial and verdict) has no test. Story 3.1's cadence
-  test proves per-meter labelling for readings; nothing yet proves it for republished verdicts,
-  and that is exactly where a shared fixture would hide a defect.
-- **AC5** (the screen and `/healthz` agree with the wire) is untouched. It is ADR 0027 §1, and it
-  needs the meter oracle state plumbed to the UI — the honesty half of FR28. The page still says
-  *"polling the meters and publishing what it reads"* without qualification.
+That test also introduced a `body()` helper that reads the **rendered bytes**. Every existing
+`/healthz` test asserted only a status code, and the one test that did look at content used
+`format!("{response:?}")`, which prints `body: Body(UnsyncBoxBody)` and never the content — the
+hollow assertion found on 2026-08-05.
+
+**AC3 is NOT done.** Four meters, each carrying its own serial and verdict, has no test. Story
+3.1's cadence test proves per-meter labelling for readings; nothing yet proves it for republished
+verdicts, and that is exactly where a shared fixture hid a defect once already.
 
 ## Falsification
 

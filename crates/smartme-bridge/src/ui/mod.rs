@@ -272,6 +272,22 @@ impl Phase {
     /// merely young. It also means a task that dies before its first tick is
     /// invisible here — true before this change as well, and owed a guard of its
     /// own rather than a silent reinterpretation of this one.
+    /// The meters whose source has failed fatally, if any (Story 3.2 AC5).
+    ///
+    /// Empty in every silent phase, because there is no poll loop to have an
+    /// opinion — and empty is then the truth rather than a default.
+    fn failed_sources(&self) -> Vec<String> {
+        match self.running.as_ref() {
+            Some(control) => control
+                .heartbeats()
+                .failed()
+                .into_iter()
+                .map(|m| m.to_string())
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
     fn loop_age(&self) -> Option<(i64, i64)> {
         let control = self.running.as_ref()?;
         let now = control.clock().monotonic().0;
@@ -420,16 +436,45 @@ pub async fn serve(port: u16, state: UiState) {
 /// surface that exists in the states they will be used in, and an operator who
 /// opens the address should never meet a blank page or a connection refusal.
 async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
-    let lifecycle = state.phase().lifecycle;
+    let phase = state.phase();
+    let lifecycle = phase.lifecycle;
+    // THE CLAIM IS QUALIFIED, or it is not made (Story 3.2 AC5, ADR 0027 §1).
+    //
+    // `Lifecycle::Running`'s detail says the bridge "is polling the meters and
+    // publishing what it reads". That is a claim about the SOURCE, and until now
+    // the page had no way to see one: a rejected credential put every meter into
+    // an absorbing `Failed`, nothing reached the wire, and this page went on
+    // saying it was publishing. Naming the meters is the whole point — "something
+    // is wrong" sends an operator to the logs, a meter's name sends them to the
+    // meter.
+    let failed = phase.failed_sources();
+    let caveat = if failed.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<p><strong>{} not being read: {}.</strong> The smart-me cloud refused \
+             or could not answer, and this is a fault a restart is needed to clear \
+             — the last known values are still published, marked not-good, so \
+             nothing downstream shows them as current.</p>",
+            if failed.len() == 1 {
+                "One meter is"
+            } else {
+                "Meters are"
+            },
+            screens::escape(&failed.join(", ")),
+        )
+    };
     Html(format!(
         "<!doctype html><meta charset=utf-8>\
          <title>smartme_mqtt</title>\
          <h1>smartme_mqtt</h1>\
          <p><strong>{}</strong></p>\
          <p>{}</p>\
+         {}\
          <hr><p>version {} · contract {}</p>",
         lifecycle.headline(),
         lifecycle.detail(),
+        caveat,
         env!("CARGO_PKG_VERSION"),
         crate::adapters::sparkplug_publisher::CONTRACT_VERSION,
     ))
@@ -492,13 +537,28 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
     // Broker connectivity is not plumbed to the UI yet ([#53]); until it is, the
     // honest report is what the bridge INTENDS plus the heartbeat, which a caller
     // can check for itself.
+    // A FAULT IS NOT A DELIBERATE SILENCE, and the body has to tell them apart
+    // (Story 3.2 AC5, ADR 0027 §2). The status code stays 200: Epic 7 wires this
+    // to a container restart, and a restart provably cannot clear a rejected
+    // credential — it would loop, destroying the screen that names the fault.
+    let failed = phase.failed_sources();
+    let failed_json = format!(
+        "[{}]",
+        failed
+            .iter()
+            .map(|m| format!("\"{}\"", m.replace('\\', "\\\\").replace('"', "\\\"")))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
     let body = format!(
         "{{\"status\":\"{}\",\"intends_to_publish\":{},\"wedged\":{},\
+          \"failed_sources\":{},\
           \"loop_age_ms\":{},\"loop_age_allowed_ms\":{},\
           \"version\":\"{}\",\"contract\":{}}}",
         phase.lifecycle.slug(),
         !phase.lifecycle.is_silent_on_purpose(),
         wedged,
+        failed_json,
         age,
         allowed,
         // Compile-time, so it describes the BINARY and not the tag it wears —
@@ -546,6 +606,21 @@ mod tests {
         config: ConfigHandle,
     ) -> Phase {
         Phase::running(Control::detached(config, heartbeats, clock))
+    }
+
+    /// The rendered bytes of a response.
+    ///
+    /// **Not `format!("{response:?}")`.** `http::Response`'s `Debug` prints the
+    /// status, version, headers and `body: Body(UnsyncBoxBody)` — never the
+    /// content. A test written that way on 2026-08-05 asserted that a refusal page
+    /// contained no `<script>` and could not fail for any mutation of the function
+    /// that renders it; it shipped inside the commit whose subject was *"the
+    /// checks that could not see what they searched for"*.
+    async fn body(response: axum::response::Response) -> String {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("the body reads");
+        String::from_utf8_lossy(&bytes).into_owned()
     }
 
     /// A one-meter fleet, which is what most of these tests want.
@@ -658,6 +733,107 @@ mod tests {
     /// mutation that returned `StatusCode::OK` unconditionally left every one of
     /// them green — which is exactly how the unconditional 200 shipped in the
     /// first place.
+    /// **Story 3.2 AC5, [ADR 0027] §1 and §2** — the page and `/healthz` must
+    /// agree with the wire about a source that has failed.
+    ///
+    /// The defect: a rejected smart-me credential puts every meter into an
+    /// absorbing `Failed`, nothing reaches the wire, and `/` went on saying the
+    /// bridge *"is polling the meters and publishing what it reads"* — a claim
+    /// about the source, made by a page that had no way to see one. `/healthz`
+    /// reported `intends_to_publish: true` and `wedged: false`, both true and
+    /// both beside the point.
+    ///
+    /// **Both halves are asserted.** A page that shouted about a fault whatever
+    /// the state would pass the first half and be useless; the healthy case is
+    /// checked first, and its silence is what gives the second case meaning.
+    ///
+    /// The status code stays 200 deliberately: Epic 7 restarts on it, and a
+    /// restart cannot clear a rejected credential — it would loop, eating the
+    /// screen that names the fault.
+    ///
+    /// FALSIFIED 2026-08-07 by making `Phase::failed_sources` return `Vec::new()`
+    /// unconditionally — the state the code was in before this story. Copied:
+    ///
+    /// ```text
+    /// test ui::tests::a_failed_source_is_named_on_the_page_and_in_healthz ... FAILED
+    ///
+    /// thread '…a_failed_source_is_named_on_the_page_and_in_healthz' (57) panicked at
+    /// crates/smartme-bridge/src/ui/mod.rs:797:9:
+    /// the page claims the bridge is publishing what it reads; a meter whose source has
+    /// FAILED must be named, or the operator is sent to the logs to discover it:
+    /// <!doctype html>…<p><strong>Running</strong></p><p>The bridge is configured and
+    /// confirmed, so it is polling the meters and publishing what it reads.…</p>…
+    /// ```
+    ///
+    /// The dump is the page itself, which is the point: the helper reads the
+    /// rendered bytes, so a mutation of what is rendered can reach the assertion.
+    ///
+    /// [ADR 0027]: ../../../docs/adr/0027-a-failed-source-is-a-fault-the-screen-must-name.md
+    #[tokio::test]
+    async fn a_failed_source_is_named_on_the_page_and_in_healthz() {
+        use crate::core::clock::FakeClock;
+        use crate::core::state_machine::State as OracleState;
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let clock = Arc::new(FakeClock::new(UtcMillis(1_784_984_793_000)));
+        let beats = Heartbeats::for_meters([
+            crate::domain::MeterId::new("garage"),
+            crate::domain::MeterId::new("cellar"),
+        ]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let state = ui(publishing(
+            beats.clone(),
+            clock.clone(),
+            Arc::clone(&config),
+        ));
+
+        // HEALTHY FIRST. Without this the assertions below would also hold for a
+        // page that named a fault unconditionally.
+        beats.record(&crate::domain::MeterId::new("garage"), OracleState::Fresh);
+        beats.record(&crate::domain::MeterId::new("cellar"), OracleState::Fresh);
+        let page = body(index(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            !page.contains("not being read"),
+            "a fleet that is being read must not be reported as faulty:\n{page}"
+        );
+        let health = body(healthz(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            health.contains("\"failed_sources\":[]"),
+            "the healthy body must say so with an empty list, not by omission:\n{health}"
+        );
+
+        // Now one meter's source fails fatally — a refused credential.
+        beats.record(&crate::domain::MeterId::new("cellar"), OracleState::Failed);
+
+        let page = body(index(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            page.contains("not being read") && page.contains("cellar"),
+            "the page claims the bridge is publishing what it reads; a meter whose \
+             source has FAILED must be named, or the operator is sent to the logs \
+             to discover it:\n{page}"
+        );
+        assert!(
+            !page.contains("garage"),
+            "only the failed meter is named; naming the healthy one too would make \
+             the list noise an operator learns to skip:\n{page}"
+        );
+
+        let response = healthz(State(Arc::clone(&state))).await.into_response();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "ADR 0027 §2: a restart cannot clear a rejected credential, so a 503 \
+             here would loop the container and destroy the screen that names it"
+        );
+        let health = body(response).await;
+        assert!(
+            health.contains("\"failed_sources\":[\"cellar\"]"),
+            "the body must distinguish a FAULT from a deliberate silence, and name \
+             which meter:\n{health}"
+        );
+    }
+
     #[tokio::test]
     async fn the_status_code_follows_the_wedge_and_nothing_else() {
         use crate::core::clock::FakeClock;

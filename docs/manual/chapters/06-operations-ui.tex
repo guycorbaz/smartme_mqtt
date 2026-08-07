@@ -151,5 +151,24 @@ is in; it does not yet show what the meters are reading.}
 diagnosis in chapter~\ref{ch:trouble}. The short version: the \emph{status code} answers
 ``is this process worth keeping?'' and the \emph{body} answers ``is it doing anything?''.
 They are two different questions, and a bridge that is deliberately silent --- unconfigured,
-or waiting for you to confirm --- answers \code{200}, because the healthcheck restarts the
-container and restarting one would destroy the very screen needed to configure it.
+waiting for you to confirm, or holding a configuration it cannot use --- answers \code{200},
+because the healthcheck restarts the container and restarting one would destroy the very
+screen needed to configure it.
+
+\subsection{A meter that cannot be read is named}
+
+A \emph{fault} is not a deliberate silence, and the two are reported apart. When the smart-me
+cloud refuses or cannot answer for a meter, that meter's name appears on \code{/} --- ``one
+meter is not being read: \emph{cellar}'' --- and in \code{/healthz} under
+\code{failed\_sources}, which is an empty list when everything is being read.
+
+The status code stays \code{200}, and that is deliberate rather than lenient: the fault a
+refused credential represents is not one a restart clears, so returning \code{503} would put
+the container in a loop and destroy the screen that names the problem. What a restart
+\emph{does} fix --- a poll loop that has stopped looping --- is what \code{503} is reserved
+for.
+
+Until 2026-08-07 the page said the bridge was ``polling the meters and publishing what it
+reads'' whatever the meters were doing, because it had no way to see them. The last known
+values are still published while a meter is unreadable, marked not-good, so nothing
+downstream shows them as current.

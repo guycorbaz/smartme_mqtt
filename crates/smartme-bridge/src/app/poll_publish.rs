@@ -116,7 +116,31 @@ impl Default for LastLoopTick {
 ///
 /// [ADR 0027]: ../../../docs/adr/0027-a-failed-source-is-a-fault-the-screen-must-name.md
 #[derive(Clone, Default)]
-pub struct Heartbeats(Arc<Vec<(MeterId, LastLoopTick)>>);
+pub struct Heartbeats(Arc<Vec<(MeterId, LastLoopTick, Arc<std::sync::atomic::AtomicU8>)>>);
+
+/// How a [`State`] is carried in the shared cell above.
+///
+/// `0` means *nothing recorded yet* and is NOT a state: a task that has not
+/// completed its first tick has reached no verdict, and mapping that onto
+/// `Stale` would report a fault about a bridge that is merely starting.
+const VERDICT_NONE: u8 = 0;
+
+const fn verdict_code(state: State) -> u8 {
+    match state {
+        State::Fresh => 1,
+        State::Stale => 2,
+        State::Failed => 3,
+    }
+}
+
+const fn verdict_from(code: u8) -> Option<State> {
+    match code {
+        1 => Some(State::Fresh),
+        2 => Some(State::Stale),
+        3 => Some(State::Failed),
+        _ => None,
+    }
+}
 
 impl Heartbeats {
     /// One heartbeat per meter, in the order the meters were spawned.
@@ -124,7 +148,13 @@ impl Heartbeats {
         Self(Arc::new(
             meters
                 .into_iter()
-                .map(|meter| (meter, LastLoopTick::new()))
+                .map(|meter| {
+                    (
+                        meter,
+                        LastLoopTick::new(),
+                        Arc::new(std::sync::atomic::AtomicU8::new(VERDICT_NONE)),
+                    )
+                })
                 .collect(),
         ))
     }
@@ -133,8 +163,42 @@ impl Heartbeats {
     pub fn of(&self, meter: &MeterId) -> Option<LastLoopTick> {
         self.0
             .iter()
-            .find(|(m, _)| m == meter)
-            .map(|(_, tick)| tick.clone())
+            .find(|(m, _, _)| m == meter)
+            .map(|(_, tick, _)| tick.clone())
+    }
+
+    /// Records the oracle's verdict for one meter (Story 3.2 AC5, [ADR 0027] §1).
+    ///
+    /// **The screen had no way to see this**, so `/` said the bridge was *"polling
+    /// the meters and publishing what it reads"* about a source in `Failed` that
+    /// had put nothing on the wire since start-up. The page was describing which
+    /// branch of `main.rs` ran, presented to an operator as an observation — the
+    /// same defect `/healthz` was cured of on 2026-08-04 (`publishing` →
+    /// `intends_to_publish`).
+    pub fn record(&self, meter: &MeterId, state: State) {
+        if let Some((_, _, cell)) = self.0.iter().find(|(m, _, _)| m == meter) {
+            cell.store(verdict_code(state), std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Every meter whose oracle has reached a verdict, and which one.
+    ///
+    /// A meter that has not completed a tick is absent rather than guessed at.
+    pub fn verdicts(&self) -> impl Iterator<Item = (&MeterId, State)> {
+        self.0.iter().filter_map(|(meter, _, cell)| {
+            verdict_from(cell.load(std::sync::atomic::Ordering::Relaxed)).map(|s| (meter, s))
+        })
+    }
+
+    /// The meters whose source has failed fatally — a rejected credential, a
+    /// configuration the cloud will not accept. **Absorbing**: only a restart
+    /// clears one, so a page that does not name them leaves the operator with a
+    /// bridge that looks healthy and publishes nothing.
+    pub fn failed(&self) -> Vec<&MeterId> {
+        self.verdicts()
+            .filter(|(_, s)| *s == State::Failed)
+            .map(|(m, _)| m)
+            .collect()
     }
 
     /// Every meter and its heartbeat.
@@ -146,7 +210,7 @@ impl Heartbeats {
     /// type does not have, so it is left to the caller and written down here
     /// rather than resolved silently.
     pub fn iter(&self) -> impl Iterator<Item = (&MeterId, &LastLoopTick)> {
-        self.0.iter().map(|(m, t)| (m, t))
+        self.0.iter().map(|(m, t, _)| (m, t))
     }
 
     /// How many meters are being watched.
@@ -263,9 +327,15 @@ pub async fn run<S: Source + Send>(
     mut source: S,
     clock: Arc<dyn Clock + Send + Sync>,
     config: crate::app::supervisor::ConfigHandle,
-    heartbeat: LastLoopTick,
+    // The whole collection, not this meter's tick: the task also records its
+    // oracle verdict here, so anything that reports on the bridge reads the same
+    // cell the task writes rather than a second opinion.
+    pulse: Heartbeats,
     outbox: mpsc::Sender<MeterUpdate>,
 ) {
+    let heartbeat = pulse.of(&meter).unwrap_or_else(|| {
+        panic!("no heartbeat for {meter}; the collection is built from the served meters")
+    });
     let mut state = State::initial();
     // The last measurement this meter produced, carried so a failed tick can
     // publish a verdict about it rather than say nothing (Story 3.2).
@@ -310,6 +380,8 @@ pub async fn run<S: Source + Send>(
             outbox: &outbox,
         };
         state = step_once(&ctx, &mut source, state, &mut last).await;
+        // The verdict reaches anything outside that can report on this meter.
+        pulse.record(&meter, state);
     }
 }
 
@@ -700,7 +772,7 @@ mod tests {
                 source,
                 Arc::clone(&clock) as Arc<dyn Clock + Send + Sync>,
                 Arc::clone(&handle),
-                beats.of(meter).expect("a heartbeat per meter"),
+                beats.clone(),
                 tx.clone(),
             )));
         }

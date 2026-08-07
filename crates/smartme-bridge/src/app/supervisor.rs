@@ -405,9 +405,7 @@ pub async fn run_with_control(
                 source,
                 Arc::clone(&clock),
                 Arc::clone(&handle),
-                heartbeats
-                    .of(&meter.meter)
-                    .expect("a heartbeat exists for every served meter"),
+                heartbeats.clone(),
                 tx.clone(),
             ))
         })
