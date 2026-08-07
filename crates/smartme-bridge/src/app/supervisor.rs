@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::adapters::SmartMeCloudSource;
 use crate::app::mqtt_driver::{self, DeviceCommand, MqttConfig};
-use crate::app::poll_publish::{self, LastLoopTick, PollConfig};
+use crate::app::poll_publish::{self, Heartbeats, PollConfig};
 use crate::app::reconfigure::{self, Cost, Plan};
 use crate::core::clock::{Clock, SystemClock};
 use crate::core::state_machine::Policy;
@@ -34,12 +34,12 @@ pub struct BridgeConfig {
     pub http_timeout: Duration,
     /// Every meter configured, enabled or not.
     ///
-    /// **The model is plural and the runtime is not** (Story 5.1). The
-    /// configuration screen is built against this list, so it takes its final
-    /// shape now rather than being reshaped — with its form — when the runtime
-    /// learns to serve more than one. [`crate::app::config::validate`] refuses a
-    /// configuration that enables more than [`crate::app::config::RUNTIME_METER_LIMIT`],
-    /// so this never silently serves a subset.
+    /// **Model and runtime are both plural since Story 3.1.** The model went
+    /// first (Story 5.1), so the configuration screen could be built against its
+    /// final shape rather than reshaped — with its form — when the runtime caught
+    /// up; `RUNTIME_METER_LIMIT` refused a configuration enabling more than the
+    /// runtime served in the meantime, so a subset was never published silently.
+    /// Every enabled meter is now served, so there is no subset to refuse.
     pub meters: Vec<crate::app::config::MeterConfig>,
     /// Sparkplug group identifier.
     pub group_id: String,
@@ -115,7 +115,7 @@ pub type ConfigHandle = Arc<arc_swap::ArcSwap<BridgeConfig>>;
 pub struct Control {
     config: ConfigHandle,
     devices: mpsc::Sender<DeviceCommand>,
-    heartbeat: LastLoopTick,
+    heartbeats: Heartbeats,
     clock: Arc<dyn Clock + Send + Sync>,
 }
 
@@ -130,7 +130,7 @@ impl Control {
     /// while nothing reached the wire.
     pub(crate) fn detached(
         config: ConfigHandle,
-        heartbeat: LastLoopTick,
+        heartbeats: Heartbeats,
         clock: Arc<dyn Clock + Send + Sync>,
     ) -> Self {
         let (devices, receiver) = mpsc::channel(1);
@@ -140,7 +140,7 @@ impl Control {
         Self {
             config,
             devices,
-            heartbeat,
+            heartbeats,
             clock,
         }
     }
@@ -160,8 +160,8 @@ impl Control {
     /// Handed out rather than duplicated: `/healthz` must report the SAME
     /// instant the loop records, or a healthcheck would be acting on a second
     /// opinion about whether the bridge is alive.
-    pub fn heartbeat(&self) -> LastLoopTick {
-        self.heartbeat.clone()
+    pub fn heartbeats(&self) -> Heartbeats {
+        self.heartbeats.clone()
     }
 
     /// The clock the heartbeat is recorded against.
@@ -316,34 +316,38 @@ pub async fn run_with_control(
 ) -> Result<(), StartupError> {
     let clock: Arc<dyn Clock + Send + Sync> = Arc::new(SystemClock::new());
     let node = sparkplug_b::EdgeNode::new(config.group_id.clone(), config.node_id.clone())?;
-    // The runtime serves ONE meter. `config::validate` refuses a configuration
-    // that enables more, so taking the first enabled one here is not a silent
-    // truncation — it is the single meter the validation guaranteed.
-    let served = config
+    // EVERY enabled meter is served (Story 3.1). Until 2026-08-06 this took the
+    // first one and `config::validate` refused a configuration enabling more, so
+    // that it was a guaranteed single rather than a silent truncation. The guard
+    // was right and has been outgrown, not weakened: the truncation it forbade is
+    // still forbidden, because nothing is dropped here at all.
+    let served: Vec<_> = config
         .meters
         .iter()
-        .find(|meter| meter.enabled)
-        .ok_or(StartupError::NoEnabledMeter)?;
-    // Validate the device identifier HERE: a serial that cannot be a topic level
-    // would otherwise leave the node connected, unborn and publishing nothing,
-    // forever. Refusing to start beats starting wrong.
-    node.device_topic(sparkplug_b::MessageType::DBirth, served.serial.as_str())?;
+        .filter(|meter| meter.enabled)
+        .cloned()
+        .collect();
+    if served.is_empty() {
+        return Err(StartupError::NoEnabledMeter);
+    }
+    // Validate every device identifier HERE, and ALL of them before any task
+    // starts: a serial that cannot be a topic level would otherwise leave the
+    // node connected, unborn and publishing nothing, forever. Refusing to start
+    // beats starting wrong — and refusing on the FOURTH meter after three are
+    // already polling would be starting wrong.
+    for meter in &served {
+        node.device_topic(sparkplug_b::MessageType::DBirth, meter.serial.as_str())?;
+    }
 
     let client = SmartMeClient::new(
         config.api_base.clone(),
         config.credentials.clone(),
         config.http_timeout,
     )?;
-    let source = SmartMeCloudSource::new(
-        client,
-        Arc::clone(&clock),
-        served.meter.clone(),
-        served.device_id.clone(),
-    );
 
     // The channel first: the seam exists before either end does.
     let (tx, rx) = mpsc::channel(64);
-    let heartbeat = LastLoopTick::new();
+    let heartbeats = Heartbeats::for_meters(served.iter().map(|m| m.meter.clone()));
     let (death_tx, death_rx) = oneshot::channel();
     // Reconfiguration gets its OWN channel, for the same reason inbound commands
     // do: sharing the reading path would put an externally-driven, bursty
@@ -353,7 +357,7 @@ pub async fn run_with_control(
     with_control(Control {
         config: Arc::clone(&handle),
         devices: device_tx,
-        heartbeat: heartbeat.clone(),
+        heartbeats: heartbeats.clone(),
         clock: Arc::clone(&clock),
     });
 
@@ -368,30 +372,60 @@ pub async fn run_with_control(
             death_flush: Duration::from_secs(2),
         },
         node,
-        vec![served.serial.clone()],
+        served.iter().map(|m| m.serial.clone()).collect(),
         Arc::clone(&clock),
         rx,
         device_rx,
         death_rx,
     ));
 
-    let poll = tokio::spawn(poll_publish::run(
-        served.meter.clone(),
-        source,
-        Arc::clone(&clock),
-        Arc::clone(&handle),
-        heartbeat,
-        tx,
-    ));
+    // ONE TASK PER METER, not one task walking the meters.
+    //
+    // The fetch carries its own timeout (10 s by default). A single task walking
+    // four meters would serialise four timeouts — 40 s inside a 30 s period — so
+    // one unreachable meter would push every other meter's poll past its own
+    // deadline. That is FR12 failing by construction, and NFR2's bound
+    // unmeetable for reasons having nothing to do with the meter it is measured
+    // on. One of the author's four meters is physically unplugged, so this is the
+    // normal case here rather than the unlucky one.
+    //
+    // What stays singular is what the norm makes singular: the sequence number
+    // and the transport, both behind the one driver task (AR6).
+    let polls: Vec<_> = served
+        .iter()
+        .map(|meter| {
+            let source = SmartMeCloudSource::new(
+                client.clone(),
+                Arc::clone(&clock),
+                meter.meter.clone(),
+                meter.device_id.clone(),
+            );
+            tokio::spawn(poll_publish::run(
+                meter.meter.clone(),
+                source,
+                Arc::clone(&clock),
+                Arc::clone(&handle),
+                heartbeats
+                    .of(&meter.meter)
+                    .expect("a heartbeat exists for every served meter"),
+                tx.clone(),
+            ))
+        })
+        .collect();
+    // The template sender is dropped so the channel closes when the LAST poll
+    // task stops, rather than staying open on a sender nobody sends through.
+    drop(tx);
 
     shutdown.await;
     tracing::info!("shutdown signalled");
 
-    // Tell the driver to publish the death, THEN stop the poll task: the order
+    // Tell the driver to publish the death, THEN stop the poll tasks: the order
     // matters only in that the death must not be blocked behind a pending
     // reading.
     let _ = death_tx.send(());
-    poll.abort();
+    for poll in &polls {
+        poll.abort();
+    }
     // Wait for the driver to finish publishing the certificate. If it panicked,
     // the connection drops and the broker's will fires — the second mechanism.
     if let Err(error) = mqtt.await {
@@ -438,7 +472,7 @@ mod tests {
             Control {
                 config: Arc::new(arc_swap::ArcSwap::from_pointee(config())),
                 devices,
-                heartbeat: LastLoopTick::new(),
+                heartbeats: Heartbeats::for_meters([crate::domain::MeterId::new("meter-a")]),
                 clock: Arc::new(crate::core::clock::SystemClock::new()),
             },
             rx,

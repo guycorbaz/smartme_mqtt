@@ -112,7 +112,17 @@ development_status:
   # these stories as they are written; `Policy::max_age_ms` validation and the
   # command path are the two named ones.
   epic-3: in-progress
-  3-1-the-runtime-serves-every-enabled-meter: ready-for-dev
+  # 2026-08-07, IMPLEMENTED, all six ACs. `RUNTIME_METER_LIMIT` gone, one poll task
+  # and one heartbeat per meter, wedge verdict = the worst meter against its OWN
+  # allowance. Three falsification lessons, and the second is the one to carry:
+  # the cadence test's first mutation COMPILED AND STAYED GREEN, because its own
+  # comment's arithmetic was wrong (one meter hangs, not four, so a serialised walk
+  # fitted inside the period). Repaced to 5 s period / 10 s deadline it goes red.
+  # A mutation that changes nothing observable is not a falsification.
+  # NOT COVERED, and said in the test rather than assumed: nothing asserts that
+  # `supervisor` spawns one task per meter — the cadence test spawns them itself.
+  # The heartbeat count is the seam that would prove it.
+  3-1-the-runtime-serves-every-enabled-meter: review
   3-2-a-meters-silence-is-published-not-withheld: backlog
   3-3-per-meter-staleness-isolation-and-its-latency-bound: backlog
   3-4-discovery-the-accounts-meters-by-name-and-serial: backlog
@@ -588,6 +598,9 @@ development_status:
   # rule of its own any more. AC4/AC6 landed together: the model is plural, the
   # runtime is not, and enabling more meters than the runtime serves is REFUSED
   # rather than truncated.
+  #   AMENDED 2026-08-06: story 3.1 made the runtime plural too and removed the
+  #   refusal. AC6 is not withdrawn — it forbade publishing a SUBSET, and nothing
+  #   is dropped now, so there is no subset to refuse.
   #
   # Two things worth carrying into the review:
   #  - under the AC2 mutation (faults.truncate(1)) TEN of eleven tests stayed

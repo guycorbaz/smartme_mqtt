@@ -101,6 +101,9 @@ Skipping Epic 2 and Epic 3 is not free, and the cost is easy to lose because it 
 - **Epic 3 owns per-meter isolation.** The runtime serves one meter
   (`config::RUNTIME_METER_LIMIT`), and a configuration enabling more is refused rather than
   truncated — which is the honest behaviour, and is not the same as the fleet working.
+  *(**Superseded in part, 2026-08-06.** Epic 3 was opened and story 3.1 removed the limit:
+  the runtime now serves every enabled meter. Per-meter staleness isolation, which is the
+  rest of what this bullet names, remains owed — stories 3.2 and 3.3.)*
 
 ### What this changes today
 

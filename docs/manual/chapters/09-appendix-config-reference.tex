@@ -89,10 +89,11 @@ enabled    & yes & Whether this meter is published. Disabling one publishes a \c
 \end{center}
 
 \begin{note}
-The model holds any number of meters; \textbf{the runtime currently serves one}. Enabling
-more than that is \emph{refused} at startup rather than silently truncated --- a bridge
-that quietly published three of your four meters would be indistinguishable, from the
-outside, from one meter having failed.
+\textbf{Every meter you enable is polled and published.} That was not always so: until
+2026-08-06 the runtime served one, and enabling more was \emph{refused} at startup rather
+than silently truncated --- a bridge that quietly published three of your four meters would
+have been indistinguishable, from the outside, from one meter having failed. The refusal is
+gone because nothing is dropped any more, not because the concern was dropped.
 \end{note}
 
 \begin{note}

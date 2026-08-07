@@ -92,6 +92,73 @@ impl Default for LastLoopTick {
     }
 }
 
+/// One heartbeat per polled meter (Story 3.1).
+///
+/// # Why this is a collection and not one value
+///
+/// The runtime served a single meter until 2026-08-06, so a single
+/// [`LastLoopTick`] *was* the poll loop's heartbeat. With one task per meter, a
+/// shared tick would be touched by whichever task ran most recently — so three
+/// healthy siblings would keep it fresh while the fourth had not read its meter
+/// for an hour, and `/healthz` would report a bridge that was, for that meter,
+/// completely wedged.
+///
+/// That is the shape of lie this project exists to prevent, and its twin was
+/// found on 2026-08-06: a `Failed` source reported as publishing.
+///
+/// # The verdict is the WORST of them, and that is deliberate
+///
+/// Epic 7 wires `/healthz` to a container restart, which kills the session for
+/// every meter. Restarting all four because one task wedged is the right trade
+/// anyway: unlike a rejected credential ([ADR 0027]), a wedged poll task is
+/// exactly what a restart fixes. This is the one place where the fleet makes the
+/// healthcheck stricter rather than more forgiving.
+///
+/// [ADR 0027]: ../../../docs/adr/0027-a-failed-source-is-a-fault-the-screen-must-name.md
+#[derive(Clone, Default)]
+pub struct Heartbeats(Arc<Vec<(MeterId, LastLoopTick)>>);
+
+impl Heartbeats {
+    /// One heartbeat per meter, in the order the meters were spawned.
+    pub fn for_meters(meters: impl IntoIterator<Item = MeterId>) -> Self {
+        Self(Arc::new(
+            meters
+                .into_iter()
+                .map(|meter| (meter, LastLoopTick::new()))
+                .collect(),
+        ))
+    }
+
+    /// The heartbeat belonging to one meter, for that meter's task to touch.
+    pub fn of(&self, meter: &MeterId) -> Option<LastLoopTick> {
+        self.0
+            .iter()
+            .find(|(m, _)| m == meter)
+            .map(|(_, tick)| tick.clone())
+    }
+
+    /// Every meter and its heartbeat.
+    ///
+    /// **A meter that has never ticked reports `None` from
+    /// [`LastLoopTick::last`], and a caller must decide what that means rather
+    /// than let it vanish.** It is not evidence of a wedge during startup, and it
+    /// is evidence of one if it persists — the distinction needs a baseline this
+    /// type does not have, so it is left to the caller and written down here
+    /// rather than resolved silently.
+    pub fn iter(&self) -> impl Iterator<Item = (&MeterId, &LastLoopTick)> {
+        self.0.iter().map(|(m, t)| (m, t))
+    }
+
+    /// How many meters are being watched.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 /// Everything one iteration needs that does not change between iterations.
 pub struct Context<'a> {
     /// The meter being polled.
@@ -345,6 +412,163 @@ mod tests {
             heartbeat.last(),
             Some(MonotonicMs(7_000)),
             "a hung fetch still leaves a heartbeat — that is what makes a wedge visible"
+        );
+    }
+
+    /// **Story 3.1 AC4** — a meter that never answers must not cost the others
+    /// their cadence (FR12, and NFR2's bound measured per meter).
+    ///
+    /// One of Guy's four meters is physically unplugged, so this is the steady
+    /// state of the deployment rather than an unlucky case.
+    ///
+    /// **The assertion is a COUNT per meter, not an absence and not a shape.**
+    /// "The others were polled on time" holds vacuously over a run that polled
+    /// nobody — this repository has shipped absence assertions that held over an
+    /// empty stream, and the fix is to name a number only the property produces.
+    /// The hanging meter's own count is asserted too, at 3: it must keep being
+    /// *tried* rather than dropped, or a silent meter would silently stop being
+    /// a meter.
+    ///
+    /// **What this proves and what it does not.** It proves the tasks are
+    /// independent when spawned independently: the fetch timeout here (2 s) times
+    /// four exceeds the 5 s period, so a single task walking the four would fall
+    /// behind by construction. It does NOT prove `supervisor` spawns one per
+    /// meter — that is production wiring this test never touches, and it is
+    /// covered instead by the heartbeat count, which is one per spawned task.
+    ///
+    /// FALSIFIED 2026-08-07 by replacing the four spawns with one task that
+    /// awaits each meter's `step_once` in turn — the design this AC exists to
+    /// forbid. Copied from the run:
+    ///
+    /// ```text
+    /// test app::poll_publish::tests::a_hanging_meter_does_not_cost_the_others_their_cadence ... FAILED
+    ///
+    /// thread '…a_hanging_meter_does_not_cost_the_others_their_cadence' (355) panicked at
+    /// crates/smartme-bridge/src/app/poll_publish.rs:558:9:
+    /// assertion `left == right` failed: a meter that never answers must not cost another
+    /// meter its cadence: three periods must produce three readings each
+    ///   left: [2, 2, 2]
+    ///  right: [3, 3, 3]
+    ///
+    /// test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 168 filtered out
+    /// ```
+    ///
+    /// Two rounds were needed, and the first is the instructive one: the mutation
+    /// compiled and the test stayed GREEN, because the pacing made a serialised
+    /// walk fit inside the period anyway. A mutation that changes nothing
+    /// observable is not a falsification.
+    /// The pacing this AC needs: a **5 s period and a 10 s fetch deadline**, which
+    /// is the real default pairing at the minimum period (ADR 0020's `PERIOD_MIN`
+    /// with the shipped `fetch_timeout`).
+    ///
+    /// The first draft used a 2 s deadline on the reasoning that "four serialised
+    /// timeouts, 8 s, overrun a 5 s period". That arithmetic was wrong — only ONE
+    /// meter hangs, so a serialised cycle cost 2 s and fitted inside the period.
+    /// **The falsification is what caught it**: the serialised mutation compiled
+    /// and the test stayed green, proving nothing. With the deadline above the
+    /// period, one hang is enough to put a serialised walk behind.
+    fn bridge_config() -> crate::app::supervisor::BridgeConfig {
+        crate::app::supervisor::BridgeConfig {
+            api_base: "https://api.smart-me.com".to_string(),
+            credentials: smart_me_client::Credentials::Basic {
+                user: "u".to_string(),
+                password: "p".to_string(),
+            },
+            http_timeout: Duration::from_secs(10),
+            meters: Vec::new(),
+            group_id: "G".to_string(),
+            node_id: "N".to_string(),
+            broker_host: "b".to_string(),
+            broker_port: 1883,
+            bd_seq_path: std::path::PathBuf::from("/data/bdseq.toml"),
+            poll: PollConfig {
+                interval: Duration::from_secs(5),
+                fetch_timeout: Duration::from_secs(10),
+            },
+            policy: policy(),
+            log_dir: None,
+            log_keep: None,
+            ui_port: None,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_hanging_meter_does_not_cost_the_others_their_cadence() {
+        use crate::app::supervisor::ConfigHandle;
+
+        let clock = Arc::new(FakeClock::new(UtcMillis(SANE_NOW)));
+        let (tx, mut rx) = mpsc::channel(64);
+        let healthy = [
+            MeterId::new("garage"),
+            MeterId::new("cellar"),
+            MeterId::new("attic"),
+        ];
+        let silent = MeterId::new("unplugged");
+        let all: Vec<MeterId> = healthy.iter().cloned().chain([silent.clone()]).collect();
+        let beats = Heartbeats::for_meters(all.clone());
+        let handle: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(bridge_config()));
+
+        let mut tasks = Vec::new();
+        for meter in &all {
+            // The unplugged one hangs on every fetch, so its task spends
+            // `fetch_timeout` inside each tick. Four of those serialised would be
+            // 8 s against a 5 s period.
+            // The reading must carry ITS OWN meter id. The shared fixture hard-codes
+            // one, and with it every task's update arrived labelled "garage" — the
+            // first draft of this test read 9/0/0 and would have read 3/3/3 for a
+            // runtime that polled one meter three times as fast.
+            let mine = |q| {
+                let mut r = reading(q, 950);
+                r.value.meter = meter.clone();
+                r
+            };
+            let source = if *meter == silent {
+                FakeSource::new().then_hang().then_hang().then_hang()
+            } else {
+                FakeSource::new()
+                    .then(Ok(mine(Quality::Good)))
+                    .then(Ok(mine(Quality::Good)))
+                    .then(Ok(mine(Quality::Good)))
+            };
+            tasks.push(tokio::spawn(run(
+                meter.clone(),
+                source,
+                Arc::clone(&clock) as Arc<dyn Clock + Send + Sync>,
+                Arc::clone(&handle),
+                beats.of(meter).expect("a heartbeat per meter"),
+                tx.clone(),
+            )));
+        }
+        drop(tx);
+
+        // Three periods of 5 s, with a little slack for the final tick to be
+        // forwarded. Virtual time, so this costs nothing and cannot flake on load.
+        tokio::time::sleep(Duration::from_millis(15_500)).await;
+        for task in &tasks {
+            task.abort();
+        }
+
+        let mut polled: std::collections::HashMap<MeterId, usize> = Default::default();
+        while let Ok(update) = rx.try_recv() {
+            *polled.entry(update.measurement.meter.clone()).or_default() += 1;
+        }
+        let counts: Vec<usize> = healthy
+            .iter()
+            .map(|m| polled.get(m).copied().unwrap_or(0))
+            .collect();
+        assert_eq!(
+            counts,
+            vec![3, 3, 3],
+            "a meter that never answers must not cost another meter its cadence: \
+             three periods must produce three readings each"
+        );
+        // The silent one forwards nothing — it has no reading to carry — but its
+        // heartbeat proves it was TRIED rather than dropped.
+        assert!(
+            beats.of(&silent).expect("present").last().is_some(),
+            "the unplugged meter must keep being polled; a meter that stops being \
+             tried stops being a meter, and its silence would then be the runtime's \
+             rather than the cloud's"
         );
     }
 

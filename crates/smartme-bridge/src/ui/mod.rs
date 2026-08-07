@@ -261,15 +261,34 @@ impl Phase {
     /// The allowance comes from the cadence the loop RECORDED, not from the
     /// period the configuration currently asks for — see [`LastLoopTick::touch`]
     /// for the false 503 that produced.
+    /// **The worst meter's, not the fleet's average and not the first one's**
+    /// (Story 3.1). Each meter paces itself, so each carries its own allowance;
+    /// the pair returned is the one most over it, and `None` only when no meter
+    /// has ticked at all.
+    ///
+    /// A meter that has never ticked while its siblings have is skipped rather
+    /// than counted as infinitely late: during startup that is every meter for a
+    /// moment, and reporting a wedge there would restart a container that is
+    /// merely young. It also means a task that dies before its first tick is
+    /// invisible here — true before this change as well, and owed a guard of its
+    /// own rather than a silent reinterpretation of this one.
     fn loop_age(&self) -> Option<(i64, i64)> {
         let control = self.running.as_ref()?;
-        let heartbeat = control.heartbeat();
-        let last = heartbeat.last()?;
-        let age = control.clock().monotonic().0 - last.0;
-        let allowed = heartbeat
-            .period_ms()
-            .saturating_mul(i64::from(WEDGED_AFTER_PERIODS));
-        Some((age, allowed))
+        let now = control.clock().monotonic().0;
+        control
+            .heartbeats()
+            .iter()
+            .filter_map(|(_, heartbeat)| {
+                let last = heartbeat.last()?;
+                let allowed = heartbeat
+                    .period_ms()
+                    .saturating_mul(i64::from(WEDGED_AFTER_PERIODS));
+                Some((now - last.0, allowed))
+            })
+            // Most over its OWN allowance. Comparing raw ages would let a meter
+            // polled every 300 s out-shout one polled every 5 s that is genuinely
+            // wedged, which is the whole reason the allowance is per-meter.
+            .max_by_key(|(age, allowed)| age.saturating_sub(*allowed))
     }
 }
 
@@ -511,17 +530,31 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
 mod tests {
     use super::*;
     use crate::app::LastLoopTick;
+    use crate::app::poll_publish::Heartbeats;
     use crate::app::supervisor::ConfigHandle;
     use crate::core::clock::Clock;
 
     /// A publishing phase built from the three things `/healthz` reads, wrapped
     /// in the detached control surface that carries them.
+    ///
+    /// Takes the whole [`Heartbeats`] rather than one tick, because since Story
+    /// 3.1 the wedge verdict is the WORST meter's and a helper that could only
+    /// build a fleet of one would make that untestable.
     fn publishing(
-        heartbeat: LastLoopTick,
+        heartbeats: Heartbeats,
         clock: std::sync::Arc<dyn Clock + Send + Sync>,
         config: ConfigHandle,
     ) -> Phase {
-        Phase::running(Control::detached(config, heartbeat, clock))
+        Phase::running(Control::detached(config, heartbeats, clock))
+    }
+
+    /// A one-meter fleet, which is what most of these tests want.
+    fn one_meter() -> (Heartbeats, LastLoopTick) {
+        let beats = Heartbeats::for_meters([crate::domain::MeterId::new("meter-a")]);
+        let tick = beats
+            .of(&crate::domain::MeterId::new("meter-a"))
+            .expect("just created");
+        (beats, tick)
     }
 
     /// Wrap a phase in the state a handler sees. The state directory and the
@@ -595,9 +628,9 @@ mod tests {
         use std::sync::Arc;
 
         let clock = Arc::new(FakeClock::new(UtcMillis(1_784_984_793_000)));
-        let heartbeat = LastLoopTick::new();
+        let (beats, heartbeat) = one_meter();
         let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
-        let phase = publishing(heartbeat.clone(), clock.clone(), config);
+        let phase = publishing(beats.clone(), clock.clone(), config);
 
         // The loop ticks now, with a 30 s period, so 90 s is the allowance.
         heartbeat.touch(clock.monotonic(), 30_000);
@@ -632,10 +665,10 @@ mod tests {
         use std::sync::Arc;
 
         let clock = Arc::new(FakeClock::new(UtcMillis(1_784_984_793_000)));
-        let heartbeat = LastLoopTick::new();
+        let (beats, heartbeat) = one_meter();
         let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
         let state = ui(publishing(
-            heartbeat.clone(),
+            beats.clone(),
             clock.clone(),
             Arc::clone(&config),
         ));
@@ -687,11 +720,11 @@ mod tests {
         use crate::domain::UtcMillis;
 
         let clock = Arc::new(FakeClock::new(UtcMillis(1_784_984_793_000)));
-        let heartbeat = LastLoopTick::new();
+        let (beats, heartbeat) = one_meter();
         let mut slow = running_config();
         slow.poll.interval = std::time::Duration::from_secs(300);
         let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(slow));
-        let phase = publishing(heartbeat.clone(), clock.clone(), Arc::clone(&config));
+        let phase = publishing(beats.clone(), clock.clone(), Arc::clone(&config));
 
         // The loop ticks at 300 s and then sleeps.
         heartbeat.touch(clock.monotonic(), 300_000);

@@ -64,14 +64,15 @@ pub const PERIOD_MAX: Duration = Duration::from_secs(300);
 /// behaviour: a release that shipped both would be two changes wearing one name.
 pub const PERIOD_DEFAULT: Duration = Duration::from_secs(30);
 
-/// How many meters the *runtime* can serve today.
-///
-/// The **model** holds any number (Story 5.1 AC4), because the configuration
-/// screen is built against the model and a form built against a singular field
-/// would be built twice. The **runtime** still serves one. Enabling more than
-/// this is refused rather than truncated — the fault is raised in [`validate`]
-/// under the field name `enabled meters`.
-pub const RUNTIME_METER_LIMIT: usize = 1;
+// `RUNTIME_METER_LIMIT` lived here until 2026-08-06 (Story 3.1).
+//
+// It was `1`, and enabling more was REFUSED rather than truncated, because a
+// bridge that quietly published one of four meters would look healthy in every
+// way a human checks — node online, tags present, values fresh — while three
+// were simply absent. The runtime now serves every enabled meter, so the guard
+// has been outgrown rather than weakened: nothing is dropped, so there is no
+// subset to refuse. The duplicate-serial, duplicate-meter-id and topic-legality
+// guards below are unrelated and stay.
 
 /// A meter as configured: its identity, and whether it is published at all.
 ///
@@ -616,24 +617,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
             })
         });
 
-    // The model holds any number; the runtime does not. Refusing beats serving a
-    // subset: a bridge that quietly published one of four meters would look
-    // healthy in every way a human checks — node online, tags present, values
-    // fresh — while three meters were simply absent.
     let enabled = meters.iter().filter(|m| m.enabled).count();
-    if enabled > RUNTIME_METER_LIMIT {
-        faults.push(Fault {
-            field: "enabled meters".to_string(),
-            source: None,
-            problem: format!(
-                "{enabled} are enabled and the runtime serves {RUNTIME_METER_LIMIT}. The \
-                 configuration model accepts more so the UI can be built against its final \
-                 shape, but serving them is not implemented yet — refusing here beats \
-                 publishing a subset that looks complete. Epic 3 (The Full Fleet) lifts \
-                 this limit; see docs/adr/0025-the-execution-order-actually-followed.md"
-            ),
-        });
-    }
     if enabled == 0 && !meters.is_empty() {
         faults.push(Fault {
             field: "enabled meters".to_string(),
@@ -1198,22 +1182,57 @@ mod tests {
         );
     }
 
-    /// AC6 — the guard that keeps a plural model from becoming a silent lie.
+    /// **Story 3.1 AC1, and this test asserted the OPPOSITE until 2026-08-06.**
+    ///
+    /// It was `more_enabled_meters_than_the_runtime_serves_is_refused`, and it was
+    /// right: story 5.1's AC6 refused a configuration enabling more meters than
+    /// the runtime served, because publishing one of four while looking healthy is
+    /// the exact failure this project exists to prevent. The guard has been
+    /// outgrown, not weakened — nothing is truncated now, because everything is
+    /// served.
+    ///
+    /// Four meters, which is the fleet the deployment actually has.
+    ///
+    /// FALSIFIED 2026-08-06 by restoring the `enabled > 1` fault in `validate`.
+    /// Copied from the run:
+    ///
+    /// ```text
+    /// test app::config::tests::every_enabled_meter_is_accepted_because_every_one_is_served ... FAILED
+    ///
+    /// thread '…every_enabled_meter_is_accepted_because_every_one_is_served' (57) panicked at
+    /// crates/smartme-bridge/src/app/config.rs:1223:13:
+    /// the runtime serves every enabled meter since Story 3.1, so four of them is a
+    /// configuration and not a fault: ConfigErrors([Fault { field: "enabled meters",
+    /// source: None, problem: "MUTATION" }])
+    ///
+    /// test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 166 filtered out
+    /// ```
+    ///
+    /// It dies on the `validate` itself, not on the count assertions below it —
+    /// so those two are proved only against the fault being absent, which is what
+    /// they are for.
     #[test]
-    fn more_enabled_meters_than_the_runtime_serves_is_refused() {
+    fn every_enabled_meter_is_accepted_because_every_one_is_served() {
         let mut raw = sound();
-        raw.meters.push(RawMeter {
-            meter_id: Some("meter-b".into()),
-            device_id: Some("dev-b".into()),
-            serial: Some("9202686".into()),
-            enabled: Some(true),
+        for (n, serial) in [(2, "9202686"), (3, "9202687"), (4, "9202688")] {
+            raw.meters.push(RawMeter {
+                meter_id: Some(format!("meter-{n}")),
+                device_id: Some(format!("dev-{n}")),
+                serial: Some(serial.into()),
+                enabled: Some(true),
+            });
+        }
+        let config = validate(raw).unwrap_or_else(|e| {
+            panic!(
+                "the runtime serves every enabled meter since Story 3.1, so four of \
+                 them is a configuration and not a fault: {e:?}"
+            )
         });
-        let errors = validate(raw).expect_err("two enabled meters should be refused");
-        assert!(
-            fields(&errors).contains(&"enabled meters"),
-            "got {:?}",
-            fields(&errors)
-        );
+        // The COUNT, not merely "it validated": a `validate` that dropped the
+        // extra meters would satisfy the line above and reintroduce, silently,
+        // the truncation story 5.1 refused.
+        assert_eq!(config.meters.len(), 4);
+        assert_eq!(config.meters.iter().filter(|m| m.enabled).count(), 4);
     }
 
     /// The other half of AC6: the model may hold the meter Guy has not connected.

@@ -997,6 +997,86 @@ mod tests {
         assert!(sink.emitted.is_empty());
     }
 
+    /// **Story 3.1 AC2 and AC3, and nothing exercised either beyond one meter.**
+    ///
+    /// Every other `birth` test here passes one serial or none, because the
+    /// runtime served one meter until 2026-08-06. The code was already written
+    /// against a slice and is unchanged by the fleet — which is exactly why it
+    /// needs a test: *"it always took a list"* is a claim about the signature,
+    /// not about the messages.
+    ///
+    /// AC3 is the one at risk. A per-meter task design invites a per-meter
+    /// counter, and `tck-id-topics-dbirth-seq` (`Sparkplug_4:386`) makes the
+    /// sequence a property of the **Edge Node**: one greater than the previous
+    /// message *from the node*, whichever device it concerned.
+    ///
+    /// The assertion is the FULL ordered list, not "increasing" and not "all
+    /// different". A counter advancing by two, or restarting per device, or
+    /// shared but read twice, each satisfies a weaker claim.
+    ///
+    /// FALSIFIED 2026-08-07 by giving each device its own counter — `live` is
+    /// replaced by a fresh `Session` per device inside `birth`'s device loop.
+    /// Copied from the run:
+    ///
+    /// ```text
+    /// test adapters::sparkplug_publisher::tests::four_devices_share_one_node_sequence ... FAILED
+    ///
+    /// thread '…four_devices_share_one_node_sequence' (355) panicked at
+    /// crates/smartme-bridge/src/adapters/sparkplug_publisher.rs:1072:9:
+    /// assertion `left == right` failed: the sequence belongs to the NODE, not to a
+    /// device: four devices born under one node must consume 1,2,3,4 after the NBIRTH's 0
+    ///   left: [Some(0), Some(1), Some(1), Some(1), Some(1)]
+    ///  right: [Some(0), Some(1), Some(2), Some(3), Some(4)]
+    /// ```
+    #[test]
+    fn four_devices_share_one_node_sequence() {
+        let mut p = publisher();
+        let mut sink = RecordingSink::default();
+        let fleet: Vec<Serial> = ["30000001", "30000002", "30000003", "30000004"]
+            .iter()
+            .map(|s| Serial::new(*s))
+            .collect();
+
+        p.birth(UtcMillis(1_000), &fleet, &mut sink)
+            .expect("four legal serials");
+
+        // AC2 — one NBIRTH, then one DBIRTH per meter, in that order.
+        // `tck-id-message-flow-device-birth-publish-nbirth-wait`.
+        let kinds: Vec<MessageType> = sink.emitted.iter().map(|o| o.message).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                MessageType::NBirth,
+                MessageType::DBirth,
+                MessageType::DBirth,
+                MessageType::DBirth,
+                MessageType::DBirth
+            ],
+            "one node birth, then one device birth per enabled meter, and the node's \
+             first: a DBIRTH before the NBIRTH is a device announced under a node the \
+             host has not been told about"
+        );
+
+        // ...and each on its OWN device topic. Four DBIRTHs on one topic would
+        // satisfy the shape assertion above while announcing one device four times.
+        let topics: Vec<&str> = sink.emitted[1..].iter().map(|o| o.topic.as_str()).collect();
+        for serial in &fleet {
+            assert!(
+                topics.iter().any(|t| t.ends_with(serial.as_str())),
+                "no DBIRTH carried {serial:?}; got {topics:?}"
+            );
+        }
+
+        // AC3 — the sequence is the NODE's, shared by every device.
+        let seqs: Vec<Option<u64>> = sink.emitted.iter().map(|o| decode(o).seq).collect();
+        assert_eq!(
+            seqs,
+            vec![Some(0), Some(1), Some(2), Some(3), Some(4)],
+            "the sequence belongs to the NODE, not to a device: four devices born \
+             under one node must consume 1,2,3,4 after the NBIRTH's 0"
+        );
+    }
+
     #[test]
     fn an_illegal_serial_emits_nothing_at_all() {
         let mut p = publisher();

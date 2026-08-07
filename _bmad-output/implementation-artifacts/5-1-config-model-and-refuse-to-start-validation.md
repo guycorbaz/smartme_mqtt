@@ -69,6 +69,10 @@ disabled) is **rejected**, with a message that says why the bound exists
 **AC4 — the model holds MANY meters, each with an enabled flag** *(added; scope set by Guy
 2026-08-03)*
 
+> **AMENDED 2026-08-06 (story 3.1).** The runtime is plural too now, and
+> `RUNTIME_METER_LIMIT` is gone. What AC6 forbade — publishing a subset that looks
+> complete — is still forbidden, by there being no subset: every enabled meter is served.
+
 **Given** `BridgeConfig::meter` is singular today (`supervisor.rs:36`) and Guy has **four** real
 meters, one of them not currently connected
 **When** this story lands
