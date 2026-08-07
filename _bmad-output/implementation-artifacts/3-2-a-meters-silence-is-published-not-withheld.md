@@ -1,6 +1,6 @@
 # Story 3.2: A meter's silence is published, not withheld
 
-Status: in-progress
+Status: review
 
 ## Story
 
@@ -141,9 +141,16 @@ That test also introduced a `body()` helper that reads the **rendered bytes**. E
 `format!("{response:?}")`, which prints `body: Body(UnsyncBoxBody)` and never the content — the
 hollow assertion found on 2026-08-05.
 
-**AC3 is NOT done.** Four meters, each carrying its own serial and verdict, has no test. Story
-3.1's cadence test proves per-meter labelling for readings; nothing yet proves it for republished
-verdicts, and that is exactly where a shared fixture hid a defect once already.
+**AC3 is done** (2026-08-07, third pass), at the publisher — where routing by serial and the
+published quality meet, and where a shared fixture would hide the defect. Four meters, three
+answering and one silent, each update carrying its own serial; the emitted messages are indexed
+**by topic** into a map and the whole map is asserted, because a count would be satisfied by four
+messages addressed to one device.
+
+Falsified by routing every DDATA to the first declared device. The result is worth keeping:
+`left: {"30000004": 192}` — one entry, because all four landed on one device, and the silent
+meter's `Bad_Stale` vanished from the wire entirely. The harm the assertion names, produced
+rather than argued.
 
 ## Falsification
 

@@ -1077,6 +1077,107 @@ mod tests {
         );
     }
 
+    /// **Story 3.2 AC3** — on a fleet, each meter's verdict must reach its OWN
+    /// device and no other.
+    ///
+    /// Story 3.2 made a failed poll republish the last known value with a
+    /// non-good quality, so for the first time the wire carries **different
+    /// qualities for different devices at the same moment**. Guy runs four meters
+    /// with one permanently unplugged, so a mis-routed verdict would mark a
+    /// working meter stale — or, worse, leave the broken one looking good.
+    ///
+    /// **The trap this exists for has already sprung twice today.** Story 3.1's
+    /// first cadence test counted `[9, 0, 0]` because the shared `reading()`
+    /// fixture hard-codes one meter id, so every task's update arrived labelled
+    /// "garage". Any assertion about "the right verdict" is worthless if every
+    /// message is addressed to the same device — so this test indexes the emitted
+    /// messages BY TOPIC and asserts a full map, not a count and not a sample.
+    ///
+    /// FALSIFIED 2026-08-07 by routing every DDATA to the first declared device —
+    /// `let serial = self.declared.keys().next().unwrap().clone();` in place of
+    /// reading it from the update. Copied from the run:
+    ///
+    /// ```text
+    /// test adapters::sparkplug_publisher::tests::each_meters_verdict_reaches_its_own_device ... FAILED
+    ///
+    /// thread '…each_meters_verdict_reaches_its_own_device' (355) panicked at
+    /// crates/smartme-bridge/src/adapters/sparkplug_publisher.rs:1162:9:
+    /// assertion `left == right` failed: every meter's verdict must land on its own
+    /// device: a mis-routed quality marks a working meter stale, or leaves a broken
+    /// one looking good
+    ///   left: {"30000004": 192}
+    ///  right: {"30000001": 192, "30000002": 192, "30000003": 2147484164, "30000004": 192}
+    /// ```
+    ///
+    /// `left` has ONE entry: all four messages landed on one device, and the silent
+    /// meter's `Bad_Stale` (2147484164) vanished from the wire entirely. That is
+    /// the harm stated in the message, produced rather than argued.
+    #[test]
+    fn each_meters_verdict_reaches_its_own_device() {
+        let mut p = publisher();
+        let mut sink = RecordingSink::default();
+        let fleet = ["30000001", "30000002", "30000003", "30000004"];
+        let serials: Vec<Serial> = fleet.iter().map(|s| Serial::new(*s)).collect();
+        p.birth(UtcMillis(1_000), &serials, &mut sink)
+            .expect("four legal serials");
+        sink.emitted.clear();
+
+        // Three answering, one silent — the shape of Guy's deployment. Each
+        // update carries its OWN serial, which is what production does and what
+        // the shared fixture would have hidden.
+        let verdicts = [
+            ("30000001", Quality::Good),
+            ("30000002", Quality::Good),
+            ("30000003", Quality::Stale),
+            ("30000004", Quality::Good),
+        ];
+        for (serial, published) in verdicts {
+            let mut m = measurement(Quality::Good);
+            m.serial = Serial::new(serial);
+            m.meter = MeterId::new(serial);
+            assert_eq!(
+                p.publish(&MeterUpdate::new(m.meter.clone(), m, published), &mut sink)
+                    .expect("a declared device"),
+                Published::Emitted,
+                "the premise: every one of these must actually reach the wire, or \
+                 the map below would be asserted over an empty stream"
+            );
+        }
+
+        // Indexed BY TOPIC, so a message addressed to the wrong device shows up as
+        // a wrong map rather than as a right count.
+        let seen: std::collections::BTreeMap<String, u32> = sink
+            .emitted
+            .iter()
+            .map(|o| {
+                let payload = decode(o);
+                (
+                    o.topic
+                        .rsplit('/')
+                        .next()
+                        .expect("a device level")
+                        .to_string(),
+                    quality_of(metric(&payload, METRIC_POWER)),
+                )
+            })
+            .collect();
+        let expected: std::collections::BTreeMap<String, u32> = verdicts
+            .iter()
+            .map(|(s, q)| ((*s).to_string(), ignition_quality_code(*q)))
+            .collect();
+        assert_eq!(
+            seen, expected,
+            "every meter's verdict must land on its own device: a mis-routed \
+             quality marks a working meter stale, or leaves a broken one looking good"
+        );
+        assert_eq!(
+            sink.emitted.len(),
+            4,
+            "four meters, four messages: one device published twice would give the \
+             right map and the wrong wire"
+        );
+    }
+
     #[test]
     fn an_illegal_serial_emits_nothing_at_all() {
         let mut p = publisher();

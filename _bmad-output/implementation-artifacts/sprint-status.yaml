@@ -130,8 +130,10 @@ development_status:
   # keeping its 200 (ADR 0027 section 2 — a restart cannot clear a refused
   # credential). AC5's test brought a `body()` helper that reads the RENDERED
   # BYTES: every prior /healthz test asserted only a status code.
-  # AC3 (per-meter verdicts across the fleet) is NOT done.
-  3-2-a-meters-silence-is-published-not-withheld: in-progress
+  # AC3 done the same day at the publisher: four meters indexed BY TOPIC into a map,
+  # whole map asserted. Mis-routing every DDATA to one device collapses it to a
+  # single entry and the silent meter's Bad_Stale disappears from the wire.
+  3-2-a-meters-silence-is-published-not-withheld: review
   3-3-per-meter-staleness-isolation-and-its-latency-bound: backlog
   3-4-discovery-the-accounts-meters-by-name-and-serial: backlog
   3-5-a-known-meter-that-disappears-from-discovery: backlog
