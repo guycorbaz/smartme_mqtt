@@ -57,7 +57,7 @@ async fn chaos_stale_on_cloud_timeout() {
             interval: Duration::from_millis(300),
             fetch_timeout: Duration::from_millis(500),
         },
-        policy: Policy { max_age_ms: 90_000 },
+        policy: Policy::DEFAULT,
         log_dir: None,
         log_keep: None,
         ui_port: None,

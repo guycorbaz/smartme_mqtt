@@ -381,7 +381,7 @@ impl UiState {
 /// The router. Split from serving so a test can exercise handlers without a
 /// socket, and so the socket can be exercised without guessing at routes.
 pub fn router(state: UiState) -> Router {
-    Router::new()
+    let routes = Router::new()
         .route("/", get(index))
         .route("/healthz", get(healthz))
         .route(
@@ -394,8 +394,97 @@ pub fn router(state: UiState) -> Router {
         .route(
             "/confirm",
             get(screens::confirm_form).post(screens::confirm_mapping),
-        )
+        );
+
+    // The probe, and it is NOT in the image.
+    //
+    // Story 6.1's AC5 has two halves and only the bind half could be asserted:
+    // proving the panic half needs a route that panics, and shipping one was
+    // rightly refused ([#51]). A Cargo feature that nothing enables by default
+    // is the way out — `docker-publish.yml` builds without it, so the binary an
+    // operator runs has no such route, while the test below exercises the REAL
+    // router, the real middleware and the real `serve`. What is test-only is the
+    // thing that panics; everything the assertion is about is production.
+    #[cfg(feature = "panic-probe")]
+    let routes = routes.route("/debug/panic", get(panic_probe));
+
+    routes
+        // AFTER every route, including the probe: `layer` wraps what is already
+        // there, so a layer added first would not cover a route added second.
+        .layer(axum::middleware::from_fn(catch_panic))
         .with_state(Arc::new(state))
+}
+
+/// A panicking handler must cost the page and nothing else (Story 6.1 AC5).
+///
+/// # Why this exists when a panic was already survivable
+///
+/// It was, and only in the weakest sense: `axum` serves each connection in its
+/// own task, so a panic killed that connection and left the process alone. What
+/// the operator got was a browser reporting a reset connection and **not one
+/// line anywhere** — the panic hook writes to stderr, not through `tracing`, so
+/// it missed the log file entirely and AC5's second clause ("traced, loudly, at
+/// a level the default filter shows") was simply false for this half.
+///
+/// The unwind is caught around each `poll`, not around the whole future, because
+/// a handler that panics after its first `await` panics inside a later poll —
+/// catching only the first would cover the cheapest case and none of the real
+/// ones.
+async fn catch_panic(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use std::future::Future as _;
+    use std::task::Poll;
+
+    // Captured before the request is consumed, so the trace can name the page.
+    let path = request.uri().path().to_owned();
+    let mut handler = Box::pin(next.run(request));
+
+    let outcome = std::future::poll_fn(|cx| {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handler.as_mut().poll(cx))) {
+            Ok(Poll::Pending) => Poll::Pending,
+            Ok(Poll::Ready(response)) => Poll::Ready(Ok(response)),
+            Err(panic) => Poll::Ready(Err(panic)),
+        }
+    })
+    .await;
+
+    match outcome {
+        Ok(response) => response,
+        Err(panic) => {
+            let why = panic
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "a panic carrying no message".to_string());
+            tracing::error!(
+                path = %path,
+                panic = %why,
+                "a web UI handler PANICKED. The bridge keeps polling and publishing; \
+                 this page is what was lost. Nothing about the meters is affected"
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Html(
+                    "<!doctype html><meta charset=utf-8><title>smartme_mqtt</title>\
+                     <h1>This page failed</h1><p>The bridge itself is unaffected and \
+                     is still polling and publishing. The log carries what went \
+                     wrong.</p>",
+                ),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// The panic the test needs, compiled only when `panic-probe` is on.
+///
+/// Never present in a released image: `docker-publish.yml` and every default
+/// build leave the feature off.
+#[cfg(feature = "panic-probe")]
+async fn panic_probe() {
+    panic!("the panic probe was called deliberately");
 }
 
 /// Bind and serve until the process stops.
@@ -672,7 +761,7 @@ mod tests {
                 interval: std::time::Duration::from_secs(30),
                 fetch_timeout: std::time::Duration::from_secs(10),
             },
-            policy: crate::core::state_machine::Policy { max_age_ms: 90_000 },
+            policy: crate::core::state_machine::Policy::DEFAULT,
             log_dir: None,
             log_keep: None,
             ui_port: None,

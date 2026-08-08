@@ -318,7 +318,7 @@ mod tests {
         use crate::core::state_machine::{Policy, State};
         let m = MeterId::new("m1");
         let r = map_device(&device("kVA", "kWh", "not-a-date"), Some(1_000), &m);
-        let policy = Policy { max_age_ms: 90_000 };
+        let policy = Policy::DEFAULT;
         let (state, published) =
             policy.step(State::initial(), &Ok(r), UtcMillis(1_784_984_793_000));
         assert_eq!((state, published), (State::Stale, Quality::Bad));

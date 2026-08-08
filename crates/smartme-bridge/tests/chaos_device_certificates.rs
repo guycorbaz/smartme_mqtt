@@ -73,7 +73,7 @@ fn config(port: u16, state_dir: &std::path::Path) -> BridgeConfig {
             interval: Duration::from_millis(500),
             fetch_timeout: Duration::from_millis(500),
         },
-        policy: Policy { max_age_ms: 90_000 },
+        policy: Policy::DEFAULT,
         log_dir: None,
         log_keep: None,
         ui_port: None,

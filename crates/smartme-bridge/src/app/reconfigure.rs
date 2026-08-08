@@ -138,7 +138,11 @@ impl Plan {
 ///
 /// Pure: no clock, no socket, no task. Everything about *when* and *how* the
 /// plan is carried out belongs to the supervisor; this decides only *what*.
-pub fn classify(old: &BridgeConfig, new: &BridgeConfig) -> Plan {
+///
+/// `served` is the set of meters the runtime has a poll task for — the truth
+/// from [`Heartbeats::meters`](crate::app::poll_publish::Heartbeats::meters),
+/// not something derivable from either configuration. See [`classify_meters`].
+pub fn classify(old: &BridgeConfig, new: &BridgeConfig, served: &[crate::domain::MeterId]) -> Plan {
     // EXHAUSTIVE, deliberately — no `..`. A new field on `BridgeConfig` breaks
     // this line, and breaking it is the point: see the module docs.
     let BridgeConfig {
@@ -267,7 +271,7 @@ pub fn classify(old: &BridgeConfig, new: &BridgeConfig) -> Plan {
         note("ui_port", Cost::ProcessRestart);
     }
 
-    classify_meters(old_meters, new_meters, &mut plan);
+    classify_meters(old_meters, new_meters, served, &mut plan);
     plan
 }
 
@@ -275,14 +279,35 @@ pub fn classify(old: &BridgeConfig, new: &BridgeConfig) -> Plan {
 /// the field moved.
 /// What a change to the meter set costs, in the terms the RUNTIME can honour.
 ///
-/// # Only the served meter's on/off switch is a certificate
+/// # Only a SERVED meter's on/off switch is a certificate
 ///
 /// This function used to answer as though the meter set were live. It is not.
-/// `supervisor::run_with_control` picks the **first enabled meter** once, at
-/// startup, and hands that meter's id and `device_id` to the poll task and that
-/// meter's serial to the driver. Nothing re-reads the set. So of everything an
-/// operator can do to a meter, exactly one thing takes effect on a running
-/// bridge: enabling or disabling **the meter already being served**.
+/// `supervisor::run_with_control` reads it once, at startup, spawns a poll task
+/// per enabled meter and hands their serials to the driver. Nothing re-reads the
+/// set. So of everything an operator can do to a meter, exactly one thing takes
+/// effect on a running bridge: enabling or disabling a meter that **already has
+/// a task**.
+///
+/// # `served` is passed in, because neither configuration can answer it
+///
+/// It was inferred here until 2026-08-08 — `old.iter().find(|m| m.enabled)`,
+/// falling back to `old.first()` — and that inference was a faithful model of a
+/// runtime that served ONE meter. Story 3.1 served them all on 2026-08-06 and
+/// this function was not told, which made it wrong in the direction that costs
+/// most: with four meters enabled, disabling the second, third or fourth was
+/// classified `ProcessRestart`, so **no DDEATH was sent and the screen said a
+/// restart would settle it**. A Sparkplug host went on showing a meter the
+/// operator had switched off, at its last value, as current — the withheld
+/// verdict ADR 0027 exists to forbid, arrived at from the configuration screen
+/// instead of from a failed poll.
+///
+/// The set now comes from `Heartbeats::meters`, one entry per spawned task. A
+/// configuration cannot supply it: `old` says what is *desired* and is rewritten
+/// by every `apply`, so a meter enabled ten minutes ago appears there as enabled
+/// while nothing polls it. Asking the tasks is the only way to be right, and it
+/// is also the seam story 3.1 named as missing — *"nothing asserts that
+/// `supervisor` spawns one task per meter; the heartbeat count is the seam that
+/// would prove it"*. It is load-bearing now.
 ///
 /// Three lies followed from getting this wrong, all found by a fresh-context
 /// review on 2026-08-05 and all reported to the operator as success:
@@ -302,16 +327,20 @@ pub fn classify(old: &BridgeConfig, new: &BridgeConfig) -> Plan {
 ///
 /// The honest classification is therefore narrow, and narrowness is the point: a
 /// cost table exists to let an operator act on it.
-fn classify_meters(old: &[MeterConfig], new: &[MeterConfig], plan: &mut Plan) {
-    // The meter the runtime is actually serving.
+fn classify_meters(
+    old: &[MeterConfig],
+    new: &[MeterConfig],
+    served: &[crate::domain::MeterId],
+    plan: &mut Plan,
+) {
+    // Whether the runtime has a poll task for this meter.
     //
-    // `supervisor::run_with_control` picks the first ENABLED meter at startup —
-    // but disabling it does not unbind the poll task, it only sends a DDEATH. So
-    // once the served meter has been disabled, `old` has nothing enabled and the
-    // binding is still to the first meter in the list. Falling back to it is what
-    // makes disable-then-re-enable a certificate rather than a restart, which is
-    // the cycle `chaos_device_certificates` exercises against a real broker.
-    let served = old.iter().find(|m| m.enabled).or_else(|| old.first());
+    // Disabling a meter does NOT unbind its task — it only sends a DDEATH — so a
+    // meter stays served across a disable, and re-enabling it is a birth rather
+    // than a restart. That is the cycle `chaos_device_certificates` exercises
+    // against a real broker, and it is why this asks the task set rather than
+    // asking whether the meter is currently enabled.
+    let is_served = |meter: &crate::domain::MeterId| served.contains(meter);
 
     fn find<'a>(set: &'a [MeterConfig], id: &crate::domain::MeterId) -> Option<&'a MeterConfig> {
         set.iter().find(|m| &m.meter == id)
@@ -348,25 +377,27 @@ fn classify_meters(old: &[MeterConfig], new: &[MeterConfig], plan: &mut Plan) {
                     restart(plan, "meters (serial)");
                 }
                 if *enabled != before.enabled {
-                    match served {
-                        // The one genuinely live change. Disabling buries the
-                        // device; re-enabling births it again, and the poll task
-                        // is still bound to it either way.
-                        Some(s) if s.meter == before.meter => {
-                            if before.enabled {
-                                plan.deaths.push(before.serial.clone());
-                            } else {
-                                plan.births.push(before.serial.clone());
-                            }
-                            plan.changes.push(Change {
-                                field: "meters (enabled)",
-                                cost: Cost::DeviceCertificate,
-                            });
+                    if is_served(&before.meter) {
+                        // The one genuinely live change, and it is now live for
+                        // EVERY meter with a task rather than for one of them.
+                        // Disabling buries the device; re-enabling births it
+                        // again, and the poll task is still bound to it either
+                        // way.
+                        if before.enabled {
+                            plan.deaths.push(before.serial.clone());
+                        } else {
+                            plan.births.push(before.serial.clone());
                         }
-                        // Enabling some OTHER meter declares a device nothing
-                        // polls. Refusing to call that a certificate is what
-                        // stops the screen reporting a silence as a success.
-                        _ => restart(plan, "meters (enabled)"),
+                        plan.changes.push(Change {
+                            field: "meters (enabled)",
+                            cost: Cost::DeviceCertificate,
+                        });
+                    } else {
+                        // A meter with no task. Enabling it declares a device
+                        // nothing polls; refusing to call that a certificate is
+                        // what stops the screen reporting a silence as a
+                        // success.
+                        restart(plan, "meters (enabled)");
                     }
                 }
             }
@@ -379,7 +410,11 @@ fn classify_meters(old: &[MeterConfig], new: &[MeterConfig], plan: &mut Plan) {
                 // the device level of the topic — is unchanged, so burying it
                 // would tell a host that a device it can still see has gone.
                 let device_survives = new.iter().any(|m| m.serial == before.serial && m.enabled);
-                if before.enabled && !device_survives {
+                // And a device is only owed a burial if it was ever BORN, which
+                // means the runtime had a task for it. A meter added and removed
+                // between two restarts never reached the wire, so a DDEATH for
+                // it would bury something no host has heard of.
+                if before.enabled && is_served(&before.meter) && !device_survives {
                     plan.deaths.push(before.serial.clone());
                     plan.changes.push(Change {
                         field: "meters (removed)",
@@ -420,6 +455,15 @@ mod tests {
         }
     }
 
+    /// The meters the runtime has a task for.
+    ///
+    /// Every case below `base()` builds models a bridge that started with
+    /// `garage` enabled, which is what these tests always meant — it was
+    /// inferred from the configuration until 2026-08-08 and is now stated.
+    fn served() -> Vec<MeterId> {
+        vec![MeterId::new("garage")]
+    }
+
     fn base() -> BridgeConfig {
         BridgeConfig {
             api_base: "https://api.smart-me.com".to_string(),
@@ -438,7 +482,7 @@ mod tests {
                 interval: Duration::from_secs(30),
                 fetch_timeout: Duration::from_secs(10),
             },
-            policy: Policy { max_age_ms: 90_000 },
+            policy: Policy::DEFAULT,
             log_dir: None,
             log_keep: None,
             ui_port: None,
@@ -447,7 +491,7 @@ mod tests {
 
     #[test]
     fn an_unchanged_configuration_costs_nothing() {
-        let plan = classify(&base(), &base());
+        let plan = classify(&base(), &base(), &served());
         assert!(plan.is_empty());
         assert_eq!(plan.cost(), None);
         assert!(plan.births.is_empty() && plan.deaths.is_empty());
@@ -457,7 +501,7 @@ mod tests {
     fn the_publish_period_is_hot() {
         let mut new = base();
         new.poll.interval = Duration::from_secs(5);
-        let plan = classify(&base(), &new);
+        let plan = classify(&base(), &new, &served());
         assert_eq!(plan.cost(), Some(Cost::Hot));
         assert!(
             plan.births.is_empty() && plan.deaths.is_empty(),
@@ -475,13 +519,158 @@ mod tests {
         ] {
             let mut new = base();
             mutate(&mut new);
-            let plan = classify(&base(), &new);
+            let plan = classify(&base(), &new, &served());
             assert_eq!(
                 plan.cost(),
                 Some(Cost::NewSession),
                 "the will is registered at CONNECT, so this cannot be hot: {plan:?}"
             );
         }
+    }
+
+    /// **Story 5.2 AC4 at fleet scale — the defect story 3.1 left behind.**
+    ///
+    /// Until 2026-08-08 the served meter was inferred as *"the first enabled one
+    /// in `old`"*, which was a faithful model of a runtime that served one meter
+    /// and became wrong on 2026-08-06 when story 3.1 served them all. With four
+    /// meters running, disabling any but the first was classified
+    /// `ProcessRestart`: no DDEATH was sent, and the screen told the operator a
+    /// restart would settle it. A Sparkplug host went on showing a meter that had
+    /// been switched off, at its last value, as current — ADR 0027's withheld
+    /// verdict, reached from the configuration screen instead of a failed poll.
+    ///
+    /// FALSIFIED 2026-08-08 by restoring the inference
+    /// (`let served = old.iter().find(|m| m.enabled).or_else(|| old.first());`
+    /// and `Some(s) if s.meter == before.meter`). Copied from the run:
+    ///
+    /// ```text
+    /// test app::reconfigure::tests::every_served_meters_switch_is_a_certificate_not_only_the_firsts ... FAILED
+    /// test app::reconfigure::tests::re_enabling_a_meter_that_kept_its_task_is_a_birth ... FAILED
+    ///
+    /// thread '…every_served_meters_switch_is_a_certificate_not_only_the_firsts' (362) panicked at
+    /// crates/smartme-bridge/src/app/reconfigure.rs:582:13:
+    /// assertion `left == right` failed: disabling cellar must bury its device: a host
+    /// that is not told goes on showing a switched-off meter's last value as current
+    ///   left: []
+    ///  right: [Serial("9202686")]
+    ///
+    /// test result: FAILED. 11 passed; 2 failed
+    /// ```
+    ///
+    /// **`left: []`** — not a wrong serial, no certificate at all. It dies on
+    /// `cellar`, the SECOND meter and the first iteration the inference gets
+    /// wrong: the loop walks all four positions precisely because the old code
+    /// was right about `garage` and silent about the other three. The eleven
+    /// tests that stayed green under the same mutation are the measure of how
+    /// long this could have lived: every one of them describes a one-meter
+    /// bridge.
+    #[test]
+    fn every_served_meters_switch_is_a_certificate_not_only_the_firsts() {
+        let fleet = vec![
+            meter("garage", "9202685", true),
+            meter("cellar", "9202686", true),
+            meter("workshop", "9202687", true),
+            meter("barn", "9202688", true),
+        ];
+        // All four have a task: this is what `run_with_control` spawns for the
+        // configuration above, and what `Heartbeats::meters` reports.
+        let all: Vec<MeterId> = fleet.iter().map(|m| m.meter.clone()).collect();
+
+        for (index, target) in fleet.iter().enumerate() {
+            let mut old = base();
+            old.meters = fleet.clone();
+            let mut new = old.clone();
+            new.meters[index].enabled = false;
+
+            let plan = classify(&old, &new, &all);
+
+            assert_eq!(
+                plan.deaths,
+                vec![target.serial.clone()],
+                "disabling {} must bury its device: a host that is not told goes on \
+                 showing a switched-off meter's last value as current",
+                target.meter
+            );
+            assert_eq!(
+                plan.cost(),
+                Some(Cost::DeviceCertificate),
+                "and it must not be reported as needing a restart, which is what \
+                 the operator would have been told for {}",
+                target.meter
+            );
+            assert!(
+                plan.births.is_empty(),
+                "nothing is born by switching one off: {plan:?}"
+            );
+            // The other three keep their tasks and their devices. A classifier
+            // that buried the fleet on any change would satisfy the assertion
+            // above and be catastrophic.
+            assert_eq!(
+                plan.deaths.len(),
+                1,
+                "exactly one device is buried; the siblings are untouched: {plan:?}"
+            );
+        }
+    }
+
+    /// The other direction, and the reason `served` is not simply "enabled".
+    ///
+    /// A meter that was switched off keeps its poll task — disabling sends a
+    /// DDEATH, it does not unbind anything — so switching it back on is a birth
+    /// rather than a restart. Asking `old` whether the meter is enabled would get
+    /// this exactly backwards, which is why the set comes from the tasks.
+    #[test]
+    fn re_enabling_a_meter_that_kept_its_task_is_a_birth() {
+        let fleet = vec![
+            meter("garage", "9202685", true),
+            meter("cellar", "9202686", false), // switched off earlier, task alive
+        ];
+        let all: Vec<MeterId> = fleet.iter().map(|m| m.meter.clone()).collect();
+
+        let mut old = base();
+        old.meters = fleet.clone();
+        let mut new = old.clone();
+        new.meters[1].enabled = true;
+
+        let plan = classify(&old, &new, &all);
+        assert_eq!(
+            plan.births,
+            vec![Serial::new("9202686")],
+            "a meter with a task that is switched back on is born again, not \
+             deferred to a restart: {plan:?}"
+        );
+        assert_eq!(plan.cost(), Some(Cost::DeviceCertificate));
+    }
+
+    /// And the guard that keeps the fix from over-reaching: a meter with NO task
+    /// still needs a restart, however enabled the file says it is.
+    ///
+    /// This is the case `moving_the_enabled_flag_to_another_meter_needs_a_restart`
+    /// covers from the other side, kept separate because the fix above could have
+    /// been written as "every enabled meter is a certificate" — which would pass
+    /// that test's sibling assertions and declare a device nothing polls.
+    #[test]
+    fn a_meter_the_runtime_never_started_is_a_restart_even_when_enabled() {
+        let mut old = base();
+        old.meters = vec![
+            meter("garage", "9202685", true),
+            meter("added-later", "9202699", false),
+        ];
+        let mut new = old.clone();
+        new.meters[1].enabled = true;
+
+        // Only `garage` has a task: `added-later` was written into the file after
+        // the process started, so nothing polls it.
+        let plan = classify(&old, &new, &served());
+        assert!(
+            plan.needs_restart().contains(&"meters (enabled)"),
+            "a device nothing polls must not be declared: {plan:?}"
+        );
+        assert!(
+            plan.births.is_empty(),
+            "a DBIRTH for a device that will never carry a reading is the \
+             silence-reported-as-success case in its purest form: {plan:?}"
+        );
     }
 
     /// The heart of AC4: enabling births, disabling buries, and neither touches
@@ -491,12 +680,12 @@ mod tests {
         let mut off = base();
         off.meters[0].enabled = false;
 
-        let on = classify(&off, &base());
+        let on = classify(&off, &base(), &served());
         assert_eq!(on.cost(), Some(Cost::DeviceCertificate));
         assert_eq!(on.births, vec![Serial::new("9202685")]);
         assert!(on.deaths.is_empty());
 
-        let gone = classify(&base(), &off);
+        let gone = classify(&base(), &off, &served());
         assert_eq!(gone.cost(), Some(Cost::DeviceCertificate));
         assert_eq!(gone.deaths, vec![Serial::new("9202685")]);
         assert!(gone.births.is_empty());
@@ -521,7 +710,7 @@ mod tests {
         new.meters[0].enabled = false;
         new.meters[1].enabled = true;
 
-        let plan = classify(&old, &new);
+        let plan = classify(&old, &new, &served());
         assert!(
             plan.needs_restart().contains(&"meters (enabled)"),
             "enabling a meter the poll task is not bound to must be reported as \
@@ -548,7 +737,7 @@ mod tests {
     fn renaming_a_meter_needs_a_restart_and_claims_no_certificate() {
         let mut new = base();
         new.meters[0].meter = MeterId::new("garage-1");
-        let plan = classify(&base(), &new);
+        let plan = classify(&base(), &new, &served());
         assert_eq!(plan.cost(), Some(Cost::ProcessRestart));
         assert!(
             plan.births.is_empty() && plan.deaths.is_empty(),
@@ -567,7 +756,7 @@ mod tests {
         ];
         let mut new = old.clone();
         new.meters.reverse();
-        let plan = classify(&old, &new);
+        let plan = classify(&old, &new, &served());
         assert!(
             plan.is_empty(),
             "reordering is not a change to any device: {plan:?}"
@@ -581,7 +770,7 @@ mod tests {
     fn changing_a_serial_needs_a_restart_rather_than_a_certificate() {
         let mut new = base();
         new.meters[0].serial = Serial::new("9202699");
-        let plan = classify(&base(), &new);
+        let plan = classify(&base(), &new, &served());
         assert!(
             plan.needs_restart().contains(&"meters (serial)"),
             "the DDATA serial comes from the smart-me RESPONSE, never from the \
@@ -603,7 +792,7 @@ mod tests {
         let mut new = base();
         new.poll.interval = Duration::from_secs(5); // hot
         new.broker_host = "elsewhere".into(); // new session
-        let plan = classify(&base(), &new);
+        let plan = classify(&base(), &new, &served());
         assert_eq!(plan.cost(), Some(Cost::NewSession));
         assert_eq!(plan.changes.len(), 2, "both must be listed: {plan:?}");
     }
@@ -621,7 +810,7 @@ mod tests {
         new.log_dir = Some("/data/logs".into());
         new.log_keep = Some(30);
         new.ui_port = Some(9090);
-        let plan = classify(&base(), &new);
+        let plan = classify(&base(), &new, &served());
         assert_eq!(plan.cost(), Some(Cost::ProcessRestart));
         assert_eq!(
             plan.needs_restart(),

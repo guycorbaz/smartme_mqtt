@@ -739,7 +739,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
             interval,
             fetch_timeout: Duration::from_secs(10),
         },
-        policy: Policy { max_age_ms: 90_000 },
+        policy: Policy::DEFAULT,
         // Passed through unvalidated and unused by the runtime: `main.rs` has
         // already acted on them by the time this runs. They are here so a
         // reload can SEE them change — see `app::reconfigure`.

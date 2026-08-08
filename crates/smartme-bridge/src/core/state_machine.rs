@@ -33,17 +33,73 @@ impl State {
     }
 }
 
+/// Why an allowance was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyError {
+    /// Zero or negative. Every reading would be Stale from birth.
+    NonPositive(i64),
+}
+
+impl std::fmt::Display for PolicyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PolicyError::NonPositive(value) => write!(
+                f,
+                "a staleness allowance of {value} ms makes every reading Stale from birth: \
+                 the bridge would publish nothing a host could act on, and would look \
+                 healthy doing it"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PolicyError {}
+
 /// The staleness policy — explicit data, no hidden defaults.
+///
+/// # The allowance cannot be non-positive, and the type is what stops it
+///
+/// `max_age_ms` was a public field until 2026-08-08, and `deferred-work.md`
+/// parked *"reject ≤ 0 at config load"* on an epic that was itself deferred —
+/// the shape ADR 0025 named as how an item stops being tracked. The closing
+/// review found the item had **no subject**: the value is a literal in
+/// `app::config::validate` and reaches no operator, so there was no load to
+/// validate at.
+///
+/// A guard at a load that does not happen protects nothing. The invariant is
+/// therefore on the type: the field is private, [`Policy::new`] refuses a
+/// non-positive allowance, and [`Policy::DEFAULT`] is the one the bridge ships.
+/// A future path — a `config.toml` key, an API, a migration — cannot reach the
+/// broken state without going through the constructor, which is the difference
+/// between a rule enforced by a mechanism and a rule somebody must remember.
+///
+/// What a `0` would do is not hypothetical and is asserted in this module's
+/// tests: `age_ms > 0` for every real reading, so `step` returns Stale for all
+/// of them (`:119`) while every other part of the bridge reports itself healthy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Policy {
     /// Maximum acceptable `http_date − value_date` age in milliseconds; beyond it
-    /// the reading is STALE even though the fetch succeeded. Must be positive: a
-    /// non-positive value makes EVERY reading Stale — fail-safe but useless; the
-    /// Epic 3 config oracle rejects it at load time.
-    pub max_age_ms: i64,
+    /// the reading is STALE even though the fetch succeeded.
+    max_age_ms: i64,
 }
 
 impl Policy {
+    /// What the bridge ships: 90 s, three times the default publish period.
+    pub const DEFAULT: Policy = Policy { max_age_ms: 90_000 };
+
+    /// An allowance, or a refusal naming what it would have cost.
+    pub fn new(max_age_ms: i64) -> Result<Self, PolicyError> {
+        if max_age_ms <= 0 {
+            return Err(PolicyError::NonPositive(max_age_ms));
+        }
+        Ok(Self { max_age_ms })
+    }
+
+    /// The allowance, in milliseconds. Always positive — see [`Policy::new`].
+    pub fn max_age_ms(&self) -> i64 {
+        self.max_age_ms
+    }
+
     /// The pure transition: `(prev, tick, now) -> (next, quality-to-publish)`.
     ///
     /// `tick` is the fetch outcome (`Reading` or typed error); `now` is the host
@@ -139,7 +195,7 @@ mod tests {
     use super::*;
     use crate::domain::{Kw, Kwh, Measurement, MeterId, Serial};
 
-    const POLICY: Policy = Policy { max_age_ms: 90_000 };
+    const POLICY: Policy = Policy::DEFAULT;
     const SANE_NOW: UtcMillis = UtcMillis(1_784_984_793_000); // 2026-07-25T13:06:33Z
     /// A cloud-domain base above the 2020 floor for fabricated timestamps.
     const BASE: i64 = 1_784_984_700_000;
@@ -161,6 +217,119 @@ mod tests {
     #[test]
     fn cold_start_is_stale_until_proven() {
         assert_eq!(State::initial(), State::Stale);
+    }
+
+    /// **The harm first, so the refusal below is not taken on trust.**
+    ///
+    /// This test constructs the forbidden `Policy` directly — it can, being
+    /// inside the module that owns the private field, and nothing outside can.
+    /// That is the point of the pair: this half MEASURES what a non-positive
+    /// allowance costs, and `a_non_positive_allowance_is_refused` proves no
+    /// caller can reach it.
+    ///
+    /// **The claim is bounded, because the first draft of it was wrong and the
+    /// falsification run caught it.** *"Every reading"* is not literally true at
+    /// `0`: age is `http_date − value_date`, so a reading whose two stamps fall
+    /// in the same millisecond has age `0`, and `0 > 0` is false — it survives.
+    /// What `0` actually forbids is **every reading with any age at all**, which
+    /// is every real one: the smart-me `Date` header is truncated to the second
+    /// and the value is stamped before the response is built.
+    ///
+    /// At `-1` and below there is no survivor, and the two cases are asserted
+    /// separately rather than lumped under one loop that would have hidden the
+    /// distinction — which is exactly what the first draft did.
+    #[test]
+    fn a_non_positive_allowance_would_make_every_reading_stale_from_birth() {
+        // One millisecond of age: the smallest a reading can carry and still be
+        // one the wire produced.
+        let aged = Ok(reading(Quality::Good, BASE, Some(BASE + 1)));
+        assert_eq!(
+            POLICY.step(State::initial(), &aged, SANE_NOW),
+            (State::Fresh, Quality::Good),
+            "THE PREMISE: under the shipped allowance this reading is Fresh. Without \
+             it, the Stale below would prove nothing about the allowance"
+        );
+
+        for forbidden in [0, -1, i64::MIN] {
+            let policy = Policy {
+                max_age_ms: forbidden,
+            };
+            assert_eq!(
+                policy.step(State::initial(), &aged, SANE_NOW),
+                (State::Stale, Quality::Stale),
+                "with an allowance of {forbidden} ms a one-millisecond-old reading is \
+                 Stale, so the bridge publishes nothing usable and looks healthy doing it"
+            );
+        }
+
+        // The boundary the first draft got wrong, kept as an assertion so nobody
+        // has to rediscover it: at exactly `0` a zero-age reading still passes.
+        let simultaneous = Ok(reading(Quality::Good, BASE, Some(BASE)));
+        let zero = Policy { max_age_ms: 0 };
+        assert_eq!(
+            zero.step(State::initial(), &simultaneous, SANE_NOW),
+            (State::Fresh, Quality::Good),
+            "`0` is not a total ban, and pretending otherwise is how a test comes to \
+             assert more than its code does"
+        );
+        // Negative is, and that is the difference between the two halves above.
+        let negative = Policy { max_age_ms: -1 };
+        assert_eq!(
+            negative.step(State::initial(), &simultaneous, SANE_NOW),
+            (State::Stale, Quality::Stale),
+            "below zero nothing survives, not even a reading with no age at all"
+        );
+    }
+
+    /// Story 3.1's unswept `deferred-work.md` item, closed 2026-08-08 — as a type
+    /// invariant rather than as the load-time check it was written as. The value
+    /// reaches no operator (`app::config::validate` writes a literal), so there
+    /// was no load to validate at; see [`Policy`]'s own documentation.
+    ///
+    /// FALSIFIED 2026-08-08 by removing the guard from `Policy::new` — the whole
+    /// `if max_age_ms <= 0` block. Copied from the run:
+    ///
+    /// ```text
+    /// test core::state_machine::tests::a_non_positive_allowance_is_refused ... FAILED
+    ///
+    /// thread '…a_non_positive_allowance_is_refused' (14) panicked at
+    /// crates/smartme-bridge/src/core/state_machine.rs:262:13:
+    /// an allowance of 0 ms was accepted; every reading would be Stale from birth
+    /// ```
+    ///
+    /// It dies on `0`, the first case, which is the one a hand-written file or a
+    /// zero-valued form field actually produces — `i64::MIN` is there for the
+    /// arithmetic, not because anybody would type it.
+    #[test]
+    fn a_non_positive_allowance_is_refused() {
+        for forbidden in [0, -1, i64::MIN] {
+            assert!(
+                Policy::new(forbidden).is_err(),
+                "an allowance of {forbidden} ms was accepted; every reading would be \
+                 Stale from birth"
+            );
+        }
+        // And the refusal SAYS what it would have cost. A fault an operator
+        // cannot act on sends them to the source.
+        let refusal = Policy::new(0).expect_err("0 is refused").to_string();
+        assert!(
+            refusal.contains("Stale from birth"),
+            "the refusal must name the consequence, not merely the bound: {refusal}"
+        );
+
+        assert_eq!(
+            Policy::new(1)
+                .expect("1 ms is legal, if useless")
+                .max_age_ms(),
+            1,
+            "the guard rejects non-positive, not small: a bound that also refused \
+             legal values would be caught here and not in production"
+        );
+        assert_eq!(
+            Policy::DEFAULT.max_age_ms(),
+            90_000,
+            "the shipped allowance is 90 s — three times the default publish period"
+        );
     }
 
     #[test]

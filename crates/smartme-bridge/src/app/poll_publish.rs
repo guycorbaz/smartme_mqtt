@@ -213,6 +213,24 @@ impl Heartbeats {
         self.0.iter().map(|(m, t, _)| (m, t))
     }
 
+    /// The meters the runtime is **actually serving** — one entry per spawned
+    /// poll task, because that is how this collection is built
+    /// (`supervisor::run_with_control`).
+    ///
+    /// Exposed for [`crate::app::reconfigure::classify`], which until 2026-08-08
+    /// guessed at this from the stored configuration: *"the first enabled meter,
+    /// or the first one"*. That guess was the truth while the runtime served one
+    /// meter and became wrong the day story 3.1 served them all — disabling the
+    /// second of four was then classified as needing a restart, and its DDEATH
+    /// never sent, so a host kept showing a buried meter's last value as current.
+    ///
+    /// A configuration cannot answer this question: it says what is *desired*,
+    /// and a meter enabled after start-up is desired without being polled. Only
+    /// the set of running tasks knows, and this is it.
+    pub fn meters(&self) -> impl Iterator<Item = &MeterId> {
+        self.0.iter().map(|(m, _, _)| m)
+    }
+
     /// How many meters are being watched.
     pub fn len(&self) -> usize {
         self.0.len()
@@ -403,7 +421,7 @@ mod tests {
     }
 
     fn policy() -> Policy {
-        Policy { max_age_ms: 90_000 }
+        Policy::DEFAULT
     }
 
     fn reading(quality: Quality, age_ms: i64) -> Reading {

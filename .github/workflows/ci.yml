@@ -46,6 +46,12 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: test (includes arch_purity, no_context_leak, persist, fixtures)
         run: cargo test --workspace
+      # Story 6.1 AC5's second half ([#51]). The `panic-probe` feature adds the
+      # one route that panics; without this step the feature is dead code and
+      # the test it exists for never runs anywhere. Released images build with
+      # default features, so the probe is not in any of them.
+      - name: test the panicking-handler guard (feature-gated route)
+        run: cargo test -p smartme-bridge --features panic-probe --test a_panicking_handler_does_not_cost_the_meters
 
   deny:
     name: cargo-deny (licenses + external deps)

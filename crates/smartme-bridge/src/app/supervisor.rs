@@ -196,7 +196,12 @@ impl Control {
     /// other way except by hand.
     pub async fn apply(&self, new: BridgeConfig) -> Plan {
         let old = self.current();
-        let mut plan = reconfigure::classify(&old, &new);
+        // The meters with a poll task, from the tasks themselves — not inferred
+        // from either configuration. See `reconfigure::classify_meters`: the
+        // inference was right for a one-meter runtime and silently wrong from
+        // the day story 3.1 served the fleet.
+        let served: Vec<_> = self.heartbeats.meters().cloned().collect();
+        let mut plan = reconfigure::classify(&old, &new, &served);
         if plan.is_empty() {
             return plan;
         }
@@ -464,13 +469,30 @@ mod tests {
 
     /// A [`Control`] with no bridge behind it: the channel is the observation
     /// point, so what `apply` decides is visible without a broker.
+    /// The heartbeats are built FROM THE CONFIGURATION, the way
+    /// [`run_with_control`] builds them — one per enabled meter.
+    ///
+    /// It said `Heartbeats::for_meters(["meter-a"])` until 2026-08-08 while
+    /// `config()` describes a meter called `garage`: a harness asserting a served
+    /// set that had nothing to do with its own configuration. Nothing could
+    /// notice, because `classify` inferred the served meter from the config and
+    /// never looked at the heartbeats. Making the real code ask the tasks made
+    /// this test fail — `Some(ProcessRestart)` where a certificate was owed —
+    /// which is the harness admitting what it had been modelling.
     fn control() -> (Control, mpsc::Receiver<DeviceCommand>) {
         let (devices, rx) = mpsc::channel(8);
+        let started = config();
         (
             Control {
                 config: Arc::new(arc_swap::ArcSwap::from_pointee(config())),
                 devices,
-                heartbeats: Heartbeats::for_meters([crate::domain::MeterId::new("meter-a")]),
+                heartbeats: Heartbeats::for_meters(
+                    started
+                        .meters
+                        .iter()
+                        .filter(|m| m.enabled)
+                        .map(|m| m.meter.clone()),
+                ),
                 clock: Arc::new(crate::core::clock::SystemClock::new()),
             },
             rx,
@@ -648,7 +670,7 @@ mod tests {
                 interval: Duration::from_secs(5),
                 fetch_timeout: Duration::from_secs(2),
             },
-            policy: Policy { max_age_ms: 90_000 },
+            policy: Policy::DEFAULT,
             log_dir: None,
             log_keep: None,
             ui_port: None,

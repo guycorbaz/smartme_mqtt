@@ -73,6 +73,20 @@ else
     ok "tests"
 fi
 
+# The one test that needs a Cargo feature, and it is copied from ci.yml like
+# everything else here.
+#
+# Story 6.1 AC5's panic half ([#51]) could not be asserted without a route that
+# panics, and shipping one was refused. `panic-probe` adds exactly that route
+# and nothing else; `docker-publish.yml` builds with default features, so no
+# released image carries it. Run separately because `--workspace` does not
+# enable it — which also means that WITHOUT this step the feature would be dead
+# code and the guard untested, the failure mode the step exists to prevent.
+step "ci.yml — the panicking-handler guard (feature-gated route)"
+cargo test -p smartme-bridge --features panic-probe \
+    --test a_panicking_handler_does_not_cost_the_meters
+ok "a panicking handler costs the page and nothing else"
+
 # ---------------------------------------------------------------------------
 # .github/workflows/sparkplug-isolated.yml
 #

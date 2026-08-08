@@ -145,7 +145,24 @@ reported unhealthy**.
         dependency change. `ci-local.sh` caught the lock file unstaged, which is what it is for.
   - [x] Started before the state match; every state that stays up gets it.
   - [x] The bind asserted by a test, not by a comment.
-  - [~] **A panicking handler must not stop the poll loop — NOT ASSERTED.** Half of AC5 is proven:
+  - [x] **A panicking handler must not stop the poll loop — ASSERTED 2026-08-08**, and the second
+        clause of AC5 ("traced, loudly") was **false** until the same day, which the note below did
+        not know. A panic reached `tracing` nowhere: the default hook writes to stderr, so a bridge
+        logging to a file recorded the outage in no file, and the browser got a reset connection
+        with no status line — `Got: Some("")` in the falsification run, not a wrong status code.
+        Now `ui::router` carries `catch_panic`, a `from_fn` layer that unwinds each `poll`, logs at
+        `error!` with the page and the panic's own message, and answers `500`.
+        The route that panics is behind the `panic-probe` Cargo feature — four lines, off by
+        default, absent from every released image because `docker-publish.yml` builds with default
+        features. Everything the assertion is *about* is production: the router, the layer, the
+        trace, `serve`, the binary. `tests/a_panicking_handler_does_not_cost_the_meters.rs`, run by
+        `ci.yml` and `ci-local.sh` as their own step — without which the feature would be dead code
+        and the guard untested, which is the failure the step exists to prevent.
+        The test proves the loop is alive BEFORE the panic and ticking AFTER it, by waiting for
+        `loop_age_ms` to **fall** — its first draft compared against a pre-panic sample taken at an
+        arbitrary point in the cycle and called a perfectly live loop stopped. [#51] can close.
+  - [~] ~~**A panicking handler must not stop the poll loop — NOT ASSERTED.**~~ *(Superseded
+        2026-08-08 by the box above; kept for the reasoning it weighed.)* Half of AC5 is proven:
         a listener that cannot bind degrades to "no UI", says so, and the bridge keeps publishing
         (`a_taken_port_does_not_cost_the_meters`). The panic half is not, because asserting it needs
         a route that panics, which means shipping a panicking handler in the binary or a test-only

@@ -109,7 +109,7 @@ fn reading_with(http_date: Option<UtcMillis>) -> Reading {
 }
 
 fn verdict_for(fixture: &str) -> (State, Quality) {
-    let policy = Policy { max_age_ms: 90_000 };
+    let policy = Policy::DEFAULT;
     // The injected clock: a sane 2026 host wall time; the verdict must not depend
     // on real time in any way.
     let clock = FakeClock::new(utc_millis(2026, 7, 25, 13, 6, 40));

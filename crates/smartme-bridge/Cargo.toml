@@ -7,6 +7,12 @@ rust-version.workspace = true
 publish = false
 description = "The smartme_mqtt bridge application: canonical Measurement, state machine, adapters, web UI, wiring."
 
+[features]
+# The panicking route Story 6.1 AC5 needs to assert its second half ([#51]).
+# Off by default and never enabled by `docker-publish.yml`, so no released image
+# carries it. `ci-local.sh` and `ci.yml` run the one test that turns it on.
+panic-probe = []
+
 [dependencies]
 sparkplug-b = { path = "../sparkplug-b" }
 smart-me-client = { path = "../smart-me-client" }

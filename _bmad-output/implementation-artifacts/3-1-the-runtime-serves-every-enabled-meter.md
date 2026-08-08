@@ -171,9 +171,23 @@ above, `epics.md`, `architecture.md`, the story 5.1 record, and `config.rs`'s ow
       would be starting wrong.
 - [x] `watch<[MeterState; N]>` per AR6, so the UI reads a coherent snapshot rather than N values
       that never agreed at any instant.
-- [ ] Sweep the `deferred-work.md` items parked on Epic 3 that this story touches — at minimum
+- [x] Sweep the `deferred-work.md` items parked on Epic 3 that this story touches — at minimum
       `Policy::max_age_ms` validation, and `Serial::new("")` key collisions now that serials key a
-      multi-meter map rather than a single one. **NOT DONE, verified 2026-08-08.** `max_age_ms`
+      multi-meter map rather than a single one.
+      **`max_age_ms` DONE 2026-08-08, and not as the item was written.** It asked for a rejection
+      *at config load*; there is no such load — the allowance is a literal in `validate` and
+      reaches no operator, so the guard had no subject. It is a **type invariant** instead: the
+      field is private, `Policy::new` refuses ≤ 0 naming what it would cost, `Policy::DEFAULT` is
+      what ships, and the sixteen literal constructions now go through it. The harm is measured in
+      its own test and the refusal is falsified in another; the measurement corrected the claim it
+      was written for — at exactly `0` a reading whose two stamps share a millisecond still passes,
+      so what `0` forbids is every reading *with any age*, which is every real one.
+      **`Serial::new("")` is still owed** and is a different shape: an empty serial cannot reach
+      the map through the configuration (`config::validate` refuses a serial that is not a legal
+      topic level), so what is unguarded is the constructor, not the load. Same repair as
+      `Policy::new`, not done here — it belongs with the discovery story that will build serials
+      from API responses rather than from a validated file (3.4).
+      *Original finding, kept:* `max_age_ms`
       appears in `app/config.rs` only inside a test fixture (`:742`); nothing rejects `0`, which
       would make every reading stale from birth. `deferred-work.md:22` still parks it on *"Epic 3
       config oracle"*. This is the failure ADR 0025 named: deferring to an epic that is itself

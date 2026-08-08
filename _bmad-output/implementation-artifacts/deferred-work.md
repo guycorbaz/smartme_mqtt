@@ -19,7 +19,21 @@ Items deferred from reviews; each carries its origin and where it should be pick
   and go spuriously STALE (flapping at sub-second phase alignment). Spec-literal `age < 0 → STALE`
   kept for Epic 1 (fail-safe: noise, never a lie); revisit the tolerance band (e.g. −2000 ms) with
   real polling data in Epic 2.
-- `Policy::max_age_ms` validation (reject ≤ 0 at config load) — Epic 3 config oracle.
+- ~~`Policy::max_age_ms` validation (reject ≤ 0 at config load) — Epic 3 config oracle.~~
+  **CLOSED 2026-08-08, and not as written.** The item had no subject: the allowance is a literal
+  in `app::config::validate` and reaches no operator, so there was no load to validate at — a
+  guard at a load that does not happen protects nothing. It is now a **type invariant** instead:
+  `max_age_ms` is a private field, `Policy::new` refuses ≤ 0 naming what it would have cost, and
+  `Policy::DEFAULT` is what the bridge ships. A future path — a `config.toml` key, an API, a
+  migration — cannot reach the broken state without passing the constructor.
+  Two tests, one per half: the harm is measured (`a_non_positive_allowance_would_make_every_
+  reading_stale_from_birth`) and the refusal is falsified (`a_non_positive_allowance_is_refused`).
+  The measurement corrected the claim it was written to support — at exactly `0` a reading whose
+  two stamps share a millisecond still passes, so what `0` forbids is every reading *with any age
+  at all*, which is every real one. Below zero there is no survivor. That distinction was found by
+  the falsification run and would not have been found by reading.
+  This item is also the one story 3.1's AC6 sweep was owed and did not do; it sat here parked on
+  *"Epic 3 config oracle"*, an epic that was itself deferred — the shape ADR 0025 named.
 
 ## Deferred from: code review of 1-6-smart-me-client (2026-07-25)
 

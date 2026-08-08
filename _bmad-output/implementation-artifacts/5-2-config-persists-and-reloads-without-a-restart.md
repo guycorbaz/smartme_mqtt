@@ -259,14 +259,38 @@ write-only rule (AC6) especially, which is the reason the split exists.
 can. AC4's DBIRTH/DDEATH applies to the meter the runtime does serve, and generalises when the
 fan-out lands.~~
 
-**Overtaken 2026-08-06 by story 3.1, recorded 2026-08-08.** The fan-out landed: every enabled meter
-is served and the refusal is gone. **AC4's DBIRTH/DDEATH did NOT generalise with it** —
-`app::reconfigure::classify_meters` still reasons about *the meter the runtime is serving*,
-singular, and its comment still says `run_with_control` picks the first enabled one, which
-`supervisor.rs:319` stopped doing. Enabling any meter other than that first one is still classified
-`ProcessRestart`. That verdict remains **honest** — `Control::apply` spawns no poll task, so a
-DBIRTH would announce a device nothing reads — but it is now conservative rather than accurate, and
-it is Epic 3 work that neither 3.1 nor 3.2 picked up. See the closing review of 2026-08-08.
+**Overtaken 2026-08-06 by story 3.1, recorded 2026-08-08, REPAIRED the same day.** The fan-out
+landed: every enabled meter is served and the refusal is gone. **AC4's DBIRTH/DDEATH did not
+generalise with it**, and the closing review's first reading of that gap was too kind — it called
+the leftover verdict *"conservative rather than accurate"*. It was **wrong, and it withheld a
+certificate**.
+
+`classify_meters` inferred the served meter as *"the first enabled one in `old`, or the first one"*.
+With four meters running, disabling the second, third or fourth was therefore classified
+`ProcessRestart`: **no DDEATH was sent**, and the screen told the operator a restart would settle
+it. A Sparkplug host went on showing a meter the operator had just switched off, at its last value,
+as current. That is ADR 0027's withheld verdict — the failure this project is named for — reached
+from the configuration screen instead of from a failed poll. Guy runs four meters, so it was
+reachable on three of them.
+
+**The repair is to stop inferring.** No configuration can answer "which meters does the runtime
+serve": `old` says what is *desired* and is rewritten by every `apply`, so a meter enabled ten
+minutes ago sits there as enabled while nothing polls it. The set now comes from
+`Heartbeats::meters` — one entry per spawned poll task — and `classify` takes it as an argument.
+That is also the seam story 3.1 named as missing (*"nothing asserts that `supervisor` spawns one
+task per meter; the heartbeat count is the seam that would prove it"*); it is load-bearing now.
+
+Three tests, in `app::reconfigure`: every position in a four-meter fleet buries its own device and
+only its own; a meter that kept its task across a disable is **born** again rather than deferred to
+a restart; and a meter the runtime never started still needs a restart however enabled the file
+says it is — the guard that keeps the fix from over-reaching into declaring a device nothing polls.
+Falsified by restoring the inference: `left: []` against `right: [Serial("9202686")]`, dying on the
+second meter, with **eleven other tests still green** — every one of them describes a one-meter
+bridge, which is how the defect survived the fan-out.
+
+It also made `supervisor`'s own test harness admit something: it built `Heartbeats::for_meters(
+["meter-a"])` while its configuration described `garage`. A served set unrelated to its own
+config, invisible for as long as nothing read it.
 
 ### The absence assertion, again
 
