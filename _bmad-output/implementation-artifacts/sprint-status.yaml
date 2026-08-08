@@ -71,6 +71,28 @@ development_status:
   1-14-chaos-stale-on-death-stale-on-cloud-timeout: done
   1-15-tier-3-ignition-contract-test-manual-runbook: done
   epic-1-retrospective: done
+  # ADDED TO THIS FILE 2026-08-08. It was absent, not backlogged — and so were
+  # epics 7 and 8, which meant this dashboard described a six-epic project.
+  # ADR 0025 named the mechanism for exactly this epic: deferring to a deferred
+  # epic is how an item stops being tracked. The fix is to be listed, even at
+  # `backlog`, because a line that says `backlog` can be read; a missing line
+  # cannot.
+  #
+  # NOT started, and one piece has already LEFT it: ADR 0027 moved the republish
+  # (every poll cycle publishes a verdict for every enabled meter, or a device
+  # certificate; never silence) into story 3.2, because at four meters a withheld
+  # verdict is the permanent case rather than the unlucky one. What remains here
+  # is the rest of the "never lies" surface: the four runtime oracles — unit
+  # rejection, serial-identity binding, physical bounds, energy-counter
+  # monotonicity — plus the error taxonomy and the backoff behaviour.
+  #
+  # WHAT ITS ABSENCE COSTS, and it is a cost in absence and therefore easy to
+  # lose: "never lies" rests on the freshness state machine ALONE. Nothing checks
+  # that a reading's serial is the meter it was asked for, that a power value is
+  # physically possible, or that an energy counter has not gone backwards. The
+  # deferred-work file parks several items here.
+  epic-2: backlog
+
   # OPENED 2026-08-06, on Guy's instruction, and it is the next epic per ADR 0025's
   # forward order (6 -> 3 -> 2 -> 7 -> 8).
   #
@@ -990,3 +1012,32 @@ development_status:
   # as `contains("in force now")` had been. Under it, `needs_restart()` omitted
   # every NewSession field.
   6-2-the-configuration-screen: review
+
+  # ADDED 2026-08-08, previously absent from this file entirely.
+  #
+  # THIS IS THE EPIC THE PANORAMIX GATE LANDS IN, once the fleet works: compose
+  # behind Traefik, the healthcheck, zero-config-loss image updates.
+  #
+  # TWO DECISIONS ARE ALREADY OWED TO IT, and they are the same decision seen
+  # from two sides — taking them apart would be taking two half-decisions:
+  #  1. **Nothing inside the image can consume `/healthz`** ([#56]). The runtime
+  #     image has no `curl`, no `wget`, and its shell is not bash, so `/dev/tcp`
+  #     is out. There is no HEALTHCHECK line; `Dockerfile:97` says its absence is
+  #     a decision. So AR12's restart cannot fire in a real deployment, and the
+  #     503 path has never been exercised the way it will be used.
+  #  2. **What a `500` from `/healthz` should mean.** Since 2026-08-08 a panicking
+  #     UI handler answers 500 (story 6.1 AC5's guard). ADR 0027 §2 deliberately
+  #     keeps non-200 codes for a WEDGED POLLER only, because this epic wires them
+  #     to a container restart and a restart kills the Sparkplug session for every
+  #     meter. A panic in a DISPLAY handler must not restart the bridge.
+  epic-7: backlog
+
+  # ADDED 2026-08-08, previously absent from this file entirely.
+  #
+  # Documentation, the versioned contract and the crates.io bar. Partly ALREADY
+  # UNDER WAY outside any story, which is its own reason to be listed: the manual
+  # has ten chapters, `CONTRACT_VERSION` exists and is served by `/healthz`, and
+  # the ADR trail is at 28 rather than the 8 this epic's description still names.
+  # An epic whose work is happening without stories cannot be said to be at
+  # `backlog` honestly — but it can be said to be listed.
+  epic-8: backlog
