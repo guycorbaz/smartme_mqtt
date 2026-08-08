@@ -171,6 +171,44 @@ reported unhealthy**.
         structural rather than tested: the server is a spawned task, so a panic in it kills that task
         and nothing else.
 
+## Closing review of the panic guard, 2026-08-08 (written after `2a4d5ca`, by the same hand — which is the weakness of it)
+
+**The guard works and its test is honest.** What follows is what a reader looking for harm found
+anyway, and one item is the class of defect this project exists to prevent, reached from the
+opposite side.
+
+### 1. The `500` on `/healthz` contradicts ADR 0027 §2, and the trap is armed rather than sprung
+
+ADR 0027 §2 decided, deliberately and against the honest-looking answer, that **`/healthz` keeps
+answering `200` for a fault a restart cannot clear**: *"Epic 7 wires this endpoint to a container
+restart… The healthcheck's job is to restart a wedged poller."* A restart kills the Sparkplug
+session for **every** meter.
+
+`catch_panic` now answers `500` from any handler that panics — including `/healthz`'s own. Nothing
+is broken today: `Dockerfile:97` still says *"NO HEALTHCHECK, and its absence is a decision rather
+than an omission"*. But the day Epic 7 adds that line, a panic in a **display** handler restarts the
+container and takes four meters' session with it. That is *"a diagnostic aid that can stop the
+meters has stopped being an aid"* — this story's own sentence — reached through the repair written
+to honour it.
+
+**Not decided here**, because the decision belongs with the healthcheck wiring and inventing it now
+would be deciding Epic 7's business in Epic 6: the candidates are a `200` with a fault field for a
+panicking display route, a `500` kept only for `/healthz` itself, or a healthcheck that reads the
+body rather than the code. Recorded so that Epic 7 meets it as a decision rather than as a surprise.
+
+### 2. The error body is HTML on an endpoint that is JSON
+
+`catch_panic` returns `Html(...)` for every route. A machine reading `/healthz` — which is the only
+reason that endpoint exists — would get `<!doctype html>` with its `500`. Small, and the kind of
+thing that is never noticed until something parses it.
+
+### 3. Nothing asserts the layer covers a PRODUCTION route
+
+The test hits `/debug/panic` and nothing else. That `/`, `/config` and `/confirm` are wrapped is
+true by reading — `.layer()` is applied after every `.route()`, including the probe — and is
+asserted nowhere. A future refactor that adds a route *after* the layer would be uncovered and no
+test would notice, which is exactly the mistake the comment above the layer warns about.
+
 - [x] **Task 3 — `/healthz`** (AC: 3, 4)
   - [x] Alive vs working, distinguishable, with the heartbeat.
   - [x] **A deliberately silent bridge is healthy.** Falsify this one against the actual Docker

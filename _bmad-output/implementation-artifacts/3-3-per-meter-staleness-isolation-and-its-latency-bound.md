@@ -209,6 +209,28 @@ what let the gap live, and leaving it ticked while fixing the code repeats it.
         The two protections do not subsume each other.
   - [ ] `./scripts/ci-local.sh`, full.
 
+## Closing review, 2026-08-08 (same-day, same hand)
+
+Two findings, neither of which changes a verdict, both worth having on the record.
+
+### The two-borrow shape survives in the API, unused
+
+`MeterPulse::last()` and `MeterPulse::period_ms()` each take their **own** `borrow()`, and since
+this story `loop_age` reads the snapshot instead — so the only callers left are tests. The germ of
+the defect just repaired is therefore still in the type: a future caller wanting both would read two
+instants, which is precisely what `Vec`-of-atomics did. Either they lose their separate borrows or
+they go. Left as is today because removing a public accessor its tests use is a change with no
+present subject.
+
+### `Policy::new` is called by nothing
+
+The invariant from `2a4d5ca` holds entirely by the field being private — which is the design, and it
+is sound: nothing outside `core::state_machine` can build a `Policy` at all. But the constructor
+that carries the rule is exercised only by its own test, and `Policy::DEFAULT` is a literal that
+does not pass through it. The guard protects a path that does not exist yet. That is the correct
+shape for it, and it should be said rather than left for a reader to discover that the "rejection"
+rejects nothing anybody calls.
+
 ## Dev Notes
 
 ### What "signalled" means, and where it is measured
