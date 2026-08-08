@@ -256,22 +256,6 @@ impl Phase {
         Arc::new(arc_swap::ArcSwap::from_pointee(self))
     }
 
-    /// How long since the poll loop last started an iteration, and how long it is
-    /// allowed to be — `None` when there is no loop.
-    /// The allowance comes from the cadence the loop RECORDED, not from the
-    /// period the configuration currently asks for — see [`LastLoopTick::touch`]
-    /// for the false 503 that produced.
-    /// **The worst meter's, not the fleet's average and not the first one's**
-    /// (Story 3.1). Each meter paces itself, so each carries its own allowance;
-    /// the pair returned is the one most over it, and `None` only when no meter
-    /// has ticked at all.
-    ///
-    /// A meter that has never ticked while its siblings have is skipped rather
-    /// than counted as infinitely late: during startup that is every meter for a
-    /// moment, and reporting a wedge there would restart a container that is
-    /// merely young. It also means a task that dies before its first tick is
-    /// invisible here — true before this change as well, and owed a guard of its
-    /// own rather than a silent reinterpretation of this one.
     /// The meters whose source has failed fatally, if any (Story 3.2 AC5).
     ///
     /// Empty in every silent phase, because there is no poll loop to have an
@@ -288,6 +272,32 @@ impl Phase {
         }
     }
 
+    /// How long since the poll loop last started an iteration, and how long it is
+    /// allowed to be — `None` when there is no loop.
+    ///
+    /// The allowance comes from the cadence the loop RECORDED, not from the
+    /// period the configuration currently asks for — see [`LastLoopTick::touch`]
+    /// for the false 503 that produced.
+    ///
+    /// **The worst meter's, not the fleet's average and not the first one's**
+    /// (Story 3.1). Each meter paces itself, so each carries its own allowance;
+    /// the pair returned is the one most over it, and `None` only when no meter
+    /// has ticked at all.
+    ///
+    /// A meter that has never ticked while its siblings have is skipped rather
+    /// than counted as infinitely late: during startup that is every meter for a
+    /// moment, and reporting a wedge there would restart a container that is
+    /// merely young. It also means a task that dies before its first tick is
+    /// invisible here — true before this change as well, and owed a guard of its
+    /// own rather than a silent reinterpretation of this one.
+    ///
+    /// **This block documented `failed_sources` from 2026-08-07 to 2026-08-08.**
+    /// `590c78d` inserted that function between this comment and the item it
+    /// describes, so sixteen lines about per-meter allowances were attached to a
+    /// function that has no opinion on them, and `loop_age` had none at all. A
+    /// `///` block belongs to whatever follows it, which makes inserting an item
+    /// above a comment a silent way to make documentation wrong rather than
+    /// merely absent.
     fn loop_age(&self) -> Option<(i64, i64)> {
         let control = self.running.as_ref()?;
         let now = control.clock().monotonic().0;

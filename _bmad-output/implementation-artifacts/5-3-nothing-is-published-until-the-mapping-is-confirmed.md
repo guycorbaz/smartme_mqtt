@@ -85,11 +85,34 @@ enabled, disabled, or its `meter_id`, `device_id` or `serial` edited
 > boolean that survives the one edit somebody makes through a different path — a hand-edited file, a
 > future API, a migration. The clearing has to live where every writer must pass.
 >
-> **Note which changes do NOT withdraw it**: the publish period, the broker, the log settings, the
-> Sparkplug identity. That last one deserves a second look and is deliberately excluded: `group_id`
-> and `node_id` change the *namespace*, not the *mapping*, and they already cost a new session under
-> [Story 5.2's AC4 table](5-2-config-persists-and-reloads-without-a-restart.md). If a review decides
-> a namespace change also needs re-confirming, that is a change to this AC and not a bug in it.
+> **Note which changes do NOT withdraw it**: the publish period, the broker, the log settings,
+> ~~the Sparkplug identity. That last one deserves a second look and is deliberately excluded:
+> `group_id` and `node_id` change the *namespace*, not the *mapping*, and they already cost a new
+> session under [Story 5.2's AC4 table](5-2-config-persists-and-reloads-without-a-restart.md).~~
+> If a review decides a namespace change also needs re-confirming, that is a change to this AC and
+> not a bug in it.
+>
+> **AMENDED 2026-08-06, recorded here 2026-08-08 by the closing review.** The review the last
+> sentence invited happened, decided the other way, and changed the code and the manual without
+> coming back for the AC — so for two days this criterion stated, in the present tense, the
+> opposite of what ships. **`group_id` and `node_id` DO withdraw the confirmation**, and
+> `store::same_mapping` (`app/store.rs:441`) compares them before it looks at a single meter.
+>
+> The reason is at `app/store.rs:420`–`:436` and is not a preference: `ui::screens`'
+> `mapping_fingerprint` — the value binding the operator's click to what the screen showed them —
+> had **always** included both identifiers. Two rules answering one question, disagreeing for a
+> month, and the gap was reachable by the path the manual recommends: confirm the mapping, then
+> correct the node id. `save` carried the confirmation over, `classify` called it a new session,
+> the screen honestly said *"waiting for a restart"*, and the bridge came back publishing into a
+> namespace no human had ever seen. That is the harm FR25 exists to prevent, reached from the
+> inside.
+>
+> The argument the struck text made — *"the namespace is not the mapping"* — is answered by what
+> a topic is: every identifier here appears in every topic the bridge publishes, so changing one
+> moves every device. Asserted at `app/store.rs:744`
+> (`changing_the_node_identity_withdraws_the_confirmation`, both identifiers, separately),
+> falsified 2026-08-06 by restoring the meters-only comparison, and documented at
+> `docs/manual/chapters/09-appendix-config-reference.tex:71`.
 
 **AC4 — the confirmation is presentable without HTML**
 
@@ -159,6 +182,68 @@ enabled, disabled, or its `meter_id`, `device_id` or `serial` edited
   - [x] `docs/manual/chapters/09-appendix-config-reference.tex`: `mapping_confirmed`.
   - [x] `.env.example`'s "what moved into config.toml" list.
   - [x] Epic 5's FR list: FR25 stops being outstanding.
+
+## What is done, verified 2026-08-08 (recorded by the closing review, not by the implementing session)
+
+**Every box above was ticked with no artefact named beside it, and every one of them is true.**
+That is worth stating plainly, because it is the opposite of what the same check found on stories
+3.1, 5.2 and 6.1 — there, ticks stood for work that was partly or wholly absent. Here the work
+exists and only the evidence was missing, which is a documentation defect and not a false claim.
+The anchors below are what the review had to reconstruct; a future reader gets them for free.
+
+- **Task 2, the model.** The field is `app/store.rs:132`; the schema history is at `:50`
+  (`mapping_confirmed` arrived at version 3, `ui_port` took it to 4). The withdrawal is `save` at
+  `:551`, and the caller's value is discarded rather than trusted — the doc comment at `:531` says
+  why, in the AC's own terms. `confirm` at `:585` is deliberately **not** routed through `save`,
+  and the asymmetry is argued rather than left to be discovered: sending it through `save` would
+  clear the flag it exists to set.
+- **Task 2's third box — the withdrawal survives a path the UI does not own.** Four tests, and
+  they are not variations on one: `:984` (a caller that changes the mapping *and* asserts
+  confirmation in the same write, falsified 2026-08-04, and the two neighbouring tests stayed
+  green under that mutation — which is what makes it worth having alone); `:1016` (a duplicated
+  meter must not turn the comparison into a subset test — **found by review**, against code that
+  had survived three falsifications, none of which had targeted `same_mapping`); `:1047` and
+  `:1064` for the other direction, a write that must **not** cost a second click.
+- **Task 3, the startup states.** `app/phase.rs` — four `Decision` variants, the unconfirmed arm
+  checked *before* the publish arm and the ordering explained at `:77`. Falsified at `:85` with
+  five mutations, one per property, **each asserting its own text changed before anything ran** —
+  a discipline that exists because on 2026-08-04 `rustfmt` had reflowed a target and the test
+  stayed green. Mutation B is the instructive one and the file says so: the obvious mutation makes
+  the test fail at its *precondition*, which would have proved nothing.
+- **Task 3's second box.** `scripts/docker-smoke.sh:120`–`:165` covers the unconfirmed image, and
+  it asserts the thing that actually matters: not only that the container says *"has NOT been
+  confirmed"* and stays up, but that it does **not** say *"no configuration yet"*. The negative
+  assertion is written as an explicit `if`, with the reason in the comment — under `set -e` an
+  and-list makes the exit code describe something other than what was measured.
+- **Task 4, AC4.** `app/config.rs:783` (`mapping_preview`), test at `:959`. Literal strings, as the
+  AC demanded: `spBv1.0/Plant/DDATA/Bridge01/9202685`, and the device UUID asserted in full,
+  because *"it is the half that is easy to cross-wire"*.
+- **Task 5, the falsification.** `tests/unconfirmed_publishes_nothing.rs`, and it is the best
+  absence test in the repository. Three tests, the **premise first**: a confirmed mapping is shown
+  to produce an NBIRTH on this very harness, so that the silence asserted next means something.
+  `wait_until_it_says` (`:97`) exists because deleting one `.env("SMARTME_CLIENT_ID", "x")` once
+  made the binary exit on its first turn while *"nothing reached the broker"* still held. The
+  falsification output is copied at `:169` and names the topic that reached the wire — an
+  **NBIRTH**, not a DDATA, which is the whole distinction AC1 was written around.
+- **Task 6, the consequences.** All four: `04-configuration.tex:53` and `:76`,
+  `09-appendix-config-reference.tex:71`, `.env.example:30` and `:122`, and `epics.md:285` records
+  **FR25 met by 5.3**. This is the only one of the seven `review` stories whose consequence sweep
+  is complete — story 3.2's reached the manual and not `epics.md`.
+
+**Two things this review could not verify, and one it changed.**
+
+- **The `ci-local.sh` box cannot be checked by reading.** Same position as story 5.2's, with the
+  same answer: it has been run since, over the same tree, for later stories, and all three GitHub
+  workflows are green on every commit after this one. That is the stronger claim, but it is not
+  the claim the box makes.
+- **AC3 was stating the opposite of the shipped behaviour** and is now amended in place, above.
+  This is the eighth occurrence of the recurring shape here: the code and the manual get corrected
+  together, and the criterion stating the consequence does not.
+- **`### The original note, kept for the reasoning` (below) is now a duplicate.** It repeats the
+  FR24 paragraph immediately above it, which was written to supersede it, and it opens with two
+  blank lines. Left in place rather than deleted — the section says it is kept for the reasoning —
+  but a reader reaching it after the settled version will read the open question twice and cannot
+  tell which is current from the text alone.
 
 ## Dev Notes
 

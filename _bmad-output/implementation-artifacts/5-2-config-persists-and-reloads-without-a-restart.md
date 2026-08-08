@@ -1,6 +1,9 @@
 # Story 5.2: Configuration persists across restarts and image updates, and takes effect without one
 
-Status: ready-for-dev
+Status: review
+
+> **Header corrected 2026-08-08.** This file said `ready-for-dev` while `sprint-status.yaml` said
+> `review`. See the same correction on story 5.1.
 
 > **Amended 2026-08-04 — [ADR 0023](../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md)
 > supersedes ADR 0022.** `config.toml` is the whole configuration; the smart-me credential
@@ -200,14 +203,27 @@ one place a refactor could put it back without any test noticing.
         disabling the version check — and the telling part is that **the three other tests stayed
         green** under that mutation, because a file from another schema parses perfectly well. That
         is the whole danger.
-  - [ ] Schema: rename a field in the file and confirm refusal rather than a silent default.
-  - [ ] Secrets: assert absence from logs by **searching for the value**, having first confirmed the
+> **These four boxes were unticked while three of them were done.** Verified 2026-08-08 by reading
+> the tests rather than the record; each is ticked below with the artefact that satisfies it, so a
+> future reader is not told work is owed that exists.
+
+  - [x] Schema: rename a field in the file and confirm refusal rather than a silent default.
+        `StoredConfig` is `#[serde(deny_unknown_fields)]` (`app/store.rs:98`), and the falsification
+        is recorded at `app/store.rs:702` — removing it left the test green *because the unknown key
+        was appended at the end of the file*, which in TOML puts it in the last table.
+  - [x] Secrets: assert absence from logs by **searching for the value**, having first confirmed the
         search finds it when deliberately leaked — an absence assertion over a stream that never
-        carried it proves nothing.
-  - [ ] **The unconfigured state (AC2), both directions.** First prove the harness *observes* a
+        carried it proves nothing. `tests/secret_never_reaches_the_log.rs`: one matcher, `leaks()`,
+        run first over the same text with a leak spliced in.
+  - [x] **The unconfigured state (AC2), both directions.** First prove the harness *observes* a
         CONNECT when `config.toml` is present; only then assert none appears when it is absent.
         Reversed, the test passes against a bridge that never connects under any circumstances.
-  - [ ] `./scripts/ci-local.sh`, full. Never piped — the exit code becomes `tail`'s.
+        The wire half is `tests/unconfirmed_publishes_nothing.rs::an_unconfigured_bridge_never_reaches_the_broker_either`,
+        on a real broker, paired with a birth on the same harness. `unconfigured_start.rs` carries
+        the process half and says in its own header that it never touches a broker — a claim that
+        had been false there once and was corrected.
+  - [ ] `./scripts/ci-local.sh`, full. Never piped — the exit code becomes `tail`'s. **Still owed
+        for this story specifically**; it has been run since, for later stories, over the same tree.
 
 - [x] **Task 6 — the manual, and the deployment** (AC: 2, 6)
   - [x] `docs/manual/chapters/04-configuration.tex` and `09-appendix-config-reference.tex` document
@@ -239,9 +255,18 @@ dropped. [#41] stays open as a deployment task.
 **No UI.** Per ADR 0021 the screens are Epic 6. Everything above is testable without HTML — the
 write-only rule (AC6) especially, which is the reason the split exists.
 
-**No multi-meter runtime.** Story 5.1's AC6 keeps the bridge refusing to serve more meters than it
+~~**No multi-meter runtime.** Story 5.1's AC6 keeps the bridge refusing to serve more meters than it
 can. AC4's DBIRTH/DDEATH applies to the meter the runtime does serve, and generalises when the
-fan-out lands.
+fan-out lands.~~
+
+**Overtaken 2026-08-06 by story 3.1, recorded 2026-08-08.** The fan-out landed: every enabled meter
+is served and the refusal is gone. **AC4's DBIRTH/DDEATH did NOT generalise with it** —
+`app::reconfigure::classify_meters` still reasons about *the meter the runtime is serving*,
+singular, and its comment still says `run_with_control` picks the first enabled one, which
+`supervisor.rs:319` stopped doing. Enabling any meter other than that first one is still classified
+`ProcessRestart`. That verdict remains **honest** — `Control::apply` spawns no poll task, so a
+DBIRTH would announce a device nothing reads — but it is now conservative rather than accurate, and
+it is Epic 3 work that neither 3.1 nor 3.2 picked up. See the closing review of 2026-08-08.
 
 ### The absence assertion, again
 

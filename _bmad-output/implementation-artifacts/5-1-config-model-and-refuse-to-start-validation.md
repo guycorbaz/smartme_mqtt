@@ -1,6 +1,10 @@
 # Story 5.1: One configuration model, validated as a whole, refusing to start rather than starting partially
 
-Status: ready-for-dev
+Status: review
+
+> **Header corrected 2026-08-08.** This file said `ready-for-dev` while `sprint-status.yaml` said
+> `review`, and had said so since the story was implemented. Two registers disagreeing about
+> whether work is done is how a story gets closed twice or not at all.
 
 ## Story
 
@@ -99,6 +103,13 @@ meters, one of them not currently connected
 > clause a real requirement instead of a vacuous one.
 
 **AC6 — more enabled meters than the runtime can serve is REFUSED, not truncated** *(added)*
+
+> **SPENT 2026-08-06 (story 3.1), recorded here 2026-08-08.** `RUNTIME_METER_LIMIT` is gone and
+> every enabled meter is served, so this criterion has no subject: there is no *"more than the
+> runtime can serve"*. It was met while it applied, and it is not unmet now — it is **outgrown**.
+> What it forbade, publishing a subset that looks complete, is still forbidden, by there being no
+> subset. The amendment sat in AC4's note alone until now, which is the recurring shape here: the
+> claim gets corrected and the criterion stating its consequence does not.
 
 **Given** the model accepts N meters while the runtime still serves one
 **When** a configuration enables more than the runtime supports

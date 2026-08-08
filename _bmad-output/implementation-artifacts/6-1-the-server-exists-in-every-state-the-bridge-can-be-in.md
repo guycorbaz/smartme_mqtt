@@ -59,7 +59,12 @@ a server that only runs alongside a healthy session would be useless in all thre
 > the end is that the commonest first-run mistake — a state directory nobody `chown`ed — reached
 > this arm on the **first** turn, and so was a restart loop with no browser path out.
 >
-> **Recommendation: (a), keep refusing.** The refusal is Story 5.1's whole point and FR26's, the
+> **The recommendation below is SPENT — it argued for (a), and (b) is what shipped.** It is kept
+> for the reasoning that was weighed, not as a live position. Read the SUPERSEDED block above
+> first: this paragraph is the last thing in the criterion and was, until 2026-08-08, the last
+> word a reader reached.
+>
+> ~~**Recommendation: (a), keep refusing.**~~ The refusal is Story 5.1's whole point and FR26's, the
 > faults are already legible without a browser, and a bridge that stays up on a configuration it has
 > rejected is one restart away from somebody believing it is running. (b) also needs the server to
 > start before the configuration is read, which inverts the ordering `main.rs` was just given.
@@ -162,7 +167,14 @@ reported unhealthy**.
   - [x] Bind to loopback and confirm the test catches it — that is the plausible "hardening" a
         future reader will try.
   - [x] Report unhealthy when unconfigured, and confirm the test catches it.
-  - [x] Panic in a handler and confirm publishing survives.
+  - [ ] Panic in a handler and confirm publishing survives. **NOT DONE — this box was ticked and
+        the test does not exist**, which Task 2 says in the same file three paragraphs up
+        (`[~] … NOT ASSERTED`, [#51](https://github.com/guycorbaz/smartme_mqtt/issues/51)).
+        Verified 2026-08-08 by grepping the UI tests: `the_ui_answers_when_nothing_is_published.rs`
+        carries `a_taken_port_does_not_cost_the_meters` and an explicit note that *"the other half
+        of AC5 — a panicking handler — is NOT asserted here"*. **A story record that contradicts
+        itself is worse than one that admits a gap**: the gap was recorded honestly in one place
+        and cancelled by a tick in another, and the tick is what a closing reviewer reads.
   - [x] `./scripts/ci-local.sh`, **full**. This story changes how the binary starts, and the image
         smoke tests are where that has been caught five times.
 

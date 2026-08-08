@@ -159,19 +159,69 @@ above, `epics.md`, `architecture.md`, the story 5.1 record, and `config.rs`'s ow
 
 ## Tasks
 
-- [ ] Remove `RUNTIME_METER_LIMIT` and the AC6 refusal in `app/config.rs`; keep the duplicate-serial
-      and topic-legality guards, which are unrelated and still needed.
-- [ ] `app/poll_publish.rs`: spawn one task per enabled meter; each owns its own `State` and its own
+- [x] Remove `RUNTIME_METER_LIMIT` and the AC6 refusal in `app/config.rs`; keep the duplicate-serial
+      and topic-legality guards, which are unrelated and still needed. The constant is gone;
+      `app/config.rs:67` records where it lived and why.
+- [x] `app/poll_publish.rs`: spawn one task per enabled meter; each owns its own `State` and its own
       heartbeat.
-- [ ] `LastLoopTick` → a per-meter collection; `ui::loop_age` takes the oldest.
-- [ ] `app/supervisor.rs`: birth every enabled device after the NBIRTH; keep `seq` and `bdSeq`
-      behind the driver task.
-- [ ] `watch<[MeterState; N]>` per AR6, so the UI reads a coherent snapshot rather than N values
+- [x] `LastLoopTick` → a per-meter collection; `ui::loop_age` takes the oldest.
+- [x] `app/supervisor.rs`: birth every enabled device after the NBIRTH; keep `seq` and `bdSeq`
+      behind the driver task. `supervisor.rs:319` filters on `enabled` and validates **every**
+      device topic before any task starts — refusing on the fourth meter while three already poll
+      would be starting wrong.
+- [x] `watch<[MeterState; N]>` per AR6, so the UI reads a coherent snapshot rather than N values
       that never agreed at any instant.
 - [ ] Sweep the `deferred-work.md` items parked on Epic 3 that this story touches — at minimum
       `Policy::max_age_ms` validation, and `Serial::new("")` key collisions now that serials key a
-      multi-meter map rather than a single one.
-- [ ] Amend the manual, `epics.md`, `architecture.md` and the story 5.1 record together (AC6).
+      multi-meter map rather than a single one. **NOT DONE, verified 2026-08-08.** `max_age_ms`
+      appears in `app/config.rs` only inside a test fixture (`:742`); nothing rejects `0`, which
+      would make every reading stale from birth. `deferred-work.md:22` still parks it on *"Epic 3
+      config oracle"*. This is the failure ADR 0025 named: deferring to an epic that is itself
+      deferred is how an item stops being tracked — except the epic is open now, so the item is
+      simply owed.
+- [x] Amend the manual, `epics.md`, `architecture.md` and the story 5.1 record together (AC6).
+      The sweep reached the five passages AC6 named and **missed two**, both found by this story's
+      closing review on 2026-08-08 and struck there: story 6.2's *"Not done here, deliberately"*
+      and story 5.2's *"No multi-meter runtime"*. Seventh occurrence of a corrected claim leaving
+      its consequences standing; a per-passage table over the five named passages is still a grep
+      over the ones somebody thought of.
+
+## What is done, 2026-08-08 (recorded by the closing review, not by the implementing session)
+
+**AC1 through AC5 are implemented and tested.** This section did not exist until the closing
+review: the story shipped in `25cecc5` with every box unticked and no record, while story 3.2 —
+written the same week — carries a detailed one. **A story with no completion record cannot be
+closed by anyone but its author**, which is the state all seven `review` stories were found in.
+
+- **AC1** — `app/config.rs:1185`, which the comment marks as having asserted the **opposite**
+  until 2026-08-06.
+- **AC2 and AC3** — `adapters/sparkplug_publisher.rs:1000`, and the comment there records that
+  nothing exercised either beyond one meter before this story.
+- **AC4** — `app/poll_publish.rs:651`, the cadence test.
+- **AC5/AC6** — the documentation sweep, above.
+
+**Both traps this story named were walked past, and the records prove it** — they are in the
+source, not here, which is why this file read as though nothing had been done.
+
+- **AC3's mutation broke the sharing, not the counter**, exactly as demanded: each device given
+  its own `Session` inside `birth`'s device loop. The copied run reads
+  `left: [Some(0), Some(1), Some(1), Some(1), Some(1)]` against `right: [0,1,2,3,4]` — four
+  devices each restarting at 1. A mutation that stopped the counter advancing would have failed
+  every seq test in the suite and proved nothing about sharing.
+- **AC4's cadence assertion is a count per meter, `[3, 3, 3]`**, and the serialised-walk mutation
+  drove it to `[2, 2, 2]`. The instructive part is recorded too: the **first** round's mutation
+  compiled and stayed **green**, because the story's own arithmetic was wrong — only one meter
+  hangs, so a 2 s deadline made a serialised cycle fit inside the 5 s period. The deadline was
+  raised to the shipped 10 s and the mutation went red. *A mutation that changes nothing
+  observable is not a falsification.*
+
+**One defect in where the record lives.** AC4's falsification block sits at
+`app/poll_publish.rs:651–706`, immediately above `fn bridge_config()` — a **helper**, not the
+test, which is 26 lines further down at `:733`. Rust attaches a `///` block to whatever follows
+it, so the record documents a config constructor. The repository rule is *record the
+falsification next to the test*; a reader who opens
+`a_hanging_meter_does_not_cost_the_others_their_cadence` finds nothing. Content is right, anchor
+is wrong.
 
 ## Falsification
 

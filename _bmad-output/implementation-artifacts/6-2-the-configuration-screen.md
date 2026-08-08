@@ -262,9 +262,16 @@ defect these tests exist to catch.
 
 ### Not done here, deliberately
 
-The runtime still serves **one** meter (`RUNTIME_METER_LIMIT`). Four meters publishing is
+~~The runtime still serves **one** meter (`RUNTIME_METER_LIMIT`). Four meters publishing is
 **Epic 3** (*The Full Fleet*), which the execution order places before Epics 5–6 and which has
-been skipped; bringing it forward to make this story's testing more convenient was declined.
+been skipped; bringing it forward to make this story's testing more convenient was declined.~~
+
+**No longer true, 2026-08-06 (story 3.1); struck 2026-08-08.** Epic 3 was opened right after this
+story and `RUNTIME_METER_LIMIT` is gone — every enabled meter is served. The decision recorded
+above was right when taken: the fan-out was done for its own reasons, not to make this story's
+testing convenient. This is the last passage in the repository still asserting the one-meter
+runtime in the present tense, and story 3.1's AC6 required a per-passage sweep that reached the
+five it named and not this one.
 
 ---
 

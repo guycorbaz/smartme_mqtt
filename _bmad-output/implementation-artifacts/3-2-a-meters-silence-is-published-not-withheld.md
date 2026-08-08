@@ -152,6 +152,66 @@ Falsified by routing every DDATA to the first declared device. The result is wor
 meter's `Bad_Stale` vanished from the wire entirely. The harm the assertion names, produced
 rather than argued.
 
+## Closing review, 2026-08-08
+
+**Every claim in the section above was checked against the artefacts rather than read.** All five
+ACs hold, and the record was the most accurate of the seven stories found in `review` — it is the
+one the others were measured against. What follows is what the check added, not a restatement.
+
+**Where each AC actually is**, because this file named no anchor and a reader had to grep for them:
+
+- **AC1, AC2, AC4** — `app/poll_publish.rs:250`, where `step_once` takes `last: &mut
+  Option<Measurement>`; `:289` is the branch that gives a never-answered meter nothing, and it says
+  so in its own comment. Tests at `:423` (AC1/AC2) and `:515` (AC4).
+- **AC3** — `adapters/sparkplug_publisher.rs:1080`, test at `:1116`. **Not `:1000`**, which is story
+  3.1's `four_devices_share_one_node_sequence` and is what the 3.1 record points at. Two adjacent
+  tests about four meters, one anchor between them, and the story that shipped second is the one
+  whose reader lands in the wrong place.
+- **AC5** — `ui/mod.rs:279` (`failed_sources`), `:450` (the page qualifies its claim or does not
+  make it), `:544` (`/healthz` carries the list and keeps its `200`). Falsification at `:754`,
+  assertions at `:802` and `:831`.
+
+**The consequences were swept into the manual and NOT into `epics.md`.** The manual carries both
+halves — `06-operations-ui.tex:163` for `failed_sources`, `05-mqtt-sparkplug-contract.tex` for the
+republish. `epics.md`'s Epic 3 section (`:266`–`:269`) carries **no status line at all**: nothing
+there records that ADR 0027 moved the republish out of Epic 2 into this epic, nor that 3.1 and 3.2
+have delivered. Epic 5's section carries exactly such a line (`:285`), so the shape exists and was
+not used. The standing rule asks for the three together; this story has two.
+
+**This file has no Tasks section, and that is how the omission above got out.** Story 3.1 has one,
+and its unticked box is precisely what made its own unswept `deferred-work.md` items visible. A
+story with acceptance criteria and no task list has nowhere for *"and then amend the planning
+artefacts"* to be owed.
+
+### One defect found in the code, and it is an anchoring defect again
+
+**`ui/mod.rs:259`–`:289`: the doc comment describing `loop_age` is attached to `failed_sources`.**
+The sixteen lines beginning *"How long since the poll loop last started an iteration"* — including
+story 3.1's rule that the pair returned is **the worst meter's, not the fleet's average** — run
+contiguously into this story's four lines about failed sources, and Rust attaches the whole block
+to the item that follows it. That item is `fn failed_sources` at `:279`. `fn loop_age`, at `:291`,
+now has **no documentation at all**.
+
+This is the second anchoring defect in two stories, and it is worse than 3.1's. There, a
+falsification record sat above a helper: the text was orphaned. Here the text is **wrong where it
+now sits** — it tells a reader of `failed_sources` about per-meter allowances and startup wedges
+that belong to a different function. Introduced by `590c78d` (AC5), which added its own comment to
+the top of an existing block instead of below it.
+
+**Repaired in the same commit as this record**, unlike the six other closing reviews, which only
+recorded: this one is a four-line move with no behaviour behind it, and leaving a comment that is
+actively wrong in place until somebody schedules it would cost more than fixing it. `failed_sources`
+now carries its own four lines and `loop_age` carries the sixteen that describe it, with a note at
+the foot of that block saying where they spent a day and how they got there — because the mechanism
+matters more than this instance of it: **inserting an item above a `///` block is a silent way to
+make documentation wrong rather than merely absent**, and nothing in the toolchain reports it.
+
+### What is not owed here
+
+`./scripts/ci-local.sh` was never a task in this story, and it does not need adding: all three
+GitHub workflows are green on this story's three commits (`924223c`, `590c78d`, `e18c3b4`), which
+is the stronger claim — the isolated workflow builds with `--locked` and a local run does not.
+
 ## Falsification
 
 - **AC1's mutation is to restore the `if let Ok(reading)` guard.** Assert it fails on the count of
