@@ -12,5 +12,5 @@ pub mod reconfigure;
 pub mod store;
 pub mod supervisor;
 
-pub use poll_publish::{LastLoopTick, PollConfig};
+pub use poll_publish::{FleetState, MeterPulse, MeterState, PollConfig};
 pub use supervisor::{BridgeConfig, run};

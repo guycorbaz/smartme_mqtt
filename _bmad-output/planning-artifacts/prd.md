@@ -80,7 +80,7 @@ These criteria operationalize the Executive Summary's guiding principle, **"neve
 | Unknown unit | Rejected, never `0.0`, never published |
 | Energy plausibility | **kWh monotonic non-decreasing** per meter (except detected reset); power within physical bounds; ΔkWh ≈ kW×Δt within tolerance |
 | Identity binding | Serial asserted on every topic at startup + periodically → **0 mismatch** |
-| Staleness latency | `stale=true` no later than **last_success + 2×poll_interval + publish_margin** (tested with injected clock) |
+| Staleness latency | `stale=true` no later than **last_success + 2×poll_interval + publish_margin**, `publish_margin` = fetch timeout (ADR 0028) — measured on the wire at `PERIOD_MIN`, injected clock |
 | Partial failure | 1/4 silent → that meter stale, other 3 fresh (asserted) |
 | Death behaviour (transport) | Kill process / cut bridge↔broker → Ignition marks STALE via NDEATH/DDEATH (chaos test a) |
 | Cloud-down freshness (app) | Bridge UP + smart-me unreachable → metrics published with **quality=STALE**, node stays alive, no frozen value shown fresh (chaos test b — the most frequent failure) |
@@ -336,7 +336,7 @@ Must-have capabilities (without any one, the product fails its "never lies" purp
 
 ### Reliability & Availability
 - **NFR1:** Runs unattended for weeks; automatic recovery from smart-me API and MQTT broker outages without manual restart (bounded exponential backoff + jitter, e.g. 1 s → 60 s cap).
-- **NFR2:** Per-meter staleness signalled no later than `last_success + 2×poll_interval + publish_margin`.
+- **NFR2:** Per-meter staleness signalled no later than `last_success + 2×poll_interval + publish_margin`, where **`publish_margin` = the per-fetch timeout** ([ADR 0028](../../docs/adr/0028-publish-margin-is-the-fetch-timeout.md), 2026-08-08). The term had never had a value: it appeared only inside this formula, so the bound could be quoted and not met or missed. It is derived rather than chosen — the binding case is `PERIOD_MIN`, not the default period, where any margin at all would do. Measured on the wire at `PERIOD_MIN` by story 3.3; the ceiling is deliberately looser than the latency the bridge achieves (`last_success + poll_interval + fetch_timeout` since ADR 0027 made one missed tick enough), so that a regression has something to fail against.
 - **NFR3:** No unbounded memory/FD growth — **RSS_max ≤ 100 MB** on target; **RSS slope ≤ 1 %/24 h** by linear regression on RSS sampled every 60 s; **FD ≤ 64** via `/proc/self/fd`.
 - **NFR4:** Availability is best-effort; during a smart-me outage the system stays honest (quality=STALE) rather than available — integrity is never traded for availability.
 

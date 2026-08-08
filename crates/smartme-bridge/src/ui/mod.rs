@@ -256,18 +256,26 @@ impl Phase {
         Arc::new(arc_swap::ArcSwap::from_pointee(self))
     }
 
+    /// The fleet as it stood at ONE instant, or `None` in every silent phase
+    /// because there is no poll loop to have an opinion (Story 3.3, AR6).
+    ///
+    /// **Taken once per request and passed down**, which is the point of the
+    /// change: `failed_sources` and `loop_age` used to reach for the shared state
+    /// separately, so a page could name a failed meter from one instant beside an
+    /// age from another. Nothing was known to be wrong on the rendered page —
+    /// neither figure was compared with the other — and the day one is, the
+    /// mismatch would arrive silently.
+    fn fleet(&self) -> Option<crate::app::poll_publish::FleetState> {
+        Some(self.running.as_ref()?.heartbeats().snapshot())
+    }
+
     /// The meters whose source has failed fatally, if any (Story 3.2 AC5).
     ///
     /// Empty in every silent phase, because there is no poll loop to have an
     /// opinion — and empty is then the truth rather than a default.
-    fn failed_sources(&self) -> Vec<String> {
-        match self.running.as_ref() {
-            Some(control) => control
-                .heartbeats()
-                .failed()
-                .into_iter()
-                .map(|m| m.to_string())
-                .collect(),
+    fn failed_sources(fleet: Option<&crate::app::poll_publish::FleetState>) -> Vec<String> {
+        match fleet {
+            Some(fleet) => fleet.failed().into_iter().map(|m| m.to_string()).collect(),
             None => Vec::new(),
         }
     }
@@ -298,16 +306,16 @@ impl Phase {
     /// `///` block belongs to whatever follows it, which makes inserting an item
     /// above a comment a silent way to make documentation wrong rather than
     /// merely absent.
-    fn loop_age(&self) -> Option<(i64, i64)> {
+    fn loop_age(&self, fleet: Option<&crate::app::poll_publish::FleetState>) -> Option<(i64, i64)> {
         let control = self.running.as_ref()?;
         let now = control.clock().monotonic().0;
-        control
-            .heartbeats()
+        fleet?
+            .meters
             .iter()
-            .filter_map(|(_, heartbeat)| {
-                let last = heartbeat.last()?;
-                let allowed = heartbeat
-                    .period_ms()
+            .filter_map(|meter| {
+                let last = meter.last_tick?;
+                let allowed = meter
+                    .period_ms
                     .saturating_mul(i64::from(WEDGED_AFTER_PERIODS));
                 Some((now - last.0, allowed))
             })
@@ -546,7 +554,7 @@ async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
     // saying it was publishing. Naming the meters is the whole point — "something
     // is wrong" sends an operator to the logs, a meter's name sends them to the
     // meter.
-    let failed = phase.failed_sources();
+    let failed = Phase::failed_sources(phase.fleet().as_ref());
     let caveat = if failed.is_empty() {
         String::new()
     } else {
@@ -614,7 +622,13 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
     // print the numbers — each re-reading the clock and the atomic. A body
     // reporting `age < allowed` beside a 503 was reachable at the boundary, on
     // the one endpoint whose whole job is that the number and the verdict agree.
-    let reading = phase.loop_age();
+    // ONE SNAPSHOT, used for the age AND for the failed list (Story 3.3, AR6).
+    //
+    // The same argument as the one below, one level up: these two figures were
+    // read from the shared state separately, so a body could carry an age from
+    // one instant beside a fault list from another.
+    let fleet = phase.fleet();
+    let reading = phase.loop_age(fleet.as_ref());
     // No loop, or a loop that has not ticked once yet. Neither is a wedge: the
     // silent states have no loop by design, and a bridge that has not completed
     // its first iteration is starting, not stuck.
@@ -640,7 +654,7 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
     // (Story 3.2 AC5, ADR 0027 §2). The status code stays 200: Epic 7 wires this
     // to a container restart, and a restart provably cannot clear a rejected
     // credential — it would loop, destroying the screen that names the fault.
-    let failed = phase.failed_sources();
+    let failed = Phase::failed_sources(fleet.as_ref());
     let failed_json = format!(
         "[{}]",
         failed
@@ -688,7 +702,7 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::LastLoopTick;
+    use crate::app::MeterPulse;
     use crate::app::poll_publish::Heartbeats;
     use crate::app::supervisor::ConfigHandle;
     use crate::core::clock::Clock;
@@ -723,7 +737,7 @@ mod tests {
     }
 
     /// A one-meter fleet, which is what most of these tests want.
-    fn one_meter() -> (Heartbeats, LastLoopTick) {
+    fn one_meter() -> (Heartbeats, MeterPulse) {
         let beats = Heartbeats::for_meters([crate::domain::MeterId::new("meter-a")]);
         let tick = beats
             .of(&crate::domain::MeterId::new("meter-a"))
@@ -810,7 +824,9 @@ mod tests {
         heartbeat.touch(clock.monotonic(), 30_000);
 
         clock.advance_ms(60_000);
-        let (age, allowed) = phase.loop_age().expect("a running bridge has an age");
+        let (age, allowed) = phase
+            .loop_age(phase.fleet().as_ref())
+            .expect("a running bridge has an age");
         assert_eq!((age, allowed), (60_000, 90_000));
         assert!(
             age <= allowed,
@@ -819,7 +835,7 @@ mod tests {
         );
 
         clock.advance_ms(30_001);
-        let (age, _) = phase.loop_age().expect("age");
+        let (age, _) = phase.loop_age(phase.fleet().as_ref()).expect("age");
         assert!(
             age > allowed,
             "past three periods the loop is not looping, and that IS the case \
@@ -1011,7 +1027,7 @@ mod tests {
         config.store(Arc::new(fast));
 
         clock.advance_ms(60_000);
-        let (age, allowed) = phase.loop_age().expect("age");
+        let (age, allowed) = phase.loop_age(phase.fleet().as_ref()).expect("age");
         assert!(
             age <= allowed,
             "a loop sleeping out the period it was told to use is not wedged; \
@@ -1022,8 +1038,16 @@ mod tests {
 
     #[test]
     fn a_deliberately_silent_bridge_has_no_loop_age() {
-        assert!(Phase::silent(Lifecycle::Unconfigured).loop_age().is_none());
-        assert!(Phase::silent(Lifecycle::Unconfirmed).loop_age().is_none());
+        assert!(
+            Phase::silent(Lifecycle::Unconfigured)
+                .loop_age(None)
+                .is_none()
+        );
+        assert!(
+            Phase::silent(Lifecycle::Unconfirmed)
+                .loop_age(None)
+                .is_none()
+        );
     }
 
     /// The page must never claim a connection it cannot observe.

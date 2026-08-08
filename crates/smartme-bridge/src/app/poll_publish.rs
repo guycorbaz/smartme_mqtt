@@ -30,27 +30,24 @@ pub struct PollConfig {
     pub fetch_timeout: Duration,
 }
 
-/// The liveness heartbeat: the monotonic instant at the top of the last loop
-/// iteration.
+/// One meter, as the fleet stood at one instant.
 ///
-/// Written before the network call, so a fetch that hangs forever leaves the
-/// heartbeat visibly old — that is what makes a wedge detectable from outside
-/// (the health check, Story 1.13/Epic 7). A heartbeat written AFTER the call
-/// would look healthy exactly when it is not.
-#[derive(Debug, Clone)]
-pub struct LastLoopTick(Arc<(std::sync::atomic::AtomicI64, std::sync::atomic::AtomicI64)>);
-
-impl LastLoopTick {
-    /// A heartbeat that has never ticked.
-    pub fn new() -> Self {
-        Self(Arc::new((
-            std::sync::atomic::AtomicI64::new(i64::MIN),
-            std::sync::atomic::AtomicI64::new(0),
-        )))
-    }
-
-    /// Records that an iteration has just started, **and the period it is
-    /// actually pacing at**.
+/// AR6's `MeterState`, which the architecture has named since Epic 0 and which
+/// **did not exist until 2026-08-08** — story 3.1 ticked the box for it. What
+/// shipped instead was three independent atomics per meter, read one at a time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeterState {
+    /// Which meter this is.
+    pub meter: MeterId,
+    /// The monotonic instant at the top of its last loop iteration, or `None`
+    /// if it has never run.
+    ///
+    /// Written before the network call, so a fetch that hangs forever leaves it
+    /// visibly old — that is what makes a wedge detectable from outside (the
+    /// health check, Story 1.13/Epic 7). Written AFTER the call it would look
+    /// healthy exactly when it is not.
+    pub last_tick: Option<MonotonicMs>,
+    /// The period the loop was pacing at when it last ticked.
     ///
     /// # Why the period is recorded and not merely read
     ///
@@ -65,129 +62,49 @@ impl LastLoopTick {
     /// reconfiguration would be a killed Sparkplug session.
     ///
     /// The observed cadence is the only honest denominator.
-    pub fn touch(&self, now: MonotonicMs, period_ms: i64) {
-        self.0.0.store(now.0, std::sync::atomic::Ordering::Relaxed);
-        self.0
-            .1
-            .store(period_ms, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    /// The last recorded instant, or `None` if the loop has never run.
-    pub fn last(&self) -> Option<MonotonicMs> {
-        match self.0.0.load(std::sync::atomic::Ordering::Relaxed) {
-            i64::MIN => None,
-            v => Some(MonotonicMs(v)),
-        }
-    }
-
-    /// The period the loop was pacing at when it last ticked.
-    pub fn period_ms(&self) -> i64 {
-        self.0.1.load(std::sync::atomic::Ordering::Relaxed)
-    }
-}
-
-impl Default for LastLoopTick {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// One heartbeat per polled meter (Story 3.1).
-///
-/// # Why this is a collection and not one value
-///
-/// The runtime served a single meter until 2026-08-06, so a single
-/// [`LastLoopTick`] *was* the poll loop's heartbeat. With one task per meter, a
-/// shared tick would be touched by whichever task ran most recently — so three
-/// healthy siblings would keep it fresh while the fourth had not read its meter
-/// for an hour, and `/healthz` would report a bridge that was, for that meter,
-/// completely wedged.
-///
-/// That is the shape of lie this project exists to prevent, and its twin was
-/// found on 2026-08-06: a `Failed` source reported as publishing.
-///
-/// # The verdict is the WORST of them, and that is deliberate
-///
-/// Epic 7 wires `/healthz` to a container restart, which kills the session for
-/// every meter. Restarting all four because one task wedged is the right trade
-/// anyway: unlike a rejected credential ([ADR 0027]), a wedged poll task is
-/// exactly what a restart fixes. This is the one place where the fleet makes the
-/// healthcheck stricter rather than more forgiving.
-///
-/// [ADR 0027]: ../../../docs/adr/0027-a-failed-source-is-a-fault-the-screen-must-name.md
-#[derive(Clone, Default)]
-pub struct Heartbeats(Arc<Vec<(MeterId, LastLoopTick, Arc<std::sync::atomic::AtomicU8>)>>);
-
-/// How a [`State`] is carried in the shared cell above.
-///
-/// `0` means *nothing recorded yet* and is NOT a state: a task that has not
-/// completed its first tick has reached no verdict, and mapping that onto
-/// `Stale` would report a fault about a bridge that is merely starting.
-const VERDICT_NONE: u8 = 0;
-
-const fn verdict_code(state: State) -> u8 {
-    match state {
-        State::Fresh => 1,
-        State::Stale => 2,
-        State::Failed => 3,
-    }
-}
-
-const fn verdict_from(code: u8) -> Option<State> {
-    match code {
-        1 => Some(State::Fresh),
-        2 => Some(State::Stale),
-        3 => Some(State::Failed),
-        _ => None,
-    }
-}
-
-impl Heartbeats {
-    /// One heartbeat per meter, in the order the meters were spawned.
-    pub fn for_meters(meters: impl IntoIterator<Item = MeterId>) -> Self {
-        Self(Arc::new(
-            meters
-                .into_iter()
-                .map(|meter| {
-                    (
-                        meter,
-                        LastLoopTick::new(),
-                        Arc::new(std::sync::atomic::AtomicU8::new(VERDICT_NONE)),
-                    )
-                })
-                .collect(),
-        ))
-    }
-
-    /// The heartbeat belonging to one meter, for that meter's task to touch.
-    pub fn of(&self, meter: &MeterId) -> Option<LastLoopTick> {
-        self.0
-            .iter()
-            .find(|(m, _, _)| m == meter)
-            .map(|(_, tick, _)| tick.clone())
-    }
-
-    /// Records the oracle's verdict for one meter (Story 3.2 AC5, [ADR 0027] §1).
+    pub period_ms: i64,
+    /// The oracle's verdict, or `None` before the first tick completes.
     ///
-    /// **The screen had no way to see this**, so `/` said the bridge was *"polling
-    /// the meters and publishing what it reads"* about a source in `Failed` that
-    /// had put nothing on the wire since start-up. The page was describing which
-    /// branch of `main.rs` ran, presented to an operator as an observation — the
-    /// same defect `/healthz` was cured of on 2026-08-04 (`publishing` →
-    /// `intends_to_publish`).
-    pub fn record(&self, meter: &MeterId, state: State) {
-        if let Some((_, _, cell)) = self.0.iter().find(|(m, _, _)| m == meter) {
-            cell.store(verdict_code(state), std::sync::atomic::Ordering::Relaxed);
-        }
+    /// **`None` is not `Stale`.** A task that has not finished its first tick has
+    /// reached no verdict, and mapping that onto `Stale` would report a fault
+    /// about a bridge that is merely starting.
+    pub verdict: Option<State>,
+}
+
+/// The whole fleet at one instant (AR6).
+///
+/// # `generation`, and why a counter earns its place here
+///
+/// It is the invariant that makes "one instant" testable. Every modification
+/// touches exactly one meter's fields **and** this counter, inside a single
+/// `send_modify`, so a reader holding a snapshot holds a state that existed:
+/// `generation` equals the number of writes that produced it.
+///
+/// Without it, a snapshot test is nearly vacuous — over a quiet fleet every
+/// implementation looks coherent, including the per-meter atomics this replaces.
+/// With it, a reader that sampled meters one at a time observes a total that no
+/// single instant ever had.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FleetState {
+    /// One entry per served meter, in the order the tasks were spawned.
+    pub meters: Vec<MeterState>,
+    /// Incremented by every write, in the same modification as the write.
+    pub generation: u64,
+}
+
+impl FleetState {
+    /// One meter's state, if it is served.
+    pub fn of(&self, meter: &MeterId) -> Option<&MeterState> {
+        self.meters.iter().find(|m| &m.meter == meter)
     }
 
     /// Every meter whose oracle has reached a verdict, and which one.
     ///
     /// A meter that has not completed a tick is absent rather than guessed at.
     pub fn verdicts(&self) -> impl Iterator<Item = (&MeterId, State)> {
-        self.0.iter().filter_map(|(meter, _, cell)| {
-            verdict_from(cell.load(std::sync::atomic::Ordering::Relaxed)).map(|s| (meter, s))
-        })
+        self.meters
+            .iter()
+            .filter_map(|m| m.verdict.map(|v| (&m.meter, v)))
     }
 
     /// The meters whose source has failed fatally — a rejected credential, a
@@ -200,17 +117,117 @@ impl Heartbeats {
             .map(|(m, _)| m)
             .collect()
     }
+}
 
-    /// Every meter and its heartbeat.
+/// The fleet's live state, written by the poll tasks and read as a snapshot
+/// (Story 3.1, AR6 since Story 3.3).
+///
+/// # Why this is a collection and not one value
+///
+/// The runtime served a single meter until 2026-08-06, so a single heartbeat
+/// *was* the poll loop's. With one task per meter, a shared tick would be
+/// touched by whichever task ran most recently — so three healthy siblings would
+/// keep it fresh while the fourth had not read its meter for an hour, and
+/// `/healthz` would report a bridge that was, for that meter, completely wedged.
+///
+/// That is the shape of lie this project exists to prevent, and its twin was
+/// found on 2026-08-06: a `Failed` source reported as publishing.
+///
+/// # Why a `watch` and not N atomics, since 2026-08-08
+///
+/// The atomics were per-meter, which is the half that mattered for the fleet,
+/// and they were not a snapshot: a reader walking four meters observed four
+/// different instants. `watch::send_modify` takes `&mut` on the shared value
+/// under the channel's own lock, so N writers serialise their own field updates
+/// while [`Self::snapshot`] hands a reader the whole fleet as it stood.
+///
+/// **`ArcSwap` was rejected**: rebuilding the vector needs a read-modify-write,
+/// which is a race between tasks — the defect being repaired, reintroduced in
+/// the repair.
+///
+/// # The verdict is the WORST of them, and that is deliberate
+///
+/// Epic 7 wires `/healthz` to a container restart, which kills the session for
+/// every meter. Restarting all four because one task wedged is the right trade
+/// anyway: unlike a rejected credential ([ADR 0027]), a wedged poll task is
+/// exactly what a restart fixes. This is the one place where the fleet makes the
+/// healthcheck stricter rather than more forgiving.
+///
+/// # The name stays `Heartbeats`
+///
+/// It has carried the verdicts as well as the ticks since Story 3.2, so it was
+/// already inexact. Renaming it in the same change that alters its semantics
+/// would put a cosmetic diff on top of a behavioural one, and this repository
+/// reviews by reading diffs.
+///
+/// [ADR 0027]: ../../../docs/adr/0027-a-failed-source-is-a-fault-the-screen-must-name.md
+#[derive(Clone)]
+pub struct Heartbeats(Arc<tokio::sync::watch::Sender<FleetState>>);
+
+impl Default for Heartbeats {
+    fn default() -> Self {
+        Self::for_meters([])
+    }
+}
+
+impl Heartbeats {
+    /// One entry per meter, in the order the meters were spawned.
+    pub fn for_meters(meters: impl IntoIterator<Item = MeterId>) -> Self {
+        let meters = meters
+            .into_iter()
+            .map(|meter| MeterState {
+                meter,
+                last_tick: None,
+                period_ms: 0,
+                verdict: None,
+            })
+            .collect();
+        Self(Arc::new(tokio::sync::watch::Sender::new(FleetState {
+            meters,
+            generation: 0,
+        })))
+    }
+
+    /// The fleet as it stands, at one instant.
     ///
-    /// **A meter that has never ticked reports `None` from
-    /// [`LastLoopTick::last`], and a caller must decide what that means rather
-    /// than let it vanish.** It is not evidence of a wedge during startup, and it
-    /// is evidence of one if it persists — the distinction needs a baseline this
-    /// type does not have, so it is left to the caller and written down here
-    /// rather than resolved silently.
-    pub fn iter(&self) -> impl Iterator<Item = (&MeterId, &LastLoopTick)> {
-        self.0.iter().map(|(m, t, _)| (m, t))
+    /// Cloned out rather than handed as a borrow: `watch`'s read guard blocks
+    /// writers for as long as it is held, and a caller that kept one across an
+    /// `await` — a template render, say — would stall every poll task.
+    pub fn snapshot(&self) -> FleetState {
+        self.0.borrow().clone()
+    }
+
+    /// The handle one poll task writes through.
+    pub fn of(&self, meter: &MeterId) -> Option<MeterPulse> {
+        let index = self
+            .0
+            .borrow()
+            .meters
+            .iter()
+            .position(|m| &m.meter == meter)?;
+        Some(MeterPulse {
+            fleet: Arc::clone(&self.0),
+            index,
+        })
+    }
+
+    /// Records the oracle's verdict for one meter (Story 3.2 AC5, [ADR 0027] §1).
+    ///
+    /// **The screen had no way to see this**, so `/` said the bridge was *"polling
+    /// the meters and publishing what it reads"* about a source in `Failed` that
+    /// had put nothing on the wire since start-up. The page was describing which
+    /// branch of `main.rs` ran, presented to an operator as an observation — the
+    /// same defect `/healthz` was cured of on 2026-08-04 (`publishing` →
+    /// `intends_to_publish`).
+    ///
+    /// [ADR 0027]: ../../../docs/adr/0027-a-failed-source-is-a-fault-the-screen-must-name.md
+    pub fn record(&self, meter: &MeterId, state: State) {
+        self.0.send_modify(|fleet| {
+            if let Some(entry) = fleet.meters.iter_mut().find(|m| &m.meter == meter) {
+                entry.verdict = Some(state);
+                fleet.generation += 1;
+            }
+        });
     }
 
     /// The meters the runtime is **actually serving** — one entry per spawned
@@ -227,17 +244,58 @@ impl Heartbeats {
     /// A configuration cannot answer this question: it says what is *desired*,
     /// and a meter enabled after start-up is desired without being polled. Only
     /// the set of running tasks knows, and this is it.
-    pub fn meters(&self) -> impl Iterator<Item = &MeterId> {
-        self.0.iter().map(|(m, _, _)| m)
+    pub fn meters(&self) -> Vec<MeterId> {
+        self.0
+            .borrow()
+            .meters
+            .iter()
+            .map(|m| m.meter.clone())
+            .collect()
     }
 
     /// How many meters are being watched.
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.0.borrow().meters.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.len() == 0
+    }
+}
+
+/// One meter's write handle into the fleet state.
+///
+/// Holds an index rather than a reference: the vector's length never changes
+/// after `for_meters`, because the served set is fixed at start-up and a
+/// configuration change that would alter it costs a process restart
+/// (`app::reconfigure`).
+#[derive(Clone)]
+pub struct MeterPulse {
+    fleet: Arc<tokio::sync::watch::Sender<FleetState>>,
+    index: usize,
+}
+
+impl MeterPulse {
+    /// Records that an iteration has just started, **and the period it is
+    /// actually pacing at** — see [`MeterState::period_ms`] for why the pacing
+    /// is recorded rather than read from the configuration.
+    pub fn touch(&self, now: MonotonicMs, period_ms: i64) {
+        self.fleet.send_modify(|fleet| {
+            let entry = &mut fleet.meters[self.index];
+            entry.last_tick = Some(now);
+            entry.period_ms = period_ms;
+            fleet.generation += 1;
+        });
+    }
+
+    /// The last recorded instant, or `None` if this meter's loop has never run.
+    pub fn last(&self) -> Option<MonotonicMs> {
+        self.fleet.borrow().meters[self.index].last_tick
+    }
+
+    /// The period this meter's loop was pacing at when it last ticked.
+    pub fn period_ms(&self) -> i64 {
+        self.fleet.borrow().meters[self.index].period_ms
     }
 }
 
@@ -252,7 +310,7 @@ pub struct Context<'a> {
     /// Loop pacing and the fetch deadline.
     pub config: PollConfig,
     /// The liveness heartbeat.
-    pub heartbeat: &'a LastLoopTick,
+    pub heartbeat: &'a MeterPulse,
     /// Where judged readings go.
     pub outbox: &'a mpsc::Sender<MeterUpdate>,
 }
@@ -474,7 +532,8 @@ mod tests {
     #[tokio::test]
     async fn a_meter_that_goes_silent_is_republished_stale() {
         let clock = FakeClock::new(UtcMillis(SANE_NOW));
-        let heartbeat = LastLoopTick::new();
+        let beats = Heartbeats::for_meters([MeterId::new("garage")]);
+        let heartbeat = beats.of(&MeterId::new("garage")).expect("present");
         let (tx, mut rx) = mpsc::channel(8);
         let meter = MeterId::new("garage");
         let mut source = FakeSource::new()
@@ -563,7 +622,8 @@ mod tests {
 
     async fn drive(source: FakeSource) -> (State, Vec<MeterUpdate>) {
         let clock = FakeClock::new(UtcMillis(SANE_NOW));
-        let heartbeat = LastLoopTick::new();
+        let beats = Heartbeats::for_meters([MeterId::new("garage")]);
+        let heartbeat = beats.of(&MeterId::new("garage")).expect("present");
         let (tx, mut rx) = mpsc::channel(8);
         let mut source = source;
         let meter = MeterId::new("garage");
@@ -643,7 +703,8 @@ mod tests {
         // assertion below would hold whichever side of the fetch the touch sat
         // on, and would prove nothing.
         clock.advance_ms(7_000);
-        let heartbeat = LastLoopTick::new();
+        let beats = Heartbeats::for_meters([MeterId::new("garage")]);
+        let heartbeat = beats.of(&MeterId::new("garage")).expect("present");
         assert_eq!(heartbeat.last(), None, "never run yet");
         let (tx, _rx) = mpsc::channel(8);
         // A source that never answers: if the heartbeat were written after the
@@ -747,6 +808,116 @@ mod tests {
         }
     }
 
+    /// **Story 3.3 AC3 — the fleet is read at one instant** (AR6).
+    ///
+    /// # The invariant, and why a counter earns its place
+    ///
+    /// Every write touches one meter's fields and `generation` inside the same
+    /// `send_modify`. Each task here writes `last_tick = its own number of
+    /// touches`, so for any state that ever existed:
+    ///
+    /// ```text
+    /// generation == sum of every meter's last_tick
+    /// ```
+    ///
+    /// A reader that samples meters one at a time can satisfy neither side
+    /// honestly: it observes meter A before a write and meter B after it, and the
+    /// total belongs to no single instant.
+    ///
+    /// # The vacuity this is built against
+    ///
+    /// A snapshot test over a QUIET fleet passes against any implementation,
+    /// including the per-meter atomics this replaces. The writers therefore run
+    /// concurrently with the reader, on a multi-threaded runtime, for enough
+    /// iterations that a torn read is overwhelmingly likely rather than merely
+    /// possible.
+    ///
+    /// FALSIFIED 2026-08-08 by rebuilding the snapshot field by field — one
+    /// `borrow()` per meter plus one for the generation, which is exactly what
+    /// `Heartbeats::iter()` did before this story:
+    ///
+    /// ```text
+    /// test app::poll_publish::tests::the_fleet_is_read_at_one_instant ... FAILED
+    ///
+    /// thread '…the_fleet_is_read_at_one_instant' (357) panicked at
+    /// crates/smartme-bridge/src/app/poll_publish.rs:1111:9:
+    /// a snapshot must belong to ONE instant: generation 57 against meters summing
+    /// to 56 — the reader saw some meters before a write and others after
+    /// ```
+    ///
+    /// It tears on the 57th write out of 8000, which is the measure of how little
+    /// concurrency it takes: the old read was not unlikely to be torn, it was
+    /// torn almost immediately whenever anything was writing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_fleet_is_read_at_one_instant() {
+        const WRITES: i64 = 2_000;
+        let all: Vec<MeterId> = ["garage", "cellar", "attic", "unplugged"]
+            .into_iter()
+            .map(MeterId::new)
+            .collect();
+        let beats = Heartbeats::for_meters(all.clone());
+
+        let writers: Vec<_> = all
+            .iter()
+            .map(|meter| {
+                let pulse = beats.of(meter).expect("served");
+                tokio::spawn(async move {
+                    for n in 1..=WRITES {
+                        // `last_tick` carries this task's own write count, which
+                        // is what makes the sum checkable.
+                        pulse.touch(MonotonicMs(n), 5_000);
+                        tokio::task::yield_now().await;
+                    }
+                })
+            })
+            .collect();
+
+        let reader = {
+            let beats = beats.clone();
+            tokio::spawn(async move {
+                let mut torn = None;
+                for _ in 0..20_000 {
+                    let fleet = beats.snapshot();
+                    let sum: i64 = fleet
+                        .meters
+                        .iter()
+                        .filter_map(|m| m.last_tick)
+                        .map(|t| t.0)
+                        .sum();
+                    if sum != fleet.generation as i64 {
+                        torn = Some((fleet.generation, sum));
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                torn
+            })
+        };
+
+        for w in writers {
+            w.await.expect("writer");
+        }
+        let torn = reader.await.expect("reader");
+
+        // THE PREMISE: the writers really did write, or "no torn read" is a claim
+        // about a fleet nobody touched.
+        let end = beats.snapshot();
+        assert_eq!(
+            end.generation,
+            (WRITES * all.len() as i64) as u64,
+            "every write must be counted, or the invariant below is checked over a \
+             fleet that was never written to"
+        );
+        assert!(
+            torn.is_none(),
+            "a snapshot must belong to ONE instant: generation {} against meters \
+             summing to {} — the reader saw some meters before a write and others \
+             after",
+            torn.map(|t| t.0).unwrap_or(0),
+            torn.map(|t| t.1).unwrap_or(0)
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_hanging_meter_does_not_cost_the_others_their_cadence() {
         use crate::app::supervisor::ConfigHandle;
@@ -834,7 +1005,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn recovery_needs_one_proven_reading() {
         let clock = FakeClock::new(UtcMillis(SANE_NOW));
-        let heartbeat = LastLoopTick::new();
+        let beats = Heartbeats::for_meters([MeterId::new("garage")]);
+        let heartbeat = beats.of(&MeterId::new("garage")).expect("present");
         let (tx, mut rx) = mpsc::channel(8);
         let mut source = FakeSource::new()
             .then(Err(SourceError::Timeout))

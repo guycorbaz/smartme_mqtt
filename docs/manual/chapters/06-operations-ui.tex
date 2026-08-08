@@ -172,3 +172,24 @@ Until 2026-08-07 the page said the bridge was ``polling the meters and publishin
 reads'' whatever the meters were doing, because it had no way to see them. The last known
 values are still published while a meter is unreadable, marked not-good, so nothing
 downstream shows them as current.
+
+\subsection{How soon a silent meter is marked stale}
+\label{sec:stalenesslatency}
+
+A meter that has been answering and then stops is marked not-good on the wire within
+\textbf{one publish period plus one fetch timeout} of its last good reading --- with the shipped
+defaults, 30\,s + 10\,s, so about 40 seconds. At the shortest period the bridge accepts (5\,s)
+it is about 15 seconds, measured.
+
+The guarantee \prog is held to is looser than that: \emph{no later than} \code{2 × publish
+period + the fetch timeout}. The extra period is deliberate slack. It leaves room for a future
+change --- a retry inside a tick, say --- without renegotiating the promise, and it is what a
+regression is caught against: if the real figure ever doubled, it would still be inside the
+promise and the test that measures it prints the number every run.
+
+\begin{note}
+\textbf{One meter's outage costs the others nothing.} Each meter is polled by its own task, so a
+meter that hangs for the full fetch timeout does not delay any other meter's poll --- the three
+that answer keep publishing \code{Good} on their own cadence throughout. That is the whole
+reason the runtime is one task per meter rather than one task walking the list.
+\end{note}

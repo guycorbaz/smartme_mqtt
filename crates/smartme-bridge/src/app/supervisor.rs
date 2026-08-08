@@ -200,7 +200,7 @@ impl Control {
         // from either configuration. See `reconfigure::classify_meters`: the
         // inference was right for a one-meter runtime and silently wrong from
         // the day story 3.1 served the fleet.
-        let served: Vec<_> = self.heartbeats.meters().cloned().collect();
+        let served = self.heartbeats.meters();
         let mut plan = reconfigure::classify(&old, &new, &served);
         if plan.is_empty() {
             return plan;

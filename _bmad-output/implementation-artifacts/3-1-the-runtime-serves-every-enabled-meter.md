@@ -169,8 +169,19 @@ above, `epics.md`, `architecture.md`, the story 5.1 record, and `config.rs`'s ow
       behind the driver task. `supervisor.rs:319` filters on `enabled` and validates **every**
       device topic before any task starts — refusing on the fourth meter while three already poll
       would be starting wrong.
-- [x] `watch<[MeterState; N]>` per AR6, so the UI reads a coherent snapshot rather than N values
-      that never agreed at any instant.
+- [x] ~~`watch<[MeterState; N]>` per AR6, so the UI reads a coherent snapshot rather than N values
+      that never agreed at any instant.~~ **THIS BOX WAS FALSE, and was ticked. Corrected
+      2026-08-08 by story 3.3, which built it.** `tokio::sync::watch` appeared nowhere in the
+      crate. What shipped was `Heartbeats` as an `Arc<Vec<(MeterId, LastLoopTick, Arc<AtomicU8>)>>`
+      — per-meter, which is the half the fleet needed, and read one meter at a time, which is
+      exactly the *"N values that never agreed at any instant"* this line claims to prevent.
+      Nothing was observably wrong: `/` and `/healthz` rendered per request and no assertion
+      depended on two meters agreeing about *when*. The first assertion that does is a latency
+      bound, which is why the debt came due in 3.3 and not earlier.
+      **The tick is what let it live.** A closing review reads ticks; this one said the work was
+      done, so nobody looked. Story 3.3 replaced `Heartbeats` with a `watch<FleetState>` carrying a
+      generation counter, and `the_fleet_is_read_at_one_instant` falsifies it — the old
+      field-by-field read tears on the 57th write out of 8000.
 - [x] Sweep the `deferred-work.md` items parked on Epic 3 that this story touches — at minimum
       `Policy::max_age_ms` validation, and `Serial::new("")` key collisions now that serials key a
       multi-meter map rather than a single one.

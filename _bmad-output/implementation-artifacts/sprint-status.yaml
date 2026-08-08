@@ -134,7 +134,30 @@ development_status:
   # whole map asserted. Mis-routing every DDATA to one device collapses it to a
   # single entry and the silent meter's Bad_Stale disappears from the wire.
   3-2-a-meters-silence-is-published-not-withheld: review
-  3-3-per-meter-staleness-isolation-and-its-latency-bound: backlog
+  # 2026-08-08, STORY WRITTEN. Its first act is a decision that had gone unmade
+  # for a year: `publish_margin`, one of NFR2's three terms, had never had a
+  # value anywhere — it appeared four times, always inside the formula. A bound
+  # with a free variable can be quoted but not met or missed, and every use of
+  # NFR2 so far was an argument rather than a threshold, which is why nothing
+  # noticed. ADR 0028 sets it to the fetch timeout, derived: the binding case is
+  # `PERIOD_MIN`, where `margin >= T - P` bites, and NOT the default period,
+  # where any margin at all would do.
+  # The story also owns AR6's snapshot, which story 3.1 ticked and never built —
+  # `tokio::sync::watch` appears nowhere in the crate. A latency bound is the
+  # first assertion that would actually depend on two meters agreeing about
+  # *when*, which is why the debt comes due here rather than earlier.
+  # FR12 itself is NOT redone: 3.1's cadence test and 3.2's by-topic map already
+  # deliver "one silent meter does not affect the others". What is missing is
+  # the bound and the instant.
+  # 2026-08-08, IMPLEMENTED the same day it was written. NFR2 measured for the
+  # first time: 15 000 ms at PERIOD_MIN against a 20 000 ms ceiling — exactly the
+  # `P + T` ADR 0028 derives, confirmed rather than assumed. AR6's snapshot built
+  # and falsified; the old per-meter read tears on the 57th write out of 8000.
+  # The instructive falsification is the one that FAILED: a `continue` placed
+  # after `step_once` delays nothing, because `step_once` has already sent the
+  # update by the time it returns. Green mutation, no falsification — the same
+  # lesson story 3.1's cadence test paid for.
+  3-3-per-meter-staleness-isolation-and-its-latency-bound: review
   3-4-discovery-the-accounts-meters-by-name-and-serial: backlog
   3-5-a-known-meter-that-disappears-from-discovery: backlog
   3-6-orphan-retained-purge-on-a-mapping-change: backlog
