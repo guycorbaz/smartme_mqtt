@@ -192,17 +192,55 @@ mod tests {
     }
 
     /// The refusal page reflects request headers, so it must escape them.
-    #[test]
-    fn a_hostile_origin_cannot_escape_the_refusal_page() {
+    ///
+    /// # This test could not fail until 2026-08-09
+    ///
+    /// It read the body as `format!("{response:?}")`, which prints
+    /// `body: Body(UnsyncBoxBody)` and never the content — so
+    /// `!body.contains("<script>")` held whatever the renderer did. **Measured**,
+    /// not reasoned: with `super::screens::escape(why)` replaced by a bare `why`,
+    /// deleting the escaping outright, all seven tests in this module stayed
+    /// green.
+    ///
+    /// The helper that reads the rendered bytes had existed since 2026-08-05, and
+    /// its own documentation names *this* test as the one it was built for. It was
+    /// private to a sibling's `mod tests`, so it could not be reached from here and
+    /// the conversion never happened — a correction that did not travel. It is now
+    /// [`crate::ui::rendered_body`].
+    ///
+    /// FALSIFIED 2026-08-09 with that same mutation, against the repaired test.
+    /// Copied from the run:
+    ///
+    /// ```text
+    /// test ui::origin::tests::a_hostile_origin_cannot_escape_the_refusal_page ... FAILED
+    /// the one unescaped sink on the whole surface is here, and the payload survived into
+    /// the page: <!doctype html><meta charset=utf-8><title>Refused</title><h1>Refused</h1>
+    /// <p>this submission was issued by http://x"><script>alert(1)</script>, which is not
+    /// this bridge.</p>…
+    ///
+    /// test result: FAILED. 6 passed; 1 failed
+    /// ```
+    ///
+    /// **Both directions are asserted.** A renderer that dropped `why` entirely
+    /// would satisfy "no `<script>`" while telling the operator nothing, so the
+    /// escaped form is asserted present as well as the raw form absent.
+    #[tokio::test]
+    async fn a_hostile_origin_cannot_escape_the_refusal_page() {
         let response = refusal(&headers(&[
             ("origin", "http://x\"><script>alert(1)</script>"),
             ("host", "smartme.home.arpa"),
         ]))
         .expect("a foreign origin is refused");
-        let body = format!("{response:?}");
+        let page = crate::ui::rendered_body(response).await;
         assert!(
-            !body.contains("<script>"),
-            "the one unescaped sink on the whole surface was here: {body}"
+            !page.contains("<script>"),
+            "the one unescaped sink on the whole surface is here, and the payload \
+             survived into the page: {page}"
+        );
+        assert!(
+            page.contains("&lt;script&gt;"),
+            "the origin must still be REPORTED, escaped — a page that simply dropped \
+             it would pass the assertion above and tell the operator nothing: {page}"
         );
     }
 

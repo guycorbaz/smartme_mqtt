@@ -720,8 +720,33 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
     (code, [("content-type", "application/json")], body)
 }
 
+/// The rendered bytes of a response.
+///
+/// **Not `format!("{response:?}")`.** `http::Response`'s `Debug` prints the
+/// status, version, headers and `body: Body(UnsyncBoxBody)` — never the content.
+/// A test written that way on 2026-08-05 asserted that a refusal page contained
+/// no `<script>` and could not fail for any mutation of the function that renders
+/// it; it shipped inside the commit whose subject was *"the checks that could not
+/// see what they searched for"*.
+///
+/// **It lives here, beside the module rather than inside `mod tests`, since
+/// 2026-08-09.** When this helper was built, the test its own documentation named
+/// was in `ui::origin::tests`, which could not reach a private item of a sibling's
+/// test module — so the test that guards **the only unescaped sink on the whole
+/// web surface** kept the shape this exists to replace, and was measured still
+/// green with `escape()` deleted outright. A helper a caller cannot reach is a
+/// correction that does not travel.
+#[cfg(test)]
+pub(super) async fn rendered_body(response: axum::response::Response) -> String {
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("the body reads");
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 #[cfg(test)]
 mod tests {
+    use super::rendered_body as body;
     use super::*;
     use crate::app::MeterPulse;
     use crate::app::poll_publish::Heartbeats;
@@ -740,21 +765,6 @@ mod tests {
         config: ConfigHandle,
     ) -> Phase {
         Phase::running(Control::detached(config, heartbeats, clock))
-    }
-
-    /// The rendered bytes of a response.
-    ///
-    /// **Not `format!("{response:?}")`.** `http::Response`'s `Debug` prints the
-    /// status, version, headers and `body: Body(UnsyncBoxBody)` — never the
-    /// content. A test written that way on 2026-08-05 asserted that a refusal page
-    /// contained no `<script>` and could not fail for any mutation of the function
-    /// that renders it; it shipped inside the commit whose subject was *"the
-    /// checks that could not see what they searched for"*.
-    async fn body(response: axum::response::Response) -> String {
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("the body reads");
-        String::from_utf8_lossy(&bytes).into_owned()
     }
 
     /// A one-meter fleet, which is what most of these tests want.
