@@ -147,13 +147,67 @@ impl Lifecycle {
             // them as a bridge that is running.
             //
             // What is true in every way this state is reached: nothing is being
-            // published, and the faults below say why.
+            // published, and the screen that says why is one link away.
+            //
+            // NOT "the faults below". They are not below — they are on
+            // `/config`, and this page has never rendered one.
+            //
+            // Met on the panoramix deployment, 2026-08-09, by the first operator
+            // to reach this state in the field: the page says "correct them and
+            // save" while showing nothing to correct and offering no way to get
+            // anywhere. ADR 0026 keeps the process alive for exactly one reason
+            // — *killing it would destroy the screen that is the repair tool* —
+            // and the entry page did not lead to that screen.
+            //
+            // Fifth instance of one shape, after `/healthz`'s `publishing`, the
+            // `Running` detail below, the failed-source caveat and the panic
+            // guard: a surface asserting something the code does not do.
             Lifecycle::Misconfigured => {
                 "The configuration on disk cannot be used, so nothing is published — \
-                 no connection, no birth. The faults below say what is wrong with \
-                 it; correct them and save, or fix the file on the host if that is \
-                 what they point at."
+                 no connection, no birth. Open the configuration screen: it lists \
+                 every fault beside the setting it belongs to. Some of them are \
+                 repaired there; one — a state directory this process cannot write \
+                 — has to be fixed on the host, and says so."
             }
+        }
+    }
+
+    /// Where the operator goes next, as a link they can click.
+    ///
+    /// # This page had no links at all until 2026-08-09
+    ///
+    /// Every silent phase tells the operator to do something — configure the
+    /// bridge, confirm the mapping, correct a fault — and none of them said
+    /// where. The entry page was a dead end in exactly the three states whose
+    /// whole purpose is to be left.
+    ///
+    /// It was met in the field rather than found by reading: the panoramix
+    /// deployment came up `Misconfigured` (no meters yet, deliberately) and
+    /// served *"correct them and save"* with nothing to correct and nowhere to
+    /// go. [ADR 0026] keeps this process alive on a configuration it has refused
+    /// for one stated reason — *killing it would destroy the screen that is the
+    /// repair tool* — which this page then did not link to.
+    ///
+    /// `Running` gets one too, deliberately: a bridge that is publishing is
+    /// exactly when an operator wants to add a meter, and making them guess the
+    /// path is the same defect wearing a friendlier face.
+    ///
+    /// [ADR 0026]: ../../../docs/adr/0026-a-configuration-it-cannot-use-stops-the-bridge-publishing-not-serving.md
+    const fn next_step(self) -> &'static str {
+        match self {
+            Lifecycle::Unconfigured => {
+                "<p><a href=\"/config\"><strong>Configure this bridge</strong></a></p>"
+            }
+            Lifecycle::Unconfirmed => {
+                "<p><a href=\"/confirm\"><strong>Review and confirm the meter \
+                 mapping</strong></a> — nothing is published until you do.</p>\
+                 <p><a href=\"/config\">Change the configuration</a></p>"
+            }
+            Lifecycle::Misconfigured => {
+                "<p><a href=\"/config\"><strong>Open the configuration screen</strong></a> \
+                 — every fault is listed there, beside the setting it belongs to.</p>"
+            }
+            Lifecycle::Running => "<p><a href=\"/config\">Change the configuration</a></p>",
         }
     }
 
@@ -619,10 +673,12 @@ async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
          <p><strong>{}</strong></p>\
          <p>{}</p>\
          {}\
+         {}\
          <hr><p>version {} · contract {}</p>",
         lifecycle.headline(),
         lifecycle.detail(),
         caveat,
+        lifecycle.next_step(),
         env!("CARGO_PKG_VERSION"),
         crate::adapters::sparkplug_publisher::CONTRACT_VERSION,
     ))
@@ -799,6 +855,79 @@ mod tests {
     /// Wrap a phase in the state a handler sees. The state directory and the
     /// readiness nudge are irrelevant to `/healthz`, which is what these tests
     /// exercise.
+    /// **Every phase that asks the operator to act must say where to go.**
+    ///
+    /// Met in the field rather than found by reading. The panoramix deployment
+    /// came up `Misconfigured` on 2026-08-09 — deliberately, with no meters
+    /// configured yet — and served *"The faults below say what is wrong with it;
+    /// correct them and save"* over a page that rendered no fault and contained
+    /// **no link of any kind**. [ADR 0026] keeps this process alive on a
+    /// configuration it has refused for one stated reason, *killing it would
+    /// destroy the screen that is the repair tool*, and the entry page did not
+    /// lead there.
+    ///
+    /// Nothing caught it because nothing asserted anything about this page's
+    /// content at all: 182 unit tests stayed green across the repair.
+    ///
+    /// FALSIFIED 2026-08-09 by returning `""` from `Lifecycle::next_step` — the
+    /// state of the code the deployment met. Copied from the run:
+    ///
+    /// ```text
+    /// ---- ui::tests::every_phase_offers_a_way_out stdout ----
+    /// Misconfigured tells the operator to act and offers no way to: <!doctype html>…
+    /// <p><strong>The saved configuration is not usable</strong></p>…<hr><p>version …
+    ///
+    /// test result: FAILED. 1 failed
+    /// ```
+    ///
+    /// The `Misconfigured` arm additionally asserts the old sentence is gone: a
+    /// link would satisfy the first assertion while the prose still promised a
+    /// list that is on another page.
+    ///
+    /// [ADR 0026]: ../../../docs/adr/0026-a-configuration-it-cannot-use-stops-the-bridge-publishing-not-serving.md
+    #[tokio::test]
+    async fn every_phase_offers_a_way_out() {
+        for lifecycle in [
+            Lifecycle::Unconfigured,
+            Lifecycle::Unconfirmed,
+            Lifecycle::Misconfigured,
+            Lifecycle::Running,
+        ] {
+            let state = ui(Phase::silent(lifecycle));
+            let page = body(index(State(state)).await.into_response()).await;
+            assert!(
+                page.contains("href=\"/config\""),
+                "{lifecycle:?} tells the operator to act and offers no way to: {page}"
+            );
+        }
+
+        // The one that has to reach a DIFFERENT screen: confirming is its own
+        // submission, deliberately separate from saving (Story 6.2 AC3).
+        let page = body(
+            index(State(ui(Phase::silent(Lifecycle::Unconfirmed))))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert!(
+            page.contains("href=\"/confirm\""),
+            "the phase whose whole exit is one click must link to it: {page}"
+        );
+
+        // And the sentence that sent an operator looking below for nothing.
+        let page = body(
+            index(State(ui(Phase::silent(Lifecycle::Misconfigured))))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert!(
+            !page.contains("faults below"),
+            "the faults are on /config; promising them here sends the reader \
+             scrolling past a horizontal rule: {page}"
+        );
+    }
+
     fn ui(phase: Phase) -> Arc<UiState> {
         Arc::new(UiState::new(
             phase.into_handle(),
