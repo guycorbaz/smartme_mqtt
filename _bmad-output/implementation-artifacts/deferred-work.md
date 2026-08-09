@@ -498,3 +498,30 @@ need a decision; one more is new and was repaired.
   `chaos_stale_on_cloud_timeout` was verified to do exactly that — real broker,
   independent subscriber, quality codes read off the wire. The two texts differ; the
   measurement does not lie.
+
+## Deferred from: the panoramix deployment (2026-08-09)
+
+- **The published namespace is waiting on an external decision, and `PreProd` is a
+  placeholder.** Guy, 2026-08-09: *"PreProd n'est PAS le nom définitif : c'est juste pour les
+  tests. Le projet SCADA définit la stratégie de noms pour MQTT."* So `group_id` — which is in
+  every topic this bridge publishes — will change once, from outside this repository. Two
+  things follow and neither is urgent yet: the old namespace will leave an orphan tag folder
+  in the host (story 3.6's business, unwritten), and the change costs nothing at all only
+  while nothing has been historised under `PreProd`.
+
+- **What that strategy CAN ask for, which is worth knowing before it is written.** The device
+  level of the topic is the **serial** today, and that is this project's choice, not the
+  norm's: `Sparkplug_4_Topics.adoc:121-125` requires only a valid UTF-8 string, no reserved
+  characters, unique among the devices of one edge node. A readable `meter_id` — `appart-est`
+  rather than `9202685` — would be exactly as conformant, and `config::validate` already
+  enforces the uniqueness such a change would need.
+
+  It is not free, and the cost is worth stating rather than discovering: `publish` routes by
+  `update.measurement.serial`, the serial the smart-me RESPONSE carries, which is the field
+  ADR 0029 has just bound to the configured one. Routing by `meter_id` instead means moving
+  that seam. A day's work, not a line — and cheap now, expensive after historisation.
+
+- **`meter_id` reaches no consumer today.** Measured against the live deployment: the only
+  strings on the wire are `Power`, `Energy` and their units, so a SCADA host browses serial
+  numbers. The manual claimed the opposite (*"the `meter_id` becomes the metric path a SCADA
+  host displays"*) and was corrected the same day.
