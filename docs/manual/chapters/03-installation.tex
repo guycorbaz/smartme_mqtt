@@ -148,6 +148,19 @@ entrypoint. The port named by the load-balancer label must match the bridge's
 label with it --- and note that the bridge treats \code{ui\_port} as needing a
 process restart, so the two move together in any case.
 
+\begin{warning}
+\textbf{The UI is at \code{http://smartme.home.arpa} --- with no port number.}
+Traefik listens on 80; 8080 is the port \emph{inside} the container, which the
+compose file deliberately does not publish. That is what keeps an
+unauthenticated UI off the LAN.
+
+Adding \code{:8080} does not fail in a way that says so. Traefik opens that port
+for its own API, and with \code{api.insecure=false} it answers \textbf{404 page
+not found} to everything --- which reads exactly like a bridge that is not
+routed, and sends you to look at labels that are correct. If you get a 404, drop
+the port before changing anything else.
+\end{warning}
+
 \begin{note}
 \textbf{There is no authentication on the UI} (ADR 0019): the trust boundary is
 Traefik, not this process, and no host port is published, so the container is not
