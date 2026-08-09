@@ -399,10 +399,17 @@ pub async fn run_with_control(
     let polls: Vec<_> = served
         .iter()
         .map(|meter| {
+            // The serial goes down with the meter, and it is the SAME value
+            // `node.device_topic` above births the device under. That is the
+            // point: the source compares it with what smart-me answers, so a
+            // serial that is legal but wrong stops the meter loudly instead of
+            // producing a bridge that fetches, judges and ticks while the
+            // publisher discards every reading (`UnverifiedReading::verify`).
             let source = SmartMeCloudSource::new(
                 client.clone(),
                 Arc::clone(&clock),
                 meter.meter.clone(),
+                meter.serial.clone(),
                 meter.device_id.clone(),
             );
             tokio::spawn(poll_publish::run(

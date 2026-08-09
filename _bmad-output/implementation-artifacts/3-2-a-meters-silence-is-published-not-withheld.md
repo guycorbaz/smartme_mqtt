@@ -221,3 +221,68 @@ is the stronger claim — the isolated workflow builds with `--locked` and a loc
 - **Prove the stream flows before asserting anything about its shape.** Every absence and every
   count in this story is meaningless over a wire nothing reached; story 3.1's cadence test needed
   three attempts for exactly this reason, and one of its mutations compiled and stayed green.
+
+## Adversarial review of 3.1 and 3.2, 2026-08-09
+
+The closing records of 2026-08-08 verified that the acceptance criteria were met. This pass
+looked for harm instead, which is a different question and found a different answer. Four
+findings; the full list is in `deferred-work.md`, and the two below are the ones that were
+repaired here because leaving either in place would have left a surface lying.
+
+### A serial that is merely legal takes a meter off the wire in silence
+
+**The worst shape available in this system: nothing malfunctions.** The DBIRTH declares
+`meters[].serial` from the file; every DDATA is routed by the serial the smart-me RESPONSE
+carries. Nothing compared them. When they disagree the fetch succeeds, so the oracle says
+`Fresh`, the heartbeat ticks, `/healthz` answers `200` with `wedged: false` and an empty
+`failed_sources`, `/` names no fault, and the tags appear in the host's browse tree — while
+every reading is discarded as `DroppedUndeclaredDevice` behind one `warn` per period.
+
+**This repository had already met it and had stopped one step short of the fix.**
+`config::check_serial` refuses a leading zero for exactly this reason and its own comment
+states the rule it is a proxy for: *"the real requirement is «the serial must be the one
+smart-me reports», which cannot be checked offline"*. It cannot be checked offline — and the
+bridge holds the answer on every successful fetch, and had never looked at it.
+
+Fixed as **ADR 0029**, issue [#61]: `SmartMeCloudSource` compares the two and refuses a mismatch as
+`SourceError::Fatal`, which latches `Failed`, names the meter on `/` and in `failed_sources`,
+and asks for the restart that correcting a serial requires anyway. The offline proxy stays —
+it refuses before a single API call and before anything is born into a namespace a host
+persists.
+
+**Enforced by a type, and the guarantee is stated at its real size.** `fetch` has two success
+paths (the ordinary one, and the retry after a 401), so `fetch_once` cannot return a `Reading`
+at all — only an `UnverifiedReading` that `verify` opens. Dropping the call does not compile,
+measured. `unverified.0` does compile, also measured: what is closed is the forgotten branch,
+not a deliberate unwrap. The first draft of that doc comment claimed more than the measurement
+supports and was corrected before commit.
+
+Three mutations, recorded next to the test: the guard catching nothing (red, and the panic
+prints `meter: MeterId("cellar")` carrying `Serial("30000001")` at `Good` — the harm produced
+rather than argued), the guard refusing everything (red, including the control, which is what
+gives the control a subject), and the call dropped from `fetch` (a red *build*).
+
+### The caveat on `/` was false in every case that reached it
+
+Found while checking that the new fault would be reported honestly, and it predates that fault
+entirely. The banner asserted one cause — *"the smart-me cloud refused or could not answer"* —
+and promised that *"the last known values are still published, marked not-good"*.
+
+**The promise is false.** The banner only ever renders for `State::Failed`, `Failed` publishes
+`Quality::Bad`, and `metrics_for` publishes `Null` for `Bad` — no number goes out at all. A
+meter that never answered publishes nothing whatever. So the conclusion (nothing shows as
+current) was true and the reason given for it was wrong, and an operator would have gone
+looking in their historian for a value that is not there.
+
+Both halves corrected, in the page and in `06-operations-ui.tex`, which carried the same two
+sentences. The page now asserts no cause, offers the two an operator can actually cause, and
+names the log for the rest.
+
+### What this pass did NOT change
+
+**FR25 is untouched and must stay that way.** ADR 0029 binds a reading to the device the
+configuration *declares*; it cannot bind it to the meter the operator *meant*. A row carrying
+the cellar's serial AND the cellar's device id under the label `garage` is self-consistent and
+passes. The manual's warning was amended to say which half is machine-checked and which half is
+still the human's — reading that amendment as "the bridge checks the mapping now" would be the
+worst outcome available from this change.

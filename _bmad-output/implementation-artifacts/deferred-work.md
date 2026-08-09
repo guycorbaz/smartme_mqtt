@@ -372,3 +372,38 @@ Items deferred from reviews; each carries its origin and where it should be pick
   discard a death belonging to a session it believes is still live. None of the repository's 173
   tests could have found it — it lives in the interaction between DSM's ACLs, Docker's automatic
   bind-mount creation, and a uid that does not exist on the NAS.
+
+## Deferred from: code review of stories 3.1 and 3.2 (2026-08-09)
+
+The first adversarial pass over these two — the closing records written on 2026-08-08 were a
+reading of the code, not a hunt for harm. Four findings; the first was fixed in the reviewing
+commit (ADR 0029, [#61]) and the other three are here.
+
+- **Disabling a meter does not stop polling it, and its fault cannot be switched off.**
+  `poll_publish::run` never reads `enabled` (`poll_publish.rs`, the loop reads only the period
+  and the policy), and `classify_meters` relies on that deliberately — *"disabling a meter does
+  NOT unbind its task"* is what makes re-enabling a DBIRTH rather than a restart. The
+  consequences are nobody's: the smart-me API goes on being called every period, for ever, for
+  a meter the operator removed from service; every reading is then discarded after the DDEATH
+  with one `warn` per period, so the log fills with warnings describing correct behaviour; and
+  `Phase::failed_sources` does not filter on `enabled`, so a meter in `Failed` **stays named on
+  `/` and in `/healthz` after being disabled** — and `Failed` is absorbing, so only a restart
+  clears it. Disabling a broken meter is the obvious operator gesture and it does not quieten
+  the alarm it is aimed at. Belongs with the meter-lifecycle work in Epic 3 (3.4/3.5) or with
+  whichever story next touches `classify_meters`; the fix is a decision (does a disabled meter
+  keep its task at all?) before it is code.
+
+- **Nothing asserts that `supervisor` spawns one poll task per meter.** Story 3.1 named this
+  honestly — *"the heartbeat count is the seam that would prove it"* — and it has since become
+  **load-bearing**: since `2a4d5ca`, `Heartbeats::meters()` is what decides whether a DDEATH is
+  sent at all (`classify_meters`). Today `run_with_control` builds the heartbeats and the tasks
+  from the same `served` vector, so it is right by construction and by nothing else. The
+  divergence this would catch is exactly the one `2a4d5ca` repaired in its other form: a set
+  that describes the configuration rather than the tasks.
+
+- **`MeterUpdate::meter` is read by no production code.** The publisher routes on
+  `measurement.serial` and the driver traces the same; the field is used only in tests. Not a
+  defect on its own — but it is the one field that records *which meter was asked for* next to
+  *what answered*, which is the comparison ADR 0029 now performs one layer down. Either it
+  earns a reader or it should go, and deciding that belongs with Epic 2's remaining oracles
+  rather than here.

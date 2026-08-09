@@ -78,10 +78,17 @@ mapping_confirmed = true    # a human has checked the mapping
 \end{lstlisting}
 
 \begin{warning}
-\textbf{This is the one error validation cannot catch.} \prog refuses a serial that cannot be a
-topic level, and two meters that would collide on one topic. It cannot tell that \code{garage} is
-pointed at the cellar's device: that configuration is well-formed, unique, complete --- and wrong.
-Only you can see it, and only by reading the serial beside the topic.
+\textbf{This is the error validation cannot catch, and half of it is still yours alone.} \prog
+refuses a serial that cannot be a topic level, two meters that would collide on one topic, and
+--- since 2026-08-09 --- a \code{serial} that is not the serial the paired \code{device\_id}
+actually reports (section~\ref{sec:serialmustmatch}). What none of that can tell you is that
+\code{garage} is pointed at the cellar's meter \emph{consistently}: serial and device id both
+the cellar's, only the name wrong. That configuration is well-formed, unique, complete,
+self-consistent --- and wrong, and every reading it publishes will be filed under the wrong
+room for as long as it runs.
+
+Only you can see that one, and only by reading the serial beside the topic. It is what this
+confirmation is for.
 
 And the cost of not seeing it is not a restart. A SCADA host \emph{persists what it discovers}: the
 tag folder outlives the process, has to be deleted by hand, and deleting it discards the alarm and
@@ -525,6 +532,36 @@ polled and never appears on the wire.
 Two serials that would produce the same topic are refused at startup, as is a serial that
 cannot be a topic level at all --- a mapping collision would merge two meters' histories
 into one curve, which is not recoverable by fixing the configuration afterwards.
+
+\subsection{The serial must be the one smart-me reports}
+\label{sec:serialmustmatch}
+
+\code{serial} and \code{device\_id} are two names for the same physical meter, written on the
+same row, and \emph{nothing on your side checks that they agree}. They are used at opposite
+ends: \code{serial} is what the device is born under on the wire, \code{device\_id} is what
+\prog asks smart-me for. If they name different meters, every reading arrives addressed to a
+device the host was never told about, and is discarded.
+
+Before 2026-08-09 that was silent in the worst way available. The fetch succeeded, so the
+bridge considered the meter fresh, the health check stayed green, the tags appeared in the
+tag browser --- and not one value ever reached them. A bridge that looks perfect and publishes
+nothing.
+
+\prog now compares the two on every answer smart-me gives. A meter whose reported serial is
+not its declared one is marked as a fault, named on \code{/} and in \code{failed\_sources},
+and stops rather than polling on. The log line names both serials and the \code{device\_id},
+which is enough to tell you which of the two fields is wrong:
+
+\begin{lstlisting}
+meter cellar is declared with serial 9202686, but smart-me device
+a1a1a1a1-...-000000000001 reports serial 9202685
+\end{lstlisting}
+
+\begin{note}
+This is a fault a restart clears \emph{after} you fix the file, not one that clears itself:
+correcting a serial requires a restart anyway (see the change-cost table above), so the
+refusal and the repair ask for the same thing.
+\end{note}
 
 \stub{the editing screen and the first-run mapping confirmation, once Epic~6 exists.}
 

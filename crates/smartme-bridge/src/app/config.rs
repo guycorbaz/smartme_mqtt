@@ -354,6 +354,17 @@ fn check_serial(
     // zero is a proxy for it, generalised from a single incident — so it can in
     // principle refuse a legitimate serial, and there is deliberately no override.
     //
+    // SINCE 2026-08-09 THE REAL RULE IS ALSO ENFORCED, online, where it always
+    // could have been: `SmartMeCloudSource` compares the declared serial with the
+    // one every response carries and refuses the meter fatally on a mismatch
+    // (ADR 0029, `UnverifiedReading::verify`). This proxy is NOT withdrawn and is
+    // not made redundant by it — the two refuse at different moments and that is
+    // the whole of their difference. This one costs zero API calls and stops a
+    // bridge before it births anything into a namespace a SCADA host persists;
+    // the online one catches every other way the pair can disagree, but only
+    // after the node and its devices are already on the wire. Keeping both is why
+    // the cheap, certain case never reaches the expensive one.
+    //
     // Guy confirmed on 2026-08-03 that none of his four meters carries one, and
     // chose the hard refusal over a warning, on the grounds that the failure it
     // prevents is silent and a startup WARN would drown — which is exactly what

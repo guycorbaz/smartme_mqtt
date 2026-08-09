@@ -555,19 +555,40 @@ async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
     // is wrong" sends an operator to the logs, a meter's name sends them to the
     // meter.
     let failed = Phase::failed_sources(phase.fleet().as_ref());
+    // WHAT THIS SAYS HAS TO BE TRUE IN EVERY CASE THAT REACHES IT, and it was
+    // not until 2026-08-09. Two defects, both found by reading the code the
+    // sentence describes rather than the sentence:
+    //
+    //  - it named ONE cause — "the smart-me cloud refused or could not answer".
+    //    A meter whose reported serial is not its declared one reaches `Failed`
+    //    with the cloud having answered perfectly, so the page would have sent an
+    //    operator to look at their credentials for a typo in their own form.
+    //  - it promised that "the last known values are still published, marked
+    //    not-good". They are not. `Failed` publishes `Quality::Bad`, and
+    //    `metrics_for` deliberately publishes NULL for `Bad` — "this number is
+    //    not a reading", so no number goes out at all. A meter that never
+    //    answered publishes nothing whatever, having no last value to carry.
+    //    The conclusion (nothing shows as current) was true; the reason given
+    //    for it was false, and an operator would have gone looking in their
+    //    historian for a value that is not there.
+    //
+    // So: no cause is asserted, the two an operator can actually cause are
+    // offered, and the log is named for the rest.
     let caveat = if failed.is_empty() {
         String::new()
     } else {
+        let (subject, pronoun) = if failed.len() == 1 {
+            ("One meter is", "it")
+        } else {
+            ("Meters are", "them")
+        };
         format!(
-            "<p><strong>{} not being read: {}.</strong> The smart-me cloud refused \
-             or could not answer, and this is a fault a restart is needed to clear \
-             — the last known values are still published, marked not-good, so \
-             nothing downstream shows them as current.</p>",
-            if failed.len() == 1 {
-                "One meter is"
-            } else {
-                "Meters are"
-            },
+            "<p><strong>{subject} not being read: {}.</strong> The bridge cannot get a \
+             reading it can vouch for — usually a refused smart-me credential, or a \
+             device that is not the one the configuration declares for that meter. \
+             <strong>No value is published for {pronoun}</strong>, so nothing downstream \
+             shows one as current. This is a fault a restart is needed to clear, and the \
+             log names the reason.</p>",
             screens::escape(&failed.join(", ")),
         )
     };

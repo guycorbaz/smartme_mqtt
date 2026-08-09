@@ -157,21 +157,40 @@ screen needed to configure it.
 
 \subsection{A meter that cannot be read is named}
 
-A \emph{fault} is not a deliberate silence, and the two are reported apart. When the smart-me
-cloud refuses or cannot answer for a meter, that meter's name appears on \code{/} --- ``one
-meter is not being read: \emph{cellar}'' --- and in \code{/healthz} under
-\code{failed\_sources}, which is an empty list when everything is being read.
+A \emph{fault} is not a deliberate silence, and the two are reported apart. When \prog cannot
+get a reading it can vouch for, that meter's name appears on \code{/} --- ``one meter is not
+being read: \emph{cellar}'' --- and in \code{/healthz} under \code{failed\_sources}, which is
+an empty list when everything is being read.
 
-The status code stays \code{200}, and that is deliberate rather than lenient: the fault a
-refused credential represents is not one a restart clears, so returning \code{503} would put
-the container in a loop and destroy the screen that names the problem. What a restart
-\emph{does} fix --- a poll loop that has stopped looping --- is what \code{503} is reserved
-for.
+Two things put a meter there, and they are diagnosed in opposite places:
+
+\begin{itemize}
+  \item \textbf{smart-me refused or could not answer} --- typically a rejected credential.
+        Check \code{SMARTME\_CLIENT\_ID} and \code{SMARTME\_CLIENT\_SECRET} in the
+        environment.
+  \item \textbf{the device is not the one declared} --- smart-me answered perfectly, but the
+        serial it reports for that \code{device\_id} is not the \code{serial} written beside
+        it in the configuration. Nothing is wrong with your credentials; the two fields on
+        that row do not describe the same meter. See
+        section~\ref{sec:serialmustmatch}.
+\end{itemize}
+
+The log names which of the two it was.
+
+\textbf{No value is published for a meter in this state.} That is worth stating plainly,
+because the obvious guess is the opposite one: a fault does not fall back to the last known
+reading marked not-good. A meter that has never answered has no value to publish, and one
+that answered before publishes an explicitly empty reading --- the quality says ``this is not
+a reading'', so no number goes with it. Nothing downstream shows a value as current, and
+nothing downstream shows an old one either.
+
+The status code stays \code{200}, and that is deliberate rather than lenient: neither fault
+is one a restart clears, so returning \code{503} would put the container in a loop and
+destroy the screen that names the problem. What a restart \emph{does} fix --- a poll loop
+that has stopped looping --- is what \code{503} is reserved for.
 
 Until 2026-08-07 the page said the bridge was ``polling the meters and publishing what it
-reads'' whatever the meters were doing, because it had no way to see them. The last known
-values are still published while a meter is unreadable, marked not-good, so nothing
-downstream shows them as current.
+reads'' whatever the meters were doing, because it had no way to see them.
 
 \subsection{How soon a silent meter is marked stale}
 \label{sec:stalenesslatency}

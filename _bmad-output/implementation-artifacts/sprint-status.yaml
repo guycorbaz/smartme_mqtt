@@ -155,6 +155,50 @@ development_status:
   # AC3 done the same day at the publisher: four meters indexed BY TOPIC into a map,
   # whole map asserted. Mis-routing every DDATA to one device collapses it to a
   # single entry and the silent meter's Bad_Stale disappears from the wire.
+  # 2026-08-09, ADVERSARIAL REVIEW of 3.1 AND 3.2 — the first one. The closing
+  # records of 2026-08-08 checked that the ACs were MET; this looked for harm,
+  # which is a different question. Four findings, one repaired here (ADR 0029),
+  # three in `deferred-work.md`.
+  #
+  # THE ONE THAT MATTERED, and it is the shape this project exists to prevent:
+  # a serial that was merely LEGAL took a meter off the wire in total silence.
+  # The DBIRTH declares `meters[].serial` from the file; every DDATA is routed
+  # by the serial the smart-me RESPONSE carries; nothing compared them. On a
+  # mismatch the fetch SUCCEEDS — so the oracle says `Fresh`, the heartbeat
+  # ticks, `/healthz` answers 200 with `wedged: false` and an empty
+  # `failed_sources`, `/` names no fault, the tags appear in the host's browse
+  # tree — and every reading is discarded as `DroppedUndeclaredDevice` behind one
+  # `warn` per period. A bridge perfect on every surface it offers, publishing
+  # nothing.
+  # THE REPOSITORY HAD ALREADY MET THIS AND STOPPED ONE STEP SHORT.
+  # `config::check_serial` refuses a leading zero for exactly this reason and its
+  # comment names the rule it proxies: *"the real requirement is «the serial must
+  # be the one smart-me reports», which cannot be checked offline"*. Offline, no
+  # — but the bridge holds the answer on every successful fetch and had never
+  # looked at it. Story 3.1 made it four rows to get wrong instead of one, ADR
+  # 0023 made them hand-typed until 3.4, and Guy's panoramix gate runs through
+  # that form.
+  # Fixed at the source adapter, refused as `Fatal` so it latches and is NAMED
+  # rather than polled on. Enforced by a type — `fetch_once` cannot return a
+  # `Reading` at all, so the check cannot be lost on the retry-after-401 branch;
+  # dropping it does not COMPILE, measured. `unverified.0` does compile, also
+  # measured, and the doc comment was corrected to claim only that: the forgotten
+  # branch is closed, a deliberate unwrap is not.
+  # SECOND REPAIR, found while checking the first would be reported honestly and
+  # older than it: the caveat on `/` was FALSE IN EVERY CASE THAT REACHED IT. It
+  # renders only for `Failed`, `Failed` publishes `Bad`, and `metrics_for`
+  # publishes NULL for `Bad` — so *"the last known values are still published,
+  # marked not-good"* was a promise no branch kept, and a meter that never
+  # answered publishes nothing at all. Corrected in the page and in the manual,
+  # which carried the same two sentences.
+  # NOT CHANGED, deliberately: FR25. ADR 0029 binds a reading to the device the
+  # configuration DECLARES, never to the meter the operator MEANT — a row with
+  # the cellar's serial and the cellar's device id labelled `garage` is
+  # self-consistent and passes. The manual now says which half is machine-checked
+  # and which half is still the human's; reading that as "the bridge checks the
+  # mapping" would be the worst outcome of this change.
+  # `./scripts/ci-local.sh` green, all ten steps including chaos and image.
+  # Issue [#61]. ADR 0029.
   3-2-a-meters-silence-is-published-not-withheld: review
   # 2026-08-08, STORY WRITTEN. Its first act is a decision that had gone unmade
   # for a year: `publish_margin`, one of NFR2's three terms, had never had a
