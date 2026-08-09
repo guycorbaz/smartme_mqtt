@@ -22,10 +22,10 @@ services:
     # release tag, so a `latest` pin would swap the bridge at whatever hour a
     # pull happened to run. Bump this line deliberately.
     #
-    # A pre-release (`-rc1`) never moves `latest` at all, which is why a
+    # A pre-release (a tag carrying a `-`) never moves `latest` at all, which is why a
     # candidate can be deployed for a test without any `latest` pin picking it
     # up by surprise.
-    image: docker.io/gcorbaz/smartme_mqtt:0.4.0-rc1
+    image: docker.io/gcorbaz/smartme_mqtt:0.4.0-rc2
     restart: unless-stopped
 
     env_file:
