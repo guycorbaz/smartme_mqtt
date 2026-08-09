@@ -466,19 +466,39 @@ async fn catch_panic(
                 .map(|s| (*s).to_string())
                 .or_else(|| panic.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "a panic carrying no message".to_string());
+            // WHAT THIS SAYS IS WHAT THIS LAYER CAN KNOW, and no more.
+            //
+            // It said "the bridge keeps polling and publishing" until 2026-08-09,
+            // in the log line AND on the page. This middleware sees a request and
+            // a panic; it has no view of the phase at all, and three of the four
+            // phases publish nothing and never have. A panic in `/config` on a
+            // bridge that has never been configured answered an operator that it
+            // was publishing.
+            //
+            // Fourth instance of one shape: `/healthz`'s `publishing` became
+            // `intends_to_publish` (2026-08-04), `Lifecycle::Running`'s detail
+            // stopped claiming "connected and publishing" (2026-08-05), the
+            // failed-source caveat stopped promising a republish that never
+            // happened (2026-08-09) — and the guard written to make Story 6.1 AC5
+            // honest introduced the same claim again.
+            //
+            // What IS true in every phase: a panicking page does not touch the
+            // poll tasks or the driver, because nothing here can. That is a
+            // statement about what was NOT harmed, which this layer can make.
             tracing::error!(
                 path = %path,
                 panic = %why,
-                "a web UI handler PANICKED. The bridge keeps polling and publishing; \
-                 this page is what was lost. Nothing about the meters is affected"
+                "a web UI handler PANICKED. This page is what was lost; the panic \
+                 did not reach the poll tasks or the mqtt driver, which are \
+                 unaffected by anything the web surface does"
             );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Html(
                     "<!doctype html><meta charset=utf-8><title>smartme_mqtt</title>\
-                     <h1>This page failed</h1><p>The bridge itself is unaffected and \
-                     is still polling and publishing. The log carries what went \
-                     wrong.</p>",
+                     <h1>This page failed</h1><p>Only this page failed. Whatever the \
+                     bridge was doing with the meters, it is still doing — the web \
+                     surface cannot disturb it. The log carries what went wrong.</p>",
                 ),
             )
                 .into_response()

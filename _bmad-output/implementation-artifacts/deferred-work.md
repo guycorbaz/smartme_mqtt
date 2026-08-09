@@ -407,3 +407,94 @@ commit (ADR 0029, [#61]) and the other three are here.
   *what answered*, which is the comparison ADR 0029 now performs one layer down. Either it
   earns a reader or it should go, and deciding that belongs with Epic 2's remaining oracles
   rather than here.
+
+## Deferred from: code review of the 2026-08-05/06 corrections (2026-08-09)
+
+The corrections that closed ~60 review findings on 2026-08-05, plus `ed51818` the day
+after, had themselves been read by nobody — the debt the round was run to clear.
+One defect was found and repaired in `4f4ecf4` (the test guarding the only unescaped
+sink on the web surface could not fail). These three are recorded rather than fixed,
+because each needs a decision before it needs code.
+
+- **`same_mapping` and `mapping_fingerprint` will disagree again at the next field.**
+  They answer one question — *is this the mapping a human looked at?* — and already
+  diverged for a month, which `ed51818` repaired by adding the node identity to both.
+  What was not aligned is *how each reads a meter*: `store::same_mapping` compares whole
+  `StoredMeter` values with a derived `==`, so a new field counts automatically;
+  `screens::mapping_fingerprint` formats four fields **by name**, so a new field is
+  invisible to it. Add one — story 3.4's discovery work invites exactly that — and `save`
+  withdraws the confirmation while the page's token still says *"this is what you were
+  shown"*. `the_withdrawal_rule_and_the_fingerprint_answer_the_same_question` would not
+  catch it: its eleven cases are hand-written too. The repository's own remedy is
+  `reconfigure::classify`'s exhaustive destructure, which stops the build until somebody
+  answers — but applying it here means deciding, field by field of `StoredConfig`, what
+  belongs to the mapping. That decision is the work.
+
+- **The repair screen moves port when the configuration becomes unreadable.**
+  `main.rs:389` takes `ui_port` from the file and falls back to `DEFAULT_PORT` whenever
+  the read fails — which is right for a first run (nowhere to read a port from) and wrong
+  for a configured bridge whose file then broke: the screen ADR 0026 exists to serve is
+  suddenly not where Traefik is pointed. `ed51818` refused ports below 1024 on precisely
+  this reasoning; this is the same effect through another door. Mitigated deliberately
+  rather than by luck — `ui::serve` logs the BOUND address, not the requested one — and
+  reachable only on a bridge already configured with a non-default port. The fix would be
+  a lenient probe for `ui_port` alone, the shape `store::overwrite` already uses for
+  `schema_version`; whether that is worth a second parse path is the decision.
+
+- **`save_config` tells the phases apart by `control()` rather than by `lifecycle`.**
+  `Phase::starting()` carries `lifecycle: Running` with `running: None`, so `control()`
+  is `None` for the window between deciding to publish and `run_with_control` handing back
+  the `Control`. A save arriving in that window answers *"Saved. Nothing is published yet
+  — confirm the meter mapping below to start"* to an operator whose mapping IS confirmed,
+  and — the part that matters — never reaches `apply` or the cost report, so it does not
+  say the change is not in force. This is `b36f42d`'s defect ("the UI called a configured
+  bridge unconfigured, on its first answer") surviving on a path that commit did not
+  reach; its own message records that the window "opened on every CI run". Second instance
+  in this block of the same shape as the repaired one: the correction is written and its
+  consequence does not travel.
+
+- *Minor, no decision needed:* `main.rs` stores the same phase twice for `Unconfirmed`
+  (`:213` and `:272`) — a leftover from before the first `match` existed, and the only
+  branch of the second one that repeats the store.
+
+## Deferred from: code review of story 3.3 and `2a4d5ca` (2026-08-09)
+
+`be5e76b` reviewed these on 2026-08-08 and said in its own subject line what was wrong
+with doing so: they "were written and reviewed by the same hand". This pass re-checked
+its five findings against the code rather than taking them on trust, and looked for what
+a same-hand reading would miss. **All five hold.** Three are repeated here because they
+need a decision; one more is new and was repaired.
+
+- **`catch_panic` answers `500` from `/healthz`, which contradicts ADR 0027 §2** — the
+  decision that non-200 codes are reserved for a WEDGED POLLER, taken because Epic 7
+  wires the endpoint to a container restart and a restart kills the Sparkplug session for
+  every meter. Verified still live: the layer wraps every route. Nothing is broken today
+  — `Dockerfile:97` records the absence of a HEALTHCHECK line as a decision — so the trap
+  is armed, not sprung. The candidates are in story 6.1; the choice belongs with the
+  healthcheck wiring, and taking it here would settle Epic 7's business inside Epic 6.
+
+- **The panic body is HTML on `/healthz`**, which is JSON and exists for machines. Same
+  layer, same decision point.
+
+- **Nothing asserts that the layer covers a PRODUCTION route.** The test hits
+  `/debug/panic` and nothing else; coverage of `/`, `/config` and `/confirm` is true by
+  reading rather than by assertion.
+
+- **NEW, and repaired in the same pass: the guard asserted what it cannot know.** Both the
+  log line and the page said *"the bridge keeps polling and publishing"*. This middleware
+  sees a request and a panic and has no view of the phase — and three of the four phases
+  publish nothing and never have, so a panic in `/config` on a bridge nobody has
+  configured told the operator it was publishing. **Fourth instance of one shape**, after
+  `/healthz`'s `publishing` → `intends_to_publish` (2026-08-04), `Lifecycle::Running`'s
+  detail (2026-08-05) and the failed-source caveat (2026-08-09) — introduced this time by
+  the guard written to make Story 6.1 AC5 honest. Now says what the layer can actually
+  know: only this page failed, and the panic did not reach the poll tasks or the driver.
+  No test asserted the old text, which is why nothing objected.
+
+- *Checked and sound, recorded so it is not re-checked:* story 3.3's NFR2 test measures at
+  the driver's channel rather than on the wire, which its story's Dev Notes say is the
+  wrong place. The test is RIGHT and says so itself: it names the limit ("what this cannot
+  see is a driver that never delivers") and names the test that covers the other half.
+  `chaos_stale_on_cloud_timeout` was verified to do exactly that — real broker,
+  independent subscriber, quality codes read off the wire. The two texts differ; the
+  measurement does not lie.
