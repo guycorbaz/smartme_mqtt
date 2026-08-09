@@ -1,0 +1,133 @@
+# smartme_mqtt — smart-me cloud → Sparkplug B bridge.
+#
+# The reference deployment. Copy this file and `.env.example` to a directory of
+# their own, fill in the two credential variables, and:
+#
+#   mkdir -p ./data && sudo chown -R 10002:10002 ./data
+#   docker compose up -d
+#
+# Then open the web UI and configure the bridge there. EVERYTHING ELSE IS
+# CONFIGURED IN A BROWSER since v0.4.0 (ADR 0023): the Sparkplug identity, the
+# broker, the meters, the publish period and the log settings live in
+# `data/config.toml`, which the UI writes. See chapter 3 of the manual.
+#
+# For a local build against a working tree instead:
+#   docker build -t smartme_mqtt .   # in the repo
+# and change the `image:` below to `smartme_mqtt`.
+
+services:
+  smartme_mqtt:
+    container_name: smartme_mqtt
+    # PINNED, not `latest`. The publish workflow moves `latest` on every FINAL
+    # release tag, so a `latest` pin would swap the bridge at whatever hour a
+    # pull happened to run. Bump this line deliberately.
+    #
+    # A pre-release (`-rc1`) never moves `latest` at all, which is why a
+    # candidate can be deployed for a test without any `latest` pin picking it
+    # up by surprise.
+    image: docker.io/gcorbaz/smartme_mqtt:0.4.0-rc1
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    # THREE VARIABLES, AND THAT IS THE WHOLE ENVIRONMENT.
+    #
+    # Eleven others stood here until v0.4.0 — the identity, the broker, the
+    # meter, the publish period, the log settings. They were withdrawn by
+    # ADR 0023 and SETTING THEM NOW DOES NOTHING AT ALL: the file is the
+    # configuration. They are deleted rather than commented out, because a
+    # commented variable reads as one somebody might re-enable.
+    #
+    # What stays is exactly what a file cannot carry: a credential that must
+    # never descend to disk, and the location of the file itself.
+    #
+    # The `:?` form fails Compose immediately on an unset variable instead of
+    # passing an empty string into the container — the difference between an
+    # error at the moment you type `up` and a crash-loop to diagnose later.
+    environment:
+      - TZ=Europe/Zurich
+      - SMARTME_CLIENT_ID=${SMARTME_CLIENT_ID:?set it in .env}
+      - SMARTME_CLIENT_SECRET=${SMARTME_CLIENT_SECRET:?set it in .env}
+      - SMARTME_STATE_DIR=/data
+      # Optional. INFO by default, which is what the bridge is designed to be
+      # read at; raise it to diagnose a configuration that will not load.
+      #- RUST_LOG=debug
+
+    volumes:
+      # `bdseq.toml` (the Sparkplug session number), `config.toml` (the whole
+      # configuration) and the rotated logs live here.
+      #
+      # IT MUST SURVIVE RESTARTS, and `bdseq.toml` is why: a bridge that comes
+      # back with a fresh state directory replays a session number, and a
+      # consumer pairing a death to a birth by `bdSeq` can then discard a death
+      # belonging to a session it believes is still live.
+      - ./data:/data
+
+    # No `ports:`. Traefik reaches the container over the `proxy` network and is
+    # the only thing that can — the container publishes no host port, so the UI
+    # is not exposed on the LAN even though it has no authentication (ADR 0019).
+    #
+    # For a deployment WITHOUT a reverse proxy, uncomment this and set
+    # `traefik.enable=false` below:
+    #ports:
+    #  - "8080:8080"
+
+    labels:
+      # ENABLED since v0.4.0. The web UI is how the bridge is configured now, so
+      # a deployment that cannot reach it cannot be brought up at all.
+      #
+      # It stood at `false` until then, deliberately and correctly: the axum
+      # server did not exist, and a router pointing at a port nothing listens on
+      # gives Traefik a permanently failing backend and anyone browsing to
+      # smartme.home.arpa a 502.
+      - "traefik.enable=true"
+
+      - "traefik.http.routers.smartme.rule=Host(`smartme.home.arpa`)"
+      - "traefik.http.routers.smartme.entrypoints=web"
+      # Must match the bridge's `ui_port`, which defaults to 8080. If you change
+      # it in the UI, change it here too — and note the bridge classifies that
+      # field as needing a process restart, so the two move together anyway.
+      - "traefik.http.services.smartme.loadbalancer.server.port=8080"
+      - "traefik.docker.network=proxy"
+
+      # NO AUTHENTICATION, decided 2026-08-01 (ADR 0019): the trust boundary is
+      # Traefik, not this process, and the bridge is purely internal. It matches
+      # the broker, already unauthenticated on this LAN.
+      #
+      # What replaces it inside the bridge is a same-origin check (ADR 0024):
+      # precisely BECAUSE there is no login, any page open in the operator's
+      # browser could otherwise post to the bridge — a drive-by reconfiguration
+      # needs no credential to steal when there are none. Submissions carrying a
+      # foreign `Origin` are refused.
+
+    networks:
+      # `scada` reaches the broker by container name and provides outbound NAT
+      # for the smart-me cloud, which is HTTPS-only — the bridge refuses a
+      # non-TLS api_base.
+      scada:
+      # `proxy` is where Traefik looks; `traefik.docker.network` above names it
+      # explicitly so Traefik does not guess when a container has two networks.
+      proxy:
+
+    # NO `healthcheck:`, and its absence is STILL a decision — for a reason that
+    # changed on 2026-08-09 and got sharper.
+    #
+    # `/healthz` exists now (FR33, AR12) and answers 503 for a wedged poll loop,
+    # which is exactly what a restart fixes. So a healthcheck is finally
+    # possible. It is not enabled because the endpoint ALSO answers 500 from any
+    # handler that panics, `/healthz`'s own included — the panic guard added the
+    # same week wraps every route. Wiring that to a restart would kill the
+    # Sparkplug session for all four meters over a broken display page, which is
+    # the opposite of what the endpoint is for.
+    #
+    # Epic 7 owns the decision (issue #56 and the review of 2026-08-09). Until it
+    # is taken, the absence of this block is what protects the deployment.
+
+networks:
+  scada:
+    external: true
+    name: scada
+  proxy:
+    external: true
+    name: proxy

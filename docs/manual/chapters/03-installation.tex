@@ -2,10 +2,220 @@
 \label{ch:install}
 
 \section{Prerequisites}
-\stub{host requirements, Docker + Traefik, external MQTT broker.}
+
+\prog is a single container. It needs four things from around it, and none of them
+is optional:
+
+\begin{itemize}
+  \item \textbf{A Docker host.} The published image is \code{linux/amd64} only. That
+        is a Dockerfile line rather than an architectural position --- the build sets
+        the \code{mold} linker for \code{x86\_64-unknown-linux-gnu} alone, and an
+        arm64 image would need that extended first.
+  \item \textbf{An MQTT broker.} \prog connects to an \emph{external} broker and does
+        not embed one. It must be reachable from the container, which in practice
+        means the two share a Docker network and the broker is addressed by its
+        \emph{container name}, not by a LAN address.
+  \item \textbf{Outbound HTTPS to the smart-me cloud.} The API base must be TLS: the
+        client refuses a plain-HTTP endpoint outright rather than degrading.
+  \item \textbf{A smart-me OAuth2 credential} --- a client id and client secret, from
+        a ``Device'' type application in your smart-me account. This is the one
+        setting that never descends to disk (section~\ref{sec:install-env}).
+\end{itemize}
+
+A reverse proxy is not required, but is assumed throughout: the container publishes
+no host port, so without one you must uncomment the \code{ports:} fallback described
+in section~\ref{sec:install-traefik}.
 
 \section{Quick start with \texttt{docker compose}}
-\stub{example \code{docker-compose.yml}, first run, where the web UI lives.}
+\label{sec:install-quickstart}
+
+\subsection{The directory}
+
+Copy \code{docker-compose.yml} and \code{.env.example} from the repository into a
+directory of their own, and rename the second to \code{.env}:
+
+\begin{lstlisting}[language=bash]
+mkdir -p /srv/docker/smartme_mqtt && cd $_
+# copy docker-compose.yml and .env.example here
+mv .env.example .env
+chmod 600 .env
+\end{lstlisting}
+
+\subsection{The state directory, and the step everyone forgets}
+\label{sec:install-chown}
+
+\begin{warning}
+\textbf{The state directory must belong to uid 10002.} The container runs as an
+unprivileged user with that fixed uid, chosen distinct from \code{opcgw}'s 10001 so
+neither service can rewrite the other's state.
+
+\begin{lstlisting}[language=bash]
+mkdir -p ./data && sudo chown -R 10002:10002 ./data
+\end{lstlisting}
+
+Docker creates a missing bind-mount source \emph{itself}, owned by root, so skipping
+this does not fail loudly --- the bridge comes up, serves its web UI, and cannot
+write the configuration you type into it. The screen says so (``the configuration was
+NOT written''), which is the only reason this is a nuisance rather than a mystery.
+
+On a Synology NAS there is a second layer: the displayed mode can disagree with the
+enforced ACL, so a directory showing \code{777} still refuses the write. If the mode
+carries a trailing \code{+}, ACL inheritance is what governs and must be cut on the
+folder before the mode bits mean anything.
+\end{warning}
+
+What lives in \code{./data}:
+
+\begin{itemize}
+  \item \code{config.toml} --- the whole configuration, written by the web UI;
+  \item \code{bdseq.toml} --- the Sparkplug session number;
+  \item \code{logs/} --- rotated log files, if you enable them.
+\end{itemize}
+
+\begin{warning}
+\textbf{\code{bdseq.toml} must survive restarts.} A bridge that comes back with a
+fresh state directory replays a session number, and a consumer pairing a death
+certificate to a birth by \code{bdSeq} can then discard a death belonging to a
+session it believes is still live --- so a node that is gone goes on looking alive.
+Never delete \code{./data} to ``start clean''.
+\end{warning}
+
+\subsection{The environment: exactly three variables}
+\label{sec:install-env}
+
+\begin{lstlisting}
+SMARTME_CLIENT_ID=...
+SMARTME_CLIENT_SECRET=...
+\end{lstlisting}
+
+plus \code{SMARTME\_STATE\_DIR}, which the compose file already sets to \code{/data}.
+\code{RUST\_LOG} is honoured if present and defaults to \code{info}.
+
+\begin{note}
+\textbf{Eleven variables were withdrawn in v0.4.0} (ADR 0023) --- the Sparkplug
+identity, the broker, the meter, the publish period, the log settings. \emph{Setting
+them now does nothing at all.} If you are upgrading from v0.3.x, see
+section~\ref{sec:install-upgrade}.
+
+Both halves of the credential live here together, and that is a decision rather than
+an oversight: a credential split across two sources can be rotated by halves, and a
+mismatched pair fails as an authentication rejection from the smart-me API --- which
+reads as an \emph{outage of the upstream service} rather than as a configuration
+fault, and gets diagnosed accordingly, at length.
+\end{note}
+
+\subsection{First start}
+
+\begin{lstlisting}[language=bash]
+docker compose up -d
+docker compose logs -f
+\end{lstlisting}
+
+The bridge comes up, says it has no configuration, serves its web UI, and
+\textbf{publishes nothing} --- no connection to the broker, no birth. That is the
+first run and it is not an error.
+
+Open the UI (section~\ref{sec:install-traefik} for where), fill in the form, and save.
+Then \textbf{confirm the mapping on its own screen}: nothing is published until you
+do, and the separation is deliberate. A mapping can be well-formed, unique and
+complete and still point \code{garage} at the cellar's meter --- and a SCADA host
+\emph{persists what it discovers}, so the tag folder outlives the process and has to
+be deleted by hand, discarding the alarm and history configuration beneath it. See
+section~\ref{sec:confirm}.
+
+Time from a clean state directory to a publishing bridge is about one second for the
+container itself; the budget for the whole exercise, including you typing, is fifteen
+minutes.
 
 \section{Behind Traefik}
-\stub{joining the Traefik network, router labels, the non-Traefik \code{ports:} fallback.}
+\label{sec:install-traefik}
+
+The compose file joins two external networks and publishes no host port:
+
+\begin{itemize}
+  \item \code{scada} --- where the broker is, reached by container name, and the way
+        out to the smart-me cloud;
+  \item \code{proxy} --- where Traefik looks. \code{traefik.docker.network} names it
+        explicitly so Traefik does not have to guess between the two.
+\end{itemize}
+
+Both must already exist (\code{docker network create scada proxy}, or whatever your
+other services already use).
+
+The router is one host rule at \code{smartme.home.arpa} on the \code{web}
+entrypoint. The port named by the load-balancer label must match the bridge's
+\code{ui\_port}, which defaults to 8080. If you change that in the UI, change the
+label with it --- and note that the bridge treats \code{ui\_port} as needing a
+process restart, so the two move together in any case.
+
+\begin{note}
+\textbf{There is no authentication on the UI} (ADR 0019): the trust boundary is
+Traefik, not this process, and no host port is published, so the container is not
+reachable from the LAN except through the proxy.
+
+Inside the bridge, what replaces the missing login is a \emph{same-origin check}
+(ADR 0024). Precisely \emph{because} there is no login, any page open in your browser
+could otherwise post to the bridge --- a drive-by reconfiguration needs no credential
+to steal when there are none. Submissions carrying a foreign \code{Origin} are
+refused; requests carrying none at all are allowed, which is what makes the headless
+bring-up with \code{curl} work.
+\end{note}
+
+\subsection{Without a reverse proxy}
+
+Uncomment the \code{ports:} block, set the Traefik label to
+\code{false}, and reach the UI on port 8080 of the host. Understand what you are
+doing: the UI has no authentication, so anyone who can reach that port can
+reconfigure the bridge and move every meter into a namespace your SCADA host will
+keep.
+
+\section{No healthcheck, on purpose}
+\label{sec:install-healthcheck}
+
+The compose file defines no \code{healthcheck:} and the image carries no
+\code{HEALTHCHECK} line.
+
+\code{/healthz} exists and answers \code{503} for a wedged poll loop --- a loop that
+has stopped looping, which is exactly what a restart fixes. Everything else answers
+\code{200}, including an honest \code{STALE} and every deliberate silence, because
+restarting a container over those destroys the continuity they exist to report.
+
+\begin{warning}
+\textbf{Do not add a healthcheck yet.} The endpoint also answers \code{500} from any
+handler that panics, its own included --- the guard that catches a panicking page
+wraps every route. Wiring that to a container restart would kill the Sparkplug
+session for every meter over one broken display page, which is the opposite of what
+the endpoint is for. The decision belongs with the healthcheck wiring itself and has
+not been taken.
+\end{warning}
+
+\section{Upgrading from v0.3.x}
+\label{sec:install-upgrade}
+
+v0.4.0 moved the configuration out of the environment and into
+\code{data/config.toml}. An upgrade is therefore not only a \code{pull}:
+
+\begin{enumerate}
+  \item \textbf{Write down what the old deployment published under} --- \code{group\_id},
+        \code{node\_id}, the broker, and each meter's id, device id and serial. They
+        are in the old \code{.env}. \textbf{These must be reproduced exactly}: a
+        changed group or node id publishes into a namespace nobody has seen, and the
+        old one's tag folder stays behind.
+  \item Bump the \code{image:} tag, then remove the withdrawn variables from the
+        compose file and from \code{.env}. Leaving them costs nothing but reads as
+        though they still did something.
+  \item Start the bridge. With no \code{config.toml} it comes up unconfigured and
+        publishes nothing --- your old namespace is untouched while you work.
+  \item Enter the same values in the UI, check each serial against its topic, and
+        confirm.
+\end{enumerate}
+
+\begin{note}
+\textbf{One field cannot be guessed and is worth checking twice.} \code{serial} must
+be the serial smart-me \emph{reports} for that \code{device\_id}. The bridge births
+the device under the configured serial and routes every reading by the reported one;
+before v0.4.0 a mismatch produced a bridge that fetched, judged, ticked and looked
+healthy on every surface while publishing nothing at all. It now refuses the meter
+and names both serials in the log --- but the fastest way not to meet that refusal is
+to let the discovery screen fill the field.
+\end{note}
