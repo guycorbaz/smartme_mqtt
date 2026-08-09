@@ -37,13 +37,60 @@
 #   Ignition contract test (human action required — stays backlog until Guy runs it).
 
 generated: 2026-07-25
-last_updated: 2026-07-31
+last_updated: 2026-08-09
 project: smartme_mqtt
 project_key: NOKEY
 tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts
 
 development_status:
+  # ==========================================================================
+  # WHERE THIS STOOD AT THE END OF 2026-08-09 — read this first tomorrow.
+  # ==========================================================================
+  #
+  # THE BRIDGE IS DEPLOYED AND PUBLISHING, for the first time as a FLEET.
+  # panoramix runs `v0.4.0-rc2`, three meters, `PreProd/smartme-bridge`:
+  #
+  #     spBv1.0/PreProd/DDATA/smartme-bridge/9202685   (appart-est)
+  #     spBv1.0/PreProd/DDATA/smartme-bridge/9202798   (appart-ouest)
+  #     spBv1.0/PreProd/DDATA/smartme-bridge/6387987   (hangar)
+  #
+  # Observed on the wire at a 30 s period; `/healthz` reports `running`,
+  # `failed_sources: []`, `bd_seq = 7`. The fourth meter (`exterieur`,
+  # serial 6387488) is UNPLUGGED and deliberately not configured — its
+  # ValueDate at the smart-me API was four months old.
+  #
+  # LEFT RUNNING OVERNIGHT ON PURPOSE, to be looked at on 2026-08-10. What
+  # the run is worth watching for, in order of interest:
+  #   1. does any meter drift into `failed_sources` — that is ADR 0029's
+  #      check or a credential, and both name themselves;
+  #   2. does `/healthz` ever answer 503 (a wedged poll loop) — nothing
+  #      should, and a 503 here would be the first real AR12 event;
+  #   3. does `bd_seq` advance without a restart — it should not;
+  #   4. what Ignition made of three devices appearing under one node.
+  #
+  # THE REVIEW THAT PRECEDED IT IS COMPLETE. All eight stories in `review`
+  # were read, in three blocks, and the findings are in `deferred-work.md`
+  # with their origin. Four defects were repaired and shipped:
+  #   - a legal-but-wrong serial took a meter off the wire in silence
+  #     (ADR 0029, [#61], 37f43c6) — the one that would have cost this
+  #     deployment an evening;
+  #   - the failed-source caveat was false in every case it rendered;
+  #   - the test guarding the only unescaped sink could not fail (4f4ecf4);
+  #   - the panic guard claimed the bridge was publishing (67e2b28);
+  #   - and the entry page led nowhere in three states (32c89c8), met in
+  #     the field an hour after rc1 shipped.
+  #
+  # NO STORY WAS MOVED TO `done`. That is Guy's call and it is the first
+  # thing to settle tomorrow: the review now says what each is worth.
+  #
+  # ONE DECISION IS OWED FROM OUTSIDE. `PreProd` is a TEST name; the SCADA
+  # project owns the MQTT naming strategy (Guy, 2026-08-09). Everything
+  # published so far is therefore disposable, which is why the wire-breaking
+  # window is still open — see `deferred-work.md` for what that strategy can
+  # ask for, including the fact that the serial as device level is OUR
+  # choice and not the norm's.
+  #
   epic-0: done
   0-1-3-crate-cargo-virtual-workspace: done
   0-2-sparkplug-proto-compiled-via-prost-build-rs: done
