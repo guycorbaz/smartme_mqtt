@@ -260,6 +260,37 @@ development_status:
   # 2026-08-10 the freshness state machine did its work exactly and the failure was
   # in the surfaces ([#62]).
   epic-2: in-progress
+  # STORIES LISTED 2026-08-10, découpage validé par Guy. Written just-in-time, as
+  # epics 3, 5 and 6 were — only the story being worked is detailed.
+  #
+  # 2.1 FIRST, AND IT IS A DECISION BEFORE IT IS CODE. Today exactly ONE thing
+  # produces a verdict — `Policy::step` returns `(State, Quality)` — and `Quality`
+  # has three values. Oracles make several producers, and three values cannot tell
+  # a stale reading from one outside physical bounds: both land on a `Bad*` code and
+  # a host sees the same thing. So 2.1 owes three answers, none of which any later
+  # story may re-choose: how verdicts COMPOSE, whether the CAUSE survives to the
+  # wire, and which failures LATCH (as ADR 0029's identity check does, `Fatal`)
+  # versus which merely degrade the reading.
+  # `domain/quality.rs` has been waiting for this since story 1.2: *"the bridge's
+  # error taxonomy maps into it (Epic 2 onward); no ad-hoc quality strings"*.
+  2-1-the-oracle-layer-and-how-verdicts-compose: ready-for-dev
+  # FR15, NFR6 — the one with a date on it. See the epic note above.
+  2-2-energy-counter-monotonicity: backlog
+  # FR14 — does not exist at all today.
+  2-3-physical-bounds: backlog
+  # FR16, plus `map_device`'s debt: three failure modes collapse into one
+  # undifferentiated `Bad` naming no field.
+  2-4-payload-completeness-and-numeric-domain: backlog
+  # FR4, FR5, NFR1 — transient retries with bounded backoff, permanent stops and is
+  # named. Absorbs the parked `429 Retry-After` item.
+  2-5-error-taxonomy-and-bounded-backoff: backlog
+  # FR10, plus the parked frozen/replayed-feed oracle — a byte-identical replayed
+  # response keeps a plausible age and stays `Fresh` today.
+  2-6-utc-end-to-end-and-clock-skew: backlog
+  # NOT A STORY: FR9 and NFR7 (serial-identity binding and its verification) were
+  # delivered by ADR 0029 on 2026-08-09, and more strongly than the FR asked. They
+  # are owed a VERIFICATION at epic close, not fresh work.
+  epic-2-retrospective: required
 
   # OPENED 2026-08-06, on Guy's instruction, and it is the next epic per ADR 0025's
   # forward order (6 -> 3 -> 2 -> 7 -> 8).
