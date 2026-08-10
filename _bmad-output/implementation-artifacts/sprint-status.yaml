@@ -94,9 +94,32 @@ development_status:
   #   to every one of six consecutive polls. What the portal displays and what
   #   the API returns are not the same thing — trust the ValueDate.
   #
-  # STILL OWED, AND UNCHANGED BY ANY OF THE ABOVE: no story has moved to `done`.
-  # Eight sit in `review` with their findings recorded, and that is Guy's call.
-  # `PreProd` is still a test name owned by the SCADA project, so everything
+  # THE EIGHT STORIES IN `review` ARE CLOSED — Guy, 2026-08-10, in two steps.
+  # 5.2 first, `done` with AC4's new-session half recorded UNMET ([#49]); then the
+  # remaining seven once the condition for closing them was actually met.
+  #
+  # THAT CONDITION WAS NOT ABOUT THE CODE. `CLAUDE.md` allows a story to close with
+  # unmet work provided the work is recorded and carries an issue. What stood in the
+  # way was that SIX findings from the 2026-08-09 review sat in `deferred-work.md`
+  # with no issue at all — recorded in a file nobody's process reads, which is the
+  # same disappearance ADR 0025 named. Opening [#63] [#64] [#65] [#66] is what made
+  # the closures honest rather than optimistic, and every parked item in
+  # `deferred-work.md` now carries its number.
+  #
+  # WHAT THE SEVEN CARRY OUT WITH THEM, so it is not re-derived from the closures:
+  #   3.1 → [#63] (one poll task per meter, now load-bearing since `2a4d5ca`)
+  #   3.2 → [#65] (a disabled meter keeps being polled and keeps its fault),
+  #         and its central property was OBSERVED ON A REAL FAULT this morning
+  #   3.3 → nothing open; its five 2026-08-08 findings were re-checked on 08-09
+  #   5.1 → nothing open
+  #   5.3 → [#64] (the fingerprint divergence, due at story 3.4)
+  #   6.1 → the three `catch_panic` items, which belong to EPIC 7's healthcheck
+  #         decision ([#56]) and must not be settled inside Epic 6
+  #   6.2 → [#66] items 1 and 2
+  # And [#62], opened the same day, belongs to Epic 6's unwritten remainder rather
+  # than to any of the eight.
+  #
+  # STILL OWED: `PreProd` is a test name owned by the SCADA project, so everything
   # published remains disposable and the wire-breaking window is still open.
   #
   # ==========================================================================
@@ -247,7 +270,8 @@ development_status:
   # NOT COVERED, and said in the test rather than assumed: nothing asserts that
   # `supervisor` spawns one task per meter — the cadence test spawns them itself.
   # The heartbeat count is the seam that would prove it.
-  3-1-the-runtime-serves-every-enabled-meter: review
+  # CLOSED 2026-08-10 — see the closure block at the top of this file.
+  3-1-the-runtime-serves-every-enabled-meter: done
   # 2026-08-07: AC1/AC2/AC4/AC5 implemented and falsified. A meter that answered and
   # then stopped is republished with the oracle's verdict and its own ValueDate;
   # one that never answered is still given nothing; and the verdict now reaches the
@@ -302,7 +326,8 @@ development_status:
   # mapping" would be the worst outcome of this change.
   # `./scripts/ci-local.sh` green, all ten steps including chaos and image.
   # Issue [#61]. ADR 0029.
-  3-2-a-meters-silence-is-published-not-withheld: review
+  # CLOSED 2026-08-10 — see the closure block at the top of this file.
+  3-2-a-meters-silence-is-published-not-withheld: done
   # 2026-08-08, STORY WRITTEN. Its first act is a decision that had gone unmade
   # for a year: `publish_margin`, one of NFR2's three terms, had never had a
   # value anywhere — it appeared four times, always inside the formula. A bound
@@ -326,7 +351,8 @@ development_status:
   # after `step_once` delays nothing, because `step_once` has already sent the
   # update by the time it returns. Green mutation, no falsification — the same
   # lesson story 3.1's cadence test paid for.
-  3-3-per-meter-staleness-isolation-and-its-latency-bound: review
+  # CLOSED 2026-08-10 — see the closure block at the top of this file.
+  3-3-per-meter-staleness-isolation-and-its-latency-bound: done
   3-4-discovery-the-accounts-meters-by-name-and-serial: backlog
   3-5-a-known-meter-that-disappears-from-discovery: backlog
   3-6-orphan-retained-purge-on-a-mapping-change: backlog
@@ -812,7 +838,8 @@ development_status:
   #    settings in prose while a first run is fixed by editing SMARTME_GROUP_ID.
   #    startup_banner was right; fixed in the code, and a unit test now locks it
   #    in at the level where the message is built.
-  5-1-config-model-and-refuse-to-start-validation: review
+  # CLOSED 2026-08-10 — see the closure block at the top of this file.
+  5-1-config-model-and-refuse-to-start-validation: done
   # 2026-08-03: 5.2 closes architecture open item 5 via ADR 0022 — secrets rest in a
   # SEPARATE secrets.toml at 0600, beside a 0644 config.toml that stays diagnosable
   # without privileges. The bridge STATs the mode and refuses to start if it is group-
@@ -1027,7 +1054,8 @@ development_status:
   # the test and a comment claimed that tested the product — it did not: the branch under
   # test was the branch the test supplied, and the line this story adds to main.rs could
   # have been deleted with both cases green.
-  5-3-nothing-is-published-until-the-mapping-is-confirmed: review
+  # CLOSED 2026-08-10 — see the closure block at the top of this file.
+  5-3-nothing-is-published-until-the-mapping-is-confirmed: done
   # Epic 5 is FUNCTIONALLY COMPLETE: FR23/24/25/26/27/46 met; FR43+NFR16 blocked upstream
   # ([#50]). Two stories in review, one AC partially unmet ([#49]). It stays `in-progress`
   # rather than `done` until those reviews run — a review is not a formality here; the
@@ -1081,7 +1109,8 @@ development_status:
   #    bash feature the image's shell does not have — it reported "no web UI" against a
   #    server that was answering perfectly. It probes from the host now, over a port
   #    published to loopback for the duration of the check only.
-  6-1-the-server-exists-in-every-state-the-bridge-can-be-in: review
+  # CLOSED 2026-08-10 — see the closure block at the top of this file.
+  6-1-the-server-exists-in-every-state-the-bridge-can-be-in: done
   #
   # 2026-08-04 — 6.2 WRITTEN. It is where everything Epic 5 built finally gets a caller:
   # Control::apply, Plan::cost(), Plan::needs_restart(), config::mapping_preview and
@@ -1174,7 +1203,8 @@ development_status:
   # second: `contains("broker_host")` was satisfied by the change table, exactly
   # as `contains("in force now")` had been. Under it, `needs_restart()` omitted
   # every NewSession field.
-  6-2-the-configuration-screen: review
+  # CLOSED 2026-08-10 — see the closure block at the top of this file.
+  6-2-the-configuration-screen: done
 
   # ADDED 2026-08-08, previously absent from this file entirely.
   #
