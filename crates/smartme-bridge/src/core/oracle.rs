@@ -50,7 +50,7 @@
 //! ADR 0029's serial-identity check was decided before this rule existed and is
 //! its first instance rather than an exception to it — see [`Cause::latches`].
 
-use crate::domain::Quality;
+use crate::domain::{Kwh, Quality};
 
 /// Why a reading was degraded or refused: the half of a verdict that reaches a
 /// consumer, under its own property key.
@@ -108,6 +108,16 @@ pub enum Cause {
     /// cause is what says *why* it degraded, rather than leaving a consumer to read
     /// it as a reading that arrived late.
     NotRevalidated,
+    /// The energy index went backwards: a reset, a rollover, or a meter that was
+    /// replaced (Story 2.2, FR15/NFR6).
+    ///
+    /// **One cause for three events, on purpose.** Nothing available to the bridge
+    /// tells them apart: a rollover is a reset with a particular arithmetic, and a
+    /// replacement is a reset with a different serial — which ADR 0029 already
+    /// refuses upstream, so the replacement that reaches here is one an operator
+    /// re-serialised on purpose. Publishing three causes would claim a
+    /// discrimination we cannot make.
+    CounterWentBackwards,
 }
 
 impl Cause {
@@ -127,6 +137,7 @@ impl Cause {
         Cause::ValueUnusable,
         Cause::SourceMarkedStale,
         Cause::NotRevalidated,
+        Cause::CounterWentBackwards,
     ];
 
     /// A stable position per variant, existing only so its `match` is exhaustive.
@@ -153,6 +164,7 @@ impl Cause {
             Cause::ValueUnusable => 7,
             Cause::SourceMarkedStale => 8,
             Cause::NotRevalidated => 9,
+            Cause::CounterWentBackwards => 10,
         }
     }
 
@@ -169,6 +181,7 @@ impl Cause {
             Cause::ValueUnusable => "value-unusable",
             Cause::SourceMarkedStale => "source-marked-stale",
             Cause::NotRevalidated => "not-revalidated",
+            Cause::CounterWentBackwards => "counter-went-backwards",
         }
     }
 
@@ -284,6 +297,47 @@ pub fn compose(verdicts: impl IntoIterator<Item = Verdict>) -> Verdict {
     })
 }
 
+/// The energy-counter monotonicity oracle (Story 2.2 — FR15, NFR6).
+///
+/// A cumulative counter does not go down. When it does, the meter was reset,
+/// rolled over, or replaced — and the number itself is not what makes that
+/// dangerous. **The danger is the difference**: a consumer computing consumption
+/// between two readings would get a negative delta and no reason to distrust it,
+/// which is the "never lies" invariant failing on arithmetic the bridge never
+/// performs.
+///
+/// # Why `Bad` and not `Stale`
+///
+/// `Stale` says *this value was true and may be old*. Here the value may be
+/// perfectly current — a new meter really does read 12 kWh — and it is the
+/// RELATION to the previous one that is broken. `Bad` publishes null values
+/// (see `metrics_for`), which withholds exactly the number a consumer would
+/// difference. Publishing it as `Stale` would hand over the number with a hint.
+///
+/// # Why no tolerance band
+///
+/// The comparison is a strict `<`, with no epsilon. A cumulative counter does not
+/// go backwards *by a little*, so a band would be a number nobody measured,
+/// chosen to suppress a signal rather than to model one. If real polling data ever
+/// shows benign jitter, that measurement is what would justify a band.
+///
+/// # Why it does not latch
+///
+/// Story 2.1's rule: identity latches, value degrades. A broken counter history
+/// is not a claim that this is the wrong meter, and a replaced meter legitimately
+/// reads lower for ever after — latching would take a working meter off the wire
+/// until somebody restarted the container. The caller therefore adopts the new
+/// index as the reference; see `poll_publish`.
+///
+/// `None` for the reference means "no accepted reading yet", which cannot be
+/// backwards from anything.
+pub fn energy_is_monotonic(reference: Option<Kwh>, reading: Kwh) -> Verdict {
+    match reference {
+        Some(previous) if reading.0 < previous.0 => Verdict::bad(Cause::CounterWentBackwards),
+        _ => Verdict::good(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +408,7 @@ mod tests {
             Cause::ValueUnusable,
             Cause::SourceMarkedStale,
             Cause::NotRevalidated,
+            Cause::CounterWentBackwards,
         ] {
             assert!(
                 !cause.latches(),
@@ -404,7 +459,7 @@ mod tests {
         }
         assert_eq!(
             Cause::ALL.len(),
-            10,
+            11,
             "a cause was added or removed: update the golden contract too"
         );
     }
@@ -427,6 +482,7 @@ mod tests {
             Cause::ValueUnusable,
             Cause::SourceMarkedStale,
             Cause::NotRevalidated,
+            Cause::CounterWentBackwards,
         ];
         let mut seen = std::collections::BTreeSet::new();
         for cause in all {

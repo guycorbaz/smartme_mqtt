@@ -324,6 +324,7 @@ pub async fn step_once<S: Source + Send>(
     source: &mut S,
     previous: State,
     last: &mut Option<crate::domain::Measurement>,
+    energy_reference: &mut Option<crate::domain::Kwh>,
 ) -> State {
     let Context {
         meter,
@@ -344,7 +345,38 @@ pub async fn step_once<S: Source + Send>(
         Err(_elapsed) => Err(SourceError::Timeout),
     };
 
-    let (next, published) = policy.step(previous, &tick, clock.wall());
+    let (next, freshness) = policy.step(previous, &tick, clock.wall());
+
+    // The monotonicity oracle (Story 2.2). It judges a RELATION between two
+    // readings, so it has nothing to say when the fetch failed — there is no new
+    // index to compare, and the freshness verdict already covers the silence.
+    let monotonicity = match &tick {
+        Ok(reading) => {
+            crate::core::oracle::energy_is_monotonic(*energy_reference, reading.value.energy)
+        }
+        Err(_) => crate::core::oracle::Verdict::good(),
+    };
+
+    // ONE composition, worst-wins (Story 2.1). Not `if stale { ... } else if
+    // backwards { ... }`: the whole point of the layer is that a reading which is
+    // both too old AND backwards publishes the worse of the two, whatever order
+    // the oracles were consulted in.
+    let published = crate::core::oracle::compose([freshness, monotonicity]);
+
+    // The reference advances on a reading whose VALUE is usable — a source that
+    // could not convert the units hands over a number that must not become the
+    // yardstick for judging the next one. That is what makes this state distinct
+    // from `last`, which records what we would REPUBLISH and moves on every
+    // successful fetch regardless.
+    //
+    // A backwards step IS adopted (Story 2.2 AC3): a replaced meter legitimately
+    // reads lower for ever after, and keeping the old reference would mark every
+    // subsequent reading `Bad` against an index that no longer exists.
+    if let Ok(reading) = &tick
+        && reading.value.quality != crate::domain::Quality::Bad
+    {
+        *energy_reference = Some(reading.value.energy);
+    }
 
     // EVERY TICK PUBLISHES A VERDICT, or there is nothing to publish one about
     // (Story 3.2, [ADR 0027] §3).
@@ -413,6 +445,10 @@ pub async fn run<S: Source + Send>(
         panic!("no heartbeat for {meter}; the collection is built from the served meters")
     });
     let mut state = State::initial();
+    // The monotonicity reference (Story 2.2), deliberately beside `last` rather
+    // than inside it: `last` is what we would republish, this is what we judge
+    // against.
+    let mut energy_reference: Option<crate::domain::Kwh> = None;
     // The last measurement this meter produced, carried so a failed tick can
     // publish a verdict about it rather than say nothing (Story 3.2).
     let mut last: Option<crate::domain::Measurement> = None;
@@ -455,7 +491,7 @@ pub async fn run<S: Source + Send>(
             heartbeat: &heartbeat,
             outbox: &outbox,
         };
-        state = step_once(&ctx, &mut source, state, &mut last).await;
+        state = step_once(&ctx, &mut source, state, &mut last, &mut energy_reference).await;
         // The verdict reaches anything outside that can report on this meter.
         pulse.record(&meter, state);
     }
@@ -494,6 +530,147 @@ mod tests {
             },
             http_date: Some(UtcMillis(BASE + age_ms)),
         }
+    }
+
+    /// A reading with a chosen energy index, for the monotonicity tests.
+    fn reading_with_energy(quality: Quality, age_ms: i64, energy: f64) -> Reading {
+        let mut r = reading(quality, age_ms);
+        r.value.energy = Kwh(energy);
+        r
+    }
+
+    /// **Story 2.2 AC1 and AC3** — a counter that goes backwards is published
+    /// `Bad`, and the meter is not stuck there.
+    ///
+    /// Driven through `step_once` rather than against the oracle directly: what
+    /// matters is that a READING judged in the pipeline reaches the outbox with
+    /// that verdict, not that a comparison compares. The repository has twice been
+    /// caught by a test that asserted an implementation against itself.
+    ///
+    /// The recovery half (AC3) is the one that would be skipped, and it is the one
+    /// that protects a replaced meter: it legitimately reads lower for ever after,
+    /// so keeping the old reference would mark every later reading `Bad` against
+    /// an index that no longer exists.
+    ///
+    /// FALSIFIED 2026-08-10, three mutations, each red on its own assertion:
+    /// removing the comparison (`_ => Verdict::good()` for every arm) leaves the
+    /// backwards reading `Good`; flipping it to `>` marks the RISING reading bad
+    /// and the falling one good; and refusing to adopt the new index — keeping the
+    /// reference at the pre-drop value — leaves the third reading `Bad`, which is
+    /// exactly the stuck meter AC3 forbids.
+    #[tokio::test]
+    async fn a_counter_that_goes_backwards_is_bad_once_and_then_recovers() {
+        let meter = MeterId::new("garage");
+        let clock = FakeClock::new(UtcMillis(SANE_NOW));
+        let beats = Heartbeats::for_meters([MeterId::new("garage")]);
+        let heartbeat = beats.of(&MeterId::new("garage")).expect("present");
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut source = FakeSource::new()
+            .then(Ok(reading_with_energy(Quality::Good, 950, 4_843.822)))
+            .then(Ok(reading_with_energy(Quality::Good, 950, 12.0)))
+            .then(Ok(reading_with_energy(Quality::Good, 950, 12.5)));
+        let ctx = Context {
+            meter: &meter,
+            clock: &clock,
+            policy: policy(),
+            config: config(),
+            heartbeat: &heartbeat,
+            outbox: &tx,
+        };
+
+        let mut last = None;
+        let mut energy = None;
+
+        // THE PREMISE: a rising counter is Good, or the Bad below proves nothing.
+        let s1 = step_once(&ctx, &mut source, State::initial(), &mut last, &mut energy).await;
+        assert_eq!(s1, State::Fresh);
+
+        // The drop.
+        let _ = step_once(&ctx, &mut source, s1, &mut last, &mut energy).await;
+
+        // And a reading consistent with the NEW index.
+        let _ = step_once(&ctx, &mut source, State::initial(), &mut last, &mut energy).await;
+        drop(tx);
+
+        let mut got = Vec::new();
+        while let Some(u) = rx.recv().await {
+            got.push(u);
+        }
+        assert_eq!(got.len(), 3, "every tick publishes a verdict (ADR 0027)");
+
+        assert_eq!(got[0].published(), Quality::Good, "the premise");
+        assert_eq!(got[0].verdict.cause(), None);
+
+        assert_eq!(
+            got[1].published(),
+            Quality::Bad,
+            "a counter that went backwards must not be published as a valid \
+             measurement: a consumer differencing these two indices would get a \
+             negative delta and no reason to distrust it"
+        );
+        assert_eq!(
+            got[1].verdict.cause(),
+            Some(crate::core::oracle::Cause::CounterWentBackwards)
+        );
+
+        assert_eq!(
+            got[2].published(),
+            Quality::Good,
+            "AC3: the new index became the reference, so the meter recovers. A \
+             replaced meter reads lower for ever after, and staying Bad would take \
+             a working meter off the wire until somebody restarted the container"
+        );
+    }
+
+    /// **Story 2.2, Task 3** — a reading that is BOTH too old and backwards
+    /// publishes the worse of the two.
+    ///
+    /// This is Story 2.1's composition rule meeting its first real second oracle.
+    /// Publishing `Stale` here — the freshness verdict, because freshness is
+    /// consulted first — would be the rule broken by its own first user, and no
+    /// other test in the tree would notice: both verdicts are non-good, so any
+    /// "is it degraded?" assertion passes either way.
+    #[tokio::test]
+    async fn a_reading_that_is_both_stale_and_backwards_publishes_the_worse() {
+        let meter = MeterId::new("garage");
+        let clock = FakeClock::new(UtcMillis(SANE_NOW));
+        let beats = Heartbeats::for_meters([MeterId::new("garage")]);
+        let heartbeat = beats.of(&MeterId::new("garage")).expect("present");
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut source = FakeSource::new()
+            .then(Ok(reading_with_energy(Quality::Good, 950, 4_843.822)))
+            // Older than the allowance AND a lower index.
+            .then(Ok(reading_with_energy(Quality::Good, 600_000, 12.0)));
+        let ctx = Context {
+            meter: &meter,
+            clock: &clock,
+            policy: policy(),
+            config: config(),
+            heartbeat: &heartbeat,
+            outbox: &tx,
+        };
+
+        let mut last = None;
+        let mut energy = None;
+        let s1 = step_once(&ctx, &mut source, State::initial(), &mut last, &mut energy).await;
+        let _ = step_once(&ctx, &mut source, s1, &mut last, &mut energy).await;
+        drop(tx);
+
+        let mut got = Vec::new();
+        while let Some(u) = rx.recv().await {
+            got.push(u);
+        }
+        assert_eq!(
+            got[1].published(),
+            Quality::Bad,
+            "worst wins: Stale from freshness, Bad from monotonicity"
+        );
+        assert_eq!(
+            got[1].verdict.cause(),
+            Some(crate::core::oracle::Cause::CounterWentBackwards),
+            "and the cause travels with the quality it belongs to, not with \
+             whichever oracle was consulted first"
+        );
     }
 
     /// **Story 3.2 AC1 and AC2** — a meter that answered and then stopped must be
@@ -549,14 +726,14 @@ mod tests {
         };
 
         let mut last = None;
-        let good = step_once(&ctx, &mut source, State::initial(), &mut last).await;
+        let good = step_once(&ctx, &mut source, State::initial(), &mut last, &mut None).await;
         assert_eq!(
             good,
             State::Fresh,
             "the premise: the meter must first be proven fresh"
         );
 
-        let after = step_once(&ctx, &mut source, good, &mut last).await;
+        let after = step_once(&ctx, &mut source, good, &mut last, &mut None).await;
         assert_eq!(after, State::Stale);
         drop(tx);
 
@@ -635,7 +812,7 @@ mod tests {
             heartbeat: &heartbeat,
             outbox: &tx,
         };
-        let state = step_once(&ctx, &mut source, State::initial(), &mut None).await;
+        let state = step_once(&ctx, &mut source, State::initial(), &mut None, &mut None).await;
         drop(tx);
         let mut got = Vec::new();
         while let Some(u) = rx.recv().await {
@@ -719,7 +896,7 @@ mod tests {
             heartbeat: &heartbeat,
             outbox: &tx,
         };
-        let _ = step_once(&ctx, &mut source, State::initial(), &mut None).await;
+        let _ = step_once(&ctx, &mut source, State::initial(), &mut None, &mut None).await;
         assert_eq!(
             heartbeat.last(),
             Some(MonotonicMs(7_000)),
@@ -1022,10 +1199,11 @@ mod tests {
             outbox: &tx,
         };
         let mut last = None;
-        let after_timeout = step_once(&ctx, &mut source, State::initial(), &mut last).await;
+        let after_timeout =
+            step_once(&ctx, &mut source, State::initial(), &mut last, &mut None).await;
         assert_eq!(after_timeout, State::Stale);
 
-        let after_good = step_once(&ctx, &mut source, after_timeout, &mut last).await;
+        let after_good = step_once(&ctx, &mut source, after_timeout, &mut last, &mut None).await;
         assert_eq!(after_good, State::Fresh);
         drop(tx);
         let u = rx.recv().await.expect("the good reading was forwarded");

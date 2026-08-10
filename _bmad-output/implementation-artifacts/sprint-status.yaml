@@ -275,7 +275,7 @@ development_status:
   # error taxonomy maps into it (Epic 2 onward); no ad-hoc quality strings"*.
   2-1-the-oracle-layer-and-how-verdicts-compose: review
   # FR15, NFR6 — the one with a date on it. See the epic note above.
-  2-2-energy-counter-monotonicity: backlog
+  2-2-energy-counter-monotonicity: review
   # FR14 — does not exist at all today.
   2-3-physical-bounds: backlog
   # FR16, plus `map_device`'s debt: three failure modes collapse into one

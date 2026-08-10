@@ -14,7 +14,7 @@ is listed in section~\ref{sec:contract-limits} rather than described as though i
 \section{Contract version}
 
 The node BIRTH carries a metric \code{Contract/Version} (\code{Int64}), currently
-\textbf{4}. It is incremented on \emph{any} change to the topic grammar, to a metric name or
+\textbf{5}. It is incremented on \emph{any} change to the topic grammar, to a metric name or
 unit, or to the meaning of a published quality code. Publishing it means a consumer can
 \emph{see} the contract change instead of having to notice it from broken tags.
 
@@ -39,6 +39,8 @@ history.
 \toprule
 \textbf{Version} & \textbf{Kind} & \textbf{Change} \\
 \midrule
+5 & additive & A new cause, \code{counter-went-backwards}: the energy index dropped, so
+    the meter was reset, rolled over or replaced. See section~\ref{sec:quality}. \\
 4 & additive & Every metric that is not \textsc{good} carries a \code{Cause} property
     naming which check refused it. See section~\ref{sec:quality}. \\
 3 & additive & The node BIRTH declares \code{Node Control/Rebirth} (Boolean,
@@ -114,7 +116,7 @@ disabled cannot.
 \toprule
 \normalfont\textbf{Metric} & \textbf{Type} & \textbf{Unit} & \textbf{Meaning} \\
 \midrule
-Contract/Version & Int64  & ---   & Contract version, node BIRTH only. Currently 4. \\
+Contract/Version & Int64  & ---   & Contract version, node BIRTH only. Currently 5. \\
 Node Control/Rebirth & Boolean & --- & Always \code{false}. The command endpoint a host
                                        addresses to request a fresh birth; node BIRTH only. \\
 Power            & Double & kW    & Instantaneous power. \\
@@ -155,7 +157,7 @@ The code is a 32-bit pattern in which the \textbf{level lives in the top bits} a
 
 Since contract~4, a metric whose quality is \emph{not} \textsc{good} carries a second
 property, \code{Cause}, typed \code{String}, naming the check that refused it ---
-\code{reading-too-old}, \code{source-unreachable}, \code{value-unusable} and so on. A
+\code{reading-too-old}, \code{source-unreachable}, \code{counter-went-backwards} and so on. A
 \textsc{good} metric carries no \code{Cause} at all: a reason published beside every good
 value is noise a consumer learns to ignore, and then misses the day it means something.
 
@@ -166,6 +168,15 @@ that.} \code{tck-id-payloads-propertyset-quality-value-value} admits only \code{
 the warning below); encoding a reason as a fourth value would deepen a deviation accepted
 only because the alternative was a silent lie. A separate key costs nothing: a
 \code{PropertySet} constrains only that keys and values are equal in number.
+\end{note}
+
+\begin{note}
+\textbf{A counter that goes backwards is \textsc{bad}, not \textsc{stale}} (contract~5). The
+value may be perfectly current --- a replacement meter really does read 12~kWh --- and it is
+the \emph{relation} to the previous reading that is broken. \textsc{bad} publishes null
+values, which withholds exactly the number a consumer would difference; publishing it
+\textsc{stale} would hand the number over with a hint. The drop is reported once and the new
+index becomes the reference, so a replaced meter is not marked bad for ever.
 \end{note}
 
 \textsc{stale} deliberately uses the same code a host raises when a node's DEATH marks its

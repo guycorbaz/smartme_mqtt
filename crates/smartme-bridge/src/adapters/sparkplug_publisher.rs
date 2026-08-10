@@ -94,7 +94,16 @@ use crate::domain::{Measurement, Serial, UtcMillis};
 ///
 /// What the number now stands for is pinned by `tests/contract_golden.rs`, which
 /// fails if any of it moves without this constant moving too (AR16).
-pub const CONTRACT_VERSION: i64 = 4;
+///
+/// # Story 2.2 bumps it to 5, and the guard is what said so
+///
+/// The energy-monotonicity oracle added `counter-went-backwards` to the cause
+/// vocabulary, which is part of what a consumer reads off a degraded metric.
+/// `contract_golden` failed on the change before anything else did — *"the cause
+/// vocabulary changed size (11 live, 10 in the v4 golden) without
+/// CONTRACT_VERSION moving"* — which is the first time that test caught a real
+/// change rather than a mutation written to try it.
+pub const CONTRACT_VERSION: i64 = 5;
 
 /// The quality code this bridge publishes for `quality`.
 ///

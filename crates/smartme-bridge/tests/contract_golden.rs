@@ -66,10 +66,28 @@ const GOLDEN_CAUSES_V4: CauseGolden = &[
     ("not-revalidated", false),
 ];
 
+/// The cause vocabulary, as of contract v5: v4 plus `counter-went-backwards`
+/// (Story 2.2). Additive — nothing a v4 consumer understood changed meaning.
+const GOLDEN_CAUSES_V5: CauseGolden = &[
+    ("source-unreachable", false),
+    ("source-refused", true),
+    ("host-clock-unsynced", false),
+    ("no-freshness-proof", false),
+    ("source-clock-implausible", false),
+    ("timestamps-disagree", false),
+    ("reading-too-old", false),
+    ("value-unusable", false),
+    ("source-marked-stale", false),
+    ("not-revalidated", false),
+    ("counter-went-backwards", false),
+];
+
 /// The one place a version is bound to its golden. Adding a version without its
 /// golden is what the `None` arm refuses.
 fn golden_for(version: i64) -> Option<(QualityGolden, CauseGolden)> {
     match version {
+        // The quality codes have not moved since v4; the cause vocabulary has.
+        5 => Some((GOLDEN_QUALITY_V4, GOLDEN_CAUSES_V5)),
         4 => Some((GOLDEN_QUALITY_V4, GOLDEN_CAUSES_V4)),
         _ => None,
     }
