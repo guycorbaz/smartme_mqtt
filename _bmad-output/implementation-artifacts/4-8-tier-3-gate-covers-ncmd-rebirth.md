@@ -402,8 +402,8 @@ answers refine is a **revisit condition** and the gate's own coverage.
 
 | # | Question | Why it matters | How to tell |
 | ---: | --- | --- | --- |
-| 1 | **Does MQTT Engine request a rebirth on its OWN** when it receives DATA from a node whose BIRTH it never saw? | **ADR 0018's revisit condition 3.** It is the one inferred link in the host-initiated repair chain; steps 1 and 4 are measured. | Leave the bridge running, restart Ignition, click nothing. The bridge logs `Rebirth Request accepted`; Ignition's `Rebirth (Last) Cause` shows something other than `Triggered by user`. |
-| 2 | **What values does `Rebirth (Last) Cause` take?** | The label's existence is the entire evidence for question 1's premise. Its vocabulary is the answer. | Read the tag after each rebirth of any origin. |
+| 1 | **STILL OPEN after 2026-08-10, and that event cannot close it** — see the completion note. The rebirth observed that day reached a node whose BIRTH Engine *had* seen, so it is not this question's scenario whatever its origin. **Does MQTT Engine request a rebirth on its OWN** when it receives DATA from a node whose BIRTH it never saw? | **ADR 0018's revisit condition 3.** It is the one inferred link in the host-initiated repair chain; steps 1 and 4 are measured. | Leave the bridge running, restart Ignition, click nothing. The bridge logs `Rebirth Request accepted`; Ignition's `Rebirth (Last) Cause` shows something other than `Triggered by user`. |
+| 2 ⏱ | **READABLE RIGHT NOW, AND PERISHABLE — 2026-08-10.** A real rebirth landed on the production node at 07:50:57Z; the tag is *Last* Cause, so its value survives only until the next rebirth of any origin. Reading it now settles this question and tells us whether that event was operator-driven. **What values does `Rebirth (Last) Cause` take?** | The label's existence is the entire evidence for question 1's premise. Its vocabulary is the answer — and a value other than `Triggered by user` would turn "an automatic path exists" from inference into measurement. | Read the tag after each rebirth of any origin. |
 | 3 ✅ | **ANSWERED 2026-08-03 — Ignition displayed `Bad_Stale` on a `Good`→`Stale` transition, node still `online`, `Death Count = 0`.** Original entry below. **Step 4 of the gate — `Good` then `Stale`, against the product.** | **Never exercised.** The 2026-07-31 probe published no `Good` value, so `Bad_Stale` after the death was indistinguishable from `Bad_Stale` before it. This is the step that guards against the silent lie. | The gate this story builds: publish `Good`, degrade to `Stale`, then die — in that order. |
 | 4 | **Does Engine consume `$sparkplug`?** | A *Sparkplug Aware* MQTT Server stores BIRTHs and replays them retained (`Sparkplug_10:71-83`) — a **third** remedy neither ADR 0016 nor ADR 0018 weighed, because Mosquitto is not one. Story 4.4 noted it is cheap to check. | Subscribe to `$sparkplug/#` and watch, or read Engine's namespace configuration. |
 | 5 | **Does an out-of-order `seq` provoke a rebirth?** | `tck-id-operational-behavior-host-reordering-rebirth` (`Sparkplug_5:565-568`) is conditional on the host being *"configured with a 'reordering timeout' parameter"*, and **nothing measured says Ignition is**. | Publish a DDATA with a deliberately skipped `seq` from a disposable node and watch for an NCMD. |
@@ -449,5 +449,61 @@ story:
   corrected.
 - **Not observed:** which timestamp `Offline DateTime` retained. The 2026-07-31 probe found it
   tracked the will rather than the explicit certificate; this run did not re-check it.
+
+**Field observation, 2026-08-10 — the first rebirth a real MQTT Engine has sent this bridge IN
+PRODUCTION.** Unsolicited, unplanned, and not a probe: `v0.4.0-rc2`, group `PreProd`, node
+`smartme-bridge`, three live meters, the deployment that had been left running overnight. Found
+while reading the logs for something else. Both lines, verbatim:
+
+```
+2026-08-10T07:50:57.031906Z  INFO mqtt_driver: Rebirth Request accepted; re-announcing the node
+    and its devices  topic=spBv1.0/PreProd/NCMD/smartme-bridge  metric="Node Control/Rebirth"
+2026-08-10T07:50:57.090287Z  INFO mqtt_driver: node re-announced on a Rebirth Request: complete
+    BIRTH sequence republished under the SAME bdSeq ...  bd_seq=7
+```
+
+**MEASURED.**
+
+- **Hypothesis B holds against the production node.** The matcher requires the name,
+  `BooleanValue(true)` and `retain = false` **simultaneously**, so its firing proves all three;
+  no near-miss WARN anywhere in the file. Engine sends `Node Control/Rebirth`. `Sparkplug_5:950`'s
+  `Node Control/Refresh` remains a defect in the norm's prose. Second independent confirmation,
+  now off a disposable group and onto the real one.
+- **Hypothesis A, which Story 4.5 is waiting on, now has production evidence.** Engine offers and
+  exercises the control against a node that declares the metric. The 2026-07-31 probe settled this
+  on `RebirthProbe/ProbeNode`; this settles it where the answer is load-bearing.
+- **`bdSeq` unchanged at 7**, in 59 ms, and two independent witnesses agree: no second
+  `session born` line exists anywhere in the file, and `data/bdseq.toml` still carries `bd_seq = 7`
+  with an mtime at the ORIGINAL 18:35:25Z session birth. A rebirth re-announces a session; it does
+  not open one, and it does not touch the persisted counter.
+- **ADR 0017's hazard did not materialise.** The request was live, not a retained NCMD replayed at
+  subscribe time — the bridge had held that subscription for fifteen hours before it arrived.
+
+**NOT MEASURED, AND THE DISTINCTION MATTERS MORE THAN THE EVENT.**
+
+**Who sent it is unknown.** An operator clicking `Rebirth` in Designer and an Engine acting on its
+own produce the *identical* bridge log line. Nothing on our side can separate them; only Ignition's
+`Rebirth (Last) Cause` can, which is why question 2 is now marked perishable — the tag holds only
+the LAST cause.
+
+**Question 1 is not closed by this event, and could not be even if the cause reads automatic.** Its
+scenario is *DATA from a node whose BIRTH Engine never saw*. Engine had seen this BIRTH: the session
+was born 2026-08-09T18:35:25Z, Engine was online throughout (`spBv1.0/STATE/SCADA` =
+`{"online":true,…}`, captured retained), and no reconnect intervened. An automatic rebirth here
+would be a *different* automatic trigger. ADR 0018's revisit condition 3 stands untouched.
+
+**The tempting inference, recorded as refused.** The rebirth landed at 09:50:57 local, sixteen
+minutes after `appart-est` froze at 09:34:50 (issue
+[#62](https://github.com/guycorbaz/smartme_mqtt/issues/62)) — an inviting story about Engine
+reacting to a degrading node. **One isolated event plus a temporal correlation does not name a
+cause,** and this file already records the same error twice: an empty `Edge Nodes` folder read as a
+history, and a retained-message snapshot read as behaviour. The correlation is written down because
+it is a lead worth checking, not because it is evidence.
+
+**ACTION, and it expires.** Read `Rebirth (Last) Cause` on the `smartme-bridge` node before any
+further rebirth overwrites it. Two outcomes, both worth having: `Triggered by user` closes the
+question cheaply, anything else converts *"automatic causes exist"* from an inference drawn off a
+label's existence into a measurement — the first hard input ADR 0018's revisit condition has ever
+had.
 
 ### File List
