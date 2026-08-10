@@ -40,6 +40,15 @@
 # Epic 0 stays `optional`: it closed long ago and a retrospective now would collect
 # nothing that is still actionable.
 #
+# AMENDED 2026-08-10, same day, by Guy: *"les retrospectives sont à faire quand
+# c'est terminé."* `required` therefore means exactly what its wording says — the
+# retrospective is a CONDITION OF CLOSING an epic, not a debt an unfinished epic
+# carries. The Epic 5 retrospective's action B3 said the epic 3 and epic 4
+# retrospectives were "owed"; they are not, because neither epic is finished
+# (Epic 3 is at 3 of 6 stories, Epic 4 at 10 of 19). What B3 correctly established
+# is that a retrospective may no longer be skipped at the moment an epic closes,
+# which is what cost this project its only unhonoured action item.
+#
 # WORKFLOW NOTES:
 # ===============
 # - Epic transitions to 'in-progress' automatically when first story is created
@@ -429,7 +438,9 @@ development_status:
   3-4-discovery-the-accounts-meters-by-name-and-serial: backlog
   3-5-a-known-meter-that-disappears-from-discovery: backlog
   3-6-orphan-retained-purge-on-a-mapping-change: backlog
-  epic-3-retrospective: required  # owed — see the Epic 5 retro, action B3
+  # NOT owed yet: Epic 3 is at 3/6 stories (3.4, 3.5, 3.6 remain). `required`
+  # means it must run BEFORE the epic closes, not that it is late.
+  epic-3-retrospective: required
   # Epic 4 runs BEFORE Epic 2 — decided at the Epic 1 retrospective (2026-07-26).
   #
   # AMENDED 2026-08-05 (ADR 0025, [#55]). This comment said the execution order was
@@ -911,7 +922,9 @@ development_status:
   # work is correct as far as it goes and already pushed. Independent recount says
   # 29 missing, not the 27 the review reported.
   4-19-finish-chapter-4-payload-clauses: backlog
-  epic-4-retrospective: required  # owed — see the Epic 5 retro, action B3
+  # NOT owed yet: Epic 4 is at 10/19 stories, plus 4.17 in review. `required`
+  # means it must run BEFORE the epic closes, not that it is late.
+  epic-4-retrospective: required
   # 2026-08-03: Epic 5 opens with its scope CHANGED, not merely detailed. It used to
   # be framed as ".env secrets discipline" while Epic 6 was a read-only surface, so
   # configuration editing in the UI was owned by nobody — although the PRD's prose
