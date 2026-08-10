@@ -14,11 +14,19 @@ is listed in section~\ref{sec:contract-limits} rather than described as though i
 \section{Contract version}
 
 The node BIRTH carries a metric \code{Contract/Version} (\code{Int64}), currently
-\textbf{3}. It is incremented on \emph{any} change to the topic grammar, to a metric name or
+\textbf{4}. It is incremented on \emph{any} change to the topic grammar, to a metric name or
 unit, or to the meaning of a published quality code. Publishing it means a consumer can
 \emph{see} the contract change instead of having to notice it from broken tags.
 
-The number does not say what \emph{kind} of change it was, so it is worth stating. Version~3
+Since version~4 the number is also \emph{enforced}: \code{tests/contract\_golden.rs} pins the
+quality codes and the cause vocabulary to the version they belong to, and fails if either
+moves without this number moving. Before that, the number was maintained by whoever
+remembered.
+
+The number does not say what \emph{kind} of change it was, so it is worth stating. Version~4
+is \textbf{additive}: every metric that is \emph{not} good now carries a \code{Cause}
+property naming which check refused it, so a consumer sees one new property on degraded
+metrics and nothing it already held became wrong. Version~3
 is \textbf{additive}: the birth certificate gained the \code{Node Control/Rebirth} metric, so
 a consumer sees one new tag and nothing it already held became wrong. Version~2 was
 \textbf{breaking}: a quality code a consumer had recorded as good was, from that release on,
@@ -31,6 +39,8 @@ history.
 \toprule
 \textbf{Version} & \textbf{Kind} & \textbf{Change} \\
 \midrule
+4 & additive & Every metric that is not \textsc{good} carries a \code{Cause} property
+    naming which check refused it. See section~\ref{sec:quality}. \\
 3 & additive & The node BIRTH declares \code{Node Control/Rebirth} (Boolean,
     \code{false}) --- the endpoint a host addresses to request a fresh birth.
     See section~\ref{sec:contract-ncmd}. \\
@@ -104,7 +114,7 @@ disabled cannot.
 \toprule
 \normalfont\textbf{Metric} & \textbf{Type} & \textbf{Unit} & \textbf{Meaning} \\
 \midrule
-Contract/Version & Int64  & ---   & Contract version, node BIRTH only. Currently 3. \\
+Contract/Version & Int64  & ---   & Contract version, node BIRTH only. Currently 4. \\
 Node Control/Rebirth & Boolean & --- & Always \code{false}. The command endpoint a host
                                        addresses to request a fresh birth; node BIRTH only. \\
 Power            & Double & kW    & Instantaneous power. \\
@@ -140,6 +150,23 @@ The code is a 32-bit pattern in which the \textbf{level lives in the top bits} a
 \bottomrule
 \end{tabular}
 \end{center}
+
+\subsection{Why a value is not good}
+
+Since contract~4, a metric whose quality is \emph{not} \textsc{good} carries a second
+property, \code{Cause}, typed \code{String}, naming the check that refused it ---
+\code{reading-too-old}, \code{source-unreachable}, \code{value-unusable} and so on. A
+\textsc{good} metric carries no \code{Cause} at all: a reason published beside every good
+value is noise a consumer learns to ignore, and then misses the day it means something.
+
+\begin{note}
+\textbf{The reason cannot live in \code{Quality}, and the specification is what decides
+that.} \code{tck-id-payloads-propertyset-quality-value-value} admits only \code{0},
+\code{192} and \code{500} in that property. \prog already deviates there deliberately (see
+the warning below); encoding a reason as a fourth value would deepen a deviation accepted
+only because the alternative was a silent lie. A separate key costs nothing: a
+\code{PropertySet} constrains only that keys and values are equal in number.
+\end{note}
 
 \textsc{stale} deliberately uses the same code a host raises when a node's DEATH marks its
 tags stale. Transport-level and application-level staleness then look identical to the

@@ -857,8 +857,8 @@ expressed in the type system.
 
 | tck-id | Level | Our behaviour | Proof | Verdict |
 | --- | --- | --- | --- | --- |
-| `payloads-propertyset-keys-array-size` | MUST | `encode_properties` pushes key and value together in each branch, so the arrays cannot diverge (`encode.rs:273-288`) | — **correct by construction; no test asserts the invariant**, though one incidentally notices a surplus key — see the mutation note below | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
-| `payloads-propertyset-values-array-size` | MUST | as above — the same invariant stated from the other side | — **correct by construction, wholly unproven**: a surplus value passes entirely unnoticed | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
+| `payloads-propertyset-keys-array-size` | MUST | `encode_properties` pushes key and value together in each branch, and Story 2.1's caller-supplied properties are pushed as pairs from a `Vec<(String, String)>` — a shape in which they cannot diverge | — **correct by construction; no test asserts the invariant**, though one incidentally notices a surplus key — see the mutation note below | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
+| `payloads-propertyset-values-array-size` | MUST | as above — the same invariant stated from the other side; the Story 2.1 property carries its key in the same tuple | — **correct by construction, wholly unproven**: a surplus value passes entirely unnoticed | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
 | `payloads-metric-propertyvalue-type-type` | MUST | property `type` is an unsigned 32-bit integer | vendored `sparkplug_b.proto` types it `optional uint32` — **schema witness** ([ADR 0014](adr/0014-schema-as-conformance-evidence.md)); a non-`u32` here does not fail a test, it fails to compile | conformant |
 | `payloads-metric-propertyvalue-type-value` | MUST | we emit `Int32` (3) for quality and `String` (12) for `engUnit`; both enumerated | **neither half is proven** — see the row below; delete the `r#type` line from `string_property` (`encode.rs:300`) and the suite stays green, and the `Int32` half is a tautology | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
 | `payloads-metric-propertyvalue-type-req` | MUST | `int_property` / `string_property` always set `type` (`encode.rs:290-306`) | — **half-witnessed at best**: deleting `r#type` from `int_property` goes red, from `string_property` goes green. The clause says *every* property value, so a witness for one of the two constructors does not prove it. The BIRTH scope (`:593-594`) is bridged only by "one `encode_metric` serves every message type" — the code-shape reasoning this matrix refuses elsewhere | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
@@ -1312,6 +1312,16 @@ than idle: the bridge now registers its will at QoS 1, as
 `message-flow-edge-node-birth-publish-will-message-qos` requires, so a broker without full will
 support at QoS 1 would break it. This belongs in the operator manual's deployment prerequisites,
 not only here.
+
+> **Story 2.1 (2026-08-10) added a third property key, `Cause`.** It appears on every metric
+> whose quality is not good, carrying a `String`, and it is **not** in the `Quality` property —
+> `payloads-propertyset-quality-value-value` admits only `0`/`192`/`500` there and the bridge
+> already deviates from that clause (ADR 0012); encoding a reason as a fourth value would
+> deepen a deviation accepted only because the alternative was a silent lie. No verdict in this
+> matrix moves: the property-set clauses constrain key/value array lengths and the `type` field,
+> which the encoder satisfies for the new key exactly as for the existing two. `CONTRACT_VERSION`
+> moved 3 → 4, and `tests/contract_golden.rs` now fails if the quality codes or the cause
+> vocabulary move without it.
 
 ## Findings carried forward
 

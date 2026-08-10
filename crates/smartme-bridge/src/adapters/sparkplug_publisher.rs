@@ -24,6 +24,7 @@ use sparkplug_b::{
 };
 
 use crate::core::channel::MeterUpdate;
+use crate::core::oracle::{Cause, Verdict};
 use crate::domain::{Measurement, Serial, UtcMillis};
 
 /// Version of the topic/metric contract with the SCADA host. Bump on ANY change
@@ -82,7 +83,18 @@ use crate::domain::{Measurement, Serial, UtcMillis};
 ///
 /// If that ever stops being the property being protected, this decision should
 /// be re-weighed rather than assumed to still hold.
-pub const CONTRACT_VERSION: i64 = 3;
+///
+/// # Story 2.1 DOES bump it, by that same rule
+///
+/// Every non-good metric now carries a `Cause` property naming which oracle
+/// refused (Story 2.1). Unlike the DDEATH above, this **is** a change to the tag
+/// set: a consumer browsing a degraded metric sees a property that did not exist
+/// under v3, and the Tier-3 runbook's promise — *two runs sharing a version
+/// number attest to the same tag set* — would be false across the boundary.
+///
+/// What the number now stands for is pinned by `tests/contract_golden.rs`, which
+/// fails if any of it moves without this constant moving too (AR16).
+pub const CONTRACT_VERSION: i64 = 4;
 
 /// The quality code this bridge publishes for `quality`.
 ///
@@ -135,6 +147,22 @@ pub const METRIC_POWER: &str = "Power";
 pub const UNIT_POWER: &str = "kW";
 /// Metric name for the cumulative energy counter.
 pub const METRIC_ENERGY: &str = "Energy";
+
+/// The property key under which a non-good verdict names WHY (Story 2.1).
+///
+/// **Not `Quality`, and the norm is what decides that.**
+/// `tck-id-payloads-propertyset-quality-value-value`
+/// (`Sparkplug_6_Payloads.adoc:634-636`) restricts the `Quality` property to the
+/// values `0`, `192` or `500`. This bridge already deviates there on purpose
+/// (ADR 0012: the conformant codes display as *good* on Ignition, which is the
+/// exact lie the project exists to prevent), and encoding a cause as a fourth
+/// value would deepen a deviation accepted only because the alternative was a
+/// silent lie. A separate key costs nothing: a `PropertySet` constrains only that
+/// keys and values are equal in number.
+///
+/// Present ONLY on a non-good metric. A cause beside a good value is noise a
+/// consumer would learn to ignore, and then miss the day it meant something.
+pub const METRIC_PROPERTY_CAUSE: &str = "Cause";
 /// Engineering unit published with [`METRIC_ENERGY`].
 pub const UNIT_ENERGY: &str = "kWh";
 
@@ -324,7 +352,7 @@ impl SparkplugPublisher {
                 // stale, stamped with its own ValueDate. Claiming Good here
                 // would turn a 45-minute broker outage into a fresh-looking lie
                 // the moment the link came back.
-                Some(update) => metrics_for(&update.measurement, degrade(update.published())),
+                Some(update) => metrics_for(&update.measurement, degrade(update.verdict)),
                 None => cold_start_metrics(timestamp),
             };
             // The payload timestamp follows the data: a re-declared reading is
@@ -462,10 +490,7 @@ impl SparkplugPublisher {
             .node
             .device_topic(MessageType::DData, serial.as_str())?;
         let timestamp = millis(update.measurement.value_date);
-        let payload = live.device_data(
-            timestamp,
-            metrics_for(&update.measurement, update.published()),
-        );
+        let payload = live.device_data(timestamp, metrics_for(&update.measurement, update.verdict));
         sink.emit(Outbound {
             topic,
             payload: encode(&payload),
@@ -582,8 +607,9 @@ fn cold_start_metrics(timestamp_ms: u64) -> Vec<Metric> {
 /// history, so it is published, flagged, with its own `ValueDate` as the payload
 /// timestamp. The timestamp is what keeps that honest: a stale reading is
 /// visibly old even to a consumer that ignores the flag.
-fn metrics_for(measurement: &Measurement, published: Quality) -> Vec<Metric> {
+fn metrics_for(measurement: &Measurement, verdict: Verdict) -> Vec<Metric> {
     let timestamp = millis(measurement.value_date);
+    let published = verdict.quality();
     let (power, energy) = match published {
         Quality::Bad => (
             MetricValue::Null(DataType::Double),
@@ -594,22 +620,34 @@ fn metrics_for(measurement: &Measurement, published: Quality) -> Vec<Metric> {
             MetricValue::Double(measurement.energy.0),
         ),
     };
+    let with_cause = |metric: Metric| match verdict.cause() {
+        Some(cause) => metric.with_property(METRIC_PROPERTY_CAUSE, cause.as_str()),
+        // A good reading carries no cause, by construction. Publishing an empty
+        // one would be noise a consumer must learn to ignore, and the day it
+        // meant something nobody would notice.
+        None => metric,
+    };
     vec![
-        Metric::new(METRIC_POWER, power, timestamp)
-            .with_quality_code(ignition_quality_code(published))
-            .with_engineering_unit(UNIT_POWER),
-        Metric::new(METRIC_ENERGY, energy, timestamp)
-            .with_quality_code(ignition_quality_code(published))
-            .with_engineering_unit(UNIT_ENERGY),
+        with_cause(
+            Metric::new(METRIC_POWER, power, timestamp)
+                .with_quality_code(ignition_quality_code(published))
+                .with_engineering_unit(UNIT_POWER),
+        ),
+        with_cause(
+            Metric::new(METRIC_ENERGY, energy, timestamp)
+                .with_quality_code(ignition_quality_code(published))
+                .with_engineering_unit(UNIT_ENERGY),
+        ),
     ]
 }
 
 /// A verdict that has not been re-computed cannot be re-asserted: `Good`
-/// becomes `Stale`, and anything already worse stays as bad as it was.
-fn degrade(published: Quality) -> Quality {
-    match published {
-        Quality::Good => Quality::Stale,
-        other => other,
+/// becomes `Stale`, and anything already worse stays as bad as it was — keeping
+/// the cause it already had, because that cause is still the true one.
+fn degrade(verdict: Verdict) -> Verdict {
+    match verdict.quality() {
+        Quality::Good => Verdict::stale(Cause::NotRevalidated),
+        _ => verdict,
     }
 }
 
@@ -623,6 +661,63 @@ fn millis(t: UtcMillis) -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::core::oracle::{Cause, Verdict};
+
+    /// Story 2.1 AC3 — the cause reaches the metric, under its own key, and only
+    /// when there is one.
+    ///
+    /// **Why not inside `Quality`:** `tck-id-payloads-propertyset-quality-value-value`
+    /// admits only `0`, `192` and `500` there, and this bridge already deviates
+    /// from that clause deliberately (ADR 0012). A fourth value would deepen a
+    /// deviation accepted only because the alternative was a silent lie.
+    ///
+    /// The third assertion is the one that would be missed: a GOOD metric must
+    /// carry no cause at all. A cause published beside every good value is noise a
+    /// consumer learns to ignore, and then misses the day it means something.
+    ///
+    /// FALSIFIED 2026-08-10: making `with_cause` unconditional — attaching
+    /// `cause.unwrap_or(Cause::NotRevalidated)` — turns the good-metric assertion
+    /// red while the two degraded ones stay green.
+    #[test]
+    fn a_non_good_metric_names_its_cause_and_a_good_one_does_not() {
+        let m = super::super::sparkplug_publisher::tests::measurement(super::Quality::Good);
+
+        let degraded = super::metrics_for(&m, Verdict::stale(Cause::ReadingTooOld));
+        for metric in &degraded {
+            assert_eq!(
+                metric.properties,
+                vec![(
+                    super::METRIC_PROPERTY_CAUSE.to_string(),
+                    "reading-too-old".to_string()
+                )],
+                "{} must name why it is not good",
+                metric.name
+            );
+            // And the quality property is untouched by all this: still exactly
+            // what ADR 0012 chose.
+            assert_eq!(
+                metric.quality_code,
+                Some(super::ignition_quality_code(super::Quality::Stale))
+            );
+        }
+
+        let refused = super::metrics_for(&m, Verdict::bad(Cause::SourceRefused));
+        assert_eq!(
+            refused[0].properties,
+            vec![(
+                super::METRIC_PROPERTY_CAUSE.to_string(),
+                "source-refused".to_string()
+            )]
+        );
+
+        let good = super::metrics_for(&m, Verdict::good());
+        for metric in &good {
+            assert!(
+                metric.properties.is_empty(),
+                "{} is good and must carry no cause",
+                metric.name
+            );
+        }
+    }
 
     /// The property that outlives the exact constants: neither non-good quality
     /// may land on Ignition's *good* level, whatever its subcode. That was the

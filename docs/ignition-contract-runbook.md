@@ -308,6 +308,14 @@ artifact that no longer exists**, so these are first measurements, not confirmat
   Ignition did **not** invent a `0`. `EngUnit` came through as `kW` / `kWh`, and the device folder
   is named by the serial `30000001`.
 - **`Contract/Version = 3` was read by a real host** for the first time.
+
+> **These rows attest to contract v3, and the contract is now v4.** Story 2.1 (2026-08-10)
+> added a `Cause` property to every non-good metric, which is a change to the tag set — so a
+> v3 run does **not** attest to what a consumer sees today, and no v4 run has happened. What
+> the v3 rows still establish is everything independent of that property: the quality codes on
+> a `Good`→`Stale` transition, the rebirth flow, and the double NDEATH. Since v4 the binding
+> is machine-checked by `tests/contract_golden.rs`, so a future drift between this table and
+> the code cannot be silent — but a missing run is still a missing run.
 - **The bridge answers a rebirth issued by IGNITION.** Two writes to
   `ContractNodeV3/Node Control/Rebirth` produced **2 NBIRTHs and 2 DBIRTHs, `bdSeq` unchanged at 1**
   — the gate read both off the wire. Everything else in the repository proves only that the bridge

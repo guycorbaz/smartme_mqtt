@@ -1,6 +1,6 @@
 # Story 2.1: The oracle layer exists, and how verdicts compose is decided once
 
-Status: in-progress
+Status: review
 
 ## Story
 
@@ -109,22 +109,22 @@ are migrated onto the layer with **no verdict changing**, proven by asserting th
 - [x] **Task 2 — Build the layer (AC1)**
   - [x] `core/oracle.rs`: the verdict type, the composition function, the registry an oracle joins
   - [x] Verify `arch_purity` covers the new module; break it deliberately and watch it fail
-- [ ] **Task 3 — The cause channel (AC3)**
-  - [ ] Choose the property key and record why `Quality` cannot carry it
+- [x] **Task 3 — The cause channel (AC3)**
+  - [x] Choose the property key and record why `Quality` cannot carry it
         (`tck-id-payloads-propertyset-quality-value-value` restricts it to 0/192/500, and ADR 0012
         already deviates)
-  - [ ] Publish it on DDATA; decide and record whether the DBIRTH declares it
-  - [ ] Read the norm before deciding the DBIRTH half — cite the `tck-id`, not prose
+  - [x] Publish it on DDATA; decide and record whether the DBIRTH declares it
+  - [x] Read the norm before deciding the DBIRTH half — cite the `tck-id`, not prose
 - [x] **Task 4 — Migrate the three existing judgements (AC7)**
   - [x] Freshness, source `Bad`, ADR 0029's identity check
   - [x] Row-by-row equality of the `Policy::step` table before and after
-- [ ] **Task 5 — `contract_golden.rs` (AC5)**
-  - [ ] The golden mapping and the version it belongs to
-  - [ ] Falsify both directions and record both runs
-- [ ] **Task 6 — Consequences (AC6)**
-  - [ ] `CONTRACT_VERSION` 3 → 4; manual, runbook run table, conformance matrix
-  - [ ] Mechanical check for stale statements of the old number
-- [ ] **Task 7 — `./scripts/ci-local.sh` green, all steps**
+- [x] **Task 5 — `contract_golden.rs` (AC5)**
+  - [x] The golden mapping and the version it belongs to
+  - [x] Falsify both directions and record both runs
+- [x] **Task 6 — Consequences (AC6)**
+  - [x] `CONTRACT_VERSION` 3 → 4; manual, runbook run table, conformance matrix
+  - [x] Mechanical check for stale statements of the old number
+- [x] **Task 7 — `./scripts/ci-local.sh` green, all steps**
 
 ## Dev Notes
 
@@ -240,9 +240,49 @@ Tasks 3, 5, 6 (the wire, the golden guard, the contract bump) remain.**
 
 **Full suite green after the migration:** 190 unit tests plus every integration and chaos test.
 
-**Not yet done:** Task 3 (the cause reaching the wire under its own property key), Task 5
-(`contract_golden.rs`), Task 6 (`CONTRACT_VERSION` 3 → 4 and its consequences), Task 7
-(`ci-local.sh`).
+**2026-08-10, later — Tasks 3, 5, 6 and 7 done. All seven ACs met.**
+
+- **AC3.** The cause travels under `Cause`, a `String` property, and never inside `Quality` —
+  `tck-id-payloads-propertyset-quality-value-value` admits only `0`/`192`/`500` there and the
+  bridge already deviates (ADR 0012); a fourth value would deepen a deviation accepted only
+  because the alternative was a silent lie. The `sparkplug-b` crate gained a generic
+  `with_property`, since an open `PropertySet` is the norm's concept and not this bridge's.
+  A `Good` metric carries no cause: falsified by attaching one unconditionally, which turns
+  the good-metric assertion red while the two degraded ones stay green.
+- **AC5.** `tests/contract_golden.rs` binds `CONTRACT_VERSION` to what it means — the quality
+  codes and the whole cause vocabulary, each cause with its side of the latch/degrade rule.
+  `Cause::ALL` is defended by an exhaustive `match`, so a cause cannot join the enum and miss
+  the golden. **Falsified in BOTH directions**, which AC5 required: three reds (a cause string
+  moved, a quality code moved, a bump with no golden) and one deliberate GREEN — the same
+  change carried with its bump and its golden passes, proving the guard discriminates the bump
+  rather than the change.
+- **AC6.** `CONTRACT_VERSION` 3 → 4, on the rule the constant's own doc states: a new property
+  on a metric IS a change to the tag set, unlike story 5.2's DDEATH which was not. Manual
+  amended (version table, metric table, a new *"Why a value is not good"* subsection) and
+  rebuilt: 69 pages, overfull boxes **exactly the five in the committed baseline**. The Tier-3
+  runbook now warns that its rows attest to v3 while the contract is v4. The matrix moves no
+  verdict — the `PropertySet` clauses constrain array lengths and the `type` field, satisfied
+  for the new key as for the other two — and records the third property so it stops reading as
+  describing a two-property set.
+- **AC7.** No oracle was implemented. Physical bounds, monotonicity and payload domain remain
+  absent and belong to stories 2.2–2.4.
+
+**Nine falsifications in all, each red with its own message, plus one deliberate green.**
+
+**`./scripts/ci-local.sh` green, all ten steps including the image**, verified by reading the
+log rather than the exit code. Three of its steps caught defects of mine that review had not:
+`fmt`, then `clippy -D warnings` on a production-dead `discriminant` (now `#[cfg(test)]`, with
+the reason written rather than silenced by an `allow`), then clippy again on an over-complex
+return type in the golden.
+
+**LEFT OPEN, AND IT NEEDS A MEASUREMENT RATHER THAN A DECISION.** The norm does not require a
+property to be declared in a BIRTH before it may appear in DATA — only that its `type` field is
+present in BIRTH messages (`tck-id-payloads-metric-propertyvalue-type-req`), which the encoder
+satisfies. But **what Ignition does with a property it did not see at BIRTH is not measured**,
+and since a DBIRTH verdict is usually `Good` the property will be absent there. If the host
+ignores it, the fix is to declare it at BIRTH with a neutral value — which contradicts the
+"no cause on a good value" rule and deserves an arbitration rather than a workaround. Worth
+checking in the tag browser on the next deployment.
 
 ### File List
 
@@ -257,3 +297,9 @@ Tasks 3, 5, 6 (the wire, the golden guard, the contract bump) remain.**
 - `crates/smartme-bridge/tests/nfr2_staleness_latency.rs`
 - `crates/smartme-bridge/tests/chaos_ncmd_rebirth.rs`
 - `crates/smartme-bridge/tests/ignition_contract.rs`
+- `crates/smartme-bridge/tests/contract_golden.rs` (new)
+- `crates/sparkplug-b/src/model.rs`
+- `crates/sparkplug-b/src/encode.rs`
+- `docs/manual/chapters/05-mqtt-sparkplug-contract.tex`
+- `docs/ignition-contract-runbook.md`
+- `docs/sparkplug-conformance.md`

@@ -99,9 +99,63 @@ pub enum Cause {
     /// does produce it: "the source said so" and "we could not convert it" are
     /// different diagnoses and would send an operator to different places.
     SourceMarkedStale,
+    /// The value is the last one we judged, republished without a new judgement.
+    ///
+    /// ADR 0027 requires every poll cycle to publish a verdict for every enabled
+    /// meter — never silence — so a meter that has not produced a fresh reading is
+    /// republished with its last known values. A verdict that has not been
+    /// re-computed cannot be re-asserted, so `Good` degrades to `Stale` here; this
+    /// cause is what says *why* it degraded, rather than leaving a consumer to read
+    /// it as a reading that arrived late.
+    NotRevalidated,
 }
 
 impl Cause {
+    /// Every cause, in a fixed order.
+    ///
+    /// Kept honest by [`Cause::discriminant`], whose exhaustive `match` stops the
+    /// build when a variant is added — so a new cause cannot join the enum and
+    /// quietly miss the golden contract test.
+    pub const ALL: &'static [Cause] = &[
+        Cause::SourceUnreachable,
+        Cause::SourceRefused,
+        Cause::HostClockUnsynced,
+        Cause::NoFreshnessProof,
+        Cause::SourceClockImplausible,
+        Cause::TimestampsDisagree,
+        Cause::ReadingTooOld,
+        Cause::ValueUnusable,
+        Cause::SourceMarkedStale,
+        Cause::NotRevalidated,
+    ];
+
+    /// A stable position per variant, existing only so its `match` is exhaustive.
+    ///
+    /// Adding a variant to [`Cause`] without adding it here does not compile, and
+    /// `every_cause_is_in_all` then fails if it was added here but not to
+    /// [`Cause::ALL`]. Between the two, a cause cannot reach the wire without
+    /// passing the golden test.
+    ///
+    /// `#[cfg(test)]` because production has no use for it and `clippy -D warnings`
+    /// is right to say so. The guard still bites where it matters: the CI compiles
+    /// the tests on every run, so a variant added to the enum and nowhere else
+    /// fails the build rather than slipping past.
+    #[cfg(test)]
+    const fn discriminant(self) -> usize {
+        match self {
+            Cause::SourceUnreachable => 0,
+            Cause::SourceRefused => 1,
+            Cause::HostClockUnsynced => 2,
+            Cause::NoFreshnessProof => 3,
+            Cause::SourceClockImplausible => 4,
+            Cause::TimestampsDisagree => 5,
+            Cause::ReadingTooOld => 6,
+            Cause::ValueUnusable => 7,
+            Cause::SourceMarkedStale => 8,
+            Cause::NotRevalidated => 9,
+        }
+    }
+
     /// The string a consumer sees. Stable, and part of the versioned contract.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -114,6 +168,7 @@ impl Cause {
             Cause::ReadingTooOld => "reading-too-old",
             Cause::ValueUnusable => "value-unusable",
             Cause::SourceMarkedStale => "source-marked-stale",
+            Cause::NotRevalidated => "not-revalidated",
         }
     }
 
@@ -298,6 +353,7 @@ mod tests {
             Cause::ReadingTooOld,
             Cause::ValueUnusable,
             Cause::SourceMarkedStale,
+            Cause::NotRevalidated,
         ] {
             assert!(
                 !cause.latches(),
@@ -332,6 +388,27 @@ mod tests {
         assert!(!Verdict::good().latches());
     }
 
+    /// `ALL` really is all of them.
+    ///
+    /// `discriminant`'s exhaustive match makes the compiler refuse a variant that
+    /// was added to the enum and nowhere else; this closes the other half, where a
+    /// variant was given a discriminant but never listed.
+    #[test]
+    fn every_cause_is_in_all() {
+        for (position, cause) in Cause::ALL.iter().enumerate() {
+            assert_eq!(
+                cause.discriminant(),
+                position,
+                "{cause:?} is listed out of order in Cause::ALL"
+            );
+        }
+        assert_eq!(
+            Cause::ALL.len(),
+            10,
+            "a cause was added or removed: update the golden contract too"
+        );
+    }
+
     /// Every cause has a distinct wire string, and none of them is empty.
     ///
     /// Two causes sharing a string would make the property useless for the thing
@@ -349,6 +426,7 @@ mod tests {
             Cause::ReadingTooOld,
             Cause::ValueUnusable,
             Cause::SourceMarkedStale,
+            Cause::NotRevalidated,
         ];
         let mut seen = std::collections::BTreeSet::new();
         for cause in all {

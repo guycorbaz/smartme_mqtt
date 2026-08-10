@@ -140,6 +140,19 @@ pub struct Metric {
     /// [`Metric::ENG_UNIT_KEY`] so a consumer can auto-discover what the number
     /// means instead of hard-coding it.
     pub engineering_unit: Option<String>,
+    /// Additional string-valued properties, in insertion order.
+    ///
+    /// Sparkplug's `PropertySet` is open: beyond the keys the specification names
+    /// (`Quality`) and the ones convention supplies (`engUnit`), a publisher may
+    /// attach whatever a consumer needs, subject only to keys and values being
+    /// equal in number (`tck-id-payloads-propertyset-keys-value` and
+    /// `-values-value`). This is the door to that, so a caller does not have to
+    /// choose between the specification's vocabulary and its own.
+    ///
+    /// Deliberately NOT a map: the wire is an ordered pair of arrays, and a map
+    /// would make the encoded bytes depend on a hash seed — which a golden test
+    /// would then have to tolerate or a consumer diff would show as churn.
+    pub properties: Vec<(String, String)>,
 }
 
 impl Metric {
@@ -154,6 +167,7 @@ impl Metric {
             timestamp_ms,
             quality_code: None,
             engineering_unit: None,
+            properties: Vec::new(),
         }
     }
 
@@ -191,6 +205,18 @@ impl Metric {
     #[must_use]
     pub fn with_engineering_unit(mut self, unit: impl Into<String>) -> Self {
         self.engineering_unit = Some(unit.into());
+        self
+    }
+
+    /// Attaches an arbitrary string-valued property.
+    ///
+    /// Appends, so calling it twice with the same key publishes the key twice —
+    /// which the specification permits and no consumer expects. The caller owns
+    /// its key space; this crate does not deduplicate, because silently dropping
+    /// a property a caller asked for is worse than publishing what they said.
+    #[must_use]
+    pub fn with_property(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.properties.push((key.into(), value.into()));
         self
     }
 }

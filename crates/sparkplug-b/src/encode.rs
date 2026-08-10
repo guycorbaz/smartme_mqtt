@@ -281,6 +281,13 @@ fn encode_properties(metric: &Metric) -> Option<payload::PropertySet> {
         keys.push(Metric::ENG_UNIT_KEY.to_string());
         values.push(string_property(unit));
     }
+    // Caller-supplied properties last, in insertion order: the two the
+    // specification and convention name keep their position whatever a caller
+    // adds, so a consumer reading by index does not shift under it.
+    for (key, value) in &metric.properties {
+        keys.push(key.clone());
+        values.push(string_property(value));
+    }
     if keys.is_empty() {
         return None;
     }
