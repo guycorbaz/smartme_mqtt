@@ -949,7 +949,23 @@ development_status:
   # expected the binary to exit without a configuration — and it reached CI because
   # ci-local.sh reproduced TWO WORKFLOWS OUT OF THREE while claiming to reproduce CI. Image
   # checks now live in scripts/docker-smoke.sh, called by both.
-  5-2-config-persists-and-reloads-without-a-restart: review
+  # 2026-08-10 — CLOSED as `done` WITH ONE ACCEPTANCE CRITERION UNMET, on Guy's call.
+  # AC4's new-session half is NOT implemented: a change needing a new session is
+  # classified and reported, and then not carried out. It is [#49], open since
+  # 2026-08-04, and it is the only unmet AC among the eight stories reviewed.
+  # THE CLOSURE IS THE MECHANISM, NOT AN EXCEPTION TO IT. `CLAUDE.md` requires an
+  # unmet criterion to be recorded AS unmet, with an issue — which is exactly what
+  # happened here on the day the story was written, before anyone asked. What was
+  # left undone was the closing itself, and a story parked in `review` indefinitely
+  # is how Epic 2 and Epic 4 stopped being tracked (ADR 0025). The dashboard now
+  # carries the debt in the open where it can be read, instead of implying the story
+  # is still being worked.
+  # Everything else in 5.2 is met and was falsified: AC1's image-update path (the
+  # file written as TEXT, never through `store::save`, because a round-trip proves
+  # only that the writer and the reader agree with each other) and AC6's secret
+  # search (falsified by reproducing story 1.6's defect exactly — neither half leaks
+  # alone, which is why it is a test about the process and not about a derive).
+  5-2-config-persists-and-reloads-without-a-restart: done
   #
   # 2026-08-04 — 5.3 WRITTEN. FR25, the first-run mapping confirmation, and it is the last
   # buildable requirement Epic 5 owns. prd.md:136 is blunt about why it exists: it is "the

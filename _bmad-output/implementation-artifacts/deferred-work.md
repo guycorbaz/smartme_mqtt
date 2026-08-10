@@ -380,6 +380,8 @@ reading of the code, not a hunt for harm. Four findings; the first was fixed in 
 commit (ADR 0029, [#61]) and the other three are here.
 
 - **Disabling a meter does not stop polling it, and its fault cannot be switched off.**
+  **[#65]** (opened 2026-08-10, split out of the grouped follow-up: it is the only one of
+  this batch an operator can see, and it compounds with [#62]).
   `poll_publish::run` never reads `enabled` (`poll_publish.rs`, the loop reads only the period
   and the policy), and `classify_meters` relies on that deliberately — *"disabling a meter does
   NOT unbind its task"* is what makes re-enabling a DBIRTH rather than a restart. The
@@ -393,7 +395,8 @@ commit (ADR 0029, [#61]) and the other three are here.
   whichever story next touches `classify_meters`; the fix is a decision (does a disabled meter
   keep its task at all?) before it is code.
 
-- **Nothing asserts that `supervisor` spawns one poll task per meter.** Story 3.1 named this
+- **Nothing asserts that `supervisor` spawns one poll task per meter.** **[#63]** (opened
+  2026-08-10). Story 3.1 named this
   honestly — *"the heartbeat count is the seam that would prove it"* — and it has since become
   **load-bearing**: since `2a4d5ca`, `Heartbeats::meters()` is what decides whether a DDEATH is
   sent at all (`classify_meters`). Today `run_with_control` builds the heartbeats and the tasks
@@ -401,7 +404,8 @@ commit (ADR 0029, [#61]) and the other three are here.
   divergence this would catch is exactly the one `2a4d5ca` repaired in its other form: a set
   that describes the configuration rather than the tasks.
 
-- **`MeterUpdate::meter` is read by no production code.** The publisher routes on
+- **`MeterUpdate::meter` is read by no production code.** **[#66]**, item 3 (opened
+  2026-08-10). The publisher routes on
   `measurement.serial` and the driver traces the same; the field is used only in tests. Not a
   defect on its own — but it is the one field that records *which meter was asked for* next to
   *what answered*, which is the comparison ADR 0029 now performs one layer down. Either it
@@ -417,6 +421,8 @@ sink on the web surface could not fail). These three are recorded rather than fi
 because each needs a decision before it needs code.
 
 - **`same_mapping` and `mapping_fingerprint` will disagree again at the next field.**
+  **[#64]** (opened 2026-08-10, with story 3.4 named as the deadline rather than a
+  hypothetical future field).
   They answer one question — *is this the mapping a human looked at?* — and already
   diverged for a month, which `ed51818` repaired by adding the node identity to both.
   What was not aligned is *how each reads a meter*: `store::same_mapping` compares whole
@@ -430,7 +436,8 @@ because each needs a decision before it needs code.
   answers — but applying it here means deciding, field by field of `StoredConfig`, what
   belongs to the mapping. That decision is the work.
 
-- **The repair screen moves port when the configuration becomes unreadable.**
+- **The repair screen moves port when the configuration becomes unreadable.** **[#66]**,
+  item 1 (opened 2026-08-10).
   `main.rs:389` takes `ui_port` from the file and falls back to `DEFAULT_PORT` whenever
   the read fails — which is right for a first run (nowhere to read a port from) and wrong
   for a configured bridge whose file then broke: the screen ADR 0026 exists to serve is
@@ -442,6 +449,7 @@ because each needs a decision before it needs code.
   `schema_version`; whether that is worth a second parse path is the decision.
 
 - **`save_config` tells the phases apart by `control()` rather than by `lifecycle`.**
+  **[#66]**, item 2 (opened 2026-08-10).
   `Phase::starting()` carries `lifecycle: Running` with `running: None`, so `control()`
   is `None` for the window between deciding to publish and `run_with_control` handing back
   the `Control`. A save arriving in that window answers *"Saved. Nothing is published yet
