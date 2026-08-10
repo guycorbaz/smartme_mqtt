@@ -230,7 +230,36 @@ development_status:
   # that a reading's serial is the meter it was asked for, that a power value is
   # physically possible, or that an energy counter has not gone backwards. The
   # deferred-work file parks several items here.
-  epic-2: backlog
+  # OPENED 2026-08-10 — Guy: *"je tranche : on implémente maintenant l'epic 2."*
+  # ADR 0030 sets the order at `2 -> 3 -> 4 -> 6 -> 7 -> 8`, plain numeric, with one
+  # named exception (story 4.17, taken immediately — the wire is only cheap to break
+  # while nothing is historised, and a live Ignition began reading on 2026-08-10).
+  #
+  # WHAT IT ACTUALLY CONTAINS, verified against the CODE on 2026-08-10 rather than
+  # against the descriptions, because the prose reads fuller than the tree:
+  #   - unit rejection (FR8): a self-described "FR8 thin slice" from story 1.7. An
+  #     unknown unit yields `Quality::Bad`, but the three failure modes — unknown
+  #     unit / non-finite value / unparseable ValueDate — collapse into ONE
+  #     undifferentiated verdict naming no field.
+  #   - serial-identity binding (FR9, NFR7): DONE, and delivered BY ACCIDENT —
+  #     ADR 0029, because a real fault demanded it, and more strongly than the FR
+  #     asked (refused as `Fatal` rather than published as `Bad`).
+  #   - physical bounds (FR14): NOTHING. No trace in the tree.
+  #   - energy-counter monotonicity (FR15, NFR6): NOTHING. Every occurrence of
+  #     "monotonic" in the crate is the clock or `bdSeq`, not the energy index.
+  # Plus FR4/FR5 (error taxonomy and bounded backoff), FR10 (UTC end-to-end and
+  # clock skew), FR16 (payload completeness and numeric domain), AR16, AR17.
+  # ELEVEN items in `deferred-work.md` are parked here.
+  #
+  # FR15 IS THE ONE WITH A DATE ON IT. `appart-est` froze at 09:34:50 on 2026-08-10
+  # and was still frozen at 12:50. When it returns, the question is whether its
+  # index caught up, stood still, or went backwards — and if a counter was reset or
+  # the meter replaced, NOTHING TODAY WOULD DETECT IT. The bridge would publish the
+  # new index as a valid measurement and a consumer would read a negative delta.
+  # This is a risk that is not covered, NOT a defect that was observed: on
+  # 2026-08-10 the freshness state machine did its work exactly and the failure was
+  # in the surfaces ([#62]).
+  epic-2: in-progress
 
   # OPENED 2026-08-06, on Guy's instruction, and it is the next epic per ADR 0025's
   # forward order (6 -> 3 -> 2 -> 7 -> 8).

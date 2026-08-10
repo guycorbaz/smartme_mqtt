@@ -514,8 +514,17 @@ need a decision; one more is new and was repaired.
   tests. Le projet SCADA définit la stratégie de noms pour MQTT."* So `group_id` — which is in
   every topic this bridge publishes — will change once, from outside this repository. Two
   things follow and neither is urgent yet: the old namespace will leave an orphan tag folder
-  in the host (story 3.6's business, unwritten), and the change costs nothing at all only
-  while nothing has been historised under `PreProd`.
+  in the host, and the change costs nothing at all only while nothing has been historised
+  under `PreProd`.
+
+  **CORRECTED 2026-08-10 (ADR 0030): the orphan tag folder is NOT story 3.6's business, and
+  saying so here conflated two different things.** Story 3.6 implements FR21 — *purge orphan
+  RETAINED MESSAGES on old topics* — and this bridge publishes everything with `retain =
+  false`, as the specification requires, so **it cannot create the orphans FR21 purges**
+  (`epics.md:287` already said as much). The orphan tag folder is Ignition's own persisted
+  tree; no MQTT purge reaches it, and cleaning it is the host's business, not the bridge's.
+  Story 3.6 is therefore near-moot as written and must be re-scoped or withdrawn before Epic 3
+  can close — a scope decision, not a blocker.
 
 - **What that strategy CAN ask for, which is worth knowing before it is written.** The device
   level of the topic is the **serial** today, and that is this project's choice, not the
