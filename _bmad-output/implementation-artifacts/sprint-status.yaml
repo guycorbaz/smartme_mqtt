@@ -25,7 +25,20 @@
 #
 # Retrospective Status:
 #   - optional: Can be completed but not required
+#   - required: MUST be run before the epic is considered closed (added 2026-08-10)
 #   - done: Retrospective has been completed
+#
+# `required` EXISTS BECAUSE `optional` WAS TAKEN LITERALLY. Epic 5's retrospective
+# (2026-08-10) counted the record: ONE retrospective in eight epics — epic 1's, on
+# 2026-07-26 — and epics 5 to 8 carried no retrospective line at all, the same
+# omission that had kept epics 7 and 8 out of this file until 2026-08-08.
+# It also measured what the one retrospective was worth: of its six action items,
+# FIVE were honoured and their effect is visible in the work, and the SIXTH — verify
+# each AC actually covers the NFR it claims — was not, and is precisely what produced
+# Epic 5's main defect (three stories with boxes ticked for absent work). A process
+# with that hit rate should not be optional. Action item B3.
+# Epic 0 stays `optional`: it closed long ago and a retrospective now would collect
+# nothing that is still actionable.
 #
 # WORKFLOW NOTES:
 # ===============
@@ -356,7 +369,7 @@ development_status:
   3-4-discovery-the-accounts-meters-by-name-and-serial: backlog
   3-5-a-known-meter-that-disappears-from-discovery: backlog
   3-6-orphan-retained-purge-on-a-mapping-change: backlog
-  epic-3-retrospective: optional
+  epic-3-retrospective: required  # owed — see the Epic 5 retro, action B3
   # Epic 4 runs BEFORE Epic 2 — decided at the Epic 1 retrospective (2026-07-26).
   #
   # AMENDED 2026-08-05 (ADR 0025, [#55]). This comment said the execution order was
@@ -810,7 +823,7 @@ development_status:
   # work is correct as far as it goes and already pushed. Independent recount says
   # 29 missing, not the 27 the review reported.
   4-19-finish-chapter-4-payload-clauses: backlog
-  epic-4-retrospective: optional
+  epic-4-retrospective: required  # owed — see the Epic 5 retro, action B3
   # 2026-08-03: Epic 5 opens with its scope CHANGED, not merely detailed. It used to
   # be framed as ".env secrets discipline" while Epic 6 was a read-only surface, so
   # configuration editing in the UI was owned by nobody — although the PRD's prose
@@ -821,7 +834,12 @@ development_status:
   #
   # Bounds already decided, so no story may re-choose them: publish period min 5 s,
   # max 300 s, default 30 s (ADR 0020, ratified by Guy 2026-08-03).
-  epic-5: in-progress
+  # CLOSED 2026-08-10, after the retrospective Guy asked for as the precondition.
+  # All three stories are `done` (5.2 with AC4's new-session half unmet, [#49]).
+  # FR23/24/25/26/27/46 met. FR43 + NFR16 are carried as BLOCKED UPSTREAM, not as
+  # unstarted work: `rumqttc` pins a `rustls-webpki` with unfixed advisories, which
+  # is a dependency's release and not a task anyone here can schedule ([#50]).
+  epic-5: done
   # 2026-08-03, implemented. 12 unit tests in app/config.rs; main.rs applies no
   # rule of its own any more. AC4/AC6 landed together: the model is plural, the
   # runtime is not, and enabling more meters than the runtime serves is REFUSED
@@ -1056,6 +1074,15 @@ development_status:
   # have been deleted with both cases green.
   # CLOSED 2026-08-10 — see the closure block at the top of this file.
   5-3-nothing-is-published-until-the-mapping-is-confirmed: done
+  # RETROSPECTIVE RUN 2026-08-10 — `epic-5-retro-2026-08-10.md`. It audited Epic 1's
+  # six action items (five honoured, A6 not, and A6's lapse is what this epic paid
+  # for) and it was reframed by three findings from Guy: the repository has begun
+  # NUMBERING its own recurrences, so it repairs instances and never classes; the
+  # `record it unmet, with an issue` rule has no counterpart and therefore works as a
+  # permit to close; and one retrospective in eight epics left the experience
+  # uncollected exactly over the stretch where tracking drifted. Five action items,
+  # B1 to B5.
+  epic-5-retrospective: done
   # Epic 5 is FUNCTIONALLY COMPLETE: FR23/24/25/26/27/46 met; FR43+NFR16 blocked upstream
   # ([#50]). Two stories in review, one AC partially unmet ([#49]). It stays `in-progress`
   # rather than `done` until those reviews run — a review is not a formality here; the
@@ -1205,6 +1232,7 @@ development_status:
   # every NewSession field.
   # CLOSED 2026-08-10 — see the closure block at the top of this file.
   6-2-the-configuration-screen: done
+  epic-6-retrospective: required  # added 2026-08-10 — the line was absent entirely
 
   # ADDED 2026-08-08, previously absent from this file entirely.
   #
@@ -1224,6 +1252,7 @@ development_status:
   #     to a container restart and a restart kills the Sparkplug session for every
   #     meter. A panic in a DISPLAY handler must not restart the bridge.
   epic-7: backlog
+  epic-7-retrospective: required  # added 2026-08-10 — the line was absent entirely
 
   # ADDED 2026-08-08, previously absent from this file entirely.
   #
@@ -1234,3 +1263,4 @@ development_status:
   # An epic whose work is happening without stories cannot be said to be at
   # `backlog` honestly — but it can be said to be listed.
   epic-8: backlog
+  epic-8-retrospective: required  # added 2026-08-10 — the line was absent entirely
