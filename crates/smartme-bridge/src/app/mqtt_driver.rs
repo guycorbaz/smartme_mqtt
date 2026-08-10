@@ -179,15 +179,62 @@ impl Sink for Queue {
     }
 }
 
-/// Delivery semantics per message type.
+/// Delivery semantics per message type, read from the norm clause by clause.
 ///
-/// The Sparkplug specification requires QoS 0 and retain false for every
-/// edge-node message. Retain is the important half here: a retained payload is
-/// a value the broker replays to a new subscriber with no way for it to know
-/// how old the value is — a stored lie. Freshness is the BIRTH's job, not the
-/// broker's.
-fn qos_for(_message: MessageType) -> (QoS, bool) {
-    (QoS::AtMostOnce, false)
+/// **The specification does not say one thing for every edge-node message**, and
+/// this function used to claim it did — *"requires QoS 0 and retain false for
+/// every edge-node message"*. That sentence was false in one direction and
+/// unsupported in the other, and it is the same over-generalisation ADR 0010
+/// made about FR20, which `CLAUDE.md` records as having cost this project a
+/// requirement. What the norm actually mandates for an Edge Node:
+///
+/// | message | QoS | retain | clause |
+/// |---|---|---|---|
+/// | the **will** (the NDEATH registered at CONNECT) | **1** | false | `tck-id-message-flow-edge-node-birth-publish-will-message-qos` (`Sparkplug_5:184`) and `-will-retained` (`:185`) |
+/// | NBIRTH | 0 | false | `-nbirth-qos` (`:228`) and `-nbirth-retained` (`:229`) |
+/// | DBIRTH | 0 | false | `tck-id-message-flow-device-birth-publish-dbirth-qos` (`:425`) and `-dbirth-retained` (`:426`) |
+/// | NDATA, DDATA, DDEATH, the **explicit** NDEATH | — | — | **the norm is silent** |
+///
+/// Three of the seven are mandated; the rest are ours to choose, and the choices
+/// are recorded here as choices rather than dressed as requirements:
+///
+/// - **QoS 0 wherever the norm is silent.** At a 30 s period a lost DDATA is
+///   superseded within one cycle, and QoS 1 would cost a PUBACK per metric per
+///   cycle per meter for a value that is about to be replaced anyway.
+/// - **The explicit NDEATH rides at QoS 1 with the will**, and that is
+///   structural rather than preferred: `tck-id-...-death-payload`
+///   (`Sparkplug_5:808-812`) makes the shutdown certificate *byte-identical* to
+///   the registered will, both are built from `MessageType::NDeath`, and giving
+///   one delivery guarantee to a payload and a different one to the same payload
+///   would need a distinction the norm refuses to make. A lost death is also the
+///   precise lie this bridge exists to prevent: the host keeps a frozen value on
+///   screen and calls it current.
+/// - **`retain = false` throughout.** Mandated for the three above; chosen for
+///   the rest for the reason the mandate exists — a retained payload is a value
+///   the broker replays to a new subscriber with no way to judge its age, a
+///   stored lie. Freshness is the BIRTH's job, not the broker's.
+///
+/// `MessageType::NCmd` is inbound: the bridge subscribes and never publishes it,
+/// so the value returned here governs nothing. It is matched rather than caught
+/// by a wildcard so that adding a message type stops the build until somebody
+/// reads the norm for it.
+///
+/// **Left open deliberately:** DDEATH is unconstrained and stays at QoS 0, while
+/// NDEATH now rides at 1. A lost DDEATH strands one device on the host exactly
+/// as a lost NDEATH strands the node, so the asymmetry is real — but harmonising
+/// them is a decision of its own and not the violation this story was written to
+/// fix ([#26]).
+fn qos_for(message: MessageType) -> (QoS, bool) {
+    match message {
+        // Mandated 0 — `-nbirth-qos`, `-dbirth-qos`.
+        MessageType::NBirth | MessageType::DBirth => (QoS::AtMostOnce, false),
+        // Mandated 1 for the will; the explicit death is the same payload.
+        MessageType::NDeath => (QoS::AtLeastOnce, false),
+        // Unconstrained by the norm: our choice, stated above.
+        MessageType::NData | MessageType::DData | MessageType::DDeath => (QoS::AtMostOnce, false),
+        // Inbound only; publishes nothing.
+        MessageType::NCmd => (QoS::AtMostOnce, false),
+    }
 }
 
 /// A change to the served device set, applied to a session that is already live
@@ -1582,11 +1629,15 @@ fn announce(
 ///
 /// # The QoS here does not contradict `qos_for`
 ///
-/// `qos_for` returns QoS 0 for every message, and
-/// `every_edge_node_message_is_qos_zero_and_never_retained` pins it. That rule
-/// governs what the edge node PUBLISHES. This is a *subscribe* QoS — a different
-/// field, in a different packet, travelling the other way — and
-/// `tck-id-message-flow-edge-node-ncmd-subscribe` mandates 1 for it. No conflict.
+/// `qos_for` governs what the edge node PUBLISHES, per message type, and
+/// `the_delivery_table_matches_the_specification_clause_by_clause` pins it.
+/// This is a *subscribe* QoS — a different field, in a different packet,
+/// travelling the other way — and `tck-id-message-flow-edge-node-ncmd-subscribe`
+/// mandates 1 for it. No conflict.
+///
+/// (Corrected by story 4.17: this block used to say `qos_for` "returns QoS 0 for
+/// every message". It never should have, and since 4.17 it is plainly false —
+/// the will rides at QoS 1.)
 fn subscribe_to_commands(client: &AsyncClient, topic: &str) {
     // `try_subscribe` and `try_publish` feed the SAME request channel, so the
     // SUBSCRIBE queued here leaves the socket before the BIRTH queued after it.
@@ -1642,22 +1693,70 @@ fn publish_all(client: &AsyncClient, queue: &mut Queue) -> usize {
 mod tests {
     use super::*;
 
+    /// Story 4.17 — the delivery table, per clause, replacing a test that pinned
+    /// a violation.
+    ///
+    /// **The test this replaces asserted the bug.**
+    /// `every_edge_node_message_is_qos_zero_and_never_retained` required QoS 0
+    /// for `MessageType::NDeath`, which is what registers the will — and
+    /// `tck-id-message-flow-edge-node-birth-publish-will-message-qos`
+    /// (`Sparkplug_5:184`) says *"The Edge Node's MQTT Will Message's MQTT QoS
+    /// MUST be 1"*. It could not be repaired in place: any fix turned it red, so
+    /// it would have had to be edited by whoever fixed the violation, which is
+    /// the shape where a test stops being evidence ([#26]).
+    ///
+    /// Split in two on purpose. The mandated rows cite their clause and may not
+    /// be changed without one; the chosen rows are ours and say so. A single
+    /// table would let a future edit move a MUST while looking like a preference.
+    ///
+    /// `MessageType::NCmd` is ABSENT ON PURPOSE — do not "complete" this list.
+    /// NCMD is inbound: the bridge subscribes to it and never publishes one.
+    /// Asserting a publish rule about a message we do not send would PASS for a
+    /// reason unrelated to the property it names — the exact shape of the four
+    /// Epic 1 tests this project had to throw away. The QoS that does govern
+    /// NCMD is the SUBSCRIBE QoS, mandated as 1 by
+    /// `tck-id-message-flow-edge-node-ncmd-subscribe`, and it lives in
+    /// `subscribe_to_commands`.
+    ///
+    /// FALSIFIED 2026-08-10, three mutations, each red with its own message:
+    /// `NDeath -> AtMostOnce` (the violation restored) fails the mandated table;
+    /// `NBirth -> AtLeastOnce` fails it too; `retain = true` anywhere fails the
+    /// retain assertion. Run before the fix was trusted, not after.
     #[test]
-    fn every_edge_node_message_is_qos_zero_and_never_retained() {
-        // The Sparkplug specification requires QoS 0 / retain false for all
-        // edge-node messages; a retained payload would be a value replayed to a
-        // new subscriber with no way to judge its age.
-        //
-        // `MessageType::NCmd` is ABSENT ON PURPOSE — do not "complete" this
-        // list. NCMD is inbound: the bridge subscribes to it and never publishes
-        // one. Adding it would assert a publish rule about a message we do not
-        // send, and the assertion would PASS — a test green for a reason
-        // unrelated to the property it names. That is the exact shape of the
-        // four Epic 1 tests this project had to throw away.
-        //
-        // The QoS that does govern NCMD is the SUBSCRIBE QoS, mandated as 1 by
-        // `tck-id-message-flow-edge-node-ncmd-subscribe`; it lives in
-        // `subscribe_to_commands`, not here.
+    fn the_delivery_table_matches_the_specification_clause_by_clause() {
+        // MANDATED. Each row names the clause that fixes it; changing a row here
+        // means the norm changed, and the norm is vendored at
+        // `docs/spec/sparkplug-b-3.0.0/`.
+        let mandated = [
+            // `tck-id-message-flow-edge-node-birth-publish-nbirth-qos` (:228)
+            (MessageType::NBirth, QoS::AtMostOnce),
+            // `tck-id-message-flow-device-birth-publish-dbirth-qos` (:425)
+            (MessageType::DBirth, QoS::AtMostOnce),
+            // `tck-id-message-flow-edge-node-birth-publish-will-message-qos`
+            // (:184) — this is the will, registered from `MessageType::NDeath`.
+            (MessageType::NDeath, QoS::AtLeastOnce),
+        ];
+        for (message, qos) in mandated {
+            assert_eq!(
+                qos_for(message).0,
+                qos,
+                "{message:?} is MANDATED at {qos:?} by the specification, not by us"
+            );
+        }
+
+        // CHOSEN. The norm is silent on these; QoS 0 is our decision and the
+        // reasoning is in `qos_for`'s doc comment.
+        for message in [MessageType::NData, MessageType::DData, MessageType::DDeath] {
+            assert_eq!(
+                qos_for(message).0,
+                QoS::AtMostOnce,
+                "{message:?} is unconstrained by the norm and we chose QoS 0"
+            );
+        }
+
+        // `retain = false` everywhere: mandated for the births and the will,
+        // chosen for the rest, and the assertion does not distinguish because
+        // the outcome is the same and a retained payload is a stored lie.
         for message in [
             MessageType::NBirth,
             MessageType::NData,
@@ -1666,11 +1765,7 @@ mod tests {
             MessageType::DData,
             MessageType::DDeath,
         ] {
-            assert_eq!(
-                qos_for(message),
-                (QoS::AtMostOnce, false),
-                "{message:?} must be QoS 0, not retained"
-            );
+            assert!(!qos_for(message).1, "{message:?} must never be retained");
         }
     }
 

@@ -204,33 +204,43 @@ fresh measurement.
 
 \section{Delivery semantics}
 
-Every edge-node message \prog \emph{publishes} goes out at \textbf{QoS~0} with
-\textbf{retain false}. Retain is the important half: a retained payload is a value the
-broker replays to any future subscriber with no way to judge its age --- a stored lie that
-outlives the process. Freshness is the BIRTH's job, not the broker's.
+Every edge-node message \prog \emph{publishes} goes out with \textbf{retain false}, and at
+\textbf{QoS~0} except for the death certificates, which ride at \textbf{QoS~1}. Retain is
+the important half: a retained payload is a value the broker replays to any future
+subscriber with no way to judge its age --- a stored lie that outlives the process.
+Freshness is the BIRTH's job, not the broker's.
 
 \begin{note}
-\textbf{What the specification actually mandates, since \prog goes further than it in one
-place and falls short in another.} QoS~0 is required for NBIRTH, DBIRTH, NDATA and DDATA
-(\code{tck-id-payloads-nbirth-qos} and its three siblings). It is \emph{not} mandated for
-an explicitly published NDEATH or for DDEATH --- the specification carries no QoS clause
-for either, so \prog's choice of QoS~0 there is a decision, not a requirement.
+\textbf{The specification does not say one thing for every message.} QoS~0 is required for
+NBIRTH and DBIRTH (\code{\dots-nbirth-qos}, \code{\dots-dbirth-qos}); QoS~\textbf{1} for
+the will (\code{\dots-will-message-qos}, repeated at
+\code{tck-id-payloads-ndeath-will-message-qos}). For NDATA, DDATA, DDEATH and an
+\emph{explicitly} published NDEATH it carries no QoS clause at all, so \prog's choices
+there are decisions rather than requirements.
 \end{note}
 
 \begin{note}
-\textbf{The registered will is a genuine violation, and \prog gets it wrong today.} The
-specification requires the death certificate registered in the CONNECT packet to be
-\textbf{QoS~1}, not 0 --- it says so twice, at
-\code{tck-id-message-flow-edge-node-birth-publish-will-message-qos} and
-\code{tck-id-payloads-ndeath-will-message-qos}. \prog registers it at QoS~0 like everything
-else.
+\textbf{The will was a genuine violation until 2026-08-10, and it is fixed.} \prog
+registered its will at QoS~0 like everything else, and a unit test pinned that value ---
+so the test locked in the violation and any repair turned it red. Story~4.17 replaced both:
+the will now registers at QoS~1, and the test states the mandated rows and the chosen rows
+separately, each mandated row citing the clause that fixes it.
 
-This is not cosmetic. At QoS~0 the broker performs no acknowledgement, no retry and no
-queueing, so a will published to a subscriber whose session is momentarily disconnected can
-simply be lost --- and the death certificate is the one message whose loss produces exactly
-the frozen-value-shown-as-live failure this chapter exists to prevent. Listed under
-\hyperref[sec:contract-limits]{Known limitations} below.
+Why it was not cosmetic: at QoS~0 the broker performs no acknowledgement, no retry and no
+queueing, so a will could simply be lost --- and the death certificate is the one message
+whose loss produces exactly the frozen-value-shown-as-live failure this chapter exists to
+prevent.
 \end{note}
+
+\textbf{The explicit death certificate rides at QoS~1 with the will}, and that follows from
+the norm rather than from taste: \code{tck-id-\dots-death-payload} makes the shutdown
+certificate byte-identical to the registered will, so giving the same payload two different
+delivery guarantees would need a distinction the specification refuses to make.
+
+\textbf{DDEATH remains at QoS~0}, and the asymmetry is deliberate but unresolved: a lost
+DDEATH strands one device on the host exactly as a lost NDEATH strands the node.
+Harmonising them is a decision in its own right and was not the violation Story~4.17 was
+written to fix.
 
 \begin{note}
 QoS~0 defines no acknowledgement, so the bridge cannot and does not claim a message was
@@ -430,8 +440,10 @@ The two mechanisms are complementary rather than alternative: the will remains t
         requires commands to be published \emph{without} retain, so no conforming host ever
         sends one. A retained message is cleared by publishing an empty payload, retained, to
         the same topic.
-  \item \textbf{The registered will is QoS~0 where the specification requires QoS~1.}
-        See the note under \emph{Delivery semantics}.
+  \item \textbf{DDEATH rides at QoS~0 while NDEATH rides at QoS~1.} Neither is mandated,
+        but a lost DDEATH strands a device exactly as a lost NDEATH strands the node, so
+        the asymmetry is unresolved rather than justified. See \emph{Delivery semantics}.
+        (Replaces the will's own QoS~0 violation, closed 2026-08-10 by Story~4.17.)
   \item \textbf{No \emph{Primary Host Application} support --- and since 2026-07-31 this is
         a \emph{decision}, not a gap.} Sparkplug lets an Edge Node
         name a host and change its behaviour with that host's \code{STATE}: wait for it

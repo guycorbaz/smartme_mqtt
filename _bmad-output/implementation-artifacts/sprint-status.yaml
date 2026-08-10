@@ -875,7 +875,35 @@ development_status:
   4-14-chaos-poller-wedge: backlog
   4-15-ac-leak-01-resource-stability: backlog
   4-16-latency-budget: backlog
-  4-17-fix-the-will-qos: backlog
+  # 2026-08-10, IMPLEMENTED out of order — ADR 0030's one named exception, taken
+  # because the wire is only cheap to break while nothing is historised and a live
+  # Ignition began reading this bridge that morning.
+  # THE OLD DOC COMMENT WAS THE DEFECT, not just the value: it said the norm
+  # "requires QoS 0 and retain false for every edge-node message" — false in one
+  # direction, unsupported in the other, and the same over-generalisation ADR 0010
+  # made about FR20. Read clause by clause: will MUST be 1 (`Sparkplug_5:184`),
+  # NBIRTH and DBIRTH MUST be 0 (`:228`, `:425`), and for NDATA/DDATA/DDEATH/the
+  # explicit NDEATH the norm says NOTHING. Three of seven mandated; the rest are
+  # choices and now read as choices.
+  # THE TEST PINNED THE BUG and could not be repaired in place — it required QoS 0
+  # for `MessageType::NDeath`, the variant that registers the will, so every fix
+  # turned it red. Replaced by a table split mandated/chosen, each mandated row
+  # citing its clause. Three mutations, all red with their own message.
+  # LEFT OPEN IN WRITING: DDEATH stays at QoS 0 while NDEATH moves to 1. A lost
+  # DDEATH strands a device exactly as a lost NDEATH strands the node; harmonising
+  # them is its own decision and was not this story's violation.
+  # TWO DEFECTS OF MY OWN, both caught by mechanisms rather than by reading: a new
+  # overfull vbox in the manual (a chapter-2 TABLE CELL, not the chapter-5 notes I
+  # blamed three times — the exact shape story 4.10's review recorded), found by
+  # building HEAD and comparing rather than assuming; and FIVE prose tallies left
+  # contradicting the table, found by ci-local's conformance-arithmetic step. The
+  # bold tallies were updated by hand and five consequences were missed — action
+  # B1 demonstrated the day it was written.
+  # Matrix: ch5 30.1.19.49 -> 31.1.18.49, ch6 36.4.10.59 -> 37.4.9.59, total
+  # 87.6.37.144 -> 89.6.35.144, every sum re-checked. Manual: 68 pages, overfull
+  # boxes EXACTLY the five in the committed baseline. `./scripts/ci-local.sh`
+  # green, all ten steps including the image. Closes [#26].
+  4-17-fix-the-will-qos: review
   4-18-correct-adr-0010-wording: backlog
   # 2026-07-28: added out of the Story 4.2 code review. Chapter 4 records 41 of its
   # 70 clauses; Story 4.1 audited the topic grammar and left the chapter's own

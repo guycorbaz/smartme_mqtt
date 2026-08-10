@@ -375,7 +375,7 @@ do below.
 | `message-flow-edge-node-birth-publish-will-message-topic` | MUST | `spBv1.0/{group}/NDEATH/{node}`, built by `node_topic` (`sparkplug_publisher.rs:242`, `:367`) | `node_topics_follow_the_namespace_grammar` pins the full literal. `chaos_stale_on_death` is **not** a second witness for the grammar: it tests only `.contains("/NDEATH/")` (`:70-72`), which `foo/NDEATH/bar` would satisfy | conformant |
 | `message-flow-edge-node-birth-publish-will-message-payload` | MUST | the will payload is `encode(&payload)` — the vendored protobuf | `chaos_stale_on_death` decodes it from a real broker; `prop_every_numbered_payload_round_trips` | conformant |
 | `message-flow-edge-node-birth-publish-will-message-payload-bdSeq` | MUST | the metric is present, named `bdSeq`, INT64, **and the value now increments per CONNECT** — the driver owns its reconnect loop and registers a fresh will carrying the new session number (Story 4.10, 2026-08-01) | `the_will_matches_the_session_before_and_after_the_birth`, `prop_will_birth_and_death_agree_on_bdseq_for_every_session_number` (presence and pairing) + `chaos_bd_seq_advances_on_every_connect` (the INCREMENT, observed by an independent subscriber across a real disconnect, and falsified) | **conformant** (Story 4.10) |
-| `message-flow-edge-node-birth-publish-will-message-qos` | MUST (QoS 1) | the will is registered at **QoS 0** — `qos_for` returns `AtMostOnce` for every type including `NDeath` (`mqtt_driver.rs:173`, `:930`) | — | **gap (unimplemented)** ([#26](https://github.com/guycorbaz/smartme_mqtt/issues/26), Story 4.17) |
+| `message-flow-edge-node-birth-publish-will-message-qos` | MUST (QoS 1) | the will is registered at **QoS 1** — `qos_for(MessageType::NDeath)` returns `AtLeastOnce` and the will is built from it (`mqtt_driver.rs`, `qos_for` and the `set_last_will` call) | `the_delivery_table_matches_the_specification_clause_by_clause` — falsified 2026-08-10 by restoring QoS 0, red with the clause named | **conformant** (Story 4.17, closes [#26](https://github.com/guycorbaz/smartme_mqtt/issues/26)) |
 | `message-flow-edge-node-birth-publish-will-message-will-retained` | MUST (false) | retain false, from the same `qos_for` | — **no test observes the registered will's retain flag**; identical to chapter 6's `payloads-ndeath-will-message-retain`, and downgraded for the same reason. See the convention note below — this row and `-nbirth-qos` treat the same derivation differently, on purpose | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
 | `message-flow-edge-node-birth-publish-nbirth-topic` | MUST | `spBv1.0/{group}/NBIRTH/{node}` | `node_topics_follow_the_namespace_grammar`; `cold_start_birth_declares_tags_with_no_value_and_stale_quality` pins the literal `spBv1.0/Site/NBIRTH/Bridge` | conformant |
 | `message-flow-edge-node-birth-publish-nbirth-payload` | MUST | protobuf, one encoder for every message type | `a_birth_is_self_describing`, `prop_every_numbered_payload_round_trips` | conformant |
@@ -1131,7 +1131,7 @@ here that could start requiring a `seq` without a deliberate edit.
 | tck-id | Level | Our behaviour | Proof | Verdict |
 | --- | --- | --- | --- | --- |
 | `payloads-ndeath-will-message` | MUST | the will is registered in the CONNECT packet (`mqtt_driver.rs:931`) | `chaos_stale_on_death` — the bridge is **SIGKILLed** and an independent subscriber receives the certificate the broker was holding. An external witness, not a unit test | conformant |
-| `payloads-ndeath-will-message-qos` | MUST (QoS 1) | will registered at QoS 0 — `qos_for` returns `AtMostOnce` for every type including `NDeath` | — | **gap (unimplemented)** ([#26](https://github.com/guycorbaz/smartme_mqtt/issues/26), Story 4.17) |
+| `payloads-ndeath-will-message-qos` | MUST (QoS 1) | will registered at QoS 1 — `qos_for(MessageType::NDeath)` returns `AtLeastOnce` | `the_delivery_table_matches_the_specification_clause_by_clause` — falsified 2026-08-10 | **conformant** (Story 4.17, closes [#26](https://github.com/guycorbaz/smartme_mqtt/issues/26)) |
 | `payloads-ndeath-will-message-retain` | MUST | will retain false (`mqtt_driver.rs:173`, `:930`) | — **no test observes the registered will's retain flag.** `every_edge_node_message_is_qos_zero_and_never_retained` does not reach the will (the findings table says so); `chaos_stale_on_death`, the one test in which the broker actually publishes the will, asserts only `bdSeq` and `seq == None` (`:76-87`). See below | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
 | `payloads-ndeath-seq` | MUST NOT | `death_payload` sets `seq: None` (`encode.rs:219`) | `encode.rs::the_will_matches_the_birth_and_carries_no_sequence`, `sparkplug_publisher.rs::the_will_matches_the_session_before_and_after_the_birth` | conformant |
 | `payloads-ndeath-bdseq` | MUST | the death carries the birth's `bdSeq` | same, plus `prop_will_birth_and_death_agree_on_bdseq_for_every_session_number` and `chaos_stale_on_death` (asserted against a real broker) | conformant |
@@ -1307,17 +1307,17 @@ profile checklist to satisfy on top. The scope of this matrix *is* the scope of 
 **The four MQTT-Server clauses are `n/a` for us and an obligation on the deployment.** They are the
 specification's requirements on the broker a Sparkplug infrastructure runs against: QoS 0 and 1,
 full retain-flag support, and full will support *including QoS 1*. The bridge is deployed against
-Mosquitto, which meets them — but the last one is not idle here, because
-`message-flow-edge-node-birth-publish-will-message-qos` requires the bridge to register its will at
-QoS 1 and it registers at QoS 0 ([#26](https://github.com/guycorbaz/smartme_mqtt/issues/26),
-Story 4.17). The broker's capability is not the constraint; ours is. This belongs in the operator
-manual's deployment prerequisites, not only here.
+Mosquitto, which meets them — and since Story 4.17 (2026-08-10) the last one is load-bearing rather
+than idle: the bridge now registers its will at QoS 1, as
+`message-flow-edge-node-birth-publish-will-message-qos` requires, so a broker without full will
+support at QoS 1 would break it. This belongs in the operator manual's deployment prerequisites,
+not only here.
 
 ## Findings carried forward
 
 | Finding | Chapter | Where |
 | --- | --- | --- |
-| Will registered at QoS 0; the specification requires QoS 1 | 4, 6 | [#26](https://github.com/guycorbaz/smartme_mqtt/issues/26), Story 4.17 |
+| ~~Will registered at QoS 0; the specification requires QoS 1~~ **CLOSED 2026-08-10 by Story 4.17** | 5, 6 | [#26](https://github.com/guycorbaz/smartme_mqtt/issues/26) |
 | `every_edge_node_message_is_qos_zero_and_never_retained` asserts QoS 0 for all six types and claims the spec requires it uniformly — true for the six published types, false for the will | 4 | Story 4.17 |
 | No verification of edge-node-descriptor or device-id uniqueness | 4, 6 | [#27](https://github.com/guycorbaz/smartme_mqtt/issues/27) |
 | ~~NCMD/DCMD not implemented — no subscription~~ ~~**NCMD is subscribed (Story 4.6) and every command is ignored on purpose**~~ **CLOSED for NCMD (Story 4.7).** The subscribe clause `message-flow-edge-node-ncmd-subscribe` is `conformant` (4.6) and so is the acting: the NBIRTH declares `Node Control/Rebirth` and a conformant request is answered with a complete birth sequence — seven rows moved. **DCMD remains `n/a` on a condition that is scheduled to stop holding** (a planned meter relay is a writable output): [#38](https://github.com/guycorbaz/smartme_mqtt/issues/38). The publish-side QoS/retain clauses stay `n/a` in both chapters | 4, 5, 6 | 4.6 closed the subscription, **4.7 closed the answering**; DCMD → [#38](https://github.com/guycorbaz/smartme_mqtt/issues/38), [#23](https://github.com/guycorbaz/smartme_mqtt/issues/23) |
@@ -1434,9 +1434,9 @@ Every chapter-4 `conformant` row names a test. No row is asserted from reading t
 
 ## Tally for chapter 5
 
-**30 conformant · 1 deviation · 19 gaps · 49 n/a**
+**31 conformant · 1 deviation · 18 gaps · 49 n/a**
 
-`30 + 1 + 19 + 49 = 99` — the enumerated clause set, with no remainder.
+`31 + 1 + 18 + 49 = 99` — the enumerated clause set, with no remainder.
 
 **This tally was `29 · 2 · 19 · 49` until Story 4.10** (2026-08-01), which moved
 `-will-message-payload-bdSeq` from `deviation` to `conformant`: `29 + 1 = 30` and `2 − 1 = 1`. The
@@ -1461,9 +1461,9 @@ and not the voice*. That is what 4.7 supplies.
 one defect stated twice across chapters, each pointing at the owner its twin already had — not two
 new defects.
 
-**The 19 gaps, split by kind:**
+**The 18 gaps, split by kind:**
 
-- **14 × `gap (unimplemented)`** — **eleven** Primary-Host/STATE clauses (Stories 4.4 and 4.5 — *not*
+- **13 × `gap (unimplemented)`** — **eleven** Primary-Host/STATE clauses (Stories 4.4 and 4.5 — *not*
   4.6, which added an NCMD subscription and no STATE handling whatever; corrected by the Story 4.6
   code review, which found the same eleven clauses assigned three different owner sets across this
   document: the five
@@ -1570,9 +1570,9 @@ saying so.
 `-timestamp`, `-seq`, `-seq-inc`, `-seq-number` — moved from gap to conformant when the bridge
 began emitting the message. See the note under that table for what did *not* move.
 
-**36 conformant · 4 deviations · 10 gaps · 59 n/a**
+**37 conformant · 4 deviations · 9 gaps · 59 n/a**
 
-`36 + 4 + 10 + 59 = 109` — the enumerated clause set, with no remainder.
+`37 + 4 + 9 + 59 = 109` — the enumerated clause set, with no remainder.
 
 **This tally was `31 · 5 · 14 · 59` until Story 4.10** (2026-08-01), which moved
 `payloads-nbirth-bdseq-repeat` from `deviation` to `conformant`: `31 + 1 = 32` and `5 − 1 = 4`. That
@@ -1584,8 +1584,8 @@ from `gap (unimplemented)` to `conformant`. `30 + 1 = 31` and `15 − 1 = 14`.
 
 **The count of 109 is a count of ids, not of requirements.** Two of them,
 `payloads-sequence-num-req-nbirth` and `-zero-nbirth`, are one clause under two spellings (see the
-editorial note at the head of this chapter), and both hold a `conformant` row. So **36 conformant is
-35 distinct**, and the chapter states **108 distinct requirements**. The arithmetic is kept against
+editorial note at the head of this chapter), and both hold a `conformant` row. So **37 conformant is
+36 distinct**, and the chapter states **108 distinct requirements**. The arithmetic is kept against
 109 because 109 is what a mechanical enumeration of the specification returns, and a matrix that
 cannot be diffed against the norm is worth less than one that double-counts a known phantom.
 
@@ -1601,17 +1601,17 @@ was a proof cell that named evidence weaker than its clause, and one of them
 `bdSeq` (Story 4.10). A sixth `deviation` verdict renders in this chapter — the scope limit — and is
 deliberately outside the tally, because it is a scope decision rather than a `tck-id` row.
 
-**The 10 gaps, split by kind** (see "How to read this"):
+**The 9 gaps, split by kind** (see "How to read this"):
 
 - **8 × `gap (unproven)`** — we do the thing; nothing proves it. Both property-set array-length
   clauses, the `engUnit` property's `type`, the quality property's `type`, `-propertyvalue-type-req`,
   the metric-level `timestamp`, the NBIRTH payload timestamp, and the will's retain flag. All
   [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30).
-- **2 × `gap (unimplemented)`** — we do not do it. The will's QoS
-  ([#26](https://github.com/guycorbaz/smartme_mqtt/issues/26), Story 4.17) and edge-node-descriptor
-  uniqueness ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)).
+- **1 × `gap (unimplemented)`** — we do not do it: edge-node-descriptor uniqueness
+  ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)).
   `payloads-nbirth-rebirth-req` left this list at Story 4.7; **the three DDEATH clauses and the
-  DDEATH timestamp left it on 2026-08-04** with Story 5.2.
+  DDEATH timestamp left it on 2026-08-04** with Story 5.2; **the will's QoS left it on 2026-08-10**
+  with Story 4.17 ([#26](https://github.com/guycorbaz/smartme_mqtt/issues/26)).
 
 **Every gap carries an owning story, epic or issue.** That the unproven half now outnumbers the
 unimplemented half is the finding, not an accounting detail: this chapter's dominant defect is not
@@ -1704,10 +1704,10 @@ conformance scope".
 | 2 — Principles | 1 | 1 | 1 | 1 | 4 |
 | 3 — Components | 0 | 0 | 0 | 1 | 1 |
 | 4 — Topics | 17 | 0 | 3 | 21 | **41 of 70** |
-| 5 — Operational behaviour | 30 | 1 | 19 | 49 | 99 |
-| 6 — Payloads | 36 | 4 | 10 | 59 | 109 |
+| 5 — Operational behaviour | 31 | 1 | 18 | 49 | 99 |
+| 6 — Payloads | 37 | 4 | 9 | 59 | 109 |
 | 10 — Conformance | 0 | 0 | 0 | 12 | 12 |
-| **Total** | **87** | **6** | **37** | **144** | **274 of 303** |
+| **Total** | **89** | **6** | **35** | **144** | **274 of 303** |
 
 **The total was `72 · 8 · 50 · 144` until Story 4.7**, which moved seven rows from
 `gap (unimplemented)` to `conformant` — six in chapter 5, one in chapter 6. `72 + 7 = 79`,

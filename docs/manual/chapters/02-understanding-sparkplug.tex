@@ -668,8 +668,8 @@ Topic namespace, device level & implemented & One node, one device per meter, ke
                                 meter's serial number. \\
 NBIRTH / DBIRTH / DDATA / NDEATH & implemented & \code{NDATA} and \code{DDEATH} are not
                                 emitted --- see chapter~\ref{ch:contract}. \\
-Will registered inside CONNECT & implemented & At \textbf{QoS~0}, where the specification
-                                requires QoS~1. A known deviation. \\
+Will registered inside CONNECT & implemented & At \textbf{QoS~1}, as the specification
+                                requires. Corrected 2026-08-10. \\
 Explicit death on a planned stop & implemented & Both certificates fire; a consumer sees
                                 two NDEATHs per graceful stop. \\
 \code{seq} numbering and wrap & implemented & \\
