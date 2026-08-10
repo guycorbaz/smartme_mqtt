@@ -37,7 +37,7 @@
 #   Ignition contract test (human action required — stays backlog until Guy runs it).
 
 generated: 2026-07-25
-last_updated: 2026-08-09
+last_updated: 2026-08-10
 project: smartme_mqtt
 project_key: NOKEY
 tracking_system: file-system
@@ -45,7 +45,63 @@ story_location: _bmad-output/implementation-artifacts
 
 development_status:
   # ==========================================================================
-  # WHERE THIS STOOD AT THE END OF 2026-08-09 — read this first tomorrow.
+  # 2026-08-10 — WHAT THE OVERNIGHT RUN ANSWERED. Read this first.
+  # ==========================================================================
+  #
+  # THE RUN HELD: one unbroken session since 2026-08-09T18:35:25Z. Against the
+  # four things the block below said to watch for:
+  #   1. no meter reached `failed_sources` — but read the caveat below, because
+  #      one DID degrade and that list is not where it shows;
+  #   2. `/healthz` never answered 503. No AR12 event.
+  #   3. `bd_seq` did not advance. Still 7, on two independent witnesses: no
+  #      second `session born` line anywhere in the logs, and `data/bdseq.toml`
+  #      still carries the mtime of the original session birth.
+  #   4. the fourth question stopped being unanswerable — see immediately below.
+  #
+  # A SCADA IS READING, contrary to what was assumed on 2026-08-09. Captured
+  # retained on the wire: `spBv1.0/STATE/SCADA` = `{"online":true,…}`, the
+  # conformant 3.0 form. Ignition is up and consuming.
+  #
+  # AND IT SENT A REBIRTH — the first a real MQTT Engine has ever sent this
+  # bridge IN PRODUCTION, 2026-08-10T07:50:57Z, answered in 59 ms under the same
+  # `bd_seq=7`. Hypothesis B reconfirmed off the disposable group and onto the
+  # real node; hypothesis A — the input STORY 4.5 IS WAITING ON — now has
+  # production evidence. WHO SENT IT IS UNKNOWN and this bridge cannot tell: an
+  # operator clicking in Designer and an Engine acting on its own produce the
+  # identical log line. Question 1 of story 4.8's batched list is NOT closed by
+  # it and could not be, since Engine had seen this BIRTH. Full record, with the
+  # tempting-inference-refused, in story 4.8.
+  #   PERISHABLE ACTION: read `Rebirth (Last) Cause` in Ignition BEFORE the next
+  #   rebirth overwrites it. That tag is the only thing that can say whether
+  #   07:50:57 was operator-driven, and it holds only the LAST cause.
+  #
+  # A METER FROZE, AND EVERY BRIDGE SURFACE CALLED THE FLEET HEALTHY — [#62].
+  # `appart-est` (9202685) stopped feeding the smart-me cloud at 09:34:50 local;
+  # by 10:48 its ValueDate had not moved in 1 h 14 while `appart-ouest` and
+  # `hangar` advanced normally.
+  #   THE WIRE IS HONEST: `Bad_Stale` (`0x8000_0000|516`), last known values
+  #   republished each cycle with their own ValueDate — exactly Story 3.2 and
+  #   ADR 0012, and the FIRST TIME that behaviour has been observed on a real
+  #   fault rather than a provoked one.
+  #   THE OPERATOR SURFACES ARE NOT. `Phase::failed_sources` (`ui/mod.rs:330`)
+  #   returns `fleet.failed()` — FATAL source failure only. A fetch that SUCCEEDS
+  #   while its data is stale reaches no field at all, so `/healthz` read
+  #   `failed_sources: []` and `/` named no fault throughout. This is NOT [#61],
+  #   which is repaired and whose repair routes through the very `Fatal` path a
+  #   stale reading does not take. Epic 6 owns the field, Epic 7 the surface.
+  #   FOR WHOEVER DIAGNOSES THE NEXT ONE: the smart-me PORTAL alternated between
+  #   "reading" and "no reading" while the API served the same frozen ValueDate
+  #   to every one of six consecutive polls. What the portal displays and what
+  #   the API returns are not the same thing — trust the ValueDate.
+  #
+  # STILL OWED, AND UNCHANGED BY ANY OF THE ABOVE: no story has moved to `done`.
+  # Eight sit in `review` with their findings recorded, and that is Guy's call.
+  # `PreProd` is still a test name owned by the SCADA project, so everything
+  # published remains disposable and the wire-breaking window is still open.
+  #
+  # ==========================================================================
+  # WHERE THIS STOOD AT THE END OF 2026-08-09 — kept; its watch list is ANSWERED
+  # by the block above. Read it as history, not as instructions.
   # ==========================================================================
   #
   # THE BRIDGE IS DEPLOYED AND PUBLISHING, for the first time as a FLEET.
