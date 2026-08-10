@@ -431,7 +431,14 @@ mod tests {
         let policy = Policy::DEFAULT;
         let (state, published) =
             policy.step(State::initial(), &Ok(r), UtcMillis(1_784_984_793_000));
-        assert_eq!((state, published), (State::Stale, Quality::Bad));
+        assert_eq!(state, State::Stale);
+        assert_eq!(published.quality(), Quality::Bad);
+        // Story 2.1: the cause now travels with it, and it is the source's own
+        // fail-closed conversion rather than anything about the timestamps.
+        assert_eq!(
+            published.cause(),
+            Some(crate::core::oracle::Cause::ValueUnusable)
+        );
     }
 
     /// **The reading is bound to the device that was declared, or refused.**

@@ -6,6 +6,7 @@
 //! out of the equation, except for one boot-sanity guard. When in doubt, the
 //! verdict is STALE — the cheap honest default.
 
+use crate::core::oracle::{Cause, Verdict};
 use crate::core::source::{Reading, SourceError, Tick};
 use crate::domain::{Quality, UtcMillis};
 
@@ -100,6 +101,19 @@ impl Policy {
         self.max_age_ms
     }
 
+    /// [`Policy::step`] with the cause dropped, for the assertions written before
+    /// Story 2.1 gave verdicts a cause.
+    ///
+    /// They are kept **verbatim** rather than rewritten, because AC7 asks for
+    /// proof that the migration changed no verdict, and a table of assertions
+    /// that still passes unchanged is that proof. The causes themselves are
+    /// covered by `every_row_of_the_table_names_its_own_cause`.
+    #[cfg(test)]
+    fn step_quality(&self, prev: State, tick: &Tick, now: UtcMillis) -> (State, Quality) {
+        let (state, verdict) = self.step(prev, tick, now);
+        (state, verdict.quality())
+    }
+
     /// The pure transition: `(prev, tick, now) -> (next, quality-to-publish)`.
     ///
     /// `tick` is the fetch outcome (`Reading` or typed error); `now` is the host
@@ -135,41 +149,41 @@ impl Policy {
     /// byte-identical replayed response — `http_date` frozen WITH `value_date` —
     /// keeps a plausible age and stays Fresh; detecting it needs cross-tick state
     /// (`http_date` monotonicity), an additive Epic 2 oracle.
-    pub fn step(&self, prev: State, tick: &Tick, now: UtcMillis) -> (State, Quality) {
+    pub fn step(&self, prev: State, tick: &Tick, now: UtcMillis) -> (State, Verdict) {
         // Failed latches until restart; a fatal tick latches it. Both are
         // clock-independent, so they are judged BEFORE the boot-sanity guard —
         // an unsynced RTC must not soften an auth failure into Stale.
         if prev == State::Failed || matches!(tick, Err(SourceError::Fatal { .. })) {
-            return (State::Failed, Quality::Bad);
+            return (State::Failed, Verdict::bad(Cause::SourceRefused));
         }
         // Boot sanity: an unsynced host clock poisons every local stamp.
         if now < PLAUSIBILITY_FLOOR {
-            return (State::Stale, Quality::Stale);
+            return (State::Stale, Verdict::stale(Cause::HostClockUnsynced));
         }
         match tick {
-            Err(SourceError::Fatal { .. }) => (State::Failed, Quality::Bad),
+            Err(SourceError::Fatal { .. }) => (State::Failed, Verdict::bad(Cause::SourceRefused)),
             Err(SourceError::Timeout) | Err(SourceError::Transient { .. }) => {
-                (State::Stale, Quality::Stale)
+                (State::Stale, Verdict::stale(Cause::SourceUnreachable))
             }
             Ok(reading) => self.judge_reading(reading),
         }
     }
 
-    fn judge_reading(&self, reading: &Reading) -> (State, Quality) {
+    fn judge_reading(&self, reading: &Reading) -> (State, Verdict) {
         if reading.value.quality == Quality::Bad {
             // Bad is judged BEFORE the timestamp guards: "do not use this value"
             // must never be relabeled as the milder "old value" — a Bad reading
             // whose ValueDate also failed to parse stays Bad, not Stale.
-            return (State::Stale, Quality::Bad);
+            return (State::Stale, Verdict::bad(Cause::ValueUnusable));
         }
         let Some(http_date) = reading.http_date else {
             // No oracle input (absent/malformed Date header): no freshness proof.
-            return (State::Stale, Quality::Stale);
+            return (State::Stale, Verdict::stale(Cause::NoFreshnessProof));
         };
         if http_date < PLAUSIBILITY_FLOOR {
             // A pre-2020 cloud stamp: the pair may be internally consistent, but
             // it cannot be a live reading from this decade.
-            return (State::Stale, Quality::Stale);
+            return (State::Stale, Verdict::stale(Cause::SourceClockImplausible));
         }
         let age_ms = http_date - reading.value_date();
         if age_ms < 0 || age_ms > self.max_age_ms {
@@ -177,15 +191,22 @@ impl Policy {
             // 1-second Date truncation can make a genuinely fresh reading read
             // sub-zero — spurious STALE is the accepted fail-safe direction;
             // tolerance tuning is deferred to Epic 2.)
-            return (State::Stale, Quality::Stale);
+            return (
+                State::Stale,
+                if age_ms < 0 {
+                    Verdict::stale(Cause::TimestampsDisagree)
+                } else {
+                    Verdict::stale(Cause::ReadingTooOld)
+                },
+            );
         }
         // Timestamps prove freshness; the value itself may still be unusable
         // (fail-closed unit conversion, Story 1.7) — Bad passes through, never
         // upgraded. The state stays Stale: a Bad value proves nothing.
         match reading.value.quality {
-            Quality::Bad => (State::Stale, Quality::Bad),
-            Quality::Stale => (State::Stale, Quality::Stale),
-            Quality::Good => (State::Fresh, Quality::Good),
+            Quality::Bad => (State::Stale, Verdict::bad(Cause::ValueUnusable)),
+            Quality::Stale => (State::Stale, Verdict::stale(Cause::SourceMarkedStale)),
+            Quality::Good => (State::Fresh, Verdict::good()),
         }
     }
 }
@@ -193,6 +214,7 @@ impl Policy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::oracle::Cause;
     use crate::domain::{Kw, Kwh, Measurement, MeterId, Serial};
 
     const POLICY: Policy = Policy::DEFAULT;
@@ -244,7 +266,7 @@ mod tests {
         // one the wire produced.
         let aged = Ok(reading(Quality::Good, BASE, Some(BASE + 1)));
         assert_eq!(
-            POLICY.step(State::initial(), &aged, SANE_NOW),
+            POLICY.step_quality(State::initial(), &aged, SANE_NOW),
             (State::Fresh, Quality::Good),
             "THE PREMISE: under the shipped allowance this reading is Fresh. Without \
              it, the Stale below would prove nothing about the allowance"
@@ -255,7 +277,7 @@ mod tests {
                 max_age_ms: forbidden,
             };
             assert_eq!(
-                policy.step(State::initial(), &aged, SANE_NOW),
+                policy.step_quality(State::initial(), &aged, SANE_NOW),
                 (State::Stale, Quality::Stale),
                 "with an allowance of {forbidden} ms a one-millisecond-old reading is \
                  Stale, so the bridge publishes nothing usable and looks healthy doing it"
@@ -267,7 +289,7 @@ mod tests {
         let simultaneous = Ok(reading(Quality::Good, BASE, Some(BASE)));
         let zero = Policy { max_age_ms: 0 };
         assert_eq!(
-            zero.step(State::initial(), &simultaneous, SANE_NOW),
+            zero.step_quality(State::initial(), &simultaneous, SANE_NOW),
             (State::Fresh, Quality::Good),
             "`0` is not a total ban, and pretending otherwise is how a test comes to \
              assert more than its code does"
@@ -275,7 +297,7 @@ mod tests {
         // Negative is, and that is the difference between the two halves above.
         let negative = Policy { max_age_ms: -1 };
         assert_eq!(
-            negative.step(State::initial(), &simultaneous, SANE_NOW),
+            negative.step_quality(State::initial(), &simultaneous, SANE_NOW),
             (State::Stale, Quality::Stale),
             "below zero nothing survives, not even a reading with no age at all"
         );
@@ -336,7 +358,7 @@ mod tests {
     fn fresh_reading_in_bounds_goes_fresh() {
         let tick = Ok(reading(Quality::Good, BASE, Some(BASE + 950)));
         assert_eq!(
-            POLICY.step(State::initial(), &tick, SANE_NOW),
+            POLICY.step_quality(State::initial(), &tick, SANE_NOW),
             (State::Fresh, Quality::Good)
         );
     }
@@ -346,7 +368,7 @@ mod tests {
         let tick = Ok(reading(Quality::Good, BASE, Some(BASE + 950)));
         let pre_2020 = UtcMillis(PLAUSIBILITY_FLOOR.0 - 1);
         assert_eq!(
-            POLICY.step(State::Fresh, &tick, pre_2020),
+            POLICY.step_quality(State::Fresh, &tick, pre_2020),
             (State::Stale, Quality::Stale)
         );
     }
@@ -356,7 +378,7 @@ mod tests {
         // http_date before value_date: the two cloud stamps disagree.
         let tick = Ok(reading(Quality::Good, BASE + 2_000, Some(BASE + 1_000)));
         assert_eq!(
-            POLICY.step(State::Fresh, &tick, SANE_NOW),
+            POLICY.step_quality(State::Fresh, &tick, SANE_NOW),
             (State::Stale, Quality::Stale)
         );
     }
@@ -369,7 +391,7 @@ mod tests {
             Some(BASE + POLICY.max_age_ms + 1),
         ));
         assert_eq!(
-            POLICY.step(State::Fresh, &tick, SANE_NOW),
+            POLICY.step_quality(State::Fresh, &tick, SANE_NOW),
             (State::Stale, Quality::Stale)
         );
     }
@@ -378,7 +400,7 @@ mod tests {
     fn age_exactly_at_threshold_is_fresh() {
         let tick = Ok(reading(Quality::Good, BASE, Some(BASE + POLICY.max_age_ms)));
         assert_eq!(
-            POLICY.step(State::Stale, &tick, SANE_NOW),
+            POLICY.step_quality(State::Stale, &tick, SANE_NOW),
             (State::Fresh, Quality::Good)
         );
     }
@@ -387,7 +409,7 @@ mod tests {
     fn missing_http_date_is_stale() {
         let tick = Ok(reading(Quality::Good, BASE, None));
         assert_eq!(
-            POLICY.step(State::Fresh, &tick, SANE_NOW),
+            POLICY.step_quality(State::Fresh, &tick, SANE_NOW),
             (State::Stale, Quality::Stale)
         );
     }
@@ -398,7 +420,7 @@ mod tests {
         // applies to the cloud stamp too, not only to the host clock.
         let tick = Ok(reading(Quality::Good, 1_000, Some(1_500)));
         assert_eq!(
-            POLICY.step(State::Fresh, &tick, SANE_NOW),
+            POLICY.step_quality(State::Fresh, &tick, SANE_NOW),
             (State::Stale, Quality::Stale)
         );
     }
@@ -408,7 +430,7 @@ mod tests {
         // Timestamps fresh, value refused (unknown unit, 1.7): publish Bad.
         let tick = Ok(reading(Quality::Bad, BASE, Some(BASE + 500)));
         assert_eq!(
-            POLICY.step(State::Fresh, &tick, SANE_NOW),
+            POLICY.step_quality(State::Fresh, &tick, SANE_NOW),
             (State::Stale, Quality::Bad)
         );
     }
@@ -420,13 +442,13 @@ mod tests {
         // Stale ("old value") — Bad is judged first.
         let tick = Ok(reading(Quality::Bad, 0, Some(BASE)));
         assert_eq!(
-            POLICY.step(State::Fresh, &tick, SANE_NOW),
+            POLICY.step_quality(State::Fresh, &tick, SANE_NOW),
             (State::Stale, Quality::Bad)
         );
         // Same when there is no Date header at all.
         let no_header = Ok(reading(Quality::Bad, 0, None));
         assert_eq!(
-            POLICY.step(State::Fresh, &no_header, SANE_NOW),
+            POLICY.step_quality(State::Fresh, &no_header, SANE_NOW),
             (State::Stale, Quality::Bad)
         );
     }
@@ -435,7 +457,7 @@ mod tests {
     fn incoming_stale_value_stays_stale() {
         let tick = Ok(reading(Quality::Stale, BASE, Some(BASE + 500)));
         assert_eq!(
-            POLICY.step(State::Fresh, &tick, SANE_NOW),
+            POLICY.step_quality(State::Fresh, &tick, SANE_NOW),
             (State::Stale, Quality::Stale)
         );
     }
@@ -446,18 +468,18 @@ mod tests {
         // config: Failed latches (ADR 0009 "stop + surface"; config restart-only).
         let good_tick = Ok(reading(Quality::Good, BASE, Some(BASE + 500)));
         assert_eq!(
-            POLICY.step(State::Failed, &good_tick, SANE_NOW),
+            POLICY.step_quality(State::Failed, &good_tick, SANE_NOW),
             (State::Failed, Quality::Bad)
         );
         // A later timeout must not launder Bad into Stale either.
         let timeout: Tick = Err(SourceError::Timeout);
         assert_eq!(
-            POLICY.step(State::Failed, &timeout, SANE_NOW),
+            POLICY.step_quality(State::Failed, &timeout, SANE_NOW),
             (State::Failed, Quality::Bad)
         );
         // Only a restart (fresh initial state) re-opens the door.
         assert_eq!(
-            POLICY.step(State::initial(), &good_tick, SANE_NOW),
+            POLICY.step_quality(State::initial(), &good_tick, SANE_NOW),
             (State::Fresh, Quality::Good)
         );
     }
@@ -471,7 +493,7 @@ mod tests {
         });
         let pre_2020 = UtcMillis(PLAUSIBILITY_FLOOR.0 - 1);
         assert_eq!(
-            POLICY.step(State::Fresh, &fatal, pre_2020),
+            POLICY.step_quality(State::Fresh, &fatal, pre_2020),
             (State::Failed, Quality::Bad)
         );
     }
@@ -486,15 +508,15 @@ mod tests {
             reason: "auth rejected".to_string(),
         });
         assert_eq!(
-            POLICY.step(State::Fresh, &transient, SANE_NOW),
+            POLICY.step_quality(State::Fresh, &transient, SANE_NOW),
             (State::Stale, Quality::Stale)
         );
         assert_eq!(
-            POLICY.step(State::Fresh, &timeout, SANE_NOW),
+            POLICY.step_quality(State::Fresh, &timeout, SANE_NOW),
             (State::Stale, Quality::Stale)
         );
         assert_eq!(
-            POLICY.step(State::Fresh, &fatal, SANE_NOW),
+            POLICY.step_quality(State::Fresh, &fatal, SANE_NOW),
             (State::Failed, Quality::Bad)
         );
     }
@@ -502,11 +524,11 @@ mod tests {
     #[test]
     fn recovery_from_stale_needs_one_proven_reading() {
         let bad_tick: Tick = Err(SourceError::Timeout);
-        let (after_timeout, _) = POLICY.step(State::Fresh, &bad_tick, SANE_NOW);
+        let (after_timeout, _) = POLICY.step_quality(State::Fresh, &bad_tick, SANE_NOW);
         assert_eq!(after_timeout, State::Stale);
         let good_tick = Ok(reading(Quality::Good, BASE, Some(BASE + 500)));
         assert_eq!(
-            POLICY.step(after_timeout, &good_tick, SANE_NOW),
+            POLICY.step_quality(after_timeout, &good_tick, SANE_NOW),
             (State::Fresh, Quality::Good)
         );
     }
@@ -514,8 +536,110 @@ mod tests {
     #[test]
     fn step_is_deterministic_and_pure() {
         let tick = Ok(reading(Quality::Good, BASE, Some(BASE + 500)));
-        let a = POLICY.step(State::Stale, &tick, SANE_NOW);
-        let b = POLICY.step(State::Stale, &tick, SANE_NOW);
+        let a = POLICY.step_quality(State::Stale, &tick, SANE_NOW);
+        let b = POLICY.step_quality(State::Stale, &tick, SANE_NOW);
         assert_eq!(a, b);
+    }
+
+    /// Story 2.1 AC7 — every row of the table names its OWN cause.
+    ///
+    /// The assertions above this one are the pre-2.1 table, kept verbatim, and
+    /// they prove no verdict moved. This one proves the other half: that the
+    /// migration did not collapse nine distinct reasons into one convenient
+    /// bucket. A row borrowing a neighbour's cause would be invisible to every
+    /// quality assertion in this file, because the quality would still be right.
+    ///
+    /// FALSIFIED 2026-08-10: pointing the `NoFreshnessProof` arm at
+    /// `Cause::ReadingTooOld` — the plausible "they are both staleness anyway"
+    /// simplification — turns this red while every other test in the module stays
+    /// green.
+    #[test]
+    fn every_row_of_the_table_names_its_own_cause() {
+        let fresh = Ok(reading(Quality::Good, BASE, Some(BASE + 1)));
+        let fatal = Err(SourceError::Fatal {
+            reason: "auth rejected".into(),
+        });
+
+        // Latching identity trouble, from both doors: a previously-Failed meter,
+        // and a fatal tick.
+        for (prev, tick) in [(State::Failed, &fresh), (State::initial(), &fatal)] {
+            let (state, verdict) = POLICY.step(prev, tick, SANE_NOW);
+            assert_eq!(state, State::Failed);
+            assert_eq!(verdict.cause(), Some(Cause::SourceRefused));
+            assert!(verdict.latches(), "identity trouble must latch");
+        }
+
+        // Everything else describes one reading and must not latch.
+        let cases: [(&str, Tick, UtcMillis, Option<Cause>); 8] = [
+            (
+                "host clock below the floor",
+                fresh.clone(),
+                UtcMillis(0),
+                Some(Cause::HostClockUnsynced),
+            ),
+            (
+                "timeout",
+                Err(SourceError::Timeout),
+                SANE_NOW,
+                Some(Cause::SourceUnreachable),
+            ),
+            (
+                "transient",
+                Err(SourceError::Transient {
+                    reason: "5xx".into(),
+                }),
+                SANE_NOW,
+                Some(Cause::SourceUnreachable),
+            ),
+            (
+                "source could not convert the value",
+                Ok(reading(Quality::Bad, BASE, Some(BASE + 1))),
+                SANE_NOW,
+                Some(Cause::ValueUnusable),
+            ),
+            (
+                "no Date header",
+                Ok(reading(Quality::Good, BASE, None)),
+                SANE_NOW,
+                Some(Cause::NoFreshnessProof),
+            ),
+            (
+                "pre-2020 source stamp",
+                Ok(reading(Quality::Good, 1, Some(1))),
+                SANE_NOW,
+                Some(Cause::SourceClockImplausible),
+            ),
+            (
+                "http_date before value_date",
+                Ok(reading(Quality::Good, BASE + 5_000, Some(BASE))),
+                SANE_NOW,
+                Some(Cause::TimestampsDisagree),
+            ),
+            (
+                "older than the allowance",
+                Ok(reading(
+                    Quality::Good,
+                    BASE,
+                    Some(BASE + POLICY.max_age_ms() + 1),
+                )),
+                SANE_NOW,
+                Some(Cause::ReadingTooOld),
+            ),
+        ];
+        for (name, tick, now, expected) in cases {
+            let (state, verdict) = POLICY.step(State::initial(), &tick, now);
+            assert_eq!(verdict.cause(), expected, "{name}: wrong cause");
+            assert_ne!(
+                state,
+                State::Failed,
+                "{name} describes a reading, not an identity"
+            );
+            assert!(!verdict.latches(), "{name} must not latch");
+        }
+
+        // And the good row carries no cause at all.
+        let (state, verdict) = POLICY.step(State::initial(), &fresh, SANE_NOW);
+        assert_eq!(state, State::Fresh);
+        assert_eq!(verdict.cause(), None);
     }
 }

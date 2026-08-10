@@ -5,6 +5,7 @@
 //! decides nothing. PURE: no tokio, no transport — the channel TYPE is not the
 //! channel IMPLEMENTATION.
 
+use crate::core::oracle::Verdict;
 use crate::domain::{Measurement, MeterId, Quality};
 
 /// One judged reading on its way to the wire.
@@ -13,36 +14,54 @@ use crate::domain::{Measurement, MeterId, Quality};
 ///
 /// - `measurement.quality` is what the SOURCE could tell us about the value
 ///   (Story 1.7: a unit it could not convert arrives `Bad`).
-/// - [`MeterUpdate::published`] is the ORACLE's verdict — the effect returned by
-///   the state machine, and the one that must be stamped on the wire.
+/// - [`MeterUpdate::verdict`] is the ORACLE LAYER's composed verdict — the
+///   quality that must be stamped on the wire, and, unless it is `Good`, the
+///   cause that goes beside it (Story 2.1).
 ///
 /// They differ in exactly the cases that matter: a source-Good value whose
 /// timestamps prove it stale is published `Stale`, and collapsing the two here
 /// would throw away the distinction the whole state machine exists to compute.
+///
+/// **The verdict replaced a bare `Quality` in Story 2.1.** A quality alone could
+/// say a reading was unusable but never why, so every consumer — the wire, the
+/// screens, the log — had to re-derive the reason or do without it. Carrying the
+/// cause here means it is decided once, by whoever judged, rather than guessed
+/// downstream.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeterUpdate {
     /// Which meter this reading belongs to.
     pub meter: MeterId,
     /// The reading itself, carrying the source-level quality.
     pub measurement: Measurement,
-    /// The quality to publish — the state machine's verdict.
-    pub published: Quality,
+    /// What to publish, and why — the composed verdict.
+    pub verdict: Verdict,
 }
 
 impl MeterUpdate {
     /// Assembles an update from a judged reading.
-    pub fn new(meter: MeterId, measurement: Measurement, published: Quality) -> Self {
+    pub fn new(meter: MeterId, measurement: Measurement, verdict: Verdict) -> Self {
         Self {
             meter,
             measurement,
-            published,
+            verdict,
         }
+    }
+
+    /// The quality to stamp on the wire.
+    ///
+    /// A convenience over `self.verdict.quality()`, kept because the great
+    /// majority of readers want exactly this and nothing else — but the verdict
+    /// remains the field, so a reader that needs the cause cannot be handed a
+    /// value that has quietly dropped it.
+    pub fn published(&self) -> Quality {
+        self.verdict.quality()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::oracle::Cause;
     use crate::domain::{Kw, Kwh, Serial, UtcMillis};
 
     fn measurement(quality: Quality) -> Measurement {
@@ -62,9 +81,12 @@ mod tests {
         let update = MeterUpdate::new(
             MeterId::new("m1"),
             measurement(Quality::Good),
-            Quality::Stale,
+            Verdict::stale(Cause::ReadingTooOld),
         );
         assert_eq!(update.measurement.quality, Quality::Good);
-        assert_eq!(update.published, Quality::Stale);
+        assert_eq!(update.published(), Quality::Stale);
+        // Story 2.1: and the reason survives alongside, which a bare quality could
+        // not carry — this is the whole difference the verdict makes here.
+        assert_eq!(update.verdict.cause(), Some(Cause::ReadingTooOld));
     }
 }

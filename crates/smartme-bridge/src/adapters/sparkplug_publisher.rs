@@ -324,7 +324,7 @@ impl SparkplugPublisher {
                 // stale, stamped with its own ValueDate. Claiming Good here
                 // would turn a 45-minute broker outage into a fresh-looking lie
                 // the moment the link came back.
-                Some(update) => metrics_for(&update.measurement, degrade(update.published)),
+                Some(update) => metrics_for(&update.measurement, degrade(update.published())),
                 None => cold_start_metrics(timestamp),
             };
             // The payload timestamp follows the data: a re-declared reading is
@@ -464,7 +464,7 @@ impl SparkplugPublisher {
         let timestamp = millis(update.measurement.value_date);
         let payload = live.device_data(
             timestamp,
-            metrics_for(&update.measurement, update.published),
+            metrics_for(&update.measurement, update.published()),
         );
         sink.emit(Outbound {
             topic,
@@ -622,6 +622,8 @@ fn millis(t: UtcMillis) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use crate::core::oracle::{Cause, Verdict};
+
     /// The property that outlives the exact constants: neither non-good quality
     /// may land on Ignition's *good* level, whatever its subcode. That was the
     /// contract-v1 defect, and it was invisible from inside this tree.
@@ -678,11 +680,26 @@ mod tests {
         }
     }
 
+    /// A representative verdict for a quality, for the tests that only care which
+    /// quality reaches the wire.
+    ///
+    /// The cause is arbitrary but not absent: a `Stale` or `Bad` verdict without
+    /// one cannot be built, which is the point of Story 2.1 — every non-good
+    /// quality names why. Tests that DO care about the cause construct the verdict
+    /// themselves rather than going through here.
+    fn verdict_of(quality: Quality) -> Verdict {
+        match quality {
+            Quality::Good => Verdict::good(),
+            Quality::Stale => Verdict::stale(Cause::ReadingTooOld),
+            Quality::Bad => Verdict::bad(Cause::ValueUnusable),
+        }
+    }
+
     fn update(published: Quality) -> MeterUpdate {
         MeterUpdate::new(
             MeterId::new("garage"),
             measurement(Quality::Good),
-            published,
+            verdict_of(published),
         )
     }
 
@@ -1136,8 +1153,11 @@ mod tests {
             m.serial = Serial::new(serial);
             m.meter = MeterId::new(serial);
             assert_eq!(
-                p.publish(&MeterUpdate::new(m.meter.clone(), m, published), &mut sink)
-                    .expect("a declared device"),
+                p.publish(
+                    &MeterUpdate::new(m.meter.clone(), m, verdict_of(published)),
+                    &mut sink
+                )
+                .expect("a declared device"),
                 Published::Emitted,
                 "the premise: every one of these must actually reach the wire, or \
                  the map below would be asserted over an empty stream"

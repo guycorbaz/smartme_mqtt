@@ -67,6 +67,7 @@ use tokio::sync::{mpsc, oneshot};
 use smartme_bridge::app::mqtt_driver::{self, MqttConfig};
 use smartme_bridge::core::channel::MeterUpdate;
 use smartme_bridge::core::clock::{Clock, SystemClock};
+use smartme_bridge::core::oracle::{Cause, Verdict};
 use smartme_bridge::domain::{Kw, Kwh, Measurement, MeterId, Quality, Serial, UtcMillis};
 
 use common::Seen;
@@ -125,7 +126,14 @@ fn reading(power: f64, energy: f64, quality: Quality, now: UtcMillis) -> MeterUp
             value_date: now,
             quality,
         },
-        quality,
+        // Story 2.1: the gate publishes a verdict rather than a bare quality. The
+        // cause is representative — this gate's step 4 asserts what a HOST
+        // displays for a non-good quality, not which oracle refused.
+        match quality {
+            Quality::Good => Verdict::good(),
+            Quality::Stale => Verdict::stale(Cause::ReadingTooOld),
+            Quality::Bad => Verdict::bad(Cause::ValueUnusable),
+        },
     )
 }
 

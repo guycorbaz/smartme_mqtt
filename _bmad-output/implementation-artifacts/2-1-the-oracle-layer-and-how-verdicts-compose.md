@@ -1,6 +1,6 @@
 # Story 2.1: The oracle layer exists, and how verdicts compose is decided once
 
-Status: ready-for-dev
+Status: in-progress
 
 ## Story
 
@@ -101,23 +101,23 @@ are migrated onto the layer with **no verdict changing**, proven by asserting th
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Decide and record the composition (AC2, AC4)**
-  - [ ] Write the severity order and the worst-wins rule as the module doc of the oracle layer
-  - [ ] Write the latch-versus-degrade rule beside it, with ADR 0029 named as its first case
-  - [ ] Confirm `State` and `Quality` stay decoupled: `Ok, value Bad → (Stale, Bad)` today, and
+- [x] **Task 1 — Decide and record the composition (AC2, AC4)**
+  - [x] Write the severity order and the worst-wins rule as the module doc of the oracle layer
+  - [x] Write the latch-versus-degrade rule beside it, with ADR 0029 named as its first case
+  - [x] Confirm `State` and `Quality` stay decoupled: `Ok, value Bad → (Stale, Bad)` today, and
         composition governs the published `Quality`, not the state
-- [ ] **Task 2 — Build the layer (AC1)**
-  - [ ] `core/oracle.rs`: the verdict type, the composition function, the registry an oracle joins
-  - [ ] Verify `arch_purity` covers the new module; break it deliberately and watch it fail
+- [x] **Task 2 — Build the layer (AC1)**
+  - [x] `core/oracle.rs`: the verdict type, the composition function, the registry an oracle joins
+  - [x] Verify `arch_purity` covers the new module; break it deliberately and watch it fail
 - [ ] **Task 3 — The cause channel (AC3)**
   - [ ] Choose the property key and record why `Quality` cannot carry it
         (`tck-id-payloads-propertyset-quality-value-value` restricts it to 0/192/500, and ADR 0012
         already deviates)
   - [ ] Publish it on DDATA; decide and record whether the DBIRTH declares it
   - [ ] Read the norm before deciding the DBIRTH half — cite the `tck-id`, not prose
-- [ ] **Task 4 — Migrate the three existing judgements (AC7)**
-  - [ ] Freshness, source `Bad`, ADR 0029's identity check
-  - [ ] Row-by-row equality of the `Policy::step` table before and after
+- [x] **Task 4 — Migrate the three existing judgements (AC7)**
+  - [x] Freshness, source `Bad`, ADR 0029's identity check
+  - [x] Row-by-row equality of the `Policy::step` table before and after
 - [ ] **Task 5 — `contract_golden.rs` (AC5)**
   - [ ] The golden mapping and the version it belongs to
   - [ ] Falsify both directions and record both runs
@@ -206,10 +206,54 @@ being run.
 
 ## Dev Agent Record
 
-### Agent Model Used
-
-### Debug Log References
-
 ### Completion Notes List
 
+**2026-08-10 — Tasks 1, 2 and 4 done. The layer exists and the core is migrated onto it;
+Tasks 3, 5, 6 (the wire, the golden guard, the contract bump) remain.**
+
+- **`core/oracle.rs`** carries `Cause`, `Verdict` and `compose`, and the three rules as module
+  documentation rather than as folklore. `arch_purity` covers it — verified by adding a
+  `tokio::sync::watch` import and watching the guard fail, then restoring.
+- **Nine causes, one per row of `Policy::step`'s table.** The ninth,
+  `Cause::SourceMarkedStale`, is produced by nothing today: `map_device` yields `Good` or `Bad`
+  and never `Stale`. It exists because the arm exists, and naming it beats borrowing
+  `ValueUnusable` — "the source said so" and "we could not convert it" are different diagnoses
+  and would send an operator to different places.
+- **AC7 is proven by assertions that did not change.** The 26 pre-2.1 assertions in
+  `state_machine`'s tests are kept **verbatim**, routed through a `#[cfg(test)]`
+  `step_quality` accessor that drops the cause. A table of assertions that still passes
+  unchanged is the proof the migration moved no verdict; rewriting them would have destroyed
+  the evidence in the act of collecting it. The same treatment was applied to
+  `staleness_injected_clock`'s `verdict_for`.
+- **Causes are covered separately** by `every_row_of_the_table_names_its_own_cause`, because a
+  row borrowing a neighbour's cause would be invisible to every quality assertion in the file —
+  the quality would still be right.
+
+**Four falsifications, all red, each with its own message:**
+
+| mutation | result |
+|---|---|
+| `compose` → first-non-good-wins | RED on the case where evaluation order and severity order disagree — `Stale` published where `Bad` was owed |
+| `Cause::latches` widened to "anything worse than a timeout" | RED on every degrading cause: *"HostClockUnsynced describes a reading, not an identity"* |
+| a `tokio` import in `core/oracle.rs` | RED in `arch_purity` |
+| `NoFreshnessProof` pointed at `Cause::ReadingTooOld` | RED in the per-row cause test, while every other test in the module stayed green |
+
+**Full suite green after the migration:** 190 unit tests plus every integration and chaos test.
+
+**Not yet done:** Task 3 (the cause reaching the wire under its own property key), Task 5
+(`contract_golden.rs`), Task 6 (`CONTRACT_VERSION` 3 → 4 and its consequences), Task 7
+(`ci-local.sh`).
+
 ### File List
+
+- `crates/smartme-bridge/src/core/oracle.rs` (new)
+- `crates/smartme-bridge/src/core/mod.rs`
+- `crates/smartme-bridge/src/core/state_machine.rs`
+- `crates/smartme-bridge/src/core/channel.rs`
+- `crates/smartme-bridge/src/adapters/sparkplug_publisher.rs`
+- `crates/smartme-bridge/src/adapters/smartme_source.rs`
+- `crates/smartme-bridge/src/app/poll_publish.rs`
+- `crates/smartme-bridge/tests/staleness_injected_clock.rs`
+- `crates/smartme-bridge/tests/nfr2_staleness_latency.rs`
+- `crates/smartme-bridge/tests/chaos_ncmd_rebirth.rs`
+- `crates/smartme-bridge/tests/ignition_contract.rs`

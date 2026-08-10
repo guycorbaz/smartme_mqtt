@@ -273,7 +273,7 @@ development_status:
   # versus which merely degrade the reading.
   # `domain/quality.rs` has been waiting for this since story 1.2: *"the bridge's
   # error taxonomy maps into it (Epic 2 onward); no ad-hoc quality strings"*.
-  2-1-the-oracle-layer-and-how-verdicts-compose: ready-for-dev
+  2-1-the-oracle-layer-and-how-verdicts-compose: in-progress
   # FR15, NFR6 — the one with a date on it. See the epic note above.
   2-2-energy-counter-monotonicity: backlog
   # FR14 — does not exist at all today.

@@ -198,7 +198,7 @@ async fn a_silent_meters_verdict_arrives_inside_nfr2s_bound() {
         match tokio::time::timeout(left, rx.recv()).await {
             Ok(Some(update)) => {
                 let at = (tokio::time::Instant::now() - started).as_millis() as i64;
-                seen.push((update.meter.clone(), update.published, at));
+                seen.push((update.meter.clone(), update.published(), at));
             }
             Ok(None) => break,
             Err(_) => break,

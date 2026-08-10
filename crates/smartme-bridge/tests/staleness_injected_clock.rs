@@ -114,7 +114,12 @@ fn verdict_for(fixture: &str) -> (State, Quality) {
     // on real time in any way.
     let clock = FakeClock::new(utc_millis(2026, 7, 25, 13, 6, 40));
     let tick: Tick = Ok(reading_with(http_date_from_fixture(fixture)));
-    policy.step(State::initial(), &tick, clock.wall())
+    // Story 2.1 gave the verdict a cause; the assertions below are the pre-2.1
+    // ones and are kept verbatim, which is what proves the migration moved no
+    // verdict. The causes are asserted where they are decided, in
+    // `core::state_machine`.
+    let (state, verdict) = policy.step(State::initial(), &tick, clock.wall());
+    (state, verdict.quality())
 }
 
 #[test]

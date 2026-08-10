@@ -208,7 +208,7 @@ fn reading(now: UtcMillis) -> MeterUpdate {
             value_date: now,
             quality: Quality::Good,
         },
-        Quality::Good,
+        smartme_bridge::core::oracle::Verdict::good(),
     )
 }
 

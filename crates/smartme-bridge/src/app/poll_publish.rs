@@ -571,12 +571,12 @@ mod tests {
              host otherwise keeps showing its last Good value for ever"
         );
         assert_eq!(
-            got[0].published,
+            got[0].published(),
             Quality::Good,
             "the premise reached the wire"
         );
         assert_eq!(
-            got[1].published,
+            got[1].published(),
             Quality::Stale,
             "the republish carries the ORACLE's new verdict; re-asserting Good would \
              be the same lie with more messages"
@@ -649,7 +649,7 @@ mod tests {
         let (state, sent) = drive(FakeSource::new().then(Ok(reading(Quality::Good, 950)))).await;
         assert_eq!(state, State::Fresh);
         assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0].published, Quality::Good);
+        assert_eq!(sent[0].published(), Quality::Good);
         assert_eq!(sent[0].meter, MeterId::new("garage"));
     }
 
@@ -659,7 +659,7 @@ mod tests {
         let (state, sent) =
             drive(FakeSource::new().then(Ok(reading(Quality::Good, 600_000)))).await;
         assert_eq!(state, State::Stale);
-        assert_eq!(sent[0].published, Quality::Stale);
+        assert_eq!(sent[0].published(), Quality::Stale);
         assert_eq!(
             sent[0].measurement.quality,
             Quality::Good,
@@ -1029,6 +1029,6 @@ mod tests {
         assert_eq!(after_good, State::Fresh);
         drop(tx);
         let u = rx.recv().await.expect("the good reading was forwarded");
-        assert_eq!(u.published, Quality::Good);
+        assert_eq!(u.published(), Quality::Good);
     }
 }
