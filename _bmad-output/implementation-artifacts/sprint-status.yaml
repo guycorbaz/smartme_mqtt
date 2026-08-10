@@ -67,7 +67,60 @@ story_location: _bmad-output/implementation-artifacts
 
 development_status:
   # ==========================================================================
-  # 2026-08-10 — WHAT THE OVERNIGHT RUN ANSWERED. Read this first.
+  # END OF 2026-08-10 — read this first tomorrow.
+  # ==========================================================================
+  #
+  # THE MORNING'S OPEN QUESTION IS ANSWERED, and it is the good answer.
+  # `appart-est` froze at 09:34:50 on 4926.766 kWh and stayed frozen for ten
+  # hours; every operator surface called the fleet healthy throughout ([#62]).
+  # It returned at 19:36:06 reading **4928.451 kWh, Good** — +1.685 kWh over the
+  # outage, about 168 W average. **The meter kept counting; only the reporting
+  # was cut.** Nothing is lost, the period's consumption is sound, and story
+  # 2.2's monotonicity oracle would correctly have said nothing: the index rose.
+  # The three-way question — caught up / stood still / went backwards — resolved
+  # to the first, which is the benign one.
+  #
+  # SHIPPED TODAY, 12 commits, all pushed and green on all three workflows:
+  #   - story 4.17 — the will registers at QoS 1. A confirmed specification
+  #     violation open since 2026-07-26, closed while the wire is still cheap to
+  #     break ([#26] closed). Contract untouched.
+  #   - story 2.1 — the oracle layer: `Cause`, `Verdict`, worst-wins `compose`,
+  #     the latch/degrade rule, the cause on the wire under its own property key,
+  #     and `contract_golden.rs` — the AR16 guard that had never existed.
+  #     `CONTRACT_VERSION` 3 -> 4.
+  #   - story 2.2 — energy-counter monotonicity (FR15, NFR6). `CONTRACT_VERSION`
+  #     4 -> 5, demanded by the guard itself.
+  #   - Epic 5 CLOSED after its retrospective; the eight reviewed stories closed;
+  #     [#62] [#63] [#64] [#65] [#66] opened; ADR 0030 sets the order.
+  #
+  # THE THING WORTH CARRYING: the guard built in story 2.1 caught a real change
+  # in story 2.2, one story later, before anyone thought of it — *"the cause
+  # vocabulary changed size (11 live, 10 in the v4 golden) without
+  # CONTRACT_VERSION moving"*. That is action B1 of the Epic 5 retrospective
+  # working on its first real subject: a mechanism, not a correction.
+  #
+  # WHERE TO PICK UP: story **2.3, physical bounds** — the third of Epic 2's four
+  # oracles and the one that does not exist at all. 2.1 and 2.2 are in `review`.
+  #
+  # TWO MEASUREMENTS OWED, both needing Ignition rather than code:
+  #   1. what a host does with a metric property it did NOT see at BIRTH. The
+  #      `Cause` property is absent from a DBIRTH whose verdict is `Good`, which
+  #      is most of them. The norm permits this; Ignition's behaviour is
+  #      unmeasured. If it ignores the property, declaring it at BIRTH with a
+  #      neutral value contradicts the "no cause on a good value" rule and needs
+  #      an arbitration rather than a workaround.
+  #   2. `Rebirth (Last) Cause`, almost certainly overwritten by now.
+  #
+  # ONE DECISION OWED, and no retrospective will take it: **Epic 4 has no path to
+  # completion.** ADR 0025 defers eight of its nine remaining stories explicitly,
+  # so the epic cannot close, so its retrospective can never come due. Finish it,
+  # or withdraw the deferred stories from its scope.
+  #
+  # AND THE DEPLOYMENT IS STILL `v0.4.0-rc2` — contract v3. None of today's work
+  # is on the wire. The bridge running on panoramix predates the oracle layer.
+  #
+  # ==========================================================================
+  # 2026-08-10, MORNING — what the overnight run answered. History from here.
   # ==========================================================================
   #
   # THE RUN HELD: one unbroken session since 2026-08-09T18:35:25Z. Against the
