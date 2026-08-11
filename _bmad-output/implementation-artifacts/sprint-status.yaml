@@ -100,6 +100,8 @@ development_status:
   # working on its first real subject: a mechanism, not a correction.
   #
   # WHERE TO PICK UP: story **2.3, physical bounds** — the third of Epic 2's four
+  # [renumbered 2.4 on 2026-08-11; 2.3 is now the oracle-layer story, which runs
+  #  before it. This block is left as it read on the day.]
   # oracles and the one that does not exist at all. 2.1 and 2.2 are in `review`.
   #
   # TWO MEASUREMENTS OWED, both needing Ignition rather than code:
@@ -349,7 +351,7 @@ development_status:
   #    in-memory struct; deleting the protobuf encoding loop left the suite green.
   # All three are FIXED, falsified, and green. What keeps the story open is the
   # decisions: per-metric verdicts, latching-wins-ties, and health surfaces reading
-  # the composed verdict — story 2.7 below.
+  # the composed verdict — story 2.3 below.
   2-1-the-oracle-layer-and-how-verdicts-compose: in-progress
   # FR15, NFR6 — the one with a date on it. See the epic note above.
   # REVIEWED 2026-08-11. NOT `done` — AC2 is UNMET and AC6 partially so, and the
@@ -361,32 +363,21 @@ development_status:
   # saying the network hiccuped. AC2's own rationale names the hazard and then
   # guards only `energy_reference`.
   # AC2's implemented rule ("source quality != Bad") is neither AC2's nor AC3's, and
-  # is already wrong for stories 2.3 and 2.4, which produce Bad verdicts on readings
+  # is already wrong for stories 2.4 and 2.5, which produce Bad verdicts on readings
   # the source marked Good. Decided 2026-08-11: both `last` and the reference follow
   # the COMPOSED verdict, with an explicit exemption for CounterWentBackwards.
   # Also decided: persist the reference across restarts (bd_seq_path's mechanism);
   # NFR6's residual is an accepted limitation and needs an issue.
   # Fixed and falsified today: a non-finite index is refused rather than blessed.
-  # The rest lands in story 2.7, which refactors the code they live in.
+  # The rest lands in story 2.3, which refactors the code they live in.
   2-2-energy-counter-monotonicity: in-progress
-  # FR14 — does not exist at all today.
-  2-3-physical-bounds: backlog
-  # FR16, plus `map_device`'s debt: three failure modes collapse into one
-  # undifferentiated `Bad` naming no field.
-  2-4-payload-completeness-and-numeric-domain: backlog
-  # FR4, FR5, NFR1 — transient retries with bounded backoff, permanent stops and is
-  # named. Absorbs the parked `429 Retry-After` item.
-  2-5-error-taxonomy-and-bounded-backoff: backlog
-  # FR10, plus the parked frozen/replayed-feed oracle — a byte-identical replayed
-  # response keeps a plausible age and stays `Fresh` today.
-  2-6-utc-end-to-end-and-clock-skew: backlog
   # ADDED 2026-08-11 by the review of stories 2.1 and 2.2. It exists because four
   # decisions taken that day are DESIGN work, not patches, and all four finish the
-  # oracle layer rather than extending it — so they belong together and before 2.3,
-  # which builds directly on what they change:
+  # oracle layer rather than extending it — so they run FIRST, before 2.4, which
+  # builds directly on what they change:
   #  1. PER-METRIC VERDICTS. `compose` yields one verdict per READING and
   #     `metrics_for` stamps it on every metric, so an energy-only oracle nulls a
-  #     perfectly current Power and labels it `counter-went-backwards`. Story 2.3
+  #     perfectly current Power and labels it `counter-went-backwards`. Story 2.4
   #     (physical bounds) is per-metric by nature and cannot be written on top of
   #     this. Carries an ADR and a CONTRACT_VERSION bump.
   #  2. TIES GO TO THE LATCHING CAUSE. At equal severity `compose` keeps whichever
@@ -406,7 +397,30 @@ development_status:
   # STORY FILE WRITTEN 2026-08-11. Ten ACs; two of them decide at drafting rather
   # than defer (a failed reference load is absent-not-fatal; v6 is `breaking`, by the
   # manual's own criterion that values either side cannot be compared).
-  2-7-the-oracle-layer-finished: ready-for-dev
+  2-3-the-oracle-layer-finished: ready-for-dev
+  # FR14 — does not exist at all today.
+  # BLOCKED BY 2.3: physical bounds is a PER-METRIC oracle, and until 2.3 a verdict
+  # belongs to a READING. Written first, this story has to be rewritten and the wire
+  # contract moves twice, the second time to correct the first.
+  #
+  # RENUMBERED 2026-08-11, on Guy's instruction: *"j'aimerais traiter les stories
+  # dans l'ordre afin d'éviter la confusion"*. The oracle-layer story was first
+  # written as 2.7 — the next free number — while running before this one, so the
+  # numbering said one order and the plan said another. Bounds/completeness/taxonomy/
+  # UTC each moved up one (old 2.3-2.6 -> 2.4-2.7) and the three `core/oracle.rs`
+  # comments that cite them by name were corrected in the same commit. The cost was
+  # half an hour of references; what it buys is that the list can be read top to
+  # bottom without a footnote.
+  2-4-physical-bounds: backlog
+  # FR16, plus `map_device`'s debt: three failure modes collapse into one
+  # undifferentiated `Bad` naming no field.
+  2-5-payload-completeness-and-numeric-domain: backlog
+  # FR4, FR5, NFR1 — transient retries with bounded backoff, permanent stops and is
+  # named. Absorbs the parked `429 Retry-After` item.
+  2-6-error-taxonomy-and-bounded-backoff: backlog
+  # FR10, plus the parked frozen/replayed-feed oracle — a byte-identical replayed
+  # response keeps a plausible age and stays `Fresh` today.
+  2-7-utc-end-to-end-and-clock-skew: backlog
 
   # NOT A STORY: FR9 and NFR7 (serial-identity binding and its verification) were
   # delivered by ADR 0029 on 2026-08-09, and more strongly than the FR asked. They

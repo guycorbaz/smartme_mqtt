@@ -1,4 +1,4 @@
-# Story 2.7: The oracle layer finished — a verdict per metric, and ties that do not depend on order
+# Story 2.3: The oracle layer finished — a verdict per metric, and ties that do not depend on order
 
 Status: ready-for-dev
 
@@ -10,7 +10,7 @@ bridge's own screens to say what its wire says,
 so that a fault in one number does not withhold another, and so that no surface calls a meter
 healthy while the host is being told otherwise.
 
-## Why this exists, and why it comes before story 2.3
+## Why this exists, and why it comes before story 2.4
 
 **It was not planned. It is the output of the 2026-08-11 review of stories 2.1 and 2.2**, which
 found four things that are decisions rather than defects — the code does exactly what it was
@@ -18,9 +18,9 @@ written to do, and what it was written to do is wrong for the oracles Epic 2 sti
 all four the same day. This story is where they land, together, because they are one change seen
 from four sides: **the oracle layer knows what it judged, and everything downstream reads that.**
 
-**It comes before 2.3 because 2.3 cannot be written without it.** Physical bounds is a per-metric
+**It comes before 2.4 because 2.4 cannot be written without it.** Physical bounds is a per-metric
 oracle by nature — a power reading outside plausible bounds says nothing about the energy index
-beside it — and today a verdict belongs to a *reading*. Writing 2.3 first means writing it against
+beside it — and today a verdict belongs to a *reading*. Writing 2.4 first means writing it against
 a layer that cannot express what it judges, then rewriting it. The contract would move twice
 instead of once, and the second move would be a correction of the first.
 
@@ -112,7 +112,7 @@ values to Ignition while `/healthz` and `/` report it `Fresh`. That is the ten-h
      should be checking (`let _ = step_once(...)`), which is what hid AC6's divergence.
 
 10. **No verdict that is correct today changes**, apart from the four cases these criteria name.
-    The pre-2.7 assertions are kept verbatim and must still pass unchanged — the same proof
+    The pre-2.3 assertions are kept verbatim and must still pass unchanged — the same proof
     story 2.1 AC7 used for its own migration, and for the same reason.
 
 ## Tasks / Subtasks

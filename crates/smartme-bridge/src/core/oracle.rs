@@ -45,7 +45,7 @@
 //! "stop + surface"). A power value outside physical bounds says nothing about the
 //! next one, so it degrades that reading and nothing more. The rule follows the
 //! *kind* of contradiction rather than its severity, and it is written here so
-//! that stories 2.2–2.4 do not each have to guess it.
+//! that stories 2.2 and 2.4–2.5 do not each have to guess it.
 //!
 //! ADR 0029's serial-identity check was decided before this rule existed and is
 //! its first instance rather than an exception to it — see [`Cause::latches`].
@@ -281,7 +281,7 @@ impl Cause {
     ///
     /// Everything else describes *this* reading. A reading that is too old says
     /// nothing about the next one; neither does one whose value could not be
-    /// converted. Story 2.2's counter-went-backwards and 2.3's out-of-bounds will
+    /// converted. Story 2.2's counter-went-backwards and 2.4's out-of-bounds will
     /// join this half, and the test
     /// `a_degrading_cause_does_not_poison_the_next_reading` is what holds them
     /// there.
@@ -497,7 +497,7 @@ mod tests {
     /// AC4 — the latch/degrade rule, from both directions.
     ///
     /// The second half is the one that matters for the oracles Epic 2 still owes:
-    /// a value-level refusal must NOT put the meter in `Failed`, or story 2.3's
+    /// a value-level refusal must NOT put the meter in `Failed`, or story 2.4's
     /// first out-of-bounds power reading would take a meter off the wire until
     /// somebody restarted the container.
     ///

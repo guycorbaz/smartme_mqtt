@@ -93,7 +93,7 @@ NBIRTH metric-count statements went stale this way during story 4.7.
 
 **Given** the layer, the composition, the cause channel and the golden guard
 **When** this story closes
-**Then** physical bounds, monotonicity and payload domain are still absent, and stories 2.2–2.4
+**Then** physical bounds, monotonicity and payload domain are still absent, and stories 2.2 and 2.4–2.5
 own them
 **And** the existing judgements — freshness, the source's own `Bad`, ADR 0029's identity check —
 are migrated onto the layer with **no verdict changing**, proven by asserting the current
@@ -151,11 +151,11 @@ because the alternative was a silent lie. A separate property key costs nothing 
 `Fatal` — latching, restart-only — and it was right: if the reading is not from the meter we
 declared, no later reading from the same misconfiguration is trustworthy either. A power value
 outside physical bounds says nothing about the next one. The rule follows the distinction rather
-than the severity, and it must be written down before 2.3 has to guess it.
+than the severity, and it must be written down before 2.4 has to guess it.
 
 ### What this story does NOT do
 
-**No oracle.** The layer, the rule, the channel and the guard. Stories 2.2, 2.3 and 2.4 bring the
+**No oracle.** The layer, the rule, the channel and the guard. Stories 2.2, 2.4 and 2.5 bring the
 judgements. A story that shipped both would make it impossible to tell a composition defect from
 an oracle defect on the first failure.
 
@@ -265,7 +265,7 @@ Tasks 3, 5, 6 (the wire, the golden guard, the contract bump) remain.**
   for the new key as for the other two — and records the third property so it stops reading as
   describing a two-property set.
 - **AC7.** No oracle was implemented. Physical bounds, monotonicity and payload domain remain
-  absent and belong to stories 2.2–2.4.
+  absent and belong to stories 2.2 and 2.4–2.5.
 
 **Nine falsifications in all, each red with its own message, plus one deliberate green.**
 
@@ -312,7 +312,7 @@ the review found is that **three of the four mechanisms this story promised are 
 anything**: the latch rule has no production caller, the golden does not pin what AC5 named, and
 the cause's journey to the wire is untested at its last hop.
 
-**Decisions — settled by Guy on 2026-08-11, before story 2.3.**
+**Decisions — settled by Guy on 2026-08-11, before story 2.3 (the oracle-layer story; physical bounds is now 2.4).**
 
 All three were taken the same day the review raised them. Two of them change an architectural
 position and are owed an ADR each; one of those also moves the wire contract.
@@ -323,9 +323,9 @@ position and are owed an ADR each; one of those also moves the wire contract.
 | Verdict scope | **Per-metric, now — not after 2.3** | ADR + `CONTRACT_VERSION` bump; `compose` composes per metric |
 | Health surfaces | **They read the composed verdict** | closes the `[#62]` family on this path |
 
-- [x] [Review][Decision] **Equal-severity ties are resolved by array position, and the module doc says no caller may rely on that — one already does** — `compose` replaces only on STRICTLY greater severity, so `compose([freshness, monotonicity])` silently means "freshness wins ties". Reachable today: a unit-conversion failure yields `bad(ValueUnusable)` from freshness while monotonicity independently yields `bad(CounterWentBackwards)` on the same reading. The operator sees one cause and never learns the other applied. Nothing logs or counts the collision, so the documented mitigation ("a decision to take then, in the open") has no trigger. Story 2.3's bounds oracle lands in this same tie space. A rule that a LATCHING cause outranks a degrading one at equal severity would be order-independent, which is the property `compose` exists to provide.
+- [x] [Review][Decision] **Equal-severity ties are resolved by array position, and the module doc says no caller may rely on that — one already does** — `compose` replaces only on STRICTLY greater severity, so `compose([freshness, monotonicity])` silently means "freshness wins ties". Reachable today: a unit-conversion failure yields `bad(ValueUnusable)` from freshness while monotonicity independently yields `bad(CounterWentBackwards)` on the same reading. The operator sees one cause and never learns the other applied. Nothing logs or counts the collision, so the documented mitigation ("a decision to take then, in the open") has no trigger. Story 2.4's bounds oracle lands in this same tie space. A rule that a LATCHING cause outranks a degrading one at equal severity would be order-independent, which is the property `compose` exists to provide.
 - [x] [Review][Decision] **The published verdict and the bridge's own health surface have diverged** [`crates/smartme-bridge/src/app/poll_publish.rs:484-500,534`] — `pulse.record(&meter, state)` receives the FRESHNESS state; no oracle can influence it. A meter whose counter goes backwards publishes `Bad` with null values to Ignition while `/healthz` and `/` report `Fresh`. This is the family of `[#62]`, on a code path added yesterday. Decide whether the operator surfaces read the composed verdict.
-- [x] [Review][Decision] **One verdict per READING is stamped on every METRIC** [`crates/smartme-bridge/src/adapters/sparkplug_publisher.rs:110-146`] — an energy-only oracle nulls Power and labels it `counter-went-backwards`. The composition layer has no notion of which metric an oracle judges, so a per-metric oracle degrades metrics it says nothing about. Story 2.3 (physical bounds) is per-metric by nature, so this decision cannot wait.
+- [x] [Review][Decision] **One verdict per READING is stamped on every METRIC** [`crates/smartme-bridge/src/adapters/sparkplug_publisher.rs:110-146`] — an energy-only oracle nulls Power and labels it `counter-went-backwards`. The composition layer has no notion of which metric an oracle judges, so a per-metric oracle degrades metrics it says nothing about. Story 2.4 (physical bounds) is per-metric by nature, so this decision cannot wait.
 
 **Patches.**
 
@@ -343,6 +343,6 @@ position and are owed an ADR each; one of those also moves the wire contract.
 
 **Deferred.**
 
-- [x] [Review][Defer] **`source-refused` is a generic string shared by a rejected credential and a wrong meter** [`crates/smartme-bridge/src/adapters/smartme_source.rs:191`] — deferred, belongs to story 2.5 (error taxonomy). An operator cannot tell NFR7 (wrong meter) from an expired credential, which is the reproach this story levels at `smartme_source.rs:261`.
+- [x] [Review][Defer] **`source-refused` is a generic string shared by a rejected credential and a wrong meter** [`crates/smartme-bridge/src/adapters/smartme_source.rs:191`] — deferred, belongs to story 2.6 (error taxonomy). An operator cannot tell NFR7 (wrong meter) from an expired credential, which is the reproach this story levels at `smartme_source.rs:261`.
 - [x] [Review][Defer] **A cold-start or newly-announced DBIRTH publishes a non-good quality with NO `Cause`** [`crates/smartme-bridge/src/adapters/sparkplug_publisher.rs:590-607`] — deferred, pre-existing path plus an owed measurement. `cold_start_metrics` bypasses `metrics_for`, so the invariant "a non-good metric names its cause" does not hold there, and no cause in the vocabulary means "never read yet". **Settled against the norm during review: adding a property in DATA that was absent from BIRTH is LEGAL** — the rebirth triggers at `Sparkplug_5_Operational_Behavior.adoc:862-864` concern metrics and aliases, not properties, and the only property-level MUSTs (`tck-id-payloads-propertyset-keys-array-size`, `-values-array-size`, `tck-id-payloads-metric-propertyvalue-type-req`) are satisfied unconditionally by `encode.rs:273-310`. What Ignition DOES with such a property is the Tier-3 measurement already owed in `sprint-status.yaml`.
 - [x] [Review][Defer] **"No opinion" and "I checked and it is fine" are the same value** [`crates/smartme-bridge/src/app/poll_publish.rs:357`] — deferred, harmless under worst-wins. There is no `Verdict::abstain()`, so any future rule needing "every oracle affirmed" (a coverage assertion, an operator page listing which oracles ran) cannot tell them apart after composition.

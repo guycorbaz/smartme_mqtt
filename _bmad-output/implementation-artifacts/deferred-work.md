@@ -554,7 +554,7 @@ in the three story files.
   produces. The variant's own doc admits the conflation (*"rejected credentials, a configuration
   the source contradicts, or a serial that is not the one smart-me reports"*). An operator
   reading `source-refused` cannot tell NFR7 (the wrong meter is wired to this topic) from an
-  expired secret. **Belongs to story 2.5** (error taxonomy), which is the story that exists to
+  expired secret. **Belongs to story 2.6** (error taxonomy — renumbered from 2.5 on 2026-08-11), which is the story that exists to
   split causes apart — parked rather than fixed so that it is split once, with the rest.
 
 - **A cold-start or newly-announced DBIRTH publishes a non-good quality with no `Cause`.**
