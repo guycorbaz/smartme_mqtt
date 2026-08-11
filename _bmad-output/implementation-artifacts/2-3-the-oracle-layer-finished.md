@@ -139,29 +139,29 @@ values to Ignition while `/healthz` and `/` report it `Fresh`. That is the ten-h
 
 ## Tasks / Subtasks
 
-- [ ] **1. Decide and record the shape of a per-metric verdict** (AC1, AC8)
-  - [ ] Choose between an oracle declaring its metric and a verdict carrying a metric set; write the
+- [x] **1. Decide and record the shape of a per-metric verdict** (AC1, AC8)
+  - [x] Choose between an oracle declaring its metric and a verdict carrying a metric set; write the
         ADR before the code, not after.
-  - [ ] Amend `core/oracle.rs`'s module doc, whose three numbered rules currently read as settled.
-- [ ] **2. `compose` per metric, and the tie rule** (AC1, AC2, AC10)
-  - [ ] Extend `compose`; keep worst-wins below the tie rule.
-  - [ ] Give `latches()` its production caller: `State::Failed` follows the composed verdict.
-  - [ ] Property test or exhaustive permutation over a small verdict set for order-independence.
-- [ ] **3. `metrics_for` stamps each metric with its own verdict** (AC1)
-  - [ ] Null only the metrics whose own verdict is `Bad`.
-- [ ] **4. Adoption follows the composed verdict** (AC3, AC4, AC9)
-  - [ ] One rule, one place, with the `CounterWentBackwards` exemption named in the code.
-  - [ ] The two sequence tests (replayed-then-reset, and unit-failure-then-timeout).
-- [ ] **5. Persist the reference** (AC5)
-  - [ ] `persist_atomic`, per meter, restored at startup; a failed load is absent-and-logged.
-- [ ] **6. Operator surfaces read the composed verdict** (AC6)
-  - [ ] `pulse.record` and everything downstream of it; check `/healthz`, `/`, the per-meter view.
-- [ ] **7. Contract, golden, manual, runbook** (AC7)
-  - [ ] `CONTRACT_VERSION` 5 → 6, `GOLDEN_*_V6` written out, manual version table and prose,
+  - [x] Amend `core/oracle.rs`'s module doc, whose three numbered rules currently read as settled.
+- [x] **2. `compose` per metric, and the tie rule** (AC1, AC2, AC10)
+  - [x] Extend `compose`; keep worst-wins below the tie rule.
+  - [x] Give `latches()` its production caller: `State::Failed` follows the composed verdict.
+  - [x] Property test or exhaustive permutation over a small verdict set for order-independence.
+- [x] **3. `metrics_for` stamps each metric with its own verdict** (AC1)
+  - [x] Null only the metrics whose own verdict is `Bad`.
+- [x] **4. Adoption follows the composed verdict** (AC3, AC4, AC9)
+  - [x] One rule, one place, with the `CounterWentBackwards` exemption named in the code.
+  - [x] The two sequence tests (replayed-then-reset, and unit-failure-then-timeout).
+- [x] **5. Persist the reference** (AC5)
+  - [x] `persist_atomic`, per meter, restored at startup; a failed load is absent-and-logged.
+- [x] **6. Operator surfaces read the composed verdict** (AC6)
+  - [x] `pulse.record` and everything downstream of it; check `/healthz`, `/`, the per-meter view.
+- [x] **7. Contract, golden, manual, runbook** (AC7)
+  - [x] `CONTRACT_VERSION` 5 → 6, `GOLDEN_*_V6` written out, manual version table and prose,
         runbook attestation block, mechanical grep for the old number.
-- [ ] **8. Falsify everything** (AC1–AC6, AC9)
-  - [ ] Each mutation named in the ACs, run, observed red, recorded beside its test.
-- [ ] **9. `./scripts/ci-local.sh` full run**, and `gh run list` after pushing.
+- [x] **8. Falsify everything** (AC1–AC6, AC9)
+  - [x] Each mutation named in the ACs, run, observed red, recorded beside its test.
+- [x] **9. `./scripts/ci-local.sh` full run**, and `gh run list` after pushing.
 
 ## Dev Notes
 
@@ -203,3 +203,84 @@ NaN guard whose explicit arm returned what falling through returned, a `ptr::eq`
 constant coalescing makes meaningless, and a claim about a poisoned reference that survives exactly
 one tick. **A test that cannot fail is worse than no test**, because it is counted. Every assertion
 added here gets its mutation run before it is trusted.
+
+
+## Dev Agent Record
+
+### Completion Notes — 2026-08-11
+
+**Nine of ten ACs met. AC3 is recorded UNMET with [#69]** and the reasoning is in the criterion
+itself: no oracle yet produces a `Bad` on a reading the SOURCE called `Good`, so the new adoption
+rule cannot be told from the one it replaced. Story 2.4 is its first subject.
+
+### The review found four criteria I had ticked and should not have
+
+Three review layers ran on `3c17a14^..a6199da`. The verdict was that the story was not ready, and
+it was right. What each cost, and what closed it:
+
+- **AC1 was proved in the core and asserted nowhere on the wire.** Every test reaching
+  `metrics_for` handed it a `Verdicts::uniform`, where the pre-2.3 code and the new one agree on
+  every output. Reverting `metrics_for` to `verdicts.meter()` — the whole of ADR 0031 undone —
+  left the entire suite green. This was proved by running the mutation, not by reading. Closed by
+  `a_metric_refused_alone_is_the_only_one_nulled_on_the_wire`.
+- **AC2's latch clause is a no-op**, and ADR 0032 asserted it as a mechanism. `latches()` is true
+  only for `SourceRefused`, which `Policy::step` produces at the two sites already returning
+  `Failed`. Not repaired by refactoring — that would move the table AC10 requires preserved — but
+  by making the code comment and the ADR say what is true, and naming the case the branch is a net
+  for.
+- **AC4 was implemented against my own wording.** The criterion says `last` holds only measurements
+  whose composed verdict was publishable; the `CounterWentBackwards` exemption let a reading
+  published with a null value into it, so the next timeout republished the withheld index as a real
+  `Double` marked `Stale`. Two review layers reconstructed the same sequence independently. Two
+  flags now, not one.
+- **AC6 was implemented on `/healthz` only**, and the criterion names `/` too — the surface a human
+  opens, and the one that spent the ten hours of 2026-08-10 calling a frozen meter healthy. The
+  test could not catch it: its own name says `in_healthz`.
+
+### And three defects that were not AC-shaped
+
+- **`reference_path_for` promised a guard that did not exist** — *"the id is also written INSIDE and
+  checked on load"*. It was not, and the derivation was LOSSY: `gar age`, `gar.age` and `gar_age`
+  shared one file, which `config.rs` permits. Now percent-encoded (reversible, stable across
+  toolchains, readable over a file share) **and** the id is written and checked.
+- **`run`'s own load and store were exercised by nothing.** The restart test called the helpers
+  itself, so its recorded falsification deleted the test's own call. `run` is now driven end to end,
+  across two simulated processes.
+- **`/healthz` emitted raw control characters**, which RFC 8259 forbids. A meter id with a newline
+  made the body unparseable — the field added to surface a fault taking down the endpoint an
+  operator reads during that fault.
+
+### What to carry forward
+
+Every one of these is a shape this repository has a rule for, and the rules caught them — but only
+at review, not at writing. The one that keeps recurring is **testing a property one layer above
+where it lives**: AC1 asserted on the in-process `MeterUpdate`, AC5 on the helpers rather than on
+`run`, AC6 on the endpoint rather than on the surfaces named. Each time the test was true and the
+property was unprotected.
+
+### Verification
+
+`./scripts/ci-local.sh`, full run — chaos tests and image smoke tests included. Manual rebuilt.
+`gh run list` checked after pushing.
+
+### File List
+
+- `crates/smartme-bridge/src/core/oracle.rs`
+- `crates/smartme-bridge/src/core/channel.rs`
+- `crates/smartme-bridge/src/core/state_machine.rs`
+- `crates/smartme-bridge/src/app/poll_publish.rs`
+- `crates/smartme-bridge/src/app/supervisor.rs`
+- `crates/smartme-bridge/src/adapters/sparkplug_publisher.rs`
+- `crates/smartme-bridge/src/ui/mod.rs`
+- `crates/smartme-bridge/tests/contract_golden.rs`
+- `crates/smartme-bridge/tests/nfr2_staleness_latency.rs`
+- `crates/smartme-bridge/tests/chaos_ncmd_rebirth.rs`
+- `crates/smartme-bridge/tests/ignition_contract.rs`
+- `docs/adr/0031-a-verdict-belongs-to-a-metric.md` (new, [#70])
+- `docs/adr/0032-at-equal-severity-a-latching-cause-outranks-a-degrading-one.md` (new, [#71])
+- `docs/manual/chapters/05-mqtt-sparkplug-contract.tex`
+- `docs/ignition-contract-runbook.md`
+
+[#69]: https://github.com/guycorbaz/smartme_mqtt/issues/69
+[#70]: https://github.com/guycorbaz/smartme_mqtt/issues/70
+[#71]: https://github.com/guycorbaz/smartme_mqtt/issues/71

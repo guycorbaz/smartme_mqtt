@@ -6,7 +6,7 @@
   unchanged; what moves is *how many verdicts a reading produces*.
   **Supersedes:** nothing.
 - **Decided by:** Guy, 2026-08-11, on the review of stories 2.1 and 2.2.
-- **Issue:** carried by story 2.3.
+- **Issue:** [#70](https://github.com/guycorbaz/smartme_mqtt/issues/70) — opened 2026-08-11, late: this ADR shipped saying *"carried by story 2.3"*, which its own review found to depart from the convention every other ADR follows.
 
 ## Context
 

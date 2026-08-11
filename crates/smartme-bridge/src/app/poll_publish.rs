@@ -432,11 +432,28 @@ pub async fn step_once<S: Source + Send>(
     // the two, whatever order the oracles were consulted in.
     let published = Verdicts::from_judgements(&judgements);
 
-    // The latch follows the COMPOSED verdict (Story 2.3 AC2). Until then
-    // `Policy::step` computed `State::Failed` from its own guards and
-    // `Verdict::latches()` had no production caller at all, so the latch rule
-    // lived in two places and the one in `oracle.rs` was inert. Now the rule is
-    // read where it is written.
+    // A LATCHING VERDICT PUTS THE METER IN `Failed`, whatever produced it.
+    //
+    // **This is a net, not a replacement, and saying otherwise was wrong.** The
+    // 2026-08-11 review of this story proved the branch is a no-op today:
+    // `latches()` is true only for `Cause::SourceRefused`, which `Policy::step`
+    // produces at exactly the two sites that already return `State::Failed`
+    // (`prev == Failed`, and `Err(Fatal)`). So the condition holds if and only if
+    // `freshness_state` is already `Failed`, and deleting these four lines cannot
+    // change any answer. Story 2.3's AC2 claimed the composed verdict now DECIDES
+    // the latch and that the rule lives in `oracle.rs` "and nowhere else"; both
+    // were false, and ADR 0032 asserted them as fact. Corrected there.
+    //
+    // What the branch is actually for is the case Epic 2 is about to create: a
+    // METRIC-scoped judgement carrying a latching cause. `compose_for_meter`
+    // folds it into the meter verdict, and without this line the meter would keep
+    // publishing while a cause meaning *this is not the meter you asked for* went
+    // unlatched. Story 2.4's oracles are metric-scoped by design.
+    //
+    // Unifying the two for real means taking `State::Failed` out of
+    // `Policy::step` and deriving it here from `prev` plus the composed verdict.
+    // That is a change to the table AC10 requires be preserved verbatim, so it
+    // does not belong in this story — it belongs in the one that first needs it.
     let next = if published.meter().latches() {
         State::Failed
     } else {
@@ -457,18 +474,35 @@ pub async fn step_once<S: Source + Send>(
     //    then republished as a real `Double` marked `Stale`. The number story 2.2
     //    exists to withhold, on the wire one tick later.
     //
-    // The rule: a reading may be remembered if the composed verdict did not
-    // refuse it. `CounterWentBackwards` is the ONE exemption (story 2.2 AC3) —
-    // a replaced meter legitimately reads lower for ever after, so its new index
-    // must become the yardstick or every later reading is judged against an index
-    // that no longer exists.
-    let adoptable = match published.meter().quality() {
+    // TWO MEMORIES, TWO RULES — they were one flag until the 2026-08-11 review of
+    // this story, and the exemption that is right for one is wrong for the other.
+    //
+    // The YARDSTICK may adopt a reading refused for going backwards: story 2.2
+    // AC3, a replaced meter legitimately reads lower for ever after, so its new
+    // index must become the reference or every later reading is judged against an
+    // index that no longer exists.
+    //
+    // The REPUBLICATION BUFFER may not. `last` is what a later tick hands to a
+    // consumer when the cloud goes quiet, and by then the verdict that refused it
+    // is gone. With one flag, a meter replaced at 12.0 published `Energy = null`
+    // (correct), put that reading in `last` (the exemption), and the next timeout
+    // republished `Energy = 12.0` as a genuine `Double` marked `Stale`, cause
+    // `source-unreachable` — the number withheld one tick earlier, handed over
+    // under a transport fault. Reachable on this story's own AC5 path: restart,
+    // reference restored at 900_000, first reading 12.0, then any timeout.
+    //
+    // AC4 already said so — *"`last` holds only measurements whose composed
+    // verdict was publishable"* — and a reading published with a null value is
+    // not publishable. The exemption's justification is an argument about the
+    // yardstick and does not transfer.
+    let reference_adoptable = match published.meter().quality() {
         Quality::Bad => published.meter().cause() == Some(Cause::CounterWentBackwards),
         _ => true,
     };
+    let last_adoptable = published.meter().quality() != Quality::Bad;
 
     if let Ok(reading) = &tick
-        && adoptable
+        && reference_adoptable
     {
         *energy_reference = Some(reading.value.energy);
     }
@@ -503,7 +537,7 @@ pub async fn step_once<S: Source + Send>(
     // verdict that refused it is no longer attached.
     let to_publish = match &tick {
         Ok(reading) => {
-            if adoptable {
+            if last_adoptable {
                 *last = Some(reading.value.clone());
             }
             Some(reading.value.clone())
@@ -554,28 +588,59 @@ pub async fn step_once<S: Source + Send>(
 /// keeps `energy_reference` a task-local in the first place.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PersistedReference {
+    /// Which meter this reference belongs to.
+    ///
+    /// **Written and checked since 2026-08-11.** The comment on
+    /// [`reference_path_for`] claimed this field existed and that the id was
+    /// verified on load; it did not, and nothing was. The review of this story
+    /// found the claim before the collision found a deployment — a documentation
+    /// that promises a guard is worse than one that admits its absence, because
+    /// the next reader stops looking.
+    ///
+    /// It is a second lock, not the first: the file name is now collision-free by
+    /// construction (see [`reference_path_for`]). This one catches what a path
+    /// cannot — a file copied, renamed or restored from a backup under the wrong
+    /// meter's name, which is an ordinary thing to do while repairing a
+    /// deployment over a file share.
+    meter: String,
     /// The last accepted energy index, in kWh.
     energy_kwh: f64,
 }
 
 /// Where one meter's reference lives, under the state directory.
 pub fn reference_path_for(dir: &std::path::Path, meter: &MeterId) -> std::path::PathBuf {
-    // The meter id is operator-chosen, so it is not trusted as a path component:
-    // anything that is not alphanumeric, `-` or `_` becomes `_`. Two meters whose
-    // ids differ only in punctuation would then share a file, which is why the
-    // id is also written INSIDE and checked on load.
-    let safe: String = meter
-        .to_string()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
+    // The meter id is operator-chosen, so it is not trusted as a path component.
+    //
+    // **PERCENT-ENCODED since 2026-08-11, and the first version was wrong.** It
+    // mapped every character that is not alphanumeric, `-` or `_` to `_`, which
+    // is LOSSY: `gar age`, `gar.age` and `gar_age` all became
+    // `energy-reference-gar_age.toml`. `config.rs` rejects only EXACT duplicate
+    // meter ids and applies no charset rule, so all three are configurable at
+    // once. Two poll tasks would then write one file on their own cycles, and
+    // after a restart each meter would be judged against the other's index — a
+    // silent break of the per-meter isolation stories 3.1-3.3 established, in
+    // the one place where being wrong means missing a counter reset.
+    //
+    // Percent-encoding is reversible, so distinct ids give distinct names; it is
+    // stable across compiler and library versions, which a hash of the id would
+    // not be (`DefaultHasher` is explicitly not guaranteed stable, and a name
+    // that moves on a toolchain bump loses the reference it was protecting); and
+    // it keeps the file readable in a directory listing, which matters on a
+    // deployment reachable only over a file share.
+    let mut encoded = String::with_capacity(meter.to_string().len());
+    for byte in meter.to_string().bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' => {
+                encoded.push(byte as char);
             }
-        })
-        .collect();
-    dir.join(format!("energy-reference-{safe}.toml"))
+            // Everything else, including `.`, `/`, `%` itself and any non-ASCII
+            // byte, becomes `%XX`. Encoding `%` is what makes it reversible: an
+            // id containing a literal `%2E` must not collide with one containing
+            // `.`.
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
+    dir.join(format!("energy-reference-{encoded}.toml"))
 }
 
 /// Reads a meter's monotonicity reference, or `None` if there is not a usable one.
@@ -603,6 +668,23 @@ fn load_energy_reference(dir: &std::path::Path, meter: &MeterId) -> Option<crate
         return None;
     }
     match crate::persist::load::<PersistedReference>(&path) {
+        Ok(persisted) if persisted.meter != meter.to_string() => {
+            // The path is collision-free, so reaching this means the file was
+            // moved rather than mis-derived: copied while repairing a
+            // deployment, restored from a backup, or renamed by hand. Refusing
+            // it costs one unjudged reading; accepting it judges a live counter
+            // against a different meter's index, which is the failure this
+            // check exists for.
+            tracing::warn!(
+                meter = %meter,
+                stored = %persisted.meter,
+                path = %path.display(),
+                "this reference file belongs to another meter; ignoring it. This \
+                 meter's first reading will go unjudged, as if it had never been \
+                 read"
+            );
+            None
+        }
         Ok(persisted) if persisted.energy_kwh.is_finite() => {
             tracing::info!(
                 meter = %meter,
@@ -647,6 +729,7 @@ fn store_energy_reference(dir: &std::path::Path, meter: &MeterId, energy: crate:
     if let Err(error) = crate::persist::persist_atomic(
         &path,
         &PersistedReference {
+            meter: meter.to_string(),
             energy_kwh: energy.0,
         },
     ) {
@@ -1290,6 +1373,13 @@ mod tests {
     /// reading going unjudged. The bridge would then need a human before it
     /// published anything, which is a worse failure than the one prevented, and
     /// the shape ADR 0026 already refused for the configuration.
+    ///
+    /// FALSIFIED 2026-08-11 (added by this story's review, which found this the
+    /// one new test carrying no falsification note): returning
+    /// `Some(Kwh(persisted.energy_kwh))` from the `Err` arm instead of `None`
+    /// makes the corrupt-file assertion red; dropping the `is_finite` guard makes
+    /// the `nan` assertion red. Both matter — a NaN reference is worse than none,
+    /// since `x < NaN` is false for every x and the oracle goes quiet.
     #[test]
     fn an_unreadable_reference_is_absent_rather_than_fatal() {
         let dir = std::env::temp_dir().join("smartme_reference_corrupt_test");
@@ -1370,6 +1460,134 @@ mod tests {
             sent[2].verdicts.for_metric(Measured::Energy).cause(),
             Some(Cause::CounterWentBackwards)
         );
+    }
+
+    /// **The defect the 2026-08-11 review of this story found** — a value
+    /// withheld for going backwards must not be republished a tick later.
+    ///
+    /// One flag governed both memories, and the `CounterWentBackwards` exemption
+    /// — right for the yardstick — let the refused reading into `last` too. The
+    /// sequence below is the one two review layers reconstructed independently,
+    /// and it is reachable on this story's own AC5 path: a meter replaced while
+    /// the bridge was down, then any timeout.
+    ///
+    /// What the wire did: `Energy = null, Bad, counter-went-backwards`, then one
+    /// tick later `Energy = 12.0` as a genuine `Double` marked `Stale`, cause
+    /// `source-unreachable`. The number the bridge had just refused to hand over,
+    /// handed over under a transport fault, with nothing left saying why it had
+    /// been refused.
+    ///
+    /// FALSIFIED 2026-08-11 by restoring the single flag (`last_adoptable` =
+    /// `reference_adoptable`): the third publication carries `12.0` and the
+    /// assertion names it.
+    #[tokio::test]
+    async fn a_value_withheld_for_going_backwards_is_not_republished_a_tick_later() {
+        let (_, sent) = drive_sequence(
+            FakeSource::new()
+                .then(Ok(reading_with_energy(Quality::Good, 950, 4_843.822)))
+                // The meter was replaced: the index drops, and the bridge refuses
+                // to hand the number over.
+                .then(Ok(reading_with_energy(Quality::Good, 950, 12.0)))
+                // Then the cloud goes quiet, which is when `last` speaks.
+                .then(Err(SourceError::Timeout)),
+        )
+        .await;
+        assert_eq!(sent.len(), 3, "every tick publishes a verdict (ADR 0027)");
+
+        assert_eq!(
+            sent[1].published_for(Measured::Energy),
+            Quality::Bad,
+            "the premise: the drop is refused"
+        );
+
+        assert_eq!(
+            sent[2].published(),
+            Quality::Stale,
+            "a silent cloud republishes the last known reading, marked"
+        );
+        assert_eq!(
+            sent[2].measurement.energy,
+            Kwh(4_843.822),
+            "the republished value must be the last reading the bridge ACCEPTED. \
+             Republishing the refused index hands over the very number withheld \
+             one tick earlier, under a cause about the network — and the verdict \
+             that refused it is gone by then"
+        );
+    }
+
+    /// **Two meters whose ids differ only in punctuation do not share a file, and
+    /// a file that belongs to another meter is refused** (Story 2.3 AC5).
+    ///
+    /// Both halves were found by this story's review. The first version mapped
+    /// every character outside `[A-Za-z0-9_-]` to `_`, which is LOSSY: `gar age`,
+    /// `gar.age` and `gar_age` all landed on one path. `config.rs` rejects only
+    /// exact duplicate ids and applies no charset rule, so all three are
+    /// configurable together — and two poll tasks would then write one file, each
+    /// meter judged after a restart against whichever wrote last. That is the
+    /// per-meter isolation of stories 3.1-3.3 broken through the filesystem, in
+    /// the one place where being wrong means missing a counter reset.
+    ///
+    /// The second half is the guard the comment CLAIMED existed and did not: the
+    /// meter id written inside and checked on load. With collision-free paths it
+    /// is no longer the first lock, but it catches what a path cannot — a file
+    /// copied, renamed or restored under the wrong meter's name, which is an
+    /// ordinary thing to do while repairing a deployment over a file share.
+    ///
+    /// FALSIFIED 2026-08-11, both halves: restoring the lossy `_` mapping makes
+    /// the distinctness assertion red (all three paths equal); dropping the
+    /// `persisted.meter != meter` arm makes the last assertion red, the reference
+    /// coming back as `Some(4843.822)` for a meter that never wrote it.
+    #[test]
+    fn a_reference_file_belongs_to_exactly_one_meter() {
+        let dir = std::env::temp_dir().join("smartme_reference_identity_test");
+        let _ = std::fs::create_dir_all(&dir);
+
+        // DISTINCT PATHS. These three ids all collapsed to one file before.
+        let spaced = MeterId::new("gar age");
+        let dotted = MeterId::new("gar.age");
+        let scored = MeterId::new("gar_age");
+        let paths = [
+            reference_path_for(&dir, &spaced),
+            reference_path_for(&dir, &dotted),
+            reference_path_for(&dir, &scored),
+        ];
+        let unique: std::collections::BTreeSet<_> = paths.iter().collect();
+        assert_eq!(
+            unique.len(),
+            3,
+            "ids differing only in punctuation must not share a reference file: \
+             one meter's index would judge another's readings after a restart. \
+             Got {paths:?}"
+        );
+
+        // AND THE FILE CARRIES ITS OWNER. Written for one meter, refused for
+        // another — the case a collision-free path cannot catch.
+        for path in &paths {
+            let _ = std::fs::remove_file(path);
+        }
+        store_energy_reference(&dir, &spaced, crate::domain::Kwh(4_843.822));
+        assert_eq!(
+            load_energy_reference(&dir, &spaced),
+            Some(crate::domain::Kwh(4_843.822)),
+            "its own meter reads it back"
+        );
+
+        // Simulate the hand-repair: the file is moved under another meter's name.
+        std::fs::rename(
+            reference_path_for(&dir, &spaced),
+            reference_path_for(&dir, &dotted),
+        )
+        .expect("renamed");
+        assert_eq!(
+            load_energy_reference(&dir, &dotted),
+            None,
+            "a reference belonging to another meter must be refused: accepting it \
+             judges a live counter against an index that was never its own"
+        );
+
+        for path in &paths {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     /// Drives several ticks through one `step_once` chain, carrying `last` and
@@ -1702,6 +1920,102 @@ mod tests {
         );
     }
 
+    /// **Story 2.3 AC5, THROUGH `run`** — the production load and store, which
+    /// nothing exercised.
+    ///
+    /// **Added 2026-08-11 by this story's review.** `the_monotonicity_reference_survives_a_restart`
+    /// calls `load_energy_reference` and `store_energy_reference` directly, so it
+    /// proves the two helpers agree with each other and nothing about the bridge
+    /// using them. Deleting either call site in `run` — the `let mut
+    /// energy_reference = load_…` at the top, or the `if energy_reference !=
+    /// before` block after each tick — left every test green, including the one
+    /// whose recorded falsification was *"deleting the persist call"*: the call
+    /// being deleted was the test's own.
+    ///
+    /// This drives `run` itself, with a real config handle and a real outbox, and
+    /// then reads the file off disk. It also covers the equality guard: a second
+    /// tick at the SAME index must not rewrite the file, which is what keeps a
+    /// quiet fleet from fsyncing once per meter per period for a number that did
+    /// not move.
+    ///
+    /// FALSIFIED 2026-08-11: removing the `store_energy_reference` call from
+    /// `run` makes the "written by run" assertion red; removing the
+    /// `load_energy_reference` call makes the restored-value assertion red with
+    /// `None`.
+    #[tokio::test(start_paused = true)]
+    async fn run_persists_and_restores_the_reference_without_help_from_a_test() {
+        use crate::app::supervisor::ConfigHandle;
+
+        let dir = std::env::temp_dir().join("smartme_run_persistence_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let meter = MeterId::new("garage");
+        let _ = std::fs::remove_file(reference_path_for(&dir, &meter));
+
+        let clock = Arc::new(FakeClock::new(UtcMillis(SANE_NOW)));
+        let handle: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(bridge_config()));
+
+        // FIRST PROCESS: two ticks at the same index, then the outbox closes.
+        {
+            let (tx, mut rx) = mpsc::channel(8);
+            let beats = Heartbeats::for_meters([meter.clone()]);
+            let source = FakeSource::new()
+                .then(Ok(reading_with_energy(Quality::Good, 950, 4_843.822)))
+                .then(Ok(reading_with_energy(Quality::Good, 950, 4_843.822)));
+            let task = tokio::spawn(run(
+                meter.clone(),
+                source,
+                Arc::clone(&clock) as Arc<dyn Clock + Send + Sync>,
+                Arc::clone(&handle),
+                beats.clone(),
+                tx,
+                dir.clone(),
+            ));
+            // Two ticks: the interval fires immediately, then once more.
+            tokio::time::sleep(Duration::from_secs(6)).await;
+            drop(rx.recv().await);
+            task.abort();
+        }
+
+        let written: PersistedReference = crate::persist::load(&reference_path_for(&dir, &meter))
+            .expect(
+                "`run` must persist the reference itself — a test calling the helper \
+                 proves only that the helper works",
+            );
+        assert_eq!(written.energy_kwh, 4_843.822);
+        assert_eq!(written.meter, "garage");
+
+        // SECOND PROCESS: nothing in memory survives, and the meter comes back
+        // reading lower. `run` must restore the reference and catch it.
+        let (tx, mut rx) = mpsc::channel(8);
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let source = FakeSource::new().then(Ok(reading_with_energy(Quality::Good, 950, 12.0)));
+        let task = tokio::spawn(run(
+            meter.clone(),
+            source,
+            Arc::clone(&clock) as Arc<dyn Clock + Send + Sync>,
+            Arc::clone(&handle),
+            beats,
+            tx,
+            dir.clone(),
+        ));
+        let update = rx.recv().await.expect("the first tick published");
+        task.abort();
+
+        assert_eq!(
+            update.published_for(Measured::Energy),
+            Quality::Bad,
+            "`run` must LOAD the reference at startup. Without it the first \
+             reading after every restart is unjudged, and a meter replaced during \
+             the maintenance window that caused the restart goes unnoticed"
+        );
+        assert_eq!(
+            update.verdicts.for_metric(Measured::Energy).cause(),
+            Some(Cause::CounterWentBackwards)
+        );
+
+        let _ = std::fs::remove_file(reference_path_for(&dir, &meter));
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_hanging_meter_does_not_cost_the_others_their_cadence() {
         use crate::app::supervisor::ConfigHandle;
@@ -1747,11 +2061,12 @@ mod tests {
                 Arc::clone(&handle),
                 beats.clone(),
                 tx.clone(),
-                // A per-run temp dir: this test is about per-meter isolation of
-                // the LOOP, and a shared reference file would couple the meters
-                // through the filesystem — the very thing it asserts does not
-                // happen.
-                std::env::temp_dir().join("smartme_poll_publish_fleet_refs"),
+                // A directory unique to THIS test binary, so two concurrent
+                // `cargo test` runs cannot couple through the filesystem — which
+                // is the very thing this test asserts does not happen, and which
+                // a fixed path under /tmp reintroduced. `std::process::id` is
+                // enough: the tasks in one run share it deliberately.
+                std::env::temp_dir().join(format!("smartme_fleet_refs_{}", std::process::id())),
             )));
         }
         drop(tx);

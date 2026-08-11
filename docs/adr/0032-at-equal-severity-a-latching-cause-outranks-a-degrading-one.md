@@ -5,7 +5,7 @@
 - **Amends:** [ADR 0029](0029-the-declared-serial-is-checked-against-the-one-smart-me-reports.md) by
   giving its latch rule a mechanism. **Supersedes:** nothing.
 - **Decided by:** Guy, 2026-08-11, on the review of stories 2.1 and 2.2.
-- **Issue:** carried by story 2.3.
+- **Issue:** [#71](https://github.com/guycorbaz/smartme_mqtt/issues/71) — opened 2026-08-11, late: this ADR shipped saying *"carried by story 2.3"*, which its own review found to depart from the convention every other ADR follows.
 
 ## Context
 
@@ -54,9 +54,32 @@ later reading repairs it. A degrading cause describes a number that has already 
 the degrading one at equal severity sends an operator to inspect a value when the configuration is
 wrong.
 
-**This gives `Verdict::latches()` its first production caller.** `State::Failed` now follows the
-composed verdict instead of being recomputed by `Policy::step` from its own guards. The rule is
-read where it is written.
+**This gives `Verdict::latches()` its first production caller** — `poll_publish` latches
+`State::Failed` when the composed verdict latches.
+
+**CORRECTED 2026-08-11, the same day, by this story's review.** The sentence that stood here said
+*"`State::Failed` now follows the composed verdict instead of being recomputed by `Policy::step`
+from its own guards. The rule is read where it is written."* **That was false in both halves**, and
+the review proved it rather than argued it: `latches()` is true only for `Cause::SourceRefused`,
+which `Policy::step` produces at exactly the two sites that already return `State::Failed`, so the
+new branch holds if and only if the old computation already said `Failed`. It cannot change an
+answer, and deleting it is undetectable. `Policy::step`'s own doc table still states the latch rule,
+so it is not stated in `oracle.rs` "and nowhere else" either.
+
+What the branch is for is the case Epic 2 is about to create: a **metric-scoped** judgement
+carrying a latching cause, which `compose_for_meter` folds into the meter verdict and which nothing
+else would latch. Story 2.4's oracles are metric-scoped by design. So the caller is real and the
+mechanism is a net for a case that does not exist yet — which is a defensible thing to build and
+was not a defensible thing to describe as a unification that had happened.
+
+Unifying them for real means taking `State::Failed` out of `Policy::step` and deriving it from
+`prev` plus the composed verdict. That changes the table story 2.1 AC7 and story 2.3 AC10 both
+require be preserved verbatim, so it belongs to the story that first needs it, not to this one.
+
+**Recorded because the shape matters more than the instance.** An ADR asserting a mechanism that
+does not mechanise anything is the same failure as a test that cannot fail — and this repository
+throws those away. It was written by the same author, in the same session, as the review that
+found it.
 
 ### Tier 3 is a tie-break and is not offered as a principle
 
@@ -94,6 +117,12 @@ composing incrementally in a different grouping is meaningful — `compose` take
 
 ## What would reopen this
 
+- **Tier 2 acquiring a reachable subject at all.** The audit of 2026-08-11 observed that the
+  motivating collision quoted above — `ValueUnusable` versus `CounterWentBackwards` — is settled by
+  tier 3, since neither latches, and that story 2.3's own source-quality guard makes even that
+  collision unreachable from now on. Tier 2 is therefore a rule with no live case today. It is kept
+  because the *next* latching cause makes it live, and because a rule decided after its first
+  collision is a rule decided under pressure.
 - **A second latching cause whose collision with `SourceRefused` matters.** Today the latching set
   has one member, so tier 2 never has to break a tie *within* itself. A second one makes tier 3 do
   that work, on an ordering chosen for a different purpose. That is the moment to give latching

@@ -666,6 +666,53 @@ async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
             screens::escape(&failed.join(", ")),
         )
     };
+    // AND A METER THAT IS BEING READ CAN STILL BE PUBLISHING SOMETHING THE HOST
+    // MUST NOT TRUST (Story 2.3 AC6, [#62]).
+    //
+    // **Added 2026-08-11 by this story's own review, which found AC6 implemented
+    // on `/healthz` only.** The criterion names three surfaces; one had it. This
+    // is the surface a human opens, and it is the one that spent the ten hours of
+    // 2026-08-10 saying the bridge "is polling the meters and publishing what it
+    // reads" about a meter frozen since 09:34.
+    //
+    // Distinct from `failed` above, and the wording keeps them apart: that block
+    // is about meters producing NOTHING, this one about meters producing
+    // something marked. A degraded meter needs no restart and the log is not
+    // where its reason lives — the cause is on the wire, and it is here.
+    let degraded: Vec<String> = phase
+        .fleet()
+        .as_ref()
+        .map(|fleet| {
+            fleet
+                .degraded()
+                .into_iter()
+                .map(|(meter, verdict)| {
+                    format!(
+                        "{} ({})",
+                        meter,
+                        verdict.cause().map_or("no cause recorded", |c| c.as_str())
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let degraded_caveat = if degraded.is_empty() {
+        String::new()
+    } else {
+        let subject = if degraded.len() == 1 {
+            "One meter is"
+        } else {
+            "Meters are"
+        };
+        format!(
+            "<p><strong>{subject} being read, but what is published must not be \
+             trusted: {}.</strong> The bridge is polling normally and every reading \
+             reaches the host — carrying a quality that says it is not good, and the \
+             reason beside it. Nothing here is cleared by a restart: the named cause \
+             is what to act on.</p>",
+            screens::escape(&degraded.join(", ")),
+        )
+    };
     Html(format!(
         "<!doctype html><meta charset=utf-8>\
          <title>smartme_mqtt</title>\
@@ -674,14 +721,52 @@ async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
          <p>{}</p>\
          {}\
          {}\
+         {}\
          <hr><p>version {} · contract {}</p>",
         lifecycle.headline(),
         lifecycle.detail(),
         caveat,
+        degraded_caveat,
         lifecycle.next_step(),
         env!("CARGO_PKG_VERSION"),
         crate::adapters::sparkplug_publisher::CONTRACT_VERSION,
     ))
+}
+
+/// One JSON string literal, quotes included, escaped per RFC 8259.
+///
+/// **Added 2026-08-11 by the review of story 2.3.** The two lists in [`healthz`]
+/// escaped `\` and `"` and passed U+0000–U+001F through raw. A meter id
+/// containing a newline or a tab — `config.rs` applies no charset rule, and TOML
+/// basic strings accept `\n` — put a literal control byte inside a JSON string,
+/// which RFC 8259 §7 forbids. A strict parser rejects the whole document.
+///
+/// The consumer is Epic 7's healthcheck: the field added to make a fault visible
+/// would be what makes the body undecodable, and the endpoint an operator
+/// consults during exactly the incident this story exists to surface would go
+/// dark. The pre-existing `failed_sources` had the same hole; it is fixed here
+/// too rather than left as the older half of a matched pair.
+fn json_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+
+            // Every other control character, by code point. `\u007F` is legal
+            // unescaped and is left alone.
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // Every other control character, by code point. `\u007F` is legal
+            // unescaped and is left alone.
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// The endpoint Epic 7's Docker healthcheck consumes (FR33, AR12, FR44).
@@ -765,7 +850,7 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
         "[{}]",
         failed
             .iter()
-            .map(|m| format!("\"{}\"", m.replace('\\', "\\\\").replace('"', "\\\"")))
+            .map(|m| json_string(m))
             .collect::<Vec<_>>()
             .join(",")
     );
@@ -785,14 +870,20 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
         degraded
             .iter()
             .map(|(meter, verdict)| format!(
-                "{{\"meter\":\"{}\",\"quality\":\"{}\",\"cause\":\"{}\"}}",
-                meter.to_string().replace('\\', "\\\\").replace('"', "\\\""),
-                match verdict.quality() {
+                "{{\"meter\":{},\"quality\":{},\"cause\":{}}}",
+                json_string(&meter.to_string()),
+                json_string(match verdict.quality() {
                     crate::domain::Quality::Good => "good",
                     crate::domain::Quality::Stale => "stale",
                     crate::domain::Quality::Bad => "bad",
-                },
-                verdict.cause().map_or("", |c| c.as_str()),
+                }),
+                // `null`, not `""`. A non-good verdict without a cause is
+                // unreachable today — every constructor takes one — but encoding
+                // "unknown" and "empty" identically is how a field stops being
+                // able to say it does not know.
+                verdict
+                    .cause()
+                    .map_or_else(|| "null".to_string(), |c| json_string(c.as_str())),
             ))
             .collect::<Vec<_>>()
             .join(",")
@@ -1102,6 +1193,57 @@ mod tests {
     /// rendered bytes, so a mutation of what is rendered can reach the assertion.
     ///
     /// [ADR 0027]: ../../../docs/adr/0027-a-failed-source-is-a-fault-the-screen-must-name.md
+    /// A meter id carrying a control character does not make `/healthz` emit
+    /// invalid JSON (review of story 2.3, 2026-08-11).
+    ///
+    /// `config.rs` applies no charset rule to a meter id and TOML basic strings
+    /// accept `\n`, so an operator can configure `appart\nest`. The previous
+    /// escaping handled `\` and `"` and passed U+0000–U+001F through raw, which
+    /// RFC 8259 §7 forbids inside a string: a strict parser rejects the whole
+    /// body. The consumer is Epic 7's healthcheck, and the field added to make a
+    /// fault visible would be the thing that made the body undecodable — during
+    /// exactly the incident it exists to surface.
+    ///
+    /// FALSIFIED 2026-08-11 by restoring the old escaping
+    /// (`.replace('\\', …).replace('"', …)` only): the parse assertion goes red
+    /// with a literal newline inside the string.
+    #[tokio::test]
+    async fn a_control_character_in_a_meter_id_cannot_break_the_health_body() {
+        use crate::core::clock::FakeClock;
+        use crate::core::oracle::{Cause, Verdict};
+        use crate::core::state_machine::State as OracleState;
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let awkward = crate::domain::MeterId::new("appart\nest\t\"quoted\"\\slash");
+        let clock = Arc::new(FakeClock::new(UtcMillis(1_784_984_793_000)));
+        let beats = Heartbeats::for_meters([awkward.clone()]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let state = ui(publishing(
+            beats.clone(),
+            clock.clone(),
+            Arc::clone(&config),
+        ));
+
+        beats.record(
+            &awkward,
+            OracleState::Fresh,
+            Verdict::bad(Cause::CounterWentBackwards),
+        );
+        let health = body(healthz(State(Arc::clone(&state))).await.into_response()).await;
+
+        // The body must PARSE. Nothing else is asserted about the id's rendering:
+        // what matters is that a diagnostic surface survives its own inputs.
+        let parsed = serde_json::from_str::<serde_json::Value>(&health);
+        assert!(
+            parsed.is_ok(),
+            "/healthz must emit valid JSON whatever a meter is called — an \
+             operator's healthcheck cannot parse its way past a raw control \
+             character: {:?}\n{health}",
+            parsed.err()
+        );
+    }
+
     /// **Story 2.3 AC6** — a meter publishing a non-good verdict is reported as
     /// such, and it is neither `failed` nor `wedged`.
     ///
@@ -1182,6 +1324,29 @@ mod tests {
             health.contains("\"wedged\":false"),
             "and the poll loop is not wedged: it ticked, judged, and published a \
              refusal, which is the loop working:\n{health}"
+        );
+
+        // AND THE PAGE A HUMAN OPENS, which is where AC6 was left unmet until its
+        // own review found it: `/healthz` had the field and `/` said the bridge
+        // "is polling the meters and publishing what it reads", unqualified,
+        // about a meter it was publishing `Bad` for.
+        let page = body(index(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            page.contains("appart-est"),
+            "the page must name the degraded meter — it is the surface an operator \
+             opens at 3am, and the one that reported healthy through the ten-hour \
+             outage of 2026-08-10:\n{page}"
+        );
+        assert!(
+            page.contains("counter-went-backwards"),
+            "and it must carry the cause, or the operator is told to distrust a \
+             value without being told why:\n{page}"
+        );
+        assert!(
+            !page.contains("not being read"),
+            "a degraded meter IS being read: saying otherwise sends the operator \
+             to look for a credential or a device mapping, when the fault is in \
+             the number:\n{page}"
         );
     }
 

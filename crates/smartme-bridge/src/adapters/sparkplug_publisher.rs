@@ -761,6 +761,84 @@ mod tests {
         }
     }
 
+    /// **Story 2.3 AC1, ON THE PUBLISHED METRICS** — the pair that ADR 0031
+    /// exists for, asserted where a consumer would see it.
+    ///
+    /// **ADDED 2026-08-11 by the review of story 2.3, which found this hole by
+    /// running the mutation.** Every other test reaching `metrics_for` hands it a
+    /// `Verdicts::uniform`, where the pre-2.3 code and the new one agree on every
+    /// output — so `let verdict = verdicts.meter();` restored the exact old wire,
+    /// `Power = null` labelled `counter-went-backwards`, and the WHOLE SUITE
+    /// STAYED GREEN. The story's own AC1 test asserts on the in-process
+    /// `MeterUpdate` and never inspects a `Metric`: it proves the core composes
+    /// per metric, and nothing about what leaves the process.
+    ///
+    /// This is the behaviour `CONTRACT_VERSION = 6` is declared BREAKING for. It
+    /// was pinned by nothing: not by this file, and not by `contract_golden`,
+    /// which is a list of strings and cannot express which metric a verdict lands
+    /// on.
+    ///
+    /// FALSIFIED 2026-08-11, three mutations, each red on its own message:
+    /// `verdicts.for_metric(metric)` → `verdicts.meter()` (the whole of ADR 0031
+    /// undone — the `Power` value assertion goes red); nulling on
+    /// `verdicts.meter().quality()` instead of the metric's own (same);
+    /// attaching the cause from `verdicts.meter()` (the "no cause on a good
+    /// metric" assertion goes red).
+    #[test]
+    fn a_metric_refused_alone_is_the_only_one_nulled_on_the_wire() {
+        let m = measurement(Quality::Good);
+        let mixed = Verdicts::from_judgements(&[
+            crate::core::oracle::Judgement::about_reading(Verdict::good()),
+            crate::core::oracle::Judgement::about(
+                Measured::Energy,
+                Verdict::bad(Cause::CounterWentBackwards),
+            ),
+        ]);
+        let metrics = super::metrics_for(&m, mixed);
+
+        let power = metrics
+            .iter()
+            .find(|metric| metric.name == super::METRIC_POWER)
+            .expect("power is published");
+        let energy = metrics
+            .iter()
+            .find(|metric| metric.name == super::METRIC_ENERGY)
+            .expect("energy is published");
+
+        // THE REFUSED METRIC: no value at all, and it says why.
+        assert!(
+            matches!(energy.value, MetricValue::Null(DataType::Double)),
+            "a refused metric must withhold its number — that is what `Bad`              means, and it is the whole reason a backwards counter is `Bad`              rather than `Stale`. Got {:?}",
+            energy.value
+        );
+        assert_eq!(
+            energy.quality_code,
+            Some(super::ignition_quality_code(super::Quality::Bad))
+        );
+        assert_eq!(
+            energy.properties,
+            vec![(
+                super::METRIC_PROPERTY_CAUSE.to_string(),
+                "counter-went-backwards".to_string()
+            )]
+        );
+
+        // THE METRIC NOBODY OBJECTED TO: its real value, at full trust, unlabelled.
+        assert!(
+            matches!(power.value, MetricValue::Double(v) if v == m.power.0),
+            "the power reading is current and no oracle judged it; withholding it              publishes a fault where there is none. Got {:?}",
+            power.value
+        );
+        assert_eq!(
+            power.quality_code,
+            Some(super::ignition_quality_code(super::Quality::Good))
+        );
+        assert!(
+            power.properties.is_empty(),
+            "a good metric carries no cause — least of all its neighbour's, which              is what the pre-2.3 wire did: `Power = null`, cause              `counter-went-backwards`, for a number the bridge had no complaint              about"
+        );
+    }
+
     /// The property that outlives the exact constants: neither non-good quality
     /// may land on Ignition's *good* level, whatever its subcode. That was the
     /// contract-v1 defect, and it was invisible from inside this tree.
