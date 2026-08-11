@@ -1,6 +1,6 @@
 # Story 2.1: The oracle layer exists, and how verdicts compose is decided once
 
-Status: review
+Status: in-progress
 
 ## Story
 
@@ -303,3 +303,46 @@ checking in the tag browser on the next deployment.
 - `docs/manual/chapters/05-mqtt-sparkplug-contract.tex`
 - `docs/ignition-contract-runbook.md`
 - `docs/sparkplug-conformance.md`
+
+### Review Findings — 2026-08-11
+
+Three review layers (blind adversarial, edge-case, acceptance audit). The layer exists and the
+core migrated onto it with no verdict changed (AC7 holds, 26 assertions preserved verbatim). What
+the review found is that **three of the four mechanisms this story promised are not wired to
+anything**: the latch rule has no production caller, the golden does not pin what AC5 named, and
+the cause's journey to the wire is untested at its last hop.
+
+**Decisions — settled by Guy on 2026-08-11, before story 2.3.**
+
+All three were taken the same day the review raised them. Two of them change an architectural
+position and are owed an ADR each; one of those also moves the wire contract.
+
+| Decision | Taken | Carries |
+|---|---|---|
+| Equal-severity ties | **A latching cause outranks a degrading one** | ADR; gives `latches()` its first production caller |
+| Verdict scope | **Per-metric, now — not after 2.3** | ADR + `CONTRACT_VERSION` bump; `compose` composes per metric |
+| Health surfaces | **They read the composed verdict** | closes the `[#62]` family on this path |
+
+- [x] [Review][Decision] **Equal-severity ties are resolved by array position, and the module doc says no caller may rely on that — one already does** — `compose` replaces only on STRICTLY greater severity, so `compose([freshness, monotonicity])` silently means "freshness wins ties". Reachable today: a unit-conversion failure yields `bad(ValueUnusable)` from freshness while monotonicity independently yields `bad(CounterWentBackwards)` on the same reading. The operator sees one cause and never learns the other applied. Nothing logs or counts the collision, so the documented mitigation ("a decision to take then, in the open") has no trigger. Story 2.3's bounds oracle lands in this same tie space. A rule that a LATCHING cause outranks a degrading one at equal severity would be order-independent, which is the property `compose` exists to provide.
+- [x] [Review][Decision] **The published verdict and the bridge's own health surface have diverged** [`crates/smartme-bridge/src/app/poll_publish.rs:484-500,534`] — `pulse.record(&meter, state)` receives the FRESHNESS state; no oracle can influence it. A meter whose counter goes backwards publishes `Bad` with null values to Ignition while `/healthz` and `/` report `Fresh`. This is the family of `[#62]`, on a code path added yesterday. Decide whether the operator surfaces read the composed verdict.
+- [x] [Review][Decision] **One verdict per READING is stamped on every METRIC** [`crates/smartme-bridge/src/adapters/sparkplug_publisher.rs:110-146`] — an energy-only oracle nulls Power and labels it `counter-went-backwards`. The composition layer has no notion of which metric an oracle judges, so a per-metric oracle degrades metrics it says nothing about. Story 2.3 (physical bounds) is per-metric by nature, so this decision cannot wait.
+
+**Patches.**
+
+- [ ] [Review][Patch] **`Cause::ALL` can be bypassed by APPENDING a variant — the natural case, and the only way a cause has ever been added here** [`crates/smartme-bridge/src/core/oracle.rs:~1007-1052`, `crates/smartme-bridge/tests/contract_golden.rs`] — `as_str()` and `discriminant()` are exhaustive matches; `ALL` is a hand-written slice that nothing forces. Append a variant, add its two match arms, forget `ALL`: positions still align, `ALL.len()` is unchanged, the golden compares 11 to 11, everything is green, and the new string reaches the wire. The module doc claims *"a cause cannot reach the wire without passing the golden test"*. `every_cause_has_its_own_wire_string` and `identity_latches_and_value_does_not` each carry a THIRD hand-copied duplicate of the list. `latches()` is `matches!(…)`, not an exhaustive match, so a new cause silently defaults to non-latching with no build error.
+- [ ] [Review][Patch] **AC5 is unmet as written: the golden does not pin the oracle→quality mapping** [`crates/smartme-bridge/tests/contract_golden.rs`] — it pins `Quality → integer code` and `cause → (wire string, latches)`, never WHICH QUALITY A CAUSE PRODUCES. Turning `Verdict::stale(ReadingTooOld)` into `Verdict::bad(…)` leaves it green. Also unpinned: `METRIC_PROPERTY_CAUSE = "Cause"` (the very change v4 was struck for — rename it to `"Reason"` and every consumer's tag binding breaks with the guard green), metric names, and units — while the manual promises a bump *"on ANY change to a metric name or unit"*. Conversely the golden pins `latches`, which is never published.
+- [ ] [Review][Patch] **Nothing proves the cause reaches the wire — the only assertion is on the in-memory struct** [`crates/sparkplug-b/src/encode.rs:281-288`] — `a_non_good_metric_names_its_cause_and_a_good_one_does_not` compares `metric.properties`, the model's `Vec<(String,String)>`. The new loop that pours those pairs into the protobuf `PropertySet` is traversed by NO test: `a_birth_is_self_describing` and `quality_travels_as_a_property_on_every_message` cover only `Quality`/`engUnit`, and `builders_attach_self_describing_properties` never calls `with_property`. Delete the encoding loop and the whole suite stays green — the cause would never reach a consumer and nothing would say so. This is the exact defect shape the story was written to prevent.
+- [ ] [Review][Patch] **AC4 is unmet: `Verdict::latches()` governs nothing, and its doc claims the opposite** [`crates/smartme-bridge/src/core/oracle.rs:424-425`] — the only callers outside `oracle.rs` are three test assertions. The real latch is computed independently by `Policy::step` (`prev == State::Failed || matches!(tick, Err(Fatal))`). So `assert!(Cause::SourceRefused.latches())` restates `matches!(SourceRefused, SourceRefused)` in a second file — the "bdSeq compared against itself" shape. The doc says the `Failed` latch *"is reached through `Verdict::latches` alone"*, which is false. The rule lives in two places, one of them inert.
+- [ ] [Review][Patch] **AC4's non-latching test asserts that a stateless fold is stateless** [`crates/smartme-bridge/src/core/oracle.rs:429-435`] — `a_degrading_cause_does_not_poison_the_next_reading` calls `compose([bad(…)])` then `compose([good()])`. No reading is judged, no "next reading" is published. AC4 asked that *"the next good reading publishes `Good` again"*. The property was only really attested afterwards, by story 2.2's test. The story file names this trap itself.
+- [ ] [Review][Patch] **`step_is_deterministic_and_pure` silently narrowed in the migration** [`crates/smartme-bridge/src/core/state_machine.rs:~1698`] — migrated to `step_quality`, which discards the cause. It now proves the QUALITY is deterministic and says nothing about the half this story added, in a migration whose rule was to keep assertions verbatim.
+- [ ] [Review][Patch] **Falsification is not recorded next to the tests** [`crates/smartme-bridge/tests/contract_golden.rs`] — no `FALSIFIED` note anywhere in the file, though AC5 demands both directions. The three reds and the deliberate green live only in this story file. Repository rule: *"record the falsification next to the test"*.
+- [ ] [Review][Patch] **`a_version_without_a_golden_is_refused…` is near-tautological, and `GOLDEN_QUALITY_V4` is shared by reference between the v4 and v5 arms** [`crates/smartme-bridge/tests/contract_golden.rs`] — the first restates that the `match` has two listed arms; the load-bearing half (that the panic arm fires) is unexercised. The second means editing v4's golden retroactively rewrites what v4 attested to — a golden is a historical record.
+- [ ] [Review][Patch] **The runbook still says "the contract is now v4" while `CONTRACT_VERSION = 5`** [`docs/ignition-contract-runbook.md:312`] — verified. AC6 instituted a mechanical grep for the old number; story 2.2 did not re-run it. The manual's prose (`05-…tex:179-182`) states the nature of v4, v3 and v2 and skips v5, the current one.
+- [ ] [Review][Patch] **ADR 0029 is not amended** [`docs/adr/0029-*.md`] — AC4 asked that the serial-identity check be recorded as the first instance of the latching half. The link exists only inside `oracle.rs`; ADR 0029's reader still sees an isolated decision. Repository rule: an architectural position gets an ADR.
+- [ ] [Review][Patch] **A closed task carries an undecided decision** [Task 3] — *"decide and record whether the DBIRTH declares it"* is ticked `[x]` while the completion notes defer it to a future tag-browser observation. Repository rule: never defer a decision to an artifact that does not exist. Record it as UNMET with an issue, or decide it.
+
+**Deferred.**
+
+- [x] [Review][Defer] **`source-refused` is a generic string shared by a rejected credential and a wrong meter** [`crates/smartme-bridge/src/adapters/smartme_source.rs:191`] — deferred, belongs to story 2.5 (error taxonomy). An operator cannot tell NFR7 (wrong meter) from an expired credential, which is the reproach this story levels at `smartme_source.rs:261`.
+- [x] [Review][Defer] **A cold-start or newly-announced DBIRTH publishes a non-good quality with NO `Cause`** [`crates/smartme-bridge/src/adapters/sparkplug_publisher.rs:590-607`] — deferred, pre-existing path plus an owed measurement. `cold_start_metrics` bypasses `metrics_for`, so the invariant "a non-good metric names its cause" does not hold there, and no cause in the vocabulary means "never read yet". **Settled against the norm during review: adding a property in DATA that was absent from BIRTH is LEGAL** — the rebirth triggers at `Sparkplug_5_Operational_Behavior.adoc:862-864` concern metrics and aliases, not properties, and the only property-level MUSTs (`tck-id-payloads-propertyset-keys-array-size`, `-values-array-size`, `tck-id-payloads-metric-propertyvalue-type-req`) are satisfied unconditionally by `encode.rs:273-310`. What Ignition DOES with such a property is the Tier-3 measurement already owed in `sprint-status.yaml`.
+- [x] [Review][Defer] **"No opinion" and "I checked and it is fine" are the same value** [`crates/smartme-bridge/src/app/poll_publish.rs:357`] — deferred, harmless under worst-wins. There is no `Verdict::abstain()`, so any future rule needing "every oracle affirmed" (a coverage assertion, an operator page listing which oracles ran) cannot tell them apart after composition.

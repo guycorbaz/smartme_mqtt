@@ -1,6 +1,6 @@
 # Story 4.17: Fix the Will QoS — the specification says 1, we send 0
 
-Status: review
+Status: done
 
 ## Story
 
@@ -127,3 +127,21 @@ removed it.
 - `docs/sparkplug-conformance.md`
 - `docs/manual/chapters/02-understanding-sparkplug.tex`
 - `docs/manual/chapters/05-mqtt-sparkplug-contract.tex`
+
+### Review Findings — 2026-08-11
+
+Three review layers (blind adversarial, edge-case, acceptance audit). **The behaviour this story
+changed is correct** — `qos_for` returns QoS 1 for the will and QoS 0 for NDATA/DDATA, which is
+what the norm requires. Every finding below is about what the story WROTE DOWN, and the first is
+a third instance of the failure `CLAUDE.md` was written to stop.
+
+- [ ] [Review][Patch] **The norm is NOT silent on NDATA and DDATA — it mandates QoS 0, and this story replaced a true sentence with a false one** [`crates/smartme-bridge/src/app/mqtt_driver.rs:196`] — `tck-id-payloads-ndata-qos` (`Sparkplug_6_Payloads.adoc:1314-1315`) and `tck-id-payloads-ddata-qos` (`:1371-1372`) both read *"MUST be published with the MQTT QoS set to 0"*. Verified by grep against the vendored spec during review. The deleted text was accurate. Consequences: the doc table row, the test's `// CHOSEN. The norm is silent on these` grouping (`:1747`), the manual (`05-…tex:255-257`), and the count "three of seven mandated" (it is five). `docs/sparkplug-conformance.md:979,1006,1016` still states the MUST, so the repository now contradicts itself. The test whose stated purpose is *"a single table would let a future edit move a MUST while looking like a preference"* files two MUSTs under preference.
+- [ ] [Review][Patch] **The citation justifying "the explicit NDEATH rides at QoS 1, structurally" is about the Host Application, not an Edge Node** [`crates/smartme-bridge/src/app/mqtt_driver.rs:205-207`] — `Sparkplug_5:808-812` is `tck-id-operational-behavior-host-application-death-payload`: the Host Application's STATE will, JSON UTF-8, `online`/`timestamp`. Verified during review. Nothing in chapters 5 or 6 mandates byte-identity between the explicit NDEATH and the registered will. The QoS 1 choice stands on its own merits; it is a CHOICE, and is currently presented as structural on an off-topic clause.
+- [ ] [Review][Patch] **`-will-retained` does not recompose into a real identifier** [`crates/smartme-bridge/src/app/mqtt_driver.rs:194`] — under the stated prefix it yields `…-publish-will-retained`, which does not exist. The clause is `tck-id-message-flow-edge-node-birth-publish-will-message-will-retained` (`Sparkplug_5:185`). The line number and the verdict are right; the abbreviation is not.
+- [ ] [Review][Patch] **Nine `conformant` rows cite a test that no longer exists** [`docs/sparkplug-conformance.md:288,306,308,310,383,648,979,1006,1016`] — `every_edge_node_message_is_qos_zero_and_never_retained` was replaced, not renamed-through. It survives as evidence in the conformance matrix, in prose at `:405,:1152,:1331`, in `docs/adr/0017-a-retained-ncmd-is-a-replay-not-a-request.md:13` and in `docs/primary-host-state-observation.md:314`. Confirmed: 9 files still name it. `:1331` also describes as open a finding this story closed.
+- [ ] [Review][Patch] **AC1's evidence is weaker than the sibling clause the same document grades `gap (unproven)`** [`crates/smartme-bridge/src/app/mqtt_driver.rs:1726`] — `the_delivery_table_matches_the_specification_clause_by_clause` asserts on `qos_for(NDeath)`, a pure function. No assertion observes the QoS handed to `set_last_will`. Three lines away, `-will-message-retain` stays `gap (unproven)` with the reason *"no test observes the registered will's retain flag"* — the same derivation, graded differently, and the tally moved on the difference.
+
+**Came back clean:** the shutdown flush carries no QoS-1-specific hazard (a fresh `AsyncClient`
+per session, so no cross-session redelivery of an unacked death); AC3 (the test was replaced, not
+edited) and AC4's arithmetic (ch. 5 `31+1+18+49=99`, ch. 6 `37+4+9+59=109`, total `274`) both
+verify.

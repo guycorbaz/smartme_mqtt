@@ -447,6 +447,80 @@ mod tests {
         );
     }
 
+    /// A caller-supplied property reaches the protobuf, with its key, its value
+    /// and its type — and it does not displace the two the crate adds itself.
+    ///
+    /// **ADDED 2026-08-11. Nothing traversed this loop.** Story 2.1 put the
+    /// bridge's `Cause` on the wire through `Metric::with_property`, and asserted
+    /// it on `metric.properties` — the model's `Vec<(String, String)>`, in
+    /// memory, before any encoding happens. `a_birth_is_self_describing` and
+    /// `quality_travels_as_a_property_on_every_message` reach the protobuf but
+    /// only ever look at quality and `engUnit`, and `model.rs`'s own property
+    /// test never calls `with_property`. So the `for (key, value) in
+    /// &metric.properties` loop in `encode_properties` could be DELETED and the
+    /// entire suite stayed green, while the cause silently stopped reaching any
+    /// consumer — the exact failure story 2.1 was written to prevent, one layer
+    /// below where it was checked.
+    ///
+    /// The array-length assertion is not decoration: equal `keys`/`values`
+    /// lengths is the one thing the norm actually mandates about a `PropertySet`
+    /// (`tck-id-payloads-propertyset-keys-array-size` and
+    /// `-values-array-size`, `Sparkplug_6_Payloads.adoc:570,576`), and a loop
+    /// that pushed to one vector and not the other would produce a payload no
+    /// conformant host must accept.
+    ///
+    /// FALSIFIED 2026-08-11, three mutations, each red on its own message:
+    /// deleting the caller-property loop (the key is absent); pushing the value
+    /// as an int rather than a string (the type assertion); and moving the loop
+    /// ABOVE the quality/unit pushes (the ordering assertion, which is what
+    /// keeps a consumer reading by index from shifting under a new property).
+    #[test]
+    fn a_caller_supplied_property_reaches_the_wire_beside_the_crate_s_own() {
+        let (mut live, _) = live_from(0);
+        let refused = Metric::new("Energy", MetricValue::Double(4843.822), 1)
+            .with_quality(Quality::Bad)
+            .with_engineering_unit("kWh")
+            .with_property("Cause", "counter-went-backwards");
+        let p = live.data(1, vec![refused]);
+        let props = p.metrics[0]
+            .properties
+            .as_ref()
+            .expect("a metric with a caller property has a property set");
+
+        assert_eq!(
+            props.keys.len(),
+            props.values.len(),
+            "tck-id-payloads-propertyset-keys-array-size / -values-array-size: \
+             the two arrays MUST be the same length"
+        );
+
+        // Ordering is the property `encode_properties` documents: the crate's
+        // own two keep their positions whatever a caller adds.
+        assert_eq!(
+            props.keys,
+            vec![
+                Quality::PROPERTY_KEY.to_string(),
+                Metric::ENG_UNIT_KEY.to_string(),
+                "Cause".to_string(),
+            ]
+        );
+
+        assert_eq!(
+            props.values[2].value,
+            Some(payload::property_value::Value::StringValue(
+                "counter-went-backwards".to_string()
+            )),
+            "the cause must arrive as its wire string, not as anything a \
+             consumer would have to decode"
+        );
+        assert_eq!(
+            props.values[2].r#type,
+            Some(crate::datatype::DataType::String.code()),
+            "a caller property is typed String on the wire, or a host reads the \
+             field as something else"
+        );
+    }
+
     #[test]
     fn a_metric_without_properties_omits_the_property_set() {
         let (mut live, _) = live_from(0);

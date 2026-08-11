@@ -533,12 +533,62 @@ mod tests {
         );
     }
 
+    /// The whole verdict is deterministic, not just its quality.
+    ///
+    /// **WIDENED 2026-08-11.** Story 2.1 migrated this to `step_quality`, which
+    /// discards the cause — so a test named for the purity of `step` stopped
+    /// covering the half that story had just added, and a `step` that returned a
+    /// different CAUSE on identical inputs would have passed it. That migration's
+    /// rule was to keep the pre-2.1 assertions verbatim as proof no verdict moved,
+    /// which was right for the rows above; here it silently narrowed the property
+    /// instead of preserving it.
+    ///
+    /// Determinism is not a formality for this function: `Policy::step` is the
+    /// pure core that `arch_purity` keeps off the clock and off the network, and
+    /// every oracle Epic 2 adds composes with its output. A verdict that varied
+    /// between two identical calls would make every downstream test's green a
+    /// coincidence.
+    ///
+    /// FALSIFIED 2026-08-11: making the `NoFreshnessProof` arm alternate its
+    /// cause between two calls (a `static` counter in the arm) leaves the quality
+    /// assertion green and turns the verdict assertion red — which is precisely
+    /// the gap the narrowing left open.
     #[test]
     fn step_is_deterministic_and_pure() {
-        let tick = Ok(reading(Quality::Good, BASE, Some(BASE + 500)));
-        let a = POLICY.step_quality(State::Stale, &tick, SANE_NOW);
-        let b = POLICY.step_quality(State::Stale, &tick, SANE_NOW);
-        assert_eq!(a, b);
+        // Every shape of tick, not just the good one: a cause is only produced on
+        // the paths the original assertion never took.
+        let ticks: [(&str, Tick, UtcMillis); 4] = [
+            (
+                "good",
+                Ok(reading(Quality::Good, BASE, Some(BASE + 500))),
+                SANE_NOW,
+            ),
+            (
+                "no freshness proof",
+                Ok(reading(Quality::Good, BASE, None)),
+                SANE_NOW,
+            ),
+            ("timeout", Err(SourceError::Timeout), SANE_NOW),
+            (
+                "host clock below the floor",
+                Ok(reading(Quality::Good, BASE, Some(BASE + 500))),
+                UtcMillis(0),
+            ),
+        ];
+
+        for (name, tick, now) in ticks {
+            let a = POLICY.step(State::Stale, &tick, now);
+            let b = POLICY.step(State::Stale, &tick, now);
+            assert_eq!(
+                a, b,
+                "{name}: two identical calls to `step` disagreed — state, quality \
+                 AND cause must all be a function of the inputs alone"
+            );
+            // Kept explicitly as well as through the tuple: the quality half is
+            // what this test asserted before 2026-08-11, and it must keep holding
+            // on its own terms.
+            assert_eq!(a.1.quality(), b.1.quality(), "{name}: quality is not pure");
+        }
     }
 
     /// Story 2.1 AC7 — every row of the table names its OWN cause.
@@ -635,6 +685,18 @@ mod tests {
                 "{name} describes a reading, not an identity"
             );
             assert!(!verdict.latches(), "{name} must not latch");
+            // ADDED 2026-08-11: the table must also publish the quality the
+            // cause promises. Without this the table could quietly relabel a
+            // freshness refusal as `Bad` — a contract change no golden saw,
+            // because `contract_golden` pinned each half separately and never
+            // the mapping between them.
+            assert_eq!(
+                verdict.quality(),
+                expected
+                    .expect("every row here has a cause")
+                    .published_quality(),
+                "{name}: the table publishes a quality its cause does not promise"
+            );
         }
 
         // And the good row carries no cause at all.

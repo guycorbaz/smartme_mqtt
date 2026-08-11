@@ -59,7 +59,7 @@
 #   Ignition contract test (human action required — stays backlog until Guy runs it).
 
 generated: 2026-07-25
-last_updated: 2026-08-10
+last_updated: 2026-08-11
 project: smartme_mqtt
 project_key: NOKEY
 tracking_system: file-system
@@ -335,9 +335,40 @@ development_status:
   # versus which merely degrade the reading.
   # `domain/quality.rs` has been waiting for this since story 1.2: *"the bridge's
   # error taxonomy maps into it (Epic 2 onward); no ad-hoc quality strings"*.
-  2-1-the-oracle-layer-and-how-verdicts-compose: review
+  # REVIEWED 2026-08-11, three layers. NOT `done`: AC2, AC4 and AC5 are established
+  # UNMET, and three design decisions were taken that open work this story did not
+  # contain. See the Review Findings section in the story file.
+  #  - AC4: `Verdict::latches()` had no production caller at all; the latch was
+  #    computed independently by `Policy::step`, so the rule lived in two places and
+  #    one of them was inert. Its non-latching test asserted that a stateless fold
+  #    is stateless.
+  #  - AC5: the golden pinned each quality's code and each cause's string, and never
+  #    WHICH QUALITY A CAUSE PRODUCES — nor the `Cause` property key, the change v4
+  #    was struck for. Renaming it to "Reason" broke every consumer with a green suite.
+  #  - AC3: nothing proved the cause reached the wire. The assertion was on the
+  #    in-memory struct; deleting the protobuf encoding loop left the suite green.
+  # All three are FIXED, falsified, and green. What keeps the story open is the
+  # decisions: per-metric verdicts, latching-wins-ties, and health surfaces reading
+  # the composed verdict — story 2.7 below.
+  2-1-the-oracle-layer-and-how-verdicts-compose: in-progress
   # FR15, NFR6 — the one with a date on it. See the epic note above.
-  2-2-energy-counter-monotonicity: review
+  # REVIEWED 2026-08-11. NOT `done` — AC2 is UNMET and AC6 partially so, and the
+  # worst finding is that THE NUMBER THIS STORY REFUSES TO PUBLISH REACHES THE WIRE
+  # ONE TICK LATER: `last` is updated on every successful fetch including a refused
+  # one, and `metrics_for` nulls values only on `Bad`, so the next timeout
+  # republishes the post-reset index as a real Double marked `Stale`. A consumer
+  # differencing it gets the negative delta FR15 exists to prevent, with a flag
+  # saying the network hiccuped. AC2's own rationale names the hazard and then
+  # guards only `energy_reference`.
+  # AC2's implemented rule ("source quality != Bad") is neither AC2's nor AC3's, and
+  # is already wrong for stories 2.3 and 2.4, which produce Bad verdicts on readings
+  # the source marked Good. Decided 2026-08-11: both `last` and the reference follow
+  # the COMPOSED verdict, with an explicit exemption for CounterWentBackwards.
+  # Also decided: persist the reference across restarts (bd_seq_path's mechanism);
+  # NFR6's residual is an accepted limitation and needs an issue.
+  # Fixed and falsified today: a non-finite index is refused rather than blessed.
+  # The rest lands in story 2.7, which refactors the code they live in.
+  2-2-energy-counter-monotonicity: in-progress
   # FR14 — does not exist at all today.
   2-3-physical-bounds: backlog
   # FR16, plus `map_device`'s debt: three failure modes collapse into one
@@ -349,6 +380,31 @@ development_status:
   # FR10, plus the parked frozen/replayed-feed oracle — a byte-identical replayed
   # response keeps a plausible age and stays `Fresh` today.
   2-6-utc-end-to-end-and-clock-skew: backlog
+  # ADDED 2026-08-11 by the review of stories 2.1 and 2.2. It exists because four
+  # decisions taken that day are DESIGN work, not patches, and all four finish the
+  # oracle layer rather than extending it — so they belong together and before 2.3,
+  # which builds directly on what they change:
+  #  1. PER-METRIC VERDICTS. `compose` yields one verdict per READING and
+  #     `metrics_for` stamps it on every metric, so an energy-only oracle nulls a
+  #     perfectly current Power and labels it `counter-went-backwards`. Story 2.3
+  #     (physical bounds) is per-metric by nature and cannot be written on top of
+  #     this. Carries an ADR and a CONTRACT_VERSION bump.
+  #  2. TIES GO TO THE LATCHING CAUSE. At equal severity `compose` keeps whichever
+  #     verdict came first in the array, and the module doc says no caller may rely
+  #     on that — `poll_publish` already does. A latching-outranks-degrading rule is
+  #     order-independent, which is the property `compose` exists to provide, and it
+  #     gives `latches()` its first production caller. Carries an ADR.
+  #  3. `last` AND `energy_reference` FOLLOW THE COMPOSED VERDICT, exempting
+  #     CounterWentBackwards. Closes the one-tick-later republication above.
+  #  4. HEALTH SURFACES READ THE COMPOSED VERDICT. `pulse.record` receives the
+  #     freshness state, so a backwards counter publishes Bad to Ignition while
+  #     /healthz and / call the meter Fresh — the [#62] family on a new path.
+  # Four patches from the review are deliberately deferred INTO this story rather
+  # than applied first, because they live in the exact lines it rewrites: the
+  # BAD_CARRIER guard, AC6's third mutation, a missing length assertion, and a test
+  # that discards the states it should check.
+  2-7-the-oracle-layer-finished: backlog
+
   # NOT A STORY: FR9 and NFR7 (serial-identity binding and its verification) were
   # delivered by ADR 0029 on 2026-08-09, and more strongly than the FR asked. They
   # are owed a VERIFICATION at epic close, not fresh work.
@@ -967,7 +1023,18 @@ development_status:
   # 87.6.37.144 -> 89.6.35.144, every sum re-checked. Manual: 68 pages, overfull
   # boxes EXACTLY the five in the committed baseline. `./scripts/ci-local.sh`
   # green, all ten steps including the image. Closes [#26].
-  4-17-fix-the-will-qos: review
+  # REVIEWED 2026-08-11 and CLOSED. The behaviour was right; every finding was
+  # about what the story WROTE DOWN, and the first is a third instance of the
+  # failure CLAUDE.md's opening rule exists to stop: the story deleted an accurate
+  # sentence about the norm and replaced it with a false one. tck-id-payloads-ndata-qos
+  # and -ddata-qos both mandate QoS 0, and their -retain siblings mandate false, so
+  # FIVE of the seven edge-node messages are constrained, not three. The claim landed
+  # in the very test written to stop a MUST from being moved while looking like a
+  # preference. All five findings fixed; two conformance rows UPGRADED from
+  # `gap (unproven)` to `conformant` after `register_will` was extracted so a test
+  # could observe the will actually registered — the totals move 89 -> 91 conformant,
+  # 35 -> 33 gaps.
+  4-17-fix-the-will-qos: done
   4-18-correct-adr-0010-wording: backlog
   # 2026-07-28: added out of the Story 4.2 code review. Chapter 4 records 41 of its
   # 70 clauses; Story 4.1 audited the topic grammar and left the chapter's own

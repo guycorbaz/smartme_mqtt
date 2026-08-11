@@ -1,6 +1,6 @@
 # Story 2.2: An energy counter that goes backwards is never published as a valid measurement
 
-Status: review
+Status: in-progress
 
 ## Story
 
@@ -186,3 +186,36 @@ as a valid measurement — and it will be the first time FR15 is exercised outsi
 - `crates/smartme-bridge/src/adapters/sparkplug_publisher.rs`
 - `crates/smartme-bridge/tests/contract_golden.rs`
 - `docs/manual/chapters/05-mqtt-sparkplug-contract.tex`
+
+### Review Findings — 2026-08-11
+
+Three review layers (blind adversarial, edge-case, acceptance audit). The oracle detects a
+backwards counter and publishes `Bad` with null values — the property AC1 names holds for the
+tick on which it happens. **What the review found is that the number this story refuses to
+publish reaches the wire anyway, one tick later**, and that the reference guard implements a
+third rule that is neither AC2's nor AC3's.
+
+**Decisions — settled by Guy on 2026-08-11.**
+
+| Decision | Taken | Carries |
+|---|---|---|
+| What `last` and `energy_reference` adopt | **Both follow the COMPOSED verdict**, with an explicit exemption for `CounterWentBackwards` (the one `Bad` that must be adopted, per AC3) | makes AC2 true as written; makes the guard correct for stories 2.3 and 2.4 |
+| Restart | **Persist the reference**, same mechanism as `bd_seq_path` | closes the window where FR15 is most needed; Epic 7 will make restarts frequent |
+| NFR6 residual | **Accepted limitation, recorded with an issue** | AC3 mandates the behaviour; the gap with NFR6's letter was written down nowhere |
+
+- [x] [Review][Decision] **The refused number reaches the wire on the next tick, as a real Double with quality `Stale`** [`crates/smartme-bridge/src/app/poll_publish.rs:403-409`] — `*last = Some(reading.value.clone())` runs on EVERY successful fetch, including one judged `Bad`. On the next failed fetch, `to_publish = last.clone()` and the composed verdict is `Stale(SourceUnreachable)`; `metrics_for` nulls values only on `Quality::Bad` (`sparkplug_publisher.rs:623-627`), so at `Stale` it publishes `Double(energy)` — the post-reset index, or the substituted `BAD_CARRIER = 0.0` when a unit conversion failed (`smartme_source.rs:38,265-280`). A consumer differencing `4843.822 → 0.0` gets −4843.8 with a flag saying "the network hiccuped". AC1: *"a consumer must not be handed the number at all, because the number is exactly what it would difference"*. No test covers the sequence backwards→timeout. The manual's justification for publishing values at `Stale` (*"this WAS a reading"*) is false in the `BAD_CARRIER` case: it was never a reading. **AC2's own rationale names this hazard** (*"`last` … is updated on every successful fetch including ones the oracle refused"*) and then guards only `energy_reference`.
+- [x] [Review][Decision] **AC2 is unmet: the reference advances on the SOURCE's opinion, not on the composed verdict** [`crates/smartme-bridge/src/app/poll_publish.rs:375-379`] — the guard is `reading.value.quality != Quality::Bad`, but every freshness-level refusal (`ReadingTooOld`, `NoFreshnessProof`, `SourceClockImplausible`, `TimestampsDisagree`, `HostClockUnsynced`) leaves `value.quality == Good` and advances the reference. Concrete failure: reference 4851; a replayed response at 4800 publishes `Bad(CounterWentBackwards)` **and rewinds the reference to 4800**; a genuine reset to 4820 then passes `4820 < 4800 == false` and **publishes `Good`**. A real counter reset published as a valid measurement — FR15's exact harm. AC2 says *"the reference advances only on a reading this oracle accepted"*; the code implements a third rule, written in neither AC2 nor AC3. **This guard will also be wrong for stories 2.3 and 2.4**, which produce `Bad` verdicts on readings the source marked `Good`. The fix must read the composed verdict, with an explicit exemption for `CounterWentBackwards` (the one `Bad` that MUST be adopted, per AC3).
+- [x] [Review][Decision] **The reference is amnesic across every process restart, and a restart is exactly when a meter is most likely to have been swapped** [`crates/smartme-bridge/src/app/poll_publish.rs:451`] — `energy_reference: Option<Kwh> = None`, never persisted. `energy_is_monotonic(None, x)` returns `Verdict::good()` by design, so the first reading after a restart is unchecked and silently becomes the new baseline. Restarts are routine: any `Cost::ProcessRestart` config change (`app/reconfigure.rs:201,204,240,249,271`), and Epic 7 will wire `/healthz` to one. The repository already persists cross-restart oracle state (`bd_seq_path`, `mqtt_driver.rs:1101`), so this is a missing decision, not a missing capability. The story file does not mention restart at all — an unconsidered case rather than an accepted limitation.
+- [x] [Review][Decision] **NFR6's residual, decided at drafting but recorded nowhere** — after a reset the published sequence is `Good(4843.822) → Bad(null) → Good(12.5)`, so a consumer differencing two consecutive VALID measurements still gets a negative delta. AC3 mandates this behaviour and the manual documents it, so it is not an AC violation — but NFR6 reads literally *"0 negative deltas published as valid"*. Record it as an accepted limitation with an issue, or close the gap.
+
+**Patches.**
+
+- [ ] [Review][Patch] **`energy_is_monotonic` returns `Good` for NaN, in either argument** [`crates/smartme-bridge/src/core/oracle.rs:~334-339`] — `reading.0 < previous.0` is false when either side is NaN. A NaN reading is judged monotonic-good; a NaN REFERENCE disables the oracle permanently for that meter with no signal. The only thing preventing it is an invariant in another module (the source adapter marks non-finite values `Bad`), unmentioned in this `pub` function's doc, which enumerates the cases it considered without naming non-finite.
+- [ ] [Review][Patch] **The oracle is handed `BAD_CARRIER` and judges it as an energy index** [`crates/smartme-bridge/src/app/poll_publish.rs:353-358`] — the `Ok(reading)` arm calls `energy_is_monotonic` with NO quality guard, three lines above the reference update that has exactly that guard. It returns `Bad(CounterWentBackwards)` about a documented non-value. The wire still reads `value-unusable` only because `compose` keeps the first verdict at equal severity — which `oracle.rs:280-285` states *no caller may rely on*. This caller relies on it. The published cause is the operator's only diagnosis: it sends them hunting a meter reset when the fault is an API unit-contract change.
+- [ ] [Review][Patch] **AC6's third mutation was not played, and the guard it aimed at is covered by no test** [`crates/smartme-bridge/src/app/poll_publish.rs:555-568`] — AC6 names *"removing the comparison, flipping it to `>`, and letting the reference advance on a refused reading"*. The third was replaced by a different mutation. No test in `poll_publish` chains a source-`Bad` reading followed by another reading, so deleting the guard at `:375-378` leaves everything green.
+- [ ] [Review][Patch] **`a_reading_that_is_both_stale_and_backwards_publishes_the_worse` indexes `got[1]` with no length assertion** [`crates/smartme-bridge/src/app/poll_publish.rs:~671`] — its sibling asserts `got.len() == 3` first. If the second update stops being emitted — the regression ADR 0027 exists to prevent — the test dies on an index panic instead of on the assertion that names the property.
+- [ ] [Review][Patch] **`a_counter_that_goes_backwards_is_bad_once_and_then_recovers` discards the states it should be checking** [`crates/smartme-bridge/src/app/poll_publish.rs`] — it asserts `s1 == State::Fresh` (the premise) then drops both later states with `let _ = step_once(…)`, which is what hides the verdict/health divergence recorded against story 2.1.
+
+**Deferred.**
+
+- [x] [Review][Defer] **A mid-stream unit change can produce a false `counter-went-backwards`** [`crates/smartme-bridge/src/core/oracle.rs:336`] — deferred, low likelihood. If smart-me reports `counter_reading` in `Wh` on one poll and `kWh` on the next, the same physical index reaches the oracle through two different conversion paths (`rescale`, `smartme_source.rs:300-315`) and can differ by an ULP. A downward ULP nulls a good reading for one tick. The "no tolerance band" decision is not being re-litigated; the unhandled input is the UNIT SWITCH, not jitter.

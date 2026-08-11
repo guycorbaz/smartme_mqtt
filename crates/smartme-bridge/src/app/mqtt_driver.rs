@@ -190,29 +190,49 @@ impl Sink for Queue {
 ///
 /// | message | QoS | retain | clause |
 /// |---|---|---|---|
-/// | the **will** (the NDEATH registered at CONNECT) | **1** | false | `tck-id-message-flow-edge-node-birth-publish-will-message-qos` (`Sparkplug_5:184`) and `-will-retained` (`:185`) |
-/// | NBIRTH | 0 | false | `-nbirth-qos` (`:228`) and `-nbirth-retained` (`:229`) |
-/// | DBIRTH | 0 | false | `tck-id-message-flow-device-birth-publish-dbirth-qos` (`:425`) and `-dbirth-retained` (`:426`) |
-/// | NDATA, DDATA, DDEATH, the **explicit** NDEATH | — | — | **the norm is silent** |
+/// | the **will** (the NDEATH registered at CONNECT) | **1** | **false** | `tck-id-message-flow-edge-node-birth-publish-will-message-qos` (`Sparkplug_5:183`) and `-will-message-will-retained` (`:185`); **also** `tck-id-payloads-ndeath-will-message-qos` (`Sparkplug_6:1513`) and `-will-message-retain` (`:1515`) |
+/// | NBIRTH | **0** | **false** | `tck-id-payloads-nbirth-qos` (`Sparkplug_6:1087`) and `-nbirth-retain` (`:1089`); also `…-publish-nbirth-qos` (`Sparkplug_5:228`) |
+/// | DBIRTH | **0** | **false** | `tck-id-payloads-dbirth-qos` (`Sparkplug_6:1188`) and `-dbirth-retain` (`:1190`); also `tck-id-message-flow-device-birth-publish-dbirth-qos` (`Sparkplug_5:425`) |
+/// | NDATA | **0** | **false** | `tck-id-payloads-ndata-qos` (`Sparkplug_6:1314`) and `-ndata-retain` (`:1316`) |
+/// | DDATA | **0** | **false** | `tck-id-payloads-ddata-qos` (`Sparkplug_6:1371`) and `-ddata-retain` (`:1373`) |
+/// | DDEATH, the **explicit** NDEATH | — | — | no QoS or retain clause exists |
 ///
-/// Three of the seven are mandated; the rest are ours to choose, and the choices
-/// are recorded here as choices rather than dressed as requirements:
+/// **CORRECTED 2026-08-11 by the review of this story.** The table above said
+/// *"NDATA, DDATA, DDEATH, the explicit NDEATH — the norm is silent"* and
+/// counted three mandated rows. That was false: `tck-id-payloads-ndata-qos`
+/// (*"NDATA messages MUST be published with the MQTT QoS set to 0"*) and
+/// `tck-id-payloads-ddata-qos` say the opposite, and their `-retain` siblings
+/// mandate `false` as well. **Five of the seven are mandated, not three.** The
+/// sentence this story DELETED was accurate. It is the third time in this
+/// project that a claim about the norm was written without reading the norm,
+/// which is why `CLAUDE.md` opens with that rule — and the irony is that the
+/// claim landed in the very test written to stop a MUST from being moved while
+/// looking like a preference. The published behaviour was never wrong: QoS 0
+/// was already what these messages carried.
 ///
-/// - **QoS 0 wherever the norm is silent.** At a 30 s period a lost DDATA is
-///   superseded within one cycle, and QoS 1 would cost a PUBACK per metric per
-///   cycle per meter for a value that is about to be replaced anyway.
-/// - **The explicit NDEATH rides at QoS 1 with the will**, and that is
-///   structural rather than preferred: `tck-id-...-death-payload`
-///   (`Sparkplug_5:808-812`) makes the shutdown certificate *byte-identical* to
-///   the registered will, both are built from `MessageType::NDeath`, and giving
-///   one delivery guarantee to a payload and a different one to the same payload
-///   would need a distinction the norm refuses to make. A lost death is also the
-///   precise lie this bridge exists to prevent: the host keeps a frozen value on
-///   screen and calls it current.
-/// - **`retain = false` throughout.** Mandated for the three above; chosen for
-///   the rest for the reason the mandate exists — a retained payload is a value
-///   the broker replays to a new subscriber with no way to judge its age, a
-///   stored lie. Freshness is the BIRTH's job, not the broker's.
+/// What genuinely remains ours to choose is DDEATH and the explicitly published
+/// NDEATH — the chapter-6 NDEATH clauses all govern the **Will Message**, not a
+/// death published on the way out:
+///
+/// - **QoS 0 for DDEATH**, where nothing constrains us. At a 30 s period a lost
+///   DDATA would be superseded within one cycle anyway, so a delivery guarantee
+///   buys little; that reasoning is moot for NDATA/DDATA now that the norm is
+///   read correctly, and survives only for DDEATH.
+/// - **The explicit NDEATH rides at QoS 1 with the will. This is a CHOICE, not a
+///   requirement.** It was justified here by `tck-id-…-death-payload`
+///   (`Sparkplug_5:808-812`), which the review found to be
+///   `tck-id-operational-behavior-host-application-death-payload` — the **Host
+///   Application's** STATE will, JSON UTF-8 with `online`/`timestamp`. It says
+///   nothing about an Edge Node, and nothing in chapters 5 or 6 mandates
+///   byte-identity between the explicit NDEATH and the registered will. The
+///   choice stands on its own merits: both are built from `MessageType::NDeath`,
+///   and a lost death is the precise lie this bridge exists to prevent — the
+///   host keeps a frozen value on screen and calls it current.
+/// - **`retain = false` throughout.** Mandated for five of the seven (the will,
+///   both births, NDATA and DDATA); chosen for DDEATH and the explicit NDEATH
+///   for the reason the mandate exists — a retained payload is a value the
+///   broker replays to a new subscriber with no way to judge its age, a stored
+///   lie. Freshness is the BIRTH's job, not the broker's.
 ///
 /// `MessageType::NCmd` is inbound: the bridge subscribes and never publishes it,
 /// so the value returned here governs nothing. It is matched rather than caught
@@ -224,6 +244,27 @@ impl Sink for Queue {
 /// as a lost NDEATH strands the node, so the asymmetry is real — but harmonising
 /// them is a decision of its own and not the violation this story was written to
 /// fix ([#26]).
+/// Registers the death certificate as the connection's last will, inside the
+/// CONNECT packet.
+///
+/// **Extracted 2026-08-11 so that a test can observe what is actually
+/// registered.** Until then the only evidence for `tck-id-message-flow-edge-node-
+/// birth-publish-will-message-qos` was an assertion on [`qos_for`], a pure
+/// function three call sites away from the will — while the sibling clause
+/// `-will-message-will-retained` was graded `gap (unproven)` in
+/// `docs/sparkplug-conformance.md` for exactly that reason. Two halves of one
+/// `set_last_will` call, identically derived and graded differently. A
+/// `set_last_will` that dropped the `retain` argument, or that was handed the
+/// wrong `MessageType`, passed every test in the tree.
+///
+/// The mistake this guards against is not hypothetical: the will's QoS was wrong
+/// here from 2026-07-26 to 2026-08-10 with a green suite throughout, because the
+/// test asserted the value the bug produced ([#26]).
+fn register_will(options: &mut MqttOptions, topic: &str, payload: &[u8]) {
+    let (qos, retain) = qos_for(MessageType::NDeath);
+    options.set_last_will(rumqttc::LastWill::new(topic, payload, qos, retain));
+}
+
 fn qos_for(message: MessageType) -> (QoS, bool) {
     match message {
         // Mandated 0 — `-nbirth-qos`, `-dbirth-qos`.
@@ -1131,13 +1172,7 @@ pub async fn run(
         // rejects a retained NCMD, but that runs after decode and this frame never
         // decodes — so the two are separate problems and only one of them is closed.
         options.set_max_packet_size(MAX_INCOMING_PACKET, MAX_OUTGOING_PACKET);
-        let (qos, retain) = qos_for(MessageType::NDeath);
-        options.set_last_will(rumqttc::LastWill::new(
-            will.topic.clone(),
-            will.payload.clone(),
-            qos,
-            retain,
-        ));
+        register_will(&mut options, &will.topic, &will.payload);
 
         // 5. Connect — the EventLoop pumps in its own task (see the module docs).
         let (client, eventloop) = AsyncClient::new(options, config.capacity);
@@ -1700,7 +1735,7 @@ mod tests {
     /// `every_edge_node_message_is_qos_zero_and_never_retained` required QoS 0
     /// for `MessageType::NDeath`, which is what registers the will — and
     /// `tck-id-message-flow-edge-node-birth-publish-will-message-qos`
-    /// (`Sparkplug_5:184`) says *"The Edge Node's MQTT Will Message's MQTT QoS
+    /// (`Sparkplug_5:183`) says *"The Edge Node's MQTT Will Message's MQTT QoS
     /// MUST be 1"*. It could not be repaired in place: any fix turned it red, so
     /// it would have had to be edited by whoever fixed the violation, which is
     /// the shape where a test stops being evidence ([#26]).
@@ -1708,6 +1743,17 @@ mod tests {
     /// Split in two on purpose. The mandated rows cite their clause and may not
     /// be changed without one; the chosen rows are ours and say so. A single
     /// table would let a future edit move a MUST while looking like a preference.
+    ///
+    /// **AND THAT IS EXACTLY WHAT THIS TEST DID, on the day it was written.**
+    /// NDATA and DDATA were filed under CHOSEN on the claim that the norm was
+    /// silent about them. It is not: `tck-id-payloads-ndata-qos`
+    /// (`Sparkplug_6:1314`) and `tck-id-payloads-ddata-qos` (`:1371`) both read
+    /// *"MUST be published with the MQTT QoS set to 0"*, and their `-retain`
+    /// siblings mandate `false`. Corrected 2026-08-11 by this story's review;
+    /// five of the seven rows are mandated, and only DDEATH is genuinely ours.
+    /// The split was the right idea and it still failed, because the split only
+    /// helps if the reading behind it was done — which is the whole content of
+    /// `CLAUDE.md`'s first rule.
     ///
     /// `MessageType::NCmd` is ABSENT ON PURPOSE — do not "complete" this list.
     /// NCMD is inbound: the bridge subscribes to it and never publishes one.
@@ -1728,12 +1774,22 @@ mod tests {
         // means the norm changed, and the norm is vendored at
         // `docs/spec/sparkplug-b-3.0.0/`.
         let mandated = [
-            // `tck-id-message-flow-edge-node-birth-publish-nbirth-qos` (:228)
+            // `tck-id-payloads-nbirth-qos` (`Sparkplug_6:1087`), and
+            // `tck-id-message-flow-edge-node-birth-publish-nbirth-qos` (5:228)
             (MessageType::NBirth, QoS::AtMostOnce),
-            // `tck-id-message-flow-device-birth-publish-dbirth-qos` (:425)
+            // `tck-id-payloads-dbirth-qos` (`Sparkplug_6:1188`), and
+            // `tck-id-message-flow-device-birth-publish-dbirth-qos` (5:425)
             (MessageType::DBirth, QoS::AtMostOnce),
+            // `tck-id-payloads-ndata-qos` (`Sparkplug_6:1314`) — *"NDATA messages
+            // MUST be published with the MQTT QoS set to 0"*. ADDED 2026-08-11:
+            // this row sat under CHOSEN, on the claim that the norm was silent.
+            (MessageType::NData, QoS::AtMostOnce),
+            // `tck-id-payloads-ddata-qos` (`Sparkplug_6:1371`) — same wording,
+            // same correction.
+            (MessageType::DData, QoS::AtMostOnce),
             // `tck-id-message-flow-edge-node-birth-publish-will-message-qos`
-            // (:184) — this is the will, registered from `MessageType::NDeath`.
+            // (5:183) and `tck-id-payloads-ndeath-will-message-qos` (6:1513) —
+            // this is the will, registered from `MessageType::NDeath`.
             (MessageType::NDeath, QoS::AtLeastOnce),
         ];
         for (message, qos) in mandated {
@@ -1744,29 +1800,87 @@ mod tests {
             );
         }
 
-        // CHOSEN. The norm is silent on these; QoS 0 is our decision and the
-        // reasoning is in `qos_for`'s doc comment.
-        for message in [MessageType::NData, MessageType::DData, MessageType::DDeath] {
-            assert_eq!(
-                qos_for(message).0,
-                QoS::AtMostOnce,
-                "{message:?} is unconstrained by the norm and we chose QoS 0"
-            );
-        }
+        // CHOSEN — and after 2026-08-11 this list holds exactly ONE message.
+        // DDEATH has no QoS clause anywhere in the norm; every chapter-6 NDEATH
+        // clause governs the WILL, not a death published on the way out, and the
+        // explicit NDEATH is covered above by our own choice to send it at 1.
+        assert_eq!(
+            qos_for(MessageType::DDeath).0,
+            QoS::AtMostOnce,
+            "DDeath is unconstrained by the norm and we chose QoS 0"
+        );
 
-        // `retain = false` everywhere: mandated for the births and the will,
-        // chosen for the rest, and the assertion does not distinguish because
-        // the outcome is the same and a retained payload is a stored lie.
+        // `retain = false`. MANDATED for five: the will
+        // (`tck-id-message-flow-edge-node-birth-publish-will-message-will-retained`
+        // 5:185, `tck-id-payloads-ndeath-will-message-retain` 6:1515), both
+        // births (`-nbirth-retain` 6:1089, `-dbirth-retain` 6:1190), and both
+        // data messages (`-ndata-retain` 6:1316, `-ddata-retain` 6:1373).
         for message in [
             MessageType::NBirth,
-            MessageType::NData,
-            MessageType::NDeath,
             MessageType::DBirth,
+            MessageType::NData,
             MessageType::DData,
-            MessageType::DDeath,
+            MessageType::NDeath,
         ] {
-            assert!(!qos_for(message).1, "{message:?} must never be retained");
+            assert!(
+                !qos_for(message).1,
+                "{message:?} is MANDATED retain=false by the specification, not by us"
+            );
         }
+        // CHOSEN for DDEATH, for the reason the mandate exists: a retained
+        // payload is a value the broker replays with no way to judge its age.
+        assert!(
+            !qos_for(MessageType::DDeath).1,
+            "DDeath is unconstrained and we chose retain=false"
+        );
+    }
+
+    /// AC1, observed on the WILL ITSELF rather than on the function behind it.
+    ///
+    /// **ADDED 2026-08-11 by the story's review.** `the_delivery_table_…` asserts
+    /// on `qos_for`, and nothing anywhere looked at the `LastWill` the driver
+    /// builds from it — which is why the conformance matrix grades the QoS clause
+    /// `conformant` and its retain sibling `gap (unproven)` on evidence of
+    /// identical strength. This reads the will back out of the `MqttOptions` the
+    /// broker would receive, so the clause and its sibling are proven by the same
+    /// artefact and at the same standard.
+    ///
+    /// FALSIFIED 2026-08-11, three mutations, each red on its own message:
+    /// `qos_for(MessageType::NDeath)` → `NData` in `register_will` (the QoS drops
+    /// to 0 — the [#26] violation restored, and this time a test says so);
+    /// `retain` hard-coded to `true`; and the topic and payload swapped, which no
+    /// QoS assertion would ever notice.
+    #[test]
+    fn the_registered_will_carries_the_qos_and_retain_the_norm_mandates() {
+        let mut options = MqttOptions::new("client", "localhost", 1883);
+        assert!(
+            options.last_will().is_none(),
+            "the fixture must start with no will, or this test could pass on a \
+             default rather than on what `register_will` did"
+        );
+
+        register_will(&mut options, "spBv1.0/g/NDEATH/node", b"death-certificate");
+
+        let will = options.last_will().expect("a will must be registered");
+        assert_eq!(
+            will.qos,
+            QoS::AtLeastOnce,
+            "tck-id-message-flow-edge-node-birth-publish-will-message-qos \
+             (Sparkplug_5:183) and tck-id-payloads-ndeath-will-message-qos \
+             (Sparkplug_6:1513): the Will QoS MUST be 1. At QoS 0 the broker owes \
+             no acknowledgement, no retry and no queueing, so the one message \
+             whose loss shows a frozen value as live may simply be dropped."
+        );
+        assert!(
+            !will.retain,
+            "tck-id-message-flow-edge-node-birth-publish-will-message-will-retained \
+             (Sparkplug_5:185) and tck-id-payloads-ndeath-will-message-retain \
+             (Sparkplug_6:1515): the Will Retained flag MUST be false. A retained \
+             death is replayed to every future subscriber, which marks a live node \
+             dead on a payload the broker stored."
+        );
+        assert_eq!(will.topic, "spBv1.0/g/NDEATH/node");
+        assert_eq!(&*will.message, b"death-certificate");
     }
 
     /// Story 4.6 / AC2 — the broker's answer is read, and the three shapes that

@@ -542,3 +542,51 @@ need a decision; one more is new and was repaired.
   strings on the wire are `Power`, `Energy` and their units, so a SCADA host browses serial
   numbers. The manual claimed the opposite (*"the `meter_id` becomes the metric path a SCADA
   host displays"*) and was corrected the same day.
+
+## Deferred from: code review of stories 4.17, 2.1 and 2.2 (2026-08-11)
+
+Four items parked out of thirty findings. The other twenty-six are decisions or patches carried
+in the three story files.
+
+- **`source-refused` is one generic wire string for two unrelated faults.** ADR 0029's
+  serial-identity check raises `SourceError::Fatal` (`smartme_source.rs:191`), which
+  `Policy::step` turns into `Cause::SourceRefused` — the same string a rejected credential
+  produces. The variant's own doc admits the conflation (*"rejected credentials, a configuration
+  the source contradicts, or a serial that is not the one smart-me reports"*). An operator
+  reading `source-refused` cannot tell NFR7 (the wrong meter is wired to this topic) from an
+  expired secret. **Belongs to story 2.5** (error taxonomy), which is the story that exists to
+  split causes apart — parked rather than fixed so that it is split once, with the rest.
+
+- **A cold-start or newly-announced DBIRTH publishes a non-good quality with no `Cause`.**
+  `cold_start_metrics` (`sparkplug_publisher.rs:590-607`) bypasses `metrics_for`, so the
+  invariant "a non-good metric names its cause" does not hold on the birth path, and no cause in
+  the vocabulary means "never read yet" — all eleven describe a reading that happened. Reached on
+  every first session and whenever an operator enables a meter at runtime.
+
+  **Settled against the vendored norm during the review, so it need not be re-litigated:** a
+  property present in DATA but absent from BIRTH is LEGAL. The rebirth triggers at
+  `Sparkplug_5_Operational_Behavior.adoc:862-864` concern *metrics* and *aliases*, not
+  properties; `Sparkplug_6_Payloads.adoc:1448-1450` says the same. The only property-level MUSTs
+  are `tck-id-payloads-propertyset-keys-array-size` (`:570`),
+  `tck-id-payloads-propertyset-values-array-size` (`:576`) and
+  `tck-id-payloads-metric-propertyvalue-type-req` (`:594`), and `encode.rs:273-310` satisfies all
+  three unconditionally. So this is an internal-invariant gap, not a conformance defect, and the
+  never-lie guarantee does not depend on it — the quality code degrades either way. What Ignition
+  DOES with a property it never saw declared is the Tier-3 measurement already owed in
+  `sprint-status.yaml`, and cannot be answered from inside this tree.
+
+- **"No opinion" and "I checked and it is fine" are the same value.** On a failed fetch the
+  monotonicity oracle affirmatively votes `Verdict::good()` (`poll_publish.rs:357`). Harmless
+  under worst-wins, and the comment argues it correctly. It stops being harmless the moment any
+  rule needs "every oracle affirmed" — a confirmation rule, a coverage assertion, an operator
+  page listing which oracles ran. There is no `Verdict::abstain()` and no way to tell the two
+  apart after composition. Cheap now (one variant, one fold arm), and it grows a caller with
+  every oracle Epic 2 adds.
+
+- **A mid-stream unit change can produce a false `counter-went-backwards`.** If smart-me ever
+  reports `counter_reading` in `Wh` on one poll and `kWh` on the next, the same physical index
+  reaches the oracle through two different float paths (`rescale`, `smartme_source.rs:300-315`)
+  and can differ by an ULP either way; a downward ULP nulls a perfectly good reading for one
+  tick. The strict `<` with no tolerance band (`oracle.rs:317-322`) is a decided position and is
+  NOT being reopened — the unhandled input is the unit switch itself, a comparison made across
+  two conversion paths without noticing they were different.

@@ -10,7 +10,7 @@
 
 Story 4.7 made the bridge act on an inbound message for the first time. Everything it publishes had
 always been governed by a rule about the retain flag —
-`every_edge_node_message_is_qos_zero_and_never_retained` pins it — but nothing looked at the flag on
+`the_delivery_table_matches_the_specification_clause_by_clause` pins it — but nothing looked at the flag on
 the way **in**. `pump_transport` destructured `topic` and `payload` from the inbound `Publish` and
 dropped the rest.
 

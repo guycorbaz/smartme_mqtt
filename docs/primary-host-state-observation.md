@@ -311,7 +311,7 @@ running case, STATE is an offer this deployment makes and the bridge declines at
 **What it loses is recovery after the host restarts — and the loss is total.** The chain is:
 
 1. The bridge's NBIRTH went out **once**, at QoS 0 with `retain=false`
-   (`every_edge_node_message_is_qos_zero_and_never_retained`). The broker stores nothing, so there
+   (`the_delivery_table_matches_the_specification_clause_by_clause`). The broker stores nothing, so there
    is no copy for a returning host to collect.
 2. Ignition restarts. **Measured:** the host re-births at 18:26:36 UTC and announces itself live on
    `spBv1.0/STATE/SCADA` with `retain=false`. **Inferred:** that a conformant edge node re-births in

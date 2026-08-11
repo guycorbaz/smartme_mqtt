@@ -143,3 +143,27 @@ place is how two answers to one question start disagreeing.
 One `String` comparison per fetch. No new dependency, no new message on the wire, no change to
 the topic grammar or to any metric — `CONTRACT_VERSION` is untouched, and deliberately: a
 consumer sees nothing new.
+
+### Amended 2026-08-11 — this is the first instance of the LATCHING half of the oracle rule
+
+Story 2.1 (2026-08-10) built the oracle layer that this decision anticipated, and with it a rule
+this ADR could not have stated because the vocabulary did not exist yet: **a verdict either
+LATCHES or merely DEGRADES.** A latching cause takes the meter off the wire until the process
+restarts; a degrading one marks one reading and lets the next one recover on its own.
+
+**The check decided here is the canonical latching case, and it is worth saying why**, because the
+rule is otherwise easy to read as arbitrary. The serial mismatch is a statement about *identity*:
+this topic is not the meter you configured. Nothing about the next reading can repair that — the
+same wrong meter will answer the same wrong serial thirty seconds later, and a bridge that
+recovered by itself would simply resume mislabelling values. So it raises `SourceError::Fatal`,
+which `Policy::step` absorbs into `State::Failed`, from which there is no exit but a restart.
+
+Contrast with the degrading half, whose first instance is story 2.2's energy-counter monotonicity:
+a counter that went backwards is a statement about one *value*. The reading after it may be
+perfectly sound, and latching there would take a healthy meter off the wire for an event that has
+already passed.
+
+**Identity latches; value degrades.** The rule now lives in `core/oracle.rs`; this ADR is named
+there as its first instance. Recorded here because the review of story 2.1 found the link existed
+only in the code — a reader of this ADR still saw an isolated decision, and the repository's rule
+is that an architectural position is recorded where decisions are recorded.
