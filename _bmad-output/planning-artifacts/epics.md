@@ -263,6 +263,24 @@ Thicken the skeleton's single FRESH→STALE transition into the full integrity g
 **FRs covered:** FR4, FR5, FR8, FR9, FR10, FR14, FR15, FR16
 **NFR/AR:** NFR1, NFR4, NFR6, NFR7 · AR16 *(oracle→quality mapping)*, AR17 *(freshness + oracle property tests)*
 
+**Status 2026-08-11:** opened 2026-08-10 per [ADR 0030](../../docs/adr/0030-epics-run-in-numeric-order.md). Stories written just-in-time, as epics 3, 5 and 6 were. **Seven stories, and the numbering was corrected once** — the oracle-layer story was first written as 2.7 (the next free number) while running before 2.3, so the list said one order and the plan another; bounds/completeness/taxonomy/UTC each moved up one on Guy's instruction, *"j'aimerais traiter les stories dans l'ordre afin d'éviter la confusion"*.
+
+| # | story | status |
+| --- | --- | --- |
+| 2.1 | the oracle layer, and how verdicts compose | `in-progress` — reviewed, AC4/AC5 repaired; closing is a call to make |
+| 2.2 | energy-counter monotonicity (FR15, NFR6) | `in-progress` — same |
+| 2.3 | **the oracle layer finished** — per-metric verdicts, total order on ties, both memories on the composed verdict, the reference across restarts, the surfaces reading the wire | `review` |
+| 2.4 | physical bounds (FR14) | backlog |
+| 2.5 | payload completeness and numeric domain (FR16) | backlog |
+| 2.6 | error taxonomy and bounded backoff (FR4, FR5, NFR1) | backlog |
+| 2.7 | UTC end-to-end and clock skew (FR10) | backlog |
+
+**Story 2.3 was not planned.** It is the output of the 2026-08-11 review of 2.1 and 2.2, which found four decisions rather than defects — the code did what it was written to do, and what it was written to do was wrong for the oracles still owed. It carries [ADR 0031](../../docs/adr/0031-a-verdict-belongs-to-a-metric.md) (a verdict belongs to a metric, [#70](https://github.com/guycorbaz/smartme_mqtt/issues/70)) and [ADR 0032](../../docs/adr/0032-at-equal-severity-a-latching-cause-outranks-a-degrading-one.md) (the tie rule, [#71](https://github.com/guycorbaz/smartme_mqtt/issues/71)), and moved `CONTRACT_VERSION` 5 → 6, **breaking**.
+
+**FR9 and NFR7 are NOT a story.** Serial-identity binding and its verification were delivered by [ADR 0029](../../docs/adr/0029-the-declared-serial-is-checked-against-the-one-smart-me-reports.md) on 2026-08-09, more strongly than the FR asked. They are owed a **verification at epic close**, not fresh work.
+
+**Two criteria stand recorded unmet, with issues** — the repository's practice rather than a tick: story 2.3 AC3 ([#69](https://github.com/guycorbaz/smartme_mqtt/issues/69)), whose adoption rule has no observable effect until 2.4 supplies the first oracle producing a `Bad` on a source-`Good` reading; and NFR6's residual ([#67](https://github.com/guycorbaz/smartme_mqtt/issues/67)), a negative delta between two valid measurements either side of a refusal, which AC3 of story 2.2 mandates and the NFR's letter does not admit.
+
 ### Epic 3: The Full Fleet — Multi-Meter Discovery & Per-Meter Isolation
 Grow from one meter to the author's actual 4-meter fleet on a single account: full discovery by name + serial, the real Sparkplug device topology (per-meter DBIRTH/DDEATH), and per-meter staleness isolation — one silent Kamstrup flips stale individually while the other three stay fresh. Delivers Journey 2 (A Meter Goes Silent) at fleet scale.
 **FRs covered:** FR2, FR6, FR12, FR21 *(moved from Epic 4 — mapping changes originate here)*

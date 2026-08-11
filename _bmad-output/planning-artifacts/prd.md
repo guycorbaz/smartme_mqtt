@@ -343,6 +343,7 @@ Must-have capabilities (without any one, the product fails its "never lies" purp
 ### Data Integrity & Correctness ("never lies")
 - **NFR5:** Units exactly kW/kWh, values match the meter to the digit — 0 unit/scale errors.
 - **NFR6:** Energy counters monotonic non-decreasing except on detected reset — 0 negative deltas published as valid.
+  - *Residual recorded 2026-08-11 ([#67](https://github.com/guycorbaz/smartme_mqtt/issues/67)):* after a reset the published sequence is `Good(4843.822) → Bad(null) → Good(12.5)`, so a consumer differencing the two **valid** measurements either side of the refusal still obtains a negative delta. Story 2.2 AC3 mandates that behaviour — latching instead would take a working meter off the wire for an event already past — so it is not an AC violation, but the letter of this NFR does not admit it. To be settled at Epic 2's close: amend the wording to what the bridge guarantees (no negative delta between two consecutive valid measurements with no refusal between them), or close the gap on the wire.
 - **NFR7:** 0 mislabeled-identity values (serial-bound, verified at startup + periodically).
 - **NFR8:** No value ever presented as fresh when its measurement timestamp exceeds the staleness threshold (dual-mechanism staleness).
 

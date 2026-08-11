@@ -77,20 +77,30 @@ Built epic by epic, walking-skeleton-first:
   and the atomic-persistence primitive.
 - ✅ **Epic 1 — Walking Skeleton:** one meter → Ignition with an honest STALE flag; the
   `ValueDate`/HTTP-`Date`-header freshness audit.
-- ✅ **Epic 4 — Sparkplug conformance:** the specification audited clause by clause
+- ⏳ **Epic 4 — Sparkplug conformance:** the specification audited clause by clause
   (`docs/sparkplug-conformance.md`), rebirth answered, the session number advanced per
-  connect, and a Tier-3 contract run against a real Ignition.
+  connect, the will registered at the QoS the norm requires, and a Tier-3 contract run
+  against a real Ignition. **Not closed:** ten stories of nineteen. Eight of the rest are
+  deferred by [ADR 0025](docs/adr/0025-the-execution-order-actually-followed.md) and one is
+  blocked, so the epic has no path to completion until that scope is finished or withdrawn —
+  a decision, not a task. *(Marked ✅ here until 2026-08-11.)*
 - ✅ **Epic 5 — Configuration:** one validated model, `config.toml` as the single source,
   the credential kept in the environment, and nothing published until the mapping is
   confirmed.
+- ⏳ **Epic 2 — Exhaustive oracles:** the oracle layer exists and every judgement composes
+  through one rule; an energy counter that goes backwards is refused rather than published;
+  a verdict belongs to a **metric**, so a fault in one number no longer withholds another;
+  and the bridge's own screens report what its wire says. Three stories of seven — physical
+  bounds, payload domain, error taxonomy and clock skew remain.
 - ⏳ **Epic 6 — Web UI:** the server and `/healthz` exist; **the configuration screens do
   not**, which is why a first run is currently a hand-written file.
-- ⏳ Epics 2, 3, 7, 8: exhaustive oracles, the full four-meter fleet, deployment,
-  documentation.
+- ⏳ Epics 3, 7, 8: the full four-meter fleet, deployment, documentation.
 
 *(This section read "Epic 1 in progress, the bridge is not yet functional" until a review on
 2026-08-05 — sixteen commits and four epics after it stopped being true. The README is the
-one document a newcomer reads first and the one nobody re-reads.)*
+one document a newcomer reads first and the one nobody re-reads. It happened again in the
+other direction: Epic 4 carried a ✅ until 2026-08-11 with nine of its stories unwritten, and
+Epic 2 sat in the not-started list while three of its stories shipped.)*
 
 ## Building
 
