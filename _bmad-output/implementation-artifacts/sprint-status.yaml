@@ -403,7 +403,10 @@ development_status:
   # than applied first, because they live in the exact lines it rewrites: the
   # BAD_CARRIER guard, AC6's third mutation, a missing length assertion, and a test
   # that discards the states it should check.
-  2-7-the-oracle-layer-finished: backlog
+  # STORY FILE WRITTEN 2026-08-11. Ten ACs; two of them decide at drafting rather
+  # than defer (a failed reference load is absent-not-fatal; v6 is `breaking`, by the
+  # manual's own criterion that values either side cannot be compared).
+  2-7-the-oracle-layer-finished: ready-for-dev
 
   # NOT A STORY: FR9 and NFR7 (serial-identity binding and its verification) were
   # delivered by ADR 0029 on 2026-08-09, and more strongly than the FR asked. They
