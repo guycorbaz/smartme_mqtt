@@ -402,7 +402,25 @@ pub async fn step_once<S: Source + Send>(
         Judgement::about(
             Measured::Energy,
             match &tick {
+                // THE SOURCE'S OWN REFUSAL IS RESPECTED FIRST (deferred patch
+                // from the 2026-08-11 review). `map_device` substitutes
+                // `BAD_CARRIER = 0.0` when it cannot convert a unit and marks the
+                // value `Bad`; handing that documented non-value to an ordering
+                // oracle asks it to compare a number nobody claimed was a
+                // measurement. It duly answered `counter-went-backwards`, and the
+                // wire only read `value-unusable` because the tie-break happened
+                // to favour it — a right answer for a reason no caller should
+                // depend on ([ADR 0032] says so in as many words).
+                //
+                // The published cause is the operator's only diagnosis: sending
+                // them to hunt a meter reset when the fault is an API unit
+                // contract change is the wrong place at the wrong hour.
+                //
+                // [ADR 0032]: ../../../docs/adr/0032-at-equal-severity-a-latching-cause-outranks-a-degrading-one.md
+                Ok(reading) if reading.value.quality == Quality::Bad => Verdict::good(),
                 Ok(reading) => energy_is_monotonic(*energy_reference, reading.value.energy),
+                // No new index to compare, and the freshness verdict already
+                // covers the silence.
                 Err(_) => Verdict::good(),
             },
         ),
@@ -824,11 +842,20 @@ mod tests {
         let (s1, _) = step_once(&ctx, &mut source, State::initial(), &mut last, &mut energy).await;
         assert_eq!(s1, State::Fresh);
 
-        // The drop.
-        let _ = step_once(&ctx, &mut source, s1, &mut last, &mut energy).await;
+        // The drop. The STATE is kept and asserted since 2026-08-11 (deferred
+        // review patch): `let _ =` discarded exactly the value that would have
+        // shown the wire and the operator surfaces disagreeing, which is what let
+        // that divergence live until the review found it by reading.
+        let (s2, _) = step_once(&ctx, &mut source, s1, &mut last, &mut energy).await;
+        assert_eq!(
+            s2,
+            State::Fresh,
+            "a backwards counter is a VALUE fault, not an identity one: the meter              stays in the freshness machine's `Fresh` and keeps polling. What must              NOT happen is this state reaching an operator surface unaccompanied —              see the published verdict asserted below, and `MeterState::published`"
+        );
 
         // And a reading consistent with the NEW index.
-        let _ = step_once(&ctx, &mut source, State::initial(), &mut last, &mut energy).await;
+        let (s3, _) = step_once(&ctx, &mut source, State::initial(), &mut last, &mut energy).await;
+        assert_eq!(s3, State::Fresh);
         drop(tx);
 
         let mut got = Vec::new();
@@ -899,6 +926,15 @@ mod tests {
         while let Some(u) = rx.recv().await {
             got.push(u);
         }
+        // ADDED 2026-08-11 (deferred review patch). Without it this test dies on
+        // an index panic if the second update stops being emitted — the exact
+        // regression ADR 0027 exists to prevent — instead of failing on the
+        // assertion that names the property. Its sibling above always had it.
+        assert_eq!(
+            got.len(),
+            2,
+            "every tick publishes a verdict (ADR 0027); a missing update must              fail HERE, naming the rule, rather than as an index panic below"
+        );
         assert_eq!(
             got[1].published(),
             Quality::Bad,
@@ -1274,6 +1310,66 @@ mod tests {
         assert_eq!(load_energy_reference(&dir, &meter), None);
 
         let _ = std::fs::remove_file(reference_path_for(&dir, &meter));
+    }
+
+    /// **Story 2.2 AC6's third mutation, playable at last** — the reference does
+    /// not advance on a refused reading.
+    ///
+    /// AC6 named three mutations and only two were played: the third, *"letting
+    /// the reference advance on a refused reading"*, was quietly replaced by a
+    /// different one, and the 2026-08-11 review found the guard it aimed at
+    /// covered by no test at all. Deleting it left everything green.
+    ///
+    /// It could not be played meaningfully before story 2.3, because the guard as
+    /// written keyed on the SOURCE's quality — and the only refusal that reached
+    /// it was one the source had already marked `Bad`, so the two rules agreed on
+    /// every input. With adoption following the COMPOSED verdict, the sequence
+    /// below separates them.
+    ///
+    /// The sequence: an accepted index at 4843.822; a reading whose unit could
+    /// not be converted, carrying the substituted `0.0`; then a real reading at
+    /// 4800. If the refused reading had become the reference, 4800 sits ABOVE it
+    /// and publishes `Good` — a counter that dropped 43 kWh, blessed. Judged
+    /// against the reference the bridge actually accepted, it is caught.
+    ///
+    /// FALSIFIED 2026-08-11 by making `adoptable` always `true`: the third
+    /// reading comes back `Good` with no cause, which is the defect stated.
+    #[tokio::test]
+    async fn the_reference_does_not_advance_on_a_refused_reading() {
+        let (_, sent) = drive_sequence(
+            FakeSource::new()
+                .then(Ok(reading_with_energy(Quality::Good, 950, 4_843.822)))
+                .then(Ok(reading_with_energy(Quality::Bad, 950, 0.0)))
+                .then(Ok(reading_with_energy(Quality::Good, 950, 4_800.0))),
+        )
+        .await;
+        assert_eq!(sent.len(), 3, "every tick publishes a verdict (ADR 0027)");
+
+        assert_eq!(sent[0].published(), Quality::Good, "the premise");
+
+        // The refused reading names the fault the SOURCE found, not one an
+        // ordering oracle invented about a value nobody claimed was a
+        // measurement.
+        assert_eq!(
+            sent[1].verdicts.for_metric(Measured::Energy).cause(),
+            Some(Cause::ValueUnusable),
+            "a unit that could not be converted is `value-unusable`; reporting \
+             `counter-went-backwards` would send an operator to the meter when \
+             the fault is in the API contract"
+        );
+
+        // And the reference is still 4843.822, so the drop to 4800 is caught.
+        assert_eq!(
+            sent[2].published_for(Measured::Energy),
+            Quality::Bad,
+            "the reference must still be the last ACCEPTED index. Had the refused \
+             reading's 0.0 become the reference, 4800 would sit above it and a \
+             counter that lost 43 kWh would publish as a valid measurement"
+        );
+        assert_eq!(
+            sent[2].verdicts.for_metric(Measured::Energy).cause(),
+            Some(Cause::CounterWentBackwards)
+        );
     }
 
     /// Drives several ticks through one `step_once` chain, carrying `last` and

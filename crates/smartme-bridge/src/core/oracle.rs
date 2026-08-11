@@ -39,6 +39,16 @@
 //! conformance — a `PropertySet` constrains only that keys and values have equal
 //! length (`Sparkplug_6_Payloads.adoc:571,577`).
 //!
+//! **AMENDED 2026-08-11 by story 2.3.** Rules 1 and 3 below were stated here as
+//! settled, and two of their consequences turned out not to be:
+//!
+//! - a verdict belonged to the READING, so an oracle judging one number degraded
+//!   the other — [ADR 0031](../../../../docs/adr/0031-a-verdict-belongs-to-a-metric.md);
+//! - ties were resolved by argument order and documented as arbitrary, while a
+//!   caller relied on them — [ADR 0032](../../../../docs/adr/0032-at-equal-severity-a-latching-cause-outranks-a-degrading-one.md).
+//!
+//! Both are decided now, and the text below is amended rather than left standing.
+//!
 //! **3. Latching follows identity; degrading follows value.** A reading that came
 //! from the wrong meter means no later reading from that misconfiguration is
 //! trustworthy either, so it latches (`State::Failed`, restart-only, ADR 0009's
@@ -49,6 +59,9 @@
 //!
 //! ADR 0029's serial-identity check was decided before this rule existed and is
 //! its first instance rather than an exception to it — see [`Cause::latches`].
+//! Since ADR 0032 the rule also has a MECHANISM: the composed verdict's latch is
+//! what `Policy::step` reads, so it is no longer documented in one place and
+//! computed in another.
 
 use crate::domain::{Kwh, Quality};
 
@@ -123,14 +136,14 @@ pub enum Cause {
 impl Cause {
     /// Every cause, in a fixed order.
     ///
-    /// Kept honest by [`Cause::successor`], whose exhaustive `match` stops the
+    /// Kept honest by `Cause::successor` (test-only), whose exhaustive `match` stops the
     /// build when a variant is added — so a new cause cannot join the enum and
     /// quietly miss the golden contract test.
     ///
     /// # The hole this used to have, and why it was the natural case
     ///
     /// **Corrected 2026-08-11 by the review of story 2.1.** This list was
-    /// previously said to be kept honest by [`Cause::discriminant`], and it was
+    /// previously said to be kept honest by a `discriminant` function, and it was
     /// not. `discriminant` is an exhaustive `match`, so a new variant did stop
     /// the build — but the repair was to add one arm to `discriminant` and one
     /// to [`Cause::as_str`], and **neither of those touches `ALL`**.
@@ -142,7 +155,7 @@ impl Cause {
     ///
     /// The old test caught only a MID-LIST insertion, which is not how a cause
     /// has ever been added here — `CounterWentBackwards` was appended, as the
-    /// next one will be. [`Cause::successor`] closes it: the last variant is the
+    /// next one will be. `Cause::successor` closes it: the last variant is the
     /// one that returns `None`, so appending forces an edit to two arms, and
     /// `every_cause_is_in_all` now rebuilds the list by walking that chain and
     /// compares it to this one element by element.
@@ -994,7 +1007,7 @@ mod tests {
 
     /// `ALL` really is all of them.
     ///
-    /// [`Cause::successor`]'s exhaustive match makes the compiler refuse a variant
+    /// `Cause::successor`'s exhaustive match makes the compiler refuse a variant
     /// that was added to the enum and nowhere else; this closes the other half,
     /// where a variant joined the chain but never the list.
     ///

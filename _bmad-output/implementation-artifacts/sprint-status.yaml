@@ -397,7 +397,7 @@ development_status:
   # STORY FILE WRITTEN 2026-08-11. Ten ACs; two of them decide at drafting rather
   # than defer (a failed reference load is absent-not-fatal; v6 is `breaking`, by the
   # manual's own criterion that values either side cannot be compared).
-  # IN PROGRESS 2026-08-11. Eight of ten ACs met, each falsified:
+  # READY FOR REVIEW 2026-08-11. Nine of ten ACs met, each falsified:
   #  - AC1 per-metric verdicts, from the pure core to the wire;
   #  - AC2 total order on ties, latch read from the composed verdict;
   #  - AC4 `last` no longer adopts a refused reading — the live defect, closed;
@@ -405,13 +405,21 @@ development_status:
   #  - AC6 /healthz names degraded meters ([#62] on this path, closed);
   #  - AC7 CONTRACT_VERSION 5 -> 6, BREAKING, golden + manual + runbook;
   #  - AC10 no verdict that was correct has moved.
-  # AC3 (reference adoption) is IMPLEMENTED but NOT PROVABLE until story 2.4:
-  # no oracle yet produces a `Bad` on a reading the source called `Good`, so the
-  # rule has no observable effect and its scenario as drafted deferred to an
-  # oracle that does not exist — the very rule the story cites. Awaiting a call:
-  # reword, or record unmet with an issue.
-  # AC8 (two ADRs) and AC9 (the four deferred patches) not started.
-  2-3-the-oracle-layer-finished: in-progress
+  #  - AC8 ADR 0031 (per-metric verdict) and ADR 0032 (the tie rule);
+  #  - AC9 the four patches the review deferred INTO this story, including story
+  #    2.2 AC6's third mutation, which could not be played meaningfully before
+  #    adoption followed the composed verdict.
+  # AC3 is RECORDED UNMET with [#69], per the repository rule, and NOT ticked.
+  # The code is in place; what is missing is any input that can tell it from the
+  # rule it replaced. The set of causes producing a composed `Bad` on a reading
+  # the SOURCE called `Good` is empty today — `SourceRefused` arrives without a
+  # reading, `ValueUnusable` is source-`Bad` already, and `CounterWentBackwards`
+  # is the criterion's own exemption. Its first subject is story 2.4's bounds
+  # oracle, and its proof belongs there.
+  # Its first wording also deferred to an oracle that does not exist (a replayed
+  # feed, story 2.7) — in a story quoting the rule that forbids it. Reworded,
+  # original kept beside it.
+  2-3-the-oracle-layer-finished: review
   # FR14 — does not exist at all today.
   # BLOCKED BY 2.3: physical bounds is a PER-METRIC oracle, and until 2.3 a verdict
   # belongs to a READING. Written first, this story has to be rewritten and the wire

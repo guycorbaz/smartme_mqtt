@@ -1,6 +1,6 @@
 # Story 2.3: The oracle layer finished — a verdict per metric, and ties that do not depend on order
 
-Status: in-progress
+Status: review
 
 ## Story
 
@@ -59,10 +59,32 @@ values to Ignition while `/healthz` and `/` report it `Fresh`. That is the ten-h
 3. **`last` and `energy_reference` are adopted on the COMPOSED verdict, not on the source's
    opinion**, with one explicit exemption: `Cause::CounterWentBackwards`, whose new index MUST
    become the reference (story 2.2 AC3, so a reset meter is signalled once and not for ever). A
-   test drives the sequence *reference 4851 → replayed reading 4800 (refused) → genuine reset 4820*
-   and asserts the third publishes `Bad(counter-went-backwards)`, **not** `Good`. Today it
-   publishes `Good`, because the refused reading rewound the reference. Falsify by restoring the
-   `value.quality != Quality::Bad` guard: that test must go red.
+   test drives *accepted index → a reading the composed verdict refused → a lower reading* and
+   asserts the third publishes `Bad(counter-went-backwards)`: the refused reading must not have
+   become the yardstick. Falsify by making the adoption unconditional.
+
+   **REWORDED 2026-08-11, and the first wording is left here because it is the finding.** It read:
+   *"a test drives the sequence reference 4851 → **replayed** reading 4800 (refused) → genuine
+   reset 4820"*. That test cannot pass, whatever the implementation: detecting a replayed feed
+   needs an oracle that belongs to story 2.7, so 4800 is refused *for going backwards* and is
+   therefore adopted by this criterion's own exemption. **I wrote a criterion whose proof depends
+   on an artifact that does not exist, in a story that cites the rule forbidding exactly that**
+   ([`CLAUDE.md`], "never defer a decision to an artifact that does not exist"; AR13 is the
+   precedent it names).
+
+   Two things survive the rewording, and they are the reason it is a rewording and not a deletion:
+
+   - **What is provable today is proved.** The sequence above — with the refusal being a failed
+     unit conversion rather than a replay — is `the_reference_does_not_advance_on_a_refused_reading`,
+     falsified. It is also story 2.2 AC6's third mutation, which had been silently replaced.
+   - **What is NOT provable is recorded as unmet, with [#69], per this repository's rule.** The
+     rule this criterion states is *prospective*: no oracle today produces a `Bad` on a reading the
+     SOURCE called `Good`, so on every input that exists the new rule and the old `value.quality
+     != Bad` guard agree. Its first real subject is story 2.4's bounds oracle, and its proof
+     belongs there.
+
+   [`CLAUDE.md`]: ../../CLAUDE.md
+   [#69]: https://github.com/guycorbaz/smartme_mqtt/issues/69
 
 4. **A reading the bridge refused is never republished as a value.** `last` holds only measurements
    whose composed verdict was publishable, so the `BAD_CARRIER = 0.0` substituted on a failed unit
