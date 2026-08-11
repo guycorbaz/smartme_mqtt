@@ -1,6 +1,6 @@
 # Story 2.3: The oracle layer finished — a verdict per metric, and ties that do not depend on order
 
-Status: ready-for-dev
+Status: in-progress
 
 ## Story
 

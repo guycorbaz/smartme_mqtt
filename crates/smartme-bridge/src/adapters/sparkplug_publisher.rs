@@ -24,7 +24,7 @@ use sparkplug_b::{
 };
 
 use crate::core::channel::MeterUpdate;
-use crate::core::oracle::{Cause, Verdict};
+use crate::core::oracle::{Cause, Measured, Verdict, Verdicts};
 use crate::domain::{Measurement, Serial, UtcMillis};
 
 /// Version of the topic/metric contract with the SCADA host. Bump on ANY change
@@ -95,6 +95,26 @@ use crate::domain::{Measurement, Serial, UtcMillis};
 /// What the number now stands for is pinned by `tests/contract_golden.rs`, which
 /// fails if any of it moves without this constant moving too (AR16).
 ///
+/// # Story 2.3 bumps it to 6, and it is BREAKING
+///
+/// Until this story one verdict belonged to the READING and was stamped on both
+/// metrics, so an oracle that judged only the energy index published `Power` as
+/// null, labelled with the energy's cause. Verdicts are now per metric: the same
+/// physical situation that used to yield `Power = null` now yields a real value
+/// with quality `Good` and no cause at all.
+///
+/// **Breaking rather than additive**, by the criterion stated above: nothing is
+/// renamed and no tag is added, but a consumer that recorded `Power = null`
+/// whenever the energy index was refused will record a genuine value for the
+/// identical situation from this version on. Historised values from either side
+/// of the boundary cannot be compared without knowing which side they are on,
+/// which is exactly what makes version 2 breaking too.
+///
+/// The change is a correction — the nulls were a fault reported on a metric the
+/// bridge had no complaint about — but a correction that alters what a stored
+/// point MEANS is still breaking. Calling it additive because the new behaviour
+/// is better is how a consumer gets surprised.
+///
 /// # Story 2.2 bumps it to 5, and the guard is what said so
 ///
 /// The energy-monotonicity oracle added `counter-went-backwards` to the cause
@@ -103,7 +123,7 @@ use crate::domain::{Measurement, Serial, UtcMillis};
 /// vocabulary changed size (11 live, 10 in the v4 golden) without
 /// CONTRACT_VERSION moving"* — which is the first time that test caught a real
 /// change rather than a mutation written to try it.
-pub const CONTRACT_VERSION: i64 = 5;
+pub const CONTRACT_VERSION: i64 = 6;
 
 /// The quality code this bridge publishes for `quality`.
 ///
@@ -361,7 +381,7 @@ impl SparkplugPublisher {
                 // stale, stamped with its own ValueDate. Claiming Good here
                 // would turn a 45-minute broker outage into a fresh-looking lie
                 // the moment the link came back.
-                Some(update) => metrics_for(&update.measurement, degrade(update.verdict)),
+                Some(update) => metrics_for(&update.measurement, update.verdicts.map(degrade)),
                 None => cold_start_metrics(timestamp),
             };
             // The payload timestamp follows the data: a re-declared reading is
@@ -499,7 +519,8 @@ impl SparkplugPublisher {
             .node
             .device_topic(MessageType::DData, serial.as_str())?;
         let timestamp = millis(update.measurement.value_date);
-        let payload = live.device_data(timestamp, metrics_for(&update.measurement, update.verdict));
+        let payload =
+            live.device_data(timestamp, metrics_for(&update.measurement, update.verdicts));
         sink.emit(Outbound {
             topic,
             payload: encode(&payload),
@@ -616,36 +637,47 @@ fn cold_start_metrics(timestamp_ms: u64) -> Vec<Metric> {
 /// history, so it is published, flagged, with its own `ValueDate` as the payload
 /// timestamp. The timestamp is what keeps that honest: a stale reading is
 /// visibly old even to a consumer that ignores the flag.
-fn metrics_for(measurement: &Measurement, verdict: Verdict) -> Vec<Metric> {
+fn metrics_for(measurement: &Measurement, verdicts: Verdicts) -> Vec<Metric> {
     let timestamp = millis(measurement.value_date);
-    let published = verdict.quality();
-    let (power, energy) = match published {
-        Quality::Bad => (
-            MetricValue::Null(DataType::Double),
-            MetricValue::Null(DataType::Double),
-        ),
-        _ => (
-            MetricValue::Double(measurement.power.0),
-            MetricValue::Double(measurement.energy.0),
-        ),
+
+    // One metric, judged on its OWN verdict. Before Story 2.3 both metrics took
+    // the reading's single verdict, so an energy-only refusal nulled the power
+    // value and stamped it with the energy's cause — a number the bridge had no
+    // complaint about, withheld and then blamed.
+    let build = |metric: Measured, name: &'static str, unit: &'static str, value: f64| {
+        let verdict = verdicts.for_metric(metric);
+        let published = verdict.quality();
+        let carried = match published {
+            // `Bad` withholds the number. That is the point of `Bad` rather than
+            // `Stale`: a consumer must not be handed a value it would compute
+            // with, and the datatype is kept so the tag does not change shape.
+            Quality::Bad => MetricValue::Null(DataType::Double),
+            _ => MetricValue::Double(value),
+        };
+        let built = Metric::new(name, carried, timestamp)
+            .with_quality_code(ignition_quality_code(published))
+            .with_engineering_unit(unit);
+        match verdict.cause() {
+            Some(cause) => built.with_property(METRIC_PROPERTY_CAUSE, cause.as_str()),
+            // A good metric carries no cause, by construction. Publishing an
+            // empty one would be noise a consumer must learn to ignore, and the
+            // day it meant something nobody would notice.
+            None => built,
+        }
     };
-    let with_cause = |metric: Metric| match verdict.cause() {
-        Some(cause) => metric.with_property(METRIC_PROPERTY_CAUSE, cause.as_str()),
-        // A good reading carries no cause, by construction. Publishing an empty
-        // one would be noise a consumer must learn to ignore, and the day it
-        // meant something nobody would notice.
-        None => metric,
-    };
+
     vec![
-        with_cause(
-            Metric::new(METRIC_POWER, power, timestamp)
-                .with_quality_code(ignition_quality_code(published))
-                .with_engineering_unit(UNIT_POWER),
+        build(
+            Measured::Power,
+            METRIC_POWER,
+            UNIT_POWER,
+            measurement.power.0,
         ),
-        with_cause(
-            Metric::new(METRIC_ENERGY, energy, timestamp)
-                .with_quality_code(ignition_quality_code(published))
-                .with_engineering_unit(UNIT_ENERGY),
+        build(
+            Measured::Energy,
+            METRIC_ENERGY,
+            UNIT_ENERGY,
+            measurement.energy.0,
         ),
     ]
 }
@@ -690,7 +722,8 @@ mod tests {
     fn a_non_good_metric_names_its_cause_and_a_good_one_does_not() {
         let m = super::super::sparkplug_publisher::tests::measurement(super::Quality::Good);
 
-        let degraded = super::metrics_for(&m, Verdict::stale(Cause::ReadingTooOld));
+        let degraded =
+            super::metrics_for(&m, Verdicts::uniform(Verdict::stale(Cause::ReadingTooOld)));
         for metric in &degraded {
             assert_eq!(
                 metric.properties,
@@ -709,7 +742,7 @@ mod tests {
             );
         }
 
-        let refused = super::metrics_for(&m, Verdict::bad(Cause::SourceRefused));
+        let refused = super::metrics_for(&m, Verdicts::uniform(Verdict::bad(Cause::SourceRefused)));
         assert_eq!(
             refused[0].properties,
             vec![(
@@ -718,7 +751,7 @@ mod tests {
             )]
         );
 
-        let good = super::metrics_for(&m, Verdict::good());
+        let good = super::metrics_for(&m, Verdicts::uniform(Verdict::good()));
         for metric in &good {
             assert!(
                 metric.properties.is_empty(),
@@ -800,7 +833,7 @@ mod tests {
     }
 
     fn update(published: Quality) -> MeterUpdate {
-        MeterUpdate::new(
+        MeterUpdate::uniform(
             MeterId::new("garage"),
             measurement(Quality::Good),
             verdict_of(published),
@@ -1258,7 +1291,7 @@ mod tests {
             m.meter = MeterId::new(serial);
             assert_eq!(
                 p.publish(
-                    &MeterUpdate::new(m.meter.clone(), m, verdict_of(published)),
+                    &MeterUpdate::uniform(m.meter.clone(), m, verdict_of(published)),
                     &mut sink
                 )
                 .expect("a declared device"),

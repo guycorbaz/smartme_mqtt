@@ -117,6 +117,45 @@ const GOLDEN_CAUSES_V4: CauseGolden = &[
     ("not-revalidated", false, Quality::Stale),
 ];
 
+/// The quality codes, as of contract v6. Its own copy — see [`GOLDEN_QUALITY_V5`].
+const GOLDEN_QUALITY_V6: QualityGolden = &[
+    (Quality::Good, 192),
+    (Quality::Stale, 0x8000_0000 | 516),
+    (Quality::Bad, 0x8000_0000 | 512),
+];
+
+/// The cause vocabulary, as of contract v6.
+///
+/// **Identical to v5, and that is the point of writing it out.** Story 2.3 does
+/// not touch the vocabulary: it changes WHICH METRIC a cause lands on, which no
+/// list of strings can express. A reader comparing v5 and v6 here sees no
+/// difference and must go to `CONTRACT_VERSION`'s own doc to find out what moved
+/// — so that doc carries the explanation, and this file carries the proof that
+/// nothing else moved with it.
+const GOLDEN_CAUSES_V6: CauseGolden = &[
+    ("source-unreachable", false, Quality::Stale),
+    ("source-refused", true, Quality::Bad),
+    ("host-clock-unsynced", false, Quality::Stale),
+    ("no-freshness-proof", false, Quality::Stale),
+    ("source-clock-implausible", false, Quality::Stale),
+    ("timestamps-disagree", false, Quality::Stale),
+    ("reading-too-old", false, Quality::Stale),
+    ("value-unusable", false, Quality::Bad),
+    ("source-marked-stale", false, Quality::Stale),
+    ("not-revalidated", false, Quality::Stale),
+    ("counter-went-backwards", false, Quality::Bad),
+];
+
+/// The names and units, as of v6. Unchanged, and its own copy.
+const GOLDEN_NAMES_V6: NameGolden = &[
+    ("metric.power", "Power"),
+    ("metric.energy", "Energy"),
+    ("metric.rebirth", "Node Control/Rebirth"),
+    ("unit.power", "kW"),
+    ("unit.energy", "kWh"),
+    ("property.cause", "Cause"),
+];
+
 /// The cause vocabulary, as of contract v5: v4 plus `counter-went-backwards`
 /// (Story 2.2). Additive — nothing a v4 consumer understood changed meaning.
 const GOLDEN_CAUSES_V5: CauseGolden = &[
@@ -190,6 +229,11 @@ struct Golden {
 /// golden is what the `None` arm refuses.
 fn golden_for(version: i64) -> Option<Golden> {
     match version {
+        6 => Some(Golden {
+            quality: GOLDEN_QUALITY_V6,
+            causes: GOLDEN_CAUSES_V6,
+            names: GOLDEN_NAMES_V6,
+        }),
         5 => Some(Golden {
             quality: GOLDEN_QUALITY_V5,
             causes: GOLDEN_CAUSES_V5,

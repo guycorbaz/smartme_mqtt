@@ -419,6 +419,13 @@ pub async fn run_with_control(
                 Arc::clone(&handle),
                 heartbeats.clone(),
                 tx.clone(),
+                // The state directory: the same one `bd_seq_path` lives in, so
+                // one `chown` covers everything the bridge persists.
+                config
+                    .bd_seq_path
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .to_path_buf(),
             ))
         })
         .collect();

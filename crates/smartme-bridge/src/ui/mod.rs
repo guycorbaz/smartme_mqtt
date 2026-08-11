@@ -752,6 +752,15 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
     // to a container restart, and a restart provably cannot clear a rejected
     // credential — it would loop, destroying the screen that names the fault.
     let failed = Phase::failed_sources(fleet.as_ref());
+    let degraded: Vec<(crate::domain::MeterId, crate::core::oracle::Verdict)> = fleet
+        .as_ref()
+        .map(|f| {
+            f.degraded()
+                .into_iter()
+                .map(|(m, v)| (m.clone(), v))
+                .collect()
+        })
+        .unwrap_or_default();
     let failed_json = format!(
         "[{}]",
         failed
@@ -760,15 +769,44 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
             .collect::<Vec<_>>()
             .join(",")
     );
+    // AND A DEGRADED METER IS NEITHER (Story 2.3 AC6, [#62]). A meter whose
+    // composed verdict is not `Good` is still polling and still publishing — it
+    // is not `failed` and the loop is not `wedged` — but what it puts on the wire
+    // must not be trusted. Until this field, no operator surface said so: on
+    // 2026-08-10 a meter froze for ten hours, was published `Bad_Stale`
+    // throughout, and this endpoint reported the fleet healthy the whole time.
+    //
+    // The status code stays 200 for the same reason `failed_sources` does not
+    // move it: Epic 7 wires this to a container restart, and a restart cannot
+    // clear a backwards counter — it would loop, destroying the surface that
+    // names the fault (ADR 0027 §2).
+    let degraded_json = format!(
+        "[{}]",
+        degraded
+            .iter()
+            .map(|(meter, verdict)| format!(
+                "{{\"meter\":\"{}\",\"quality\":\"{}\",\"cause\":\"{}\"}}",
+                meter.to_string().replace('\\', "\\\\").replace('"', "\\\""),
+                match verdict.quality() {
+                    crate::domain::Quality::Good => "good",
+                    crate::domain::Quality::Stale => "stale",
+                    crate::domain::Quality::Bad => "bad",
+                },
+                verdict.cause().map_or("", |c| c.as_str()),
+            ))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
     let body = format!(
         "{{\"status\":\"{}\",\"intends_to_publish\":{},\"wedged\":{},\
-          \"failed_sources\":{},\
+          \"failed_sources\":{},\"degraded_meters\":{},\
           \"loop_age_ms\":{},\"loop_age_allowed_ms\":{},\
           \"version\":\"{}\",\"contract\":{}}}",
         phase.lifecycle.slug(),
         !phase.lifecycle.is_silent_on_purpose(),
         wedged,
         failed_json,
+        degraded_json,
         age,
         allowed,
         // Compile-time, so it describes the BINARY and not the tag it wears —
@@ -1064,6 +1102,89 @@ mod tests {
     /// rendered bytes, so a mutation of what is rendered can reach the assertion.
     ///
     /// [ADR 0027]: ../../../docs/adr/0027-a-failed-source-is-a-fault-the-screen-must-name.md
+    /// **Story 2.3 AC6** — a meter publishing a non-good verdict is reported as
+    /// such, and it is neither `failed` nor `wedged`.
+    ///
+    /// This is [#62] closed on the surface where it was invisible. On 2026-08-10
+    /// `appart-est` froze at 09:34:50, was published `Bad_Stale` for ten hours,
+    /// and `/healthz` reported the fleet healthy throughout: the poll loop was
+    /// ticking (so not `wedged`), the source had not refused us (so not
+    /// `failed`), and no field existed for *"publishing, but not to be trusted"*.
+    /// The bridge's own screens were the last place the fault could be seen.
+    ///
+    /// **The healthy case is asserted first**, because every assertion below
+    /// would also hold for an endpoint that reported a degraded meter
+    /// unconditionally — the shape that made three of this file's earlier
+    /// assertions hollow.
+    ///
+    /// FALSIFIED 2026-08-11 by making `FleetState::degraded` return `Vec::new()`
+    /// unconditionally — the state the code was in before this story: the
+    /// `degraded_meters` assertion goes red while `failed_sources` and `wedged`
+    /// stay exactly as they are, which is the whole point of the finding.
+    #[tokio::test]
+    async fn a_degraded_meter_is_named_in_healthz_and_is_neither_failed_nor_wedged() {
+        use crate::core::clock::FakeClock;
+        use crate::core::oracle::{Cause, Verdict};
+        use crate::core::state_machine::State as OracleState;
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let clock = Arc::new(FakeClock::new(UtcMillis(1_784_984_793_000)));
+        let beats = Heartbeats::for_meters([crate::domain::MeterId::new("appart-est")]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let state = ui(publishing(
+            beats.clone(),
+            clock.clone(),
+            Arc::clone(&config),
+        ));
+
+        // HEALTHY FIRST, or the assertions below prove nothing.
+        beats.record(
+            &crate::domain::MeterId::new("appart-est"),
+            OracleState::Fresh,
+            Verdict::good(),
+        );
+        let health = body(healthz(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            health.contains("\"degraded_meters\":[]"),
+            "a healthy fleet must say so with an empty list, not by omission:\n{health}"
+        );
+
+        // The counter goes backwards. The meter keeps polling and keeps
+        // publishing — what it publishes is `Bad`, with nulls.
+        beats.record(
+            &crate::domain::MeterId::new("appart-est"),
+            OracleState::Fresh,
+            Verdict::bad(Cause::CounterWentBackwards),
+        );
+        let health = body(healthz(State(Arc::clone(&state))).await.into_response()).await;
+
+        assert!(
+            health.contains("\"meter\":\"appart-est\""),
+            "the degraded meter must be NAMED — an operator who cannot tell which \
+             of four meters is lying has to check all four:\n{health}"
+        );
+        assert!(
+            health.contains("\"cause\":\"counter-went-backwards\""),
+            "and the cause must travel with it, or the operator is told something \
+             is wrong and not what:\n{health}"
+        );
+
+        // THE TWO FIELDS THAT REPORTED HEALTHY THROUGH THE TEN-HOUR OUTAGE, and
+        // which are still telling the truth: this is why a new field was needed
+        // rather than a wider reading of an existing one.
+        assert!(
+            health.contains("\"failed_sources\":[]"),
+            "a degraded meter has not FAILED: the source answered, and a restart \
+             would not fix a counter that went backwards:\n{health}"
+        );
+        assert!(
+            health.contains("\"wedged\":false"),
+            "and the poll loop is not wedged: it ticked, judged, and published a \
+             refusal, which is the loop working:\n{health}"
+        );
+    }
+
     #[tokio::test]
     async fn a_failed_source_is_named_on_the_page_and_in_healthz() {
         use crate::core::clock::FakeClock;
@@ -1085,8 +1206,16 @@ mod tests {
 
         // HEALTHY FIRST. Without this the assertions below would also hold for a
         // page that named a fault unconditionally.
-        beats.record(&crate::domain::MeterId::new("garage"), OracleState::Fresh);
-        beats.record(&crate::domain::MeterId::new("cellar"), OracleState::Fresh);
+        beats.record(
+            &crate::domain::MeterId::new("garage"),
+            OracleState::Fresh,
+            crate::core::oracle::Verdict::good(),
+        );
+        beats.record(
+            &crate::domain::MeterId::new("cellar"),
+            OracleState::Fresh,
+            crate::core::oracle::Verdict::good(),
+        );
         let page = body(index(State(Arc::clone(&state))).await.into_response()).await;
         assert!(
             !page.contains("not being read"),
@@ -1099,7 +1228,11 @@ mod tests {
         );
 
         // Now one meter's source fails fatally — a refused credential.
-        beats.record(&crate::domain::MeterId::new("cellar"), OracleState::Failed);
+        beats.record(
+            &crate::domain::MeterId::new("cellar"),
+            OracleState::Failed,
+            crate::core::oracle::Verdict::bad(crate::core::oracle::Cause::SourceRefused),
+        );
 
         let page = body(index(State(Arc::clone(&state))).await.into_response()).await;
         assert!(

@@ -184,6 +184,7 @@ async fn a_silent_meters_verdict_arrives_inside_nfr2s_bound() {
             Arc::clone(&handle),
             beats.clone(),
             tx.clone(),
+            std::env::temp_dir().join("smartme_nfr2_latency_refs"),
         )));
     }
     drop(tx);

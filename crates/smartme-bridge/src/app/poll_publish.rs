@@ -14,9 +14,10 @@ use tokio::sync::mpsc;
 
 use crate::core::channel::MeterUpdate;
 use crate::core::clock::{Clock, MonotonicMs};
+use crate::core::oracle::{Cause, Judgement, Measured, Verdict, Verdicts, energy_is_monotonic};
 use crate::core::source::{Source, SourceError, Tick};
 use crate::core::state_machine::{Policy, State};
-use crate::domain::MeterId;
+use crate::domain::{MeterId, Quality};
 
 /// How the loop is paced and how long a single fetch may take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +70,24 @@ pub struct MeterState {
     /// reached no verdict, and mapping that onto `Stale` would report a fault
     /// about a bridge that is merely starting.
     pub verdict: Option<State>,
+    /// What was actually PUBLISHED for this meter, and why (Story 2.3 AC6).
+    ///
+    /// # Why the state above is not enough, and what it cost
+    ///
+    /// [`State`] is the freshness machine's answer — `Fresh`, `Stale`, `Failed`.
+    /// It knows nothing of the oracles, so a meter whose energy counter went
+    /// backwards published `Bad` with null values to the SCADA host while every
+    /// operator surface, reading this field, called it `Fresh`.
+    ///
+    /// That is [#62] exactly: on 2026-08-10 a meter froze for ten hours, was
+    /// published `Bad_Stale` throughout, and `/healthz` and `/` reported the
+    /// fleet healthy the whole time. The bridge's own screens were the last place
+    /// the fault could be seen. Carrying the composed verdict here — the same
+    /// value that reached the wire, computed once — is what makes the two agree
+    /// by construction rather than by two pieces of code happening to concur.
+    ///
+    /// `None` before the first completed tick, for the reason above.
+    pub published: Option<Verdict>,
 }
 
 /// The whole fleet at one instant (AR6).
@@ -105,6 +124,24 @@ impl FleetState {
         self.meters
             .iter()
             .filter_map(|m| m.verdict.map(|v| (&m.meter, v)))
+    }
+
+    /// The meters whose PUBLISHED verdict is not good, and why (Story 2.3 AC6).
+    ///
+    /// Distinct from [`Self::failed`], and the distinction is the point: `failed`
+    /// answers *"which meters put nothing on the wire"*, this answers *"which
+    /// meters put something the host must not trust"*. A meter can be the second
+    /// without being the first — a backwards energy counter publishes `Bad` and
+    /// keeps polling — and until Story 2.3 no surface reported that state at all
+    /// ([#62]).
+    ///
+    /// A meter that has not completed a tick is absent rather than guessed at.
+    pub fn degraded(&self) -> Vec<(&MeterId, Verdict)> {
+        self.meters
+            .iter()
+            .filter_map(|m| m.published.map(|v| (&m.meter, v)))
+            .filter(|(_, v)| v.quality() != Quality::Good)
+            .collect()
     }
 
     /// The meters whose source has failed fatally — a rejected credential, a
@@ -180,6 +217,7 @@ impl Heartbeats {
                 last_tick: None,
                 period_ms: 0,
                 verdict: None,
+                published: None,
             })
             .collect();
         Self(Arc::new(tokio::sync::watch::Sender::new(FleetState {
@@ -221,10 +259,11 @@ impl Heartbeats {
     /// `intends_to_publish`).
     ///
     /// [ADR 0027]: ../../../docs/adr/0027-a-failed-source-is-a-fault-the-screen-must-name.md
-    pub fn record(&self, meter: &MeterId, state: State) {
+    pub fn record(&self, meter: &MeterId, state: State, published: Verdict) {
         self.0.send_modify(|fleet| {
             if let Some(entry) = fleet.meters.iter_mut().find(|m| &m.meter == meter) {
                 entry.verdict = Some(state);
+                entry.published = Some(published);
                 fleet.generation += 1;
             }
         });
@@ -325,7 +364,7 @@ pub async fn step_once<S: Source + Send>(
     previous: State,
     last: &mut Option<crate::domain::Measurement>,
     energy_reference: &mut Option<crate::domain::Kwh>,
-) -> State {
+) -> (State, Verdict) {
     let Context {
         meter,
         clock,
@@ -345,35 +384,73 @@ pub async fn step_once<S: Source + Send>(
         Err(_elapsed) => Err(SourceError::Timeout),
     };
 
-    let (next, freshness) = policy.step(previous, &tick, clock.wall());
+    let (freshness_state, freshness) = policy.step(previous, &tick, clock.wall());
 
     // The monotonicity oracle (Story 2.2). It judges a RELATION between two
     // readings, so it has nothing to say when the fetch failed — there is no new
     // index to compare, and the freshness verdict already covers the silence.
-    let monotonicity = match &tick {
-        Ok(reading) => {
-            crate::core::oracle::energy_is_monotonic(*energy_reference, reading.value.energy)
-        }
-        Err(_) => crate::core::oracle::Verdict::good(),
+    //
+    // Scoped to ENERGY (Story 2.3). It looks at the energy index and at nothing
+    // else, so it has no business degrading the power value beside it: before
+    // 2.3 a backwards counter published `Power = null` labelled
+    // `counter-went-backwards`, which withheld a perfectly current number and
+    // then blamed it for a fault in its neighbour.
+    let judgements = [
+        // Freshness and identity judge the whole response: a reading that is too
+        // old is too old in both its numbers.
+        Judgement::about_reading(freshness),
+        Judgement::about(
+            Measured::Energy,
+            match &tick {
+                Ok(reading) => energy_is_monotonic(*energy_reference, reading.value.energy),
+                Err(_) => Verdict::good(),
+            },
+        ),
+    ];
+
+    // ONE composition, per metric and for the meter (Stories 2.1 and 2.3). Not
+    // `if stale { ... } else if backwards { ... }`: the point of the layer is
+    // that a reading which is both too old AND backwards publishes the worse of
+    // the two, whatever order the oracles were consulted in.
+    let published = Verdicts::from_judgements(&judgements);
+
+    // The latch follows the COMPOSED verdict (Story 2.3 AC2). Until then
+    // `Policy::step` computed `State::Failed` from its own guards and
+    // `Verdict::latches()` had no production caller at all, so the latch rule
+    // lived in two places and the one in `oracle.rs` was inert. Now the rule is
+    // read where it is written.
+    let next = if published.meter().latches() {
+        State::Failed
+    } else {
+        freshness_state
     };
 
-    // ONE composition, worst-wins (Story 2.1). Not `if stale { ... } else if
-    // backwards { ... }`: the whole point of the layer is that a reading which is
-    // both too old AND backwards publishes the worse of the two, whatever order
-    // the oracles were consulted in.
-    let published = crate::core::oracle::compose([freshness, monotonicity]);
-
-    // The reference advances on a reading whose VALUE is usable — a source that
-    // could not convert the units hands over a number that must not become the
-    // yardstick for judging the next one. That is what makes this state distinct
-    // from `last`, which records what we would REPUBLISH and moves on every
-    // successful fetch regardless.
+    // WHAT MAY BE REMEMBERED, and it is one rule for both memories (Story 2.3
+    // AC3/AC4). Before it, `energy_reference` advanced on `reading.value.quality
+    // != Bad` — the SOURCE's opinion — and `last` advanced unconditionally on
+    // every successful fetch. Both were wrong, in ways that reached the wire:
     //
-    // A backwards step IS adopted (Story 2.2 AC3): a replaced meter legitimately
-    // reads lower for ever after, and keeping the old reference would mark every
-    // subsequent reading `Bad` against an index that no longer exists.
+    //  - every freshness-level refusal leaves `value.quality == Good`, so a
+    //    replayed response rewound the reference and the genuine reset that
+    //    followed was published `Good`. FR15 defeated by the oracle's own
+    //    bookkeeping.
+    //  - `last` held whatever the last fetch returned, including the substituted
+    //    `BAD_CARRIER = 0.0` of a failed unit conversion — which the next timeout
+    //    then republished as a real `Double` marked `Stale`. The number story 2.2
+    //    exists to withhold, on the wire one tick later.
+    //
+    // The rule: a reading may be remembered if the composed verdict did not
+    // refuse it. `CounterWentBackwards` is the ONE exemption (story 2.2 AC3) —
+    // a replaced meter legitimately reads lower for ever after, so its new index
+    // must become the yardstick or every later reading is judged against an index
+    // that no longer exists.
+    let adoptable = match published.meter().quality() {
+        Quality::Bad => published.meter().cause() == Some(Cause::CounterWentBackwards),
+        _ => true,
+    };
+
     if let Ok(reading) = &tick
-        && reading.value.quality != crate::domain::Quality::Bad
+        && adoptable
     {
         *energy_reference = Some(reading.value.energy);
     }
@@ -400,9 +477,17 @@ pub async fn step_once<S: Source + Send>(
     // the other face.
     //
     // [ADR 0027]: ../../../docs/adr/0027-a-failed-source-is-a-fault-the-screen-must-name.md
+    //
+    // AND `last` OBEYS THE SAME RULE (Story 2.3 AC4). The reading is still
+    // published now — refusing it does not mean withholding it, it means
+    // publishing it marked, which is what `Bad` and its nulls already do. What
+    // changes is that it does not become the thing republished LATER, when the
+    // verdict that refused it is no longer attached.
     let to_publish = match &tick {
         Ok(reading) => {
-            *last = Some(reading.value.clone());
+            if adoptable {
+                *last = Some(reading.value.clone());
+            }
             Some(reading.value.clone())
         }
         Err(_) => last.clone(),
@@ -426,7 +511,133 @@ pub async fn step_once<S: Source + Send>(
             );
         }
     }
-    next
+    (next, published.meter())
+}
+
+/// The monotonicity reference as it is written to disk (Story 2.3 AC5).
+///
+/// # One file per meter, and the reason is concurrency rather than tidiness
+///
+/// **The first version of this comment said the reason was isolating a corrupt
+/// file, and that argument is weak**: one malformed shared file would cost every
+/// meter a single unjudged reading, which is a small harm. Corrected 2026-08-11.
+///
+/// The real reason is that **one task runs per meter** (`supervisor::run` spawns
+/// them side by side) and each persists its own reference on its own cycle. A
+/// single file holding a `meter → index` map would need a read-modify-write, so
+/// two meters storing at the same moment would silently drop one of the two
+/// updates — and the loser would come back from a restart with a stale reference,
+/// which is worse than no reference at all: it judges against a number that was
+/// true two sessions ago.
+///
+/// Avoiding that needs a shared mutex or an owning task. Both are more machinery
+/// than N files, for a value that is one `f64` per meter. The per-meter file is
+/// the cheap way to have no shared mutable state at all — the same reasoning that
+/// keeps `energy_reference` a task-local in the first place.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedReference {
+    /// The last accepted energy index, in kWh.
+    energy_kwh: f64,
+}
+
+/// Where one meter's reference lives, under the state directory.
+pub fn reference_path_for(dir: &std::path::Path, meter: &MeterId) -> std::path::PathBuf {
+    // The meter id is operator-chosen, so it is not trusted as a path component:
+    // anything that is not alphanumeric, `-` or `_` becomes `_`. Two meters whose
+    // ids differ only in punctuation would then share a file, which is why the
+    // id is also written INSIDE and checked on load.
+    let safe: String = meter
+        .to_string()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    dir.join(format!("energy-reference-{safe}.toml"))
+}
+
+/// Reads a meter's monotonicity reference, or `None` if there is not a usable one.
+///
+/// # A failed load is ABSENT, not fatal — decided at drafting (Story 2.3 AC5)
+///
+/// The tempting alternative is to refuse to start: an unreadable reference means
+/// the next reading cannot be judged, and this repository's instinct is to stop
+/// rather than to publish something it cannot vouch for.
+///
+/// It is the wrong call here, and the reasoning is worth keeping. A corrupt
+/// state file would take a WORKING FLEET off the wire — every meter silent,
+/// including the three whose references are fine — to prevent one meter's first
+/// reading going unjudged. The bridge would then need a human before it published
+/// anything at all, which is a worse failure than the one being prevented, and it
+/// is precisely the shape ADR 0026 refused for the configuration.
+///
+/// What is NOT acceptable is silence about it, so the `warn` names the meter and
+/// the error. The meter starts exactly as a brand-new one does — unjudged for one
+/// reading, then judged for ever after.
+fn load_energy_reference(dir: &std::path::Path, meter: &MeterId) -> Option<crate::domain::Kwh> {
+    let path = reference_path_for(dir, meter);
+    if !path.exists() {
+        // The ordinary first run. Not a fault, and not worth a warning.
+        return None;
+    }
+    match crate::persist::load::<PersistedReference>(&path) {
+        Ok(persisted) if persisted.energy_kwh.is_finite() => {
+            tracing::info!(
+                meter = %meter,
+                reference = persisted.energy_kwh,
+                "restored the energy-monotonicity reference across the restart"
+            );
+            Some(crate::domain::Kwh(persisted.energy_kwh))
+        }
+        Ok(persisted) => {
+            // A non-finite reference would disable the oracle for this meter
+            // without saying so — `x < NaN` is false for every x.
+            tracing::warn!(
+                meter = %meter,
+                reference = persisted.energy_kwh,
+                "the stored energy reference is not a finite number; this meter's \
+                 first reading will go unjudged, as if it had never been read"
+            );
+            None
+        }
+        Err(error) => {
+            tracing::warn!(
+                meter = %meter, %error, path = %path.display(),
+                "no readable energy-monotonicity reference; this meter's first \
+                 reading will go unjudged, as if it had never been read. The \
+                 bridge keeps publishing: a corrupt file for one meter must not \
+                 take the fleet off the wire"
+            );
+            None
+        }
+    }
+}
+
+/// Writes a meter's reference, best-effort.
+///
+/// **Failure is logged and swallowed, deliberately.** This runs on the publish
+/// path: propagating a full disk here would stop a meter that is otherwise
+/// reading and publishing perfectly, to protect a check that only matters across
+/// a restart. The cost of the swallow is bounded and stated — the reference
+/// reverts to whatever was last written, and at worst to absent.
+fn store_energy_reference(dir: &std::path::Path, meter: &MeterId, energy: crate::domain::Kwh) {
+    let path = reference_path_for(dir, meter);
+    if let Err(error) = crate::persist::persist_atomic(
+        &path,
+        &PersistedReference {
+            energy_kwh: energy.0,
+        },
+    ) {
+        tracing::warn!(
+            meter = %meter, %error, path = %path.display(),
+            "could not persist the energy-monotonicity reference; a restart will \
+             leave this meter's first reading unjudged"
+        );
+    }
 }
 
 /// The task: loops until the outbox closes.
@@ -440,6 +651,10 @@ pub async fn run<S: Source + Send>(
     // cell the task writes rather than a second opinion.
     pulse: Heartbeats,
     outbox: mpsc::Sender<MeterUpdate>,
+    // Where this meter's monotonicity reference is kept across restarts (Story
+    // 2.3 AC5). The directory, not the file: the file name is derived from the
+    // meter id so that a corrupt one costs exactly the meter it belongs to.
+    reference_dir: std::path::PathBuf,
 ) {
     let heartbeat = pulse.of(&meter).unwrap_or_else(|| {
         panic!("no heartbeat for {meter}; the collection is built from the served meters")
@@ -448,7 +663,18 @@ pub async fn run<S: Source + Send>(
     // The monotonicity reference (Story 2.2), deliberately beside `last` rather
     // than inside it: `last` is what we would republish, this is what we judge
     // against.
-    let mut energy_reference: Option<crate::domain::Kwh> = None;
+    //
+    // RESTORED FROM DISK since Story 2.3 (AC5). Until then it started at `None`
+    // on every boot, and `None` means "no accepted reading yet", which the oracle
+    // correctly treats as unjudgeable — so the FIRST reading after a restart was
+    // never compared to anything and silently became the new baseline.
+    //
+    // That is the one window where a counter is most likely to have moved: a
+    // maintenance visit in which somebody touched both the bridge and the meter.
+    // Restarts are routine here — any `Cost::ProcessRestart` configuration change
+    // performs one, and Epic 7 will wire `/healthz` to an automatic one — so the
+    // gap was not rare, it was scheduled.
+    let mut energy_reference = load_energy_reference(&reference_dir, &meter);
     // The last measurement this meter produced, carried so a failed tick can
     // publish a verdict about it rather than say nothing (Story 3.2).
     let mut last: Option<crate::domain::Measurement> = None;
@@ -491,9 +717,22 @@ pub async fn run<S: Source + Send>(
             heartbeat: &heartbeat,
             outbox: &outbox,
         };
-        state = step_once(&ctx, &mut source, state, &mut last, &mut energy_reference).await;
-        // The verdict reaches anything outside that can report on this meter.
-        pulse.record(&meter, state);
+        let published;
+        let before = energy_reference;
+        (state, published) =
+            step_once(&ctx, &mut source, state, &mut last, &mut energy_reference).await;
+        // Persisted only when it MOVED, so a quiet meter does not rewrite the
+        // same number every period — an fsync per meter per cycle for a value
+        // that did not change.
+        if energy_reference != before
+            && let Some(energy) = energy_reference
+        {
+            store_energy_reference(&reference_dir, &meter, energy);
+        }
+        // The verdict reaches anything outside that can report on this meter —
+        // BOTH halves of it since Story 2.3, so a screen cannot call a meter
+        // healthy while the broker is being told otherwise ([#62]).
+        pulse.record(&meter, state, published);
     }
 }
 
@@ -582,7 +821,7 @@ mod tests {
         let mut energy = None;
 
         // THE PREMISE: a rising counter is Good, or the Bad below proves nothing.
-        let s1 = step_once(&ctx, &mut source, State::initial(), &mut last, &mut energy).await;
+        let (s1, _) = step_once(&ctx, &mut source, State::initial(), &mut last, &mut energy).await;
         assert_eq!(s1, State::Fresh);
 
         // The drop.
@@ -599,7 +838,7 @@ mod tests {
         assert_eq!(got.len(), 3, "every tick publishes a verdict (ADR 0027)");
 
         assert_eq!(got[0].published(), Quality::Good, "the premise");
-        assert_eq!(got[0].verdict.cause(), None);
+        assert_eq!(got[0].verdict().cause(), None);
 
         assert_eq!(
             got[1].published(),
@@ -609,7 +848,7 @@ mod tests {
              negative delta and no reason to distrust it"
         );
         assert_eq!(
-            got[1].verdict.cause(),
+            got[1].verdict().cause(),
             Some(crate::core::oracle::Cause::CounterWentBackwards)
         );
 
@@ -652,7 +891,7 @@ mod tests {
 
         let mut last = None;
         let mut energy = None;
-        let s1 = step_once(&ctx, &mut source, State::initial(), &mut last, &mut energy).await;
+        let (s1, _) = step_once(&ctx, &mut source, State::initial(), &mut last, &mut energy).await;
         let _ = step_once(&ctx, &mut source, s1, &mut last, &mut energy).await;
         drop(tx);
 
@@ -666,7 +905,7 @@ mod tests {
             "worst wins: Stale from freshness, Bad from monotonicity"
         );
         assert_eq!(
-            got[1].verdict.cause(),
+            got[1].verdict().cause(),
             Some(crate::core::oracle::Cause::CounterWentBackwards),
             "and the cause travels with the quality it belongs to, not with \
              whichever oracle was consulted first"
@@ -726,14 +965,14 @@ mod tests {
         };
 
         let mut last = None;
-        let good = step_once(&ctx, &mut source, State::initial(), &mut last, &mut None).await;
+        let (good, _) = step_once(&ctx, &mut source, State::initial(), &mut last, &mut None).await;
         assert_eq!(
             good,
             State::Fresh,
             "the premise: the meter must first be proven fresh"
         );
 
-        let after = step_once(&ctx, &mut source, good, &mut last, &mut None).await;
+        let (after, _) = step_once(&ctx, &mut source, good, &mut last, &mut None).await;
         assert_eq!(after, State::Stale);
         drop(tx);
 
@@ -797,6 +1036,278 @@ mod tests {
         );
     }
 
+    /// **Story 2.3 AC1** — a fault in one metric does not withhold the other.
+    ///
+    /// The whole subject of the story, asserted where it is observable: on the
+    /// update that reaches the outbox. Before 2.3 one verdict belonged to the
+    /// READING, so a backwards energy index published `Power = null` stamped
+    /// `counter-went-backwards` — a number the bridge had no complaint about,
+    /// withheld and then blamed for its neighbour's fault.
+    ///
+    /// FALSIFIED 2026-08-11: scoping the monotonicity judgement to the reading
+    /// (`Judgement::about_reading` instead of `about(Measured::Energy, …)`) —
+    /// which is exactly the pre-2.3 behaviour — turns the two `Power` assertions
+    /// red, on quality and on cause.
+    #[tokio::test]
+    async fn a_backwards_energy_index_does_not_withhold_the_power_reading() {
+        let (_, sent) = drive_sequence(
+            FakeSource::new()
+                .then(Ok(reading_with_energy(Quality::Good, 950, 4_843.822)))
+                .then(Ok(reading_with_energy(Quality::Good, 950, 12.0))),
+        )
+        .await;
+        assert_eq!(sent.len(), 2, "every tick publishes a verdict (ADR 0027)");
+
+        let refused = &sent[1];
+
+        // The energy index is refused, and says why.
+        assert_eq!(refused.published_for(Measured::Energy), Quality::Bad);
+        assert_eq!(
+            refused.verdicts.for_metric(Measured::Energy).cause(),
+            Some(Cause::CounterWentBackwards)
+        );
+
+        // The power value was never judged by that oracle, and is untouched.
+        assert_eq!(
+            refused.published_for(Measured::Power),
+            Quality::Good,
+            "the monotonicity oracle looked at the energy index and at nothing \
+             else; withholding a current power value because of it publishes a \
+             fault where there is none"
+        );
+        assert_eq!(
+            refused.verdicts.for_metric(Measured::Power).cause(),
+            None,
+            "and a good metric carries no cause — least of all its neighbour's"
+        );
+
+        // The METER, though, is not healthy. This is the distinction the story
+        // exists to make: per-metric on the wire, worst-of for the meter.
+        assert_eq!(
+            refused.published(),
+            Quality::Bad,
+            "an operator surface must not call this meter healthy just because \
+             one of its two numbers survived"
+        );
+    }
+
+    /// **Story 2.3 AC4** — a reading the bridge refused never becomes the value
+    /// republished later.
+    ///
+    /// The live defect the 2026-08-11 review found in story 2.2, and the reason
+    /// this story is not only a refactor. `last` was adopted on EVERY successful
+    /// fetch, including one the oracle refused — so the substituted
+    /// `BAD_CARRIER = 0.0` of a failed unit conversion sat in `last`, and the
+    /// next timeout republished it as a genuine `Double` marked `Stale`. A
+    /// consumer differencing `4843.822 → 0.0` gets −4843.8 under a flag that says
+    /// the network hiccuped: the exact harm FR15 exists to prevent, produced by
+    /// the code that prevents it.
+    ///
+    /// FALSIFIED 2026-08-11: restoring the unconditional `*last = Some(...)` on
+    /// `Ok` makes the last assertion red with `0.0` — the defect, reproduced.
+    #[tokio::test]
+    async fn a_refused_reading_is_never_what_gets_republished() {
+        let (_, sent) = drive_sequence(
+            FakeSource::new()
+                .then(Ok(reading_with_energy(Quality::Good, 950, 4_843.822)))
+                // The unit was unreadable: the source substitutes BAD_CARRIER and
+                // marks the value Bad (`smartme_source.rs`). This IS published,
+                // marked and with null values — refusing a reading does not mean
+                // hiding it.
+                .then(Ok(reading_with_energy(Quality::Bad, 950, 0.0)))
+                // And then the cloud goes quiet, which is when `last` speaks.
+                .then(Err(SourceError::Timeout)),
+        )
+        .await;
+        assert_eq!(sent.len(), 3);
+
+        assert_eq!(sent[0].published(), Quality::Good, "the premise");
+        assert_eq!(sent[1].published(), Quality::Bad, "the refusal");
+
+        assert_eq!(
+            sent[2].published(),
+            Quality::Stale,
+            "a silent cloud republishes the last known reading, marked (ADR 0027)"
+        );
+        assert_eq!(
+            sent[2].measurement.energy,
+            Kwh(4_843.822),
+            "the republished value must be the last reading the bridge ACCEPTED. \
+             Republishing the refused one hands over 0.0 as a real Double under a \
+             `Stale` flag, and a consumer differencing it gets a delta of \
+             −4843.8 with nothing to warn it"
+        );
+    }
+
+    /// **Story 2.3 AC5** — the monotonicity reference survives a restart, and a
+    /// meter that was reset while the bridge was down is caught.
+    ///
+    /// The window this closes is not a rare one. `energy_reference` started at
+    /// `None` on every boot, and `None` means *"no accepted reading yet"* — which
+    /// the oracle correctly treats as unjudgeable, so the first reading after a
+    /// restart silently became the new baseline whatever it said. A maintenance
+    /// visit in which somebody touches both the bridge and the meter is exactly
+    /// when a counter is most likely to have moved, and Epic 7 will make restarts
+    /// automatic.
+    ///
+    /// The restart is simulated the only honest way: a fresh `energy_reference`
+    /// binding, loaded from disk exactly as `run` loads it. Nothing is carried in
+    /// memory across the two halves.
+    ///
+    /// FALSIFIED 2026-08-11 by skipping the `store_energy_reference` call: the
+    /// second half then loads `None`, judges nothing, and publishes the reset
+    /// index as `Good` — the defect, reproduced with the persistence removed.
+    #[tokio::test]
+    async fn the_monotonicity_reference_survives_a_restart() {
+        let dir = std::env::temp_dir().join("smartme_reference_restart_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let meter = MeterId::new("garage");
+        let _ = std::fs::remove_file(reference_path_for(&dir, &meter));
+
+        // BEFORE THE RESTART: one accepted reading at 900_000 kWh.
+        {
+            let clock = FakeClock::new(UtcMillis(SANE_NOW));
+            let beats = Heartbeats::for_meters([meter.clone()]);
+            let heartbeat = beats.of(&meter).expect("present");
+            let (tx, _rx) = mpsc::channel(8);
+            let ctx = Context {
+                meter: &meter,
+                clock: &clock,
+                policy: policy(),
+                config: config(),
+                heartbeat: &heartbeat,
+                outbox: &tx,
+            };
+            let mut source =
+                FakeSource::new().then(Ok(reading_with_energy(Quality::Good, 950, 900_000.0)));
+            let mut last = None;
+            let mut reference = load_energy_reference(&dir, &meter);
+            let (_, _) = step_once(
+                &ctx,
+                &mut source,
+                State::initial(),
+                &mut last,
+                &mut reference,
+            )
+            .await;
+            let energy = reference.expect("a good reading is adopted as the reference");
+            store_energy_reference(&dir, &meter, energy);
+        }
+
+        // THE RESTART. Everything in memory is gone; only the file remains.
+        let restored = load_energy_reference(&dir, &meter);
+        assert_eq!(
+            restored,
+            Some(crate::domain::Kwh(900_000.0)),
+            "the reference must come back from disk, or the first reading after \
+             every restart goes unjudged"
+        );
+
+        // AFTER THE RESTART: the meter was replaced while we were down.
+        let clock = FakeClock::new(UtcMillis(SANE_NOW));
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let heartbeat = beats.of(&meter).expect("present");
+        let (tx, mut rx) = mpsc::channel(8);
+        let ctx = Context {
+            meter: &meter,
+            clock: &clock,
+            policy: policy(),
+            config: config(),
+            heartbeat: &heartbeat,
+            outbox: &tx,
+        };
+        let mut source = FakeSource::new().then(Ok(reading_with_energy(Quality::Good, 950, 12.0)));
+        let mut last = None;
+        let mut reference = restored;
+        let _ = step_once(
+            &ctx,
+            &mut source,
+            State::initial(),
+            &mut last,
+            &mut reference,
+        )
+        .await;
+        drop(tx);
+
+        let update = rx.recv().await.expect("the reading was published");
+        assert_eq!(
+            update.published_for(Measured::Energy),
+            Quality::Bad,
+            "a meter that was reset while the bridge was down must be caught. \
+             Without the restored reference this reads Good and 12.0 kWh becomes \
+             the new baseline, with a consumer differencing 900000 -> 12"
+        );
+        assert_eq!(
+            update.verdicts.for_metric(Measured::Energy).cause(),
+            Some(Cause::CounterWentBackwards)
+        );
+
+        let _ = std::fs::remove_file(reference_path_for(&dir, &meter));
+    }
+
+    /// A reference file that cannot be read costs its own meter and nothing else
+    /// (Story 2.3 AC5, the decision taken at drafting).
+    ///
+    /// Refusing to start was the tempting alternative and is the wrong call: a
+    /// corrupt file would take a WORKING FLEET off the wire — every meter silent,
+    /// including those whose references are fine — to prevent one meter's first
+    /// reading going unjudged. The bridge would then need a human before it
+    /// published anything, which is a worse failure than the one prevented, and
+    /// the shape ADR 0026 already refused for the configuration.
+    #[test]
+    fn an_unreadable_reference_is_absent_rather_than_fatal() {
+        let dir = std::env::temp_dir().join("smartme_reference_corrupt_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let meter = MeterId::new("garage");
+
+        std::fs::write(reference_path_for(&dir, &meter), b"this is not toml {{{").expect("written");
+        assert_eq!(
+            load_energy_reference(&dir, &meter),
+            None,
+            "a corrupt reference reads as absent — the meter starts unjudged for \
+             one reading, exactly as a brand-new meter does"
+        );
+
+        // A non-finite reference is refused too: `x < NaN` is false for every x,
+        // so keeping it would disable the oracle for this meter with no signal.
+        std::fs::write(reference_path_for(&dir, &meter), b"energy_kwh = nan\n").expect("written");
+        assert_eq!(load_energy_reference(&dir, &meter), None);
+
+        let _ = std::fs::remove_file(reference_path_for(&dir, &meter));
+    }
+
+    /// Drives several ticks through one `step_once` chain, carrying `last` and
+    /// the monotonicity reference across them — which is what makes a SEQUENCE
+    /// testable rather than a single judgement.
+    async fn drive_sequence(source: FakeSource) -> (State, Vec<MeterUpdate>) {
+        let clock = FakeClock::new(UtcMillis(SANE_NOW));
+        let beats = Heartbeats::for_meters([MeterId::new("garage")]);
+        let heartbeat = beats.of(&MeterId::new("garage")).expect("present");
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut source = source;
+        let meter = MeterId::new("garage");
+        let ctx = Context {
+            meter: &meter,
+            clock: &clock,
+            policy: policy(),
+            config: config(),
+            heartbeat: &heartbeat,
+            outbox: &tx,
+        };
+        let mut last = None;
+        let mut energy = None;
+        let mut state = State::initial();
+        for _ in 0..source.remaining() {
+            (state, _) = step_once(&ctx, &mut source, state, &mut last, &mut energy).await;
+        }
+        drop(tx);
+        let mut got = Vec::new();
+        while let Some(u) = rx.recv().await {
+            got.push(u);
+        }
+        (state, got)
+    }
+
     async fn drive(source: FakeSource) -> (State, Vec<MeterUpdate>) {
         let clock = FakeClock::new(UtcMillis(SANE_NOW));
         let beats = Heartbeats::for_meters([MeterId::new("garage")]);
@@ -812,7 +1323,7 @@ mod tests {
             heartbeat: &heartbeat,
             outbox: &tx,
         };
-        let state = step_once(&ctx, &mut source, State::initial(), &mut None, &mut None).await;
+        let (state, _) = step_once(&ctx, &mut source, State::initial(), &mut None, &mut None).await;
         drop(tx);
         let mut got = Vec::new();
         while let Some(u) = rx.recv().await {
@@ -1140,6 +1651,11 @@ mod tests {
                 Arc::clone(&handle),
                 beats.clone(),
                 tx.clone(),
+                // A per-run temp dir: this test is about per-meter isolation of
+                // the LOOP, and a shared reference file would couple the meters
+                // through the filesystem — the very thing it asserts does not
+                // happen.
+                std::env::temp_dir().join("smartme_poll_publish_fleet_refs"),
             )));
         }
         drop(tx);
@@ -1199,11 +1715,12 @@ mod tests {
             outbox: &tx,
         };
         let mut last = None;
-        let after_timeout =
+        let (after_timeout, _) =
             step_once(&ctx, &mut source, State::initial(), &mut last, &mut None).await;
         assert_eq!(after_timeout, State::Stale);
 
-        let after_good = step_once(&ctx, &mut source, after_timeout, &mut last, &mut None).await;
+        let (after_good, _) =
+            step_once(&ctx, &mut source, after_timeout, &mut last, &mut None).await;
         assert_eq!(after_good, State::Fresh);
         drop(tx);
         let u = rx.recv().await.expect("the good reading was forwarded");

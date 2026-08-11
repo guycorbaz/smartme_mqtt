@@ -309,11 +309,13 @@ artifact that no longer exists**, so these are first measurements, not confirmat
   is named by the serial `30000001`.
 - **`Contract/Version = 3` was read by a real host** for the first time.
 
-> **These rows attest to contract v3, and the contract is now v5.** Story 2.1 (2026-08-10)
+> **These rows attest to contract v3, and the contract is now v6.** Story 2.1 (2026-08-10)
 > added a `Cause` property to every non-good metric, which is a change to the tag set (v4);
 > story 2.2, the same day, added the `counter-went-backwards` cause to that property's
-> vocabulary (v5). So a v3 run does **not** attest to what a consumer sees today, and **no run
-> has happened against v4 or v5.** What the v3 rows still establish is everything independent
+> vocabulary (v5); story 2.3 (2026-08-11) made a verdict belong to a METRIC rather than to the
+> reading, so a refused energy index no longer nulls the power value beside it (v6, **breaking**).
+> So a v3 run does **not** attest to what a consumer sees today, and **no run has happened against
+> v4, v5 or v6.** What the v3 rows still establish is everything independent
 > of that property: the quality codes on a `Good`→`Stale` transition, the rebirth flow, and the
 > double NDEATH. Since v4 the binding is machine-checked by `tests/contract_golden.rs`, so a
 > future drift between this table and the code cannot be silent — but a missing run is still a

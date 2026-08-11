@@ -213,6 +213,20 @@ impl Cause {
         walked
     }
 
+    /// This cause's position in [`Cause::ALL`], used only as [`compose`]'s
+    /// third-tier tie-break.
+    ///
+    /// Derived from `ALL` rather than from a second hand-written table, so it
+    /// cannot drift from it — and `every_cause_is_in_all` proves `ALL` is
+    /// complete, which is what makes the `expect` unreachable rather than merely
+    /// unlikely.
+    fn position_in_all(self) -> usize {
+        Cause::ALL
+            .iter()
+            .position(|listed| *listed == self)
+            .expect("Cause::ALL is complete — every_cause_is_in_all proves it")
+    }
+
     /// The quality a verdict carrying this cause publishes.
     ///
     /// **This is the oracle→quality mapping AC5 named, and until 2026-08-11 it
@@ -348,6 +362,85 @@ impl Verdict {
     }
 }
 
+/// Which published number a judgement is about.
+///
+/// The bridge publishes exactly two measured metrics per meter, and Story 2.3
+/// exists because a verdict used to belong to the READING rather than to either
+/// of them: an energy-only oracle nulled a perfectly current `Power` and labelled
+/// it `counter-went-backwards`.
+///
+/// This is deliberately **not** the Sparkplug metric name. `core/` is the pure
+/// functional core and may not know what a metric is called on the wire — the
+/// name is contract, owned by `adapters/sparkplug_publisher.rs`, and one of the
+/// things `contract_golden` pins. What the core needs is which of the two
+/// physical quantities an oracle looked at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Measured {
+    /// Instantaneous power.
+    Power,
+    /// The cumulative energy index.
+    Energy,
+}
+
+impl Measured {
+    /// Both of them, for callers that must not forget one.
+    pub const ALL: &'static [Measured] = &[Measured::Power, Measured::Energy];
+}
+
+/// What a judgement is about: one metric, or the reading as a whole.
+///
+/// **`Reading` is not a convenience.** Freshness and identity genuinely judge the
+/// whole response — a reading that is too old is too old in both its numbers, and
+/// a reading from the wrong meter is the wrong meter's power AND energy. Forcing
+/// those oracles to enumerate metrics would make every new metric a place to
+/// forget one, which is the failure mode this type exists to remove rather than
+/// relocate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// Applies to every metric of the reading.
+    Reading,
+    /// Applies to exactly one metric.
+    Metric(Measured),
+}
+
+/// One oracle's verdict, and what it was about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Judgement {
+    scope: Scope,
+    verdict: Verdict,
+}
+
+impl Judgement {
+    /// A judgement about the whole reading — freshness, identity, transport.
+    pub const fn about_reading(verdict: Verdict) -> Self {
+        Judgement {
+            scope: Scope::Reading,
+            verdict,
+        }
+    }
+
+    /// A judgement about one metric — bounds, monotonicity, numeric domain.
+    pub const fn about(metric: Measured, verdict: Verdict) -> Self {
+        Judgement {
+            scope: Scope::Metric(metric),
+            verdict,
+        }
+    }
+
+    /// Whether this judgement has anything to say about `metric`.
+    pub const fn covers(self, metric: Measured) -> bool {
+        match self.scope {
+            Scope::Reading => true,
+            Scope::Metric(judged) => judged as u8 == metric as u8,
+        }
+    }
+
+    /// The verdict itself.
+    pub const fn verdict(self) -> Verdict {
+        self.verdict
+    }
+}
+
 /// How bad a quality is. Private on purpose: the order is the composition rule,
 /// not a general fact about `Quality`, and exporting it would invite a second
 /// interpretation somewhere else.
@@ -371,14 +464,165 @@ const fn severity(quality: Quality) -> u8 {
 /// An empty iterator composes to [`Verdict::good`]: nothing objected. That is the
 /// honest reading — "no oracle refused" — and it is what makes registering zero
 /// oracles behave like the bridge did before this module existed.
+///
+/// # Ties, and why they are no longer arbitrary (Story 2.3)
+///
+/// This function used to keep the FIRST verdict of a given severity and its doc
+/// said *"which of two equally severe causes is reported is arbitrary by
+/// construction, and no caller may rely on it"*. `poll_publish` relied on it: it
+/// called `compose([freshness, monotonicity])`, so "freshness wins ties" was the
+/// real behaviour, decided by the order of a literal. The 2026-08-11 review found
+/// the tie reachable in production — a unit-conversion failure yields
+/// `bad(ValueUnusable)` from freshness while monotonicity independently yields
+/// `bad(CounterWentBackwards)` on the same reading — and the operator saw one
+/// cause without ever learning the other applied.
+///
+/// The rule is now a **total order**, so composition is a function of its inputs
+/// as a SET and no permutation changes the answer:
+///
+/// 1. **Worse quality wins**, over `Good < Stale < Bad`. Unchanged.
+/// 2. **At equal quality, a LATCHING cause outranks a degrading one.** Decided by
+///    Guy on 2026-08-11. It is the rule that matches what the two mean: a
+///    latching cause says *this meter is not the meter you asked for*, which
+///    survives the reading, while a degrading one describes a number that has
+///    already passed. Reporting the degrading one would send an operator to look
+///    at a value when the configuration is wrong. It also gives
+///    [`Verdict::latches`] its first production caller — until this story the
+///    latch rule was documented here and computed independently by
+///    `Policy::step`, so it lived in two places and one of them was inert.
+/// 3. **At equal quality and equal latching, the cause earlier in [`Cause::ALL`]
+///    wins.** This tier is a tie-break and nothing more: it exists so that the
+///    result is TOTAL, not because position in `ALL` means anything. `ALL` runs
+///    roughly from transport outwards to value, so the earlier cause is the one
+///    closer to the source — which is a defensible thing to report first, and is
+///    not offered as a deeper principle. What matters is that it is stable and
+///    stated, rather than being whatever the call site's array order happened to
+///    be.
 pub fn compose(verdicts: impl IntoIterator<Item = Verdict>) -> Verdict {
     verdicts.into_iter().fold(Verdict::good(), |worst, next| {
-        if severity(next.quality()) > severity(worst.quality()) {
+        if precedence(next) > precedence(worst) {
             next
         } else {
             worst
         }
     })
+}
+
+/// The composed verdict for ONE metric: every judgement that covers it, composed.
+///
+/// A judgement scoped to the reading covers every metric; one scoped to a metric
+/// covers only that one. This is the whole of Story 2.3's AC1 — an energy oracle
+/// no longer has any way to reach `Power`.
+pub fn compose_for(metric: Measured, judgements: &[Judgement]) -> Verdict {
+    compose(
+        judgements
+            .iter()
+            .filter(|j| j.covers(metric))
+            .map(|j| j.verdict()),
+    )
+}
+
+/// The strongest verdict among every metric — what the METER as a whole is worth.
+///
+/// The per-metric verdicts are what reach the wire; this is what a latch decision
+/// and an operator surface read, because "is this meter trustworthy" is not a
+/// question about one number. A meter whose energy index is refused for identity
+/// reasons is a broken meter even if its power is fine.
+pub fn compose_for_meter(judgements: &[Judgement]) -> Verdict {
+    compose(judgements.iter().map(|j| j.verdict()))
+}
+
+/// What one poll cycle concluded about one meter: a verdict per published
+/// metric, plus the meter-level verdict that is the worst of them.
+///
+/// **Why all three travel together.** They answer different questions and are
+/// read by different code, and Story 2.3 exists because the bridge used to have
+/// only one answer for all of them:
+///
+/// - the **per-metric** verdicts reach the wire, so a fault in the energy index
+///   no longer withholds a current power value;
+/// - the **meter** verdict is what a latch decision and every operator surface
+///   read, because *"is this meter trustworthy"* is not a question about one
+///   number. Publishing `Power` as `Good` while the energy index is refused is
+///   right on the wire and would be a lie on a status page.
+///
+/// Computed once, from one set of judgements, so the two cannot disagree — which
+/// is exactly how `/healthz` came to call a meter `Fresh` while the broker was
+/// being told `Bad` ([#62] on a fresh path, found by the 2026-08-11 review).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Verdicts {
+    power: Verdict,
+    energy: Verdict,
+    meter: Verdict,
+}
+
+impl Verdicts {
+    /// Composes every judgement, per metric and for the meter.
+    pub fn from_judgements(judgements: &[Judgement]) -> Self {
+        Verdicts {
+            power: compose_for(Measured::Power, judgements),
+            energy: compose_for(Measured::Energy, judgements),
+            meter: compose_for_meter(judgements),
+        }
+    }
+
+    /// The same verdict for every metric — the pre-2.3 shape, kept for the paths
+    /// where one judgement genuinely covers the whole reading (a failed fetch has
+    /// no per-metric detail to offer).
+    pub fn uniform(verdict: Verdict) -> Self {
+        Verdicts {
+            power: verdict,
+            energy: verdict,
+            meter: verdict,
+        }
+    }
+
+    /// What to publish on `metric`.
+    pub const fn for_metric(self, metric: Measured) -> Verdict {
+        match metric {
+            Measured::Power => self.power,
+            Measured::Energy => self.energy,
+        }
+    }
+
+    /// What the meter as a whole is worth: the worst of everything judged.
+    pub const fn meter(self) -> Verdict {
+        self.meter
+    }
+
+    /// Applies `f` to every verdict, meter-level included.
+    ///
+    /// Exists for the republication path, which degrades a whole update at once
+    /// (ADR 0027: a meter that produced no fresh reading is republished, marked,
+    /// never withheld). Mapping rather than rebuilding keeps the per-metric
+    /// distinctions the last real reading established.
+    pub fn map(self, f: impl Fn(Verdict) -> Verdict) -> Self {
+        Verdicts {
+            power: f(self.power),
+            energy: f(self.energy),
+            meter: f(self.meter),
+        }
+    }
+}
+
+/// A verdict's rank under the total order documented on [`compose`]. Bigger wins.
+///
+/// Returned as a tuple so the comparison is lexicographic by construction: adding
+/// a tier means adding an element, and it is impossible to compare tier 3 without
+/// having compared tiers 1 and 2 — which is the mistake a hand-written `if` chain
+/// invites.
+fn precedence(verdict: Verdict) -> (u8, u8, usize) {
+    (
+        severity(verdict.quality()),
+        u8::from(verdict.latches()),
+        // Earlier in `ALL` wins, so the rank must DECREASE with position.
+        match verdict.cause() {
+            Some(cause) => Cause::ALL.len() - cause.position_in_all(),
+            // A good verdict never reaches a tie-break: it loses tier 1 to
+            // anything that objected, and two good verdicts are equal anyway.
+            None => 0,
+        },
+    )
 }
 
 /// The energy-counter monotonicity oracle (Story 2.2 — FR15, NFR6).
@@ -484,6 +728,133 @@ mod tests {
         // And the cause travels with the quality it belongs to, rather than being
         // picked up from whichever verdict happened to be first.
         assert_eq!(compose([stale, bad]).cause(), Some(Cause::ValueUnusable));
+    }
+
+    /// Story 2.3 AC2 — composition is a function of its inputs as a SET.
+    ///
+    /// The property `compose` was built to provide and did not have: until this
+    /// story ties kept whichever verdict came first, so the answer depended on
+    /// the order of a literal at the call site. Every permutation of a set that
+    /// contains a tie must now produce the same verdict, cause included.
+    ///
+    /// FALSIFIED 2026-08-11: restoring `severity(next) > severity(worst)` — the
+    /// pre-2.3 comparison, which keeps the first of equal severity — turns this
+    /// red on the first permutation that puts the two `Bad`s the other way round.
+    #[test]
+    fn composition_does_not_depend_on_the_order_the_verdicts_arrive_in() {
+        // Two Bad verdicts, one latching and one not: the tie the review found
+        // reachable in production.
+        let identity = Verdict::bad(Cause::SourceRefused);
+        let value = Verdict::bad(Cause::CounterWentBackwards);
+        let stale = Verdict::stale(Cause::ReadingTooOld);
+
+        let expected = compose([identity, value, stale]);
+        for permutation in [
+            [identity, stale, value],
+            [value, identity, stale],
+            [value, stale, identity],
+            [stale, identity, value],
+            [stale, value, identity],
+        ] {
+            assert_eq!(
+                compose(permutation),
+                expected,
+                "composition changed with the order of its inputs: {permutation:?}"
+            );
+        }
+
+        // And the tie resolves the way the rule says, not the way the array does.
+        assert_eq!(
+            expected.cause(),
+            Some(Cause::SourceRefused),
+            "at equal severity the LATCHING cause must win: reporting the value \
+             fault sends an operator to look at a number when the meter is not \
+             the meter they configured"
+        );
+        assert!(expected.latches());
+    }
+
+    /// Story 2.3 AC2, tier 3 — two degrading causes of equal severity still
+    /// resolve deterministically.
+    ///
+    /// Tiers 1 and 2 cannot separate these: both are `Bad`, neither latches. If
+    /// the order were still decided by the caller's array, this is where it would
+    /// show — and it is the commonest shape, since most causes degrade.
+    ///
+    /// FALSIFIED 2026-08-11: dropping the third element of `precedence` (so the
+    /// tuple is `(severity, latches)`) makes the two orders disagree.
+    #[test]
+    fn two_degrading_causes_of_equal_severity_resolve_by_the_stated_tie_break() {
+        let earlier = Verdict::bad(Cause::ValueUnusable);
+        let later = Verdict::bad(Cause::CounterWentBackwards);
+        assert!(
+            Cause::ValueUnusable.position_in_all() < Cause::CounterWentBackwards.position_in_all(),
+            "this test's premise: ValueUnusable is the earlier of the two in ALL"
+        );
+
+        assert_eq!(compose([earlier, later]), compose([later, earlier]));
+        assert_eq!(
+            compose([later, earlier]).cause(),
+            Some(Cause::ValueUnusable),
+            "the earlier cause in ALL wins the third tier, whichever order it \
+             arrives in"
+        );
+    }
+
+    /// Story 2.3 AC1 — a metric carries the verdict of the oracles that judged
+    /// IT, and an oracle scoped to the reading reaches every metric.
+    ///
+    /// This is the story's whole subject: before it, one verdict per reading was
+    /// stamped on both metrics, so a backwards energy index nulled a perfectly
+    /// current power value and labelled it `counter-went-backwards`.
+    ///
+    /// FALSIFIED 2026-08-11: making `Judgement::covers` return `true`
+    /// unconditionally — the pre-2.3 behaviour — turns the `Power` assertions red
+    /// on both quality and cause.
+    #[test]
+    fn a_metric_carries_only_the_verdicts_that_judged_it() {
+        let judgements = [
+            Judgement::about_reading(Verdict::good()),
+            Judgement::about(Measured::Energy, Verdict::bad(Cause::CounterWentBackwards)),
+        ];
+
+        let energy = compose_for(Measured::Energy, &judgements);
+        assert_eq!(energy.quality(), Quality::Bad);
+        assert_eq!(energy.cause(), Some(Cause::CounterWentBackwards));
+
+        let power = compose_for(Measured::Power, &judgements);
+        assert_eq!(
+            power.quality(),
+            Quality::Good,
+            "the energy oracle said nothing about power, so power is untouched"
+        );
+        assert_eq!(
+            power.cause(),
+            None,
+            "a good metric carries no cause — least of all the cause of a fault \
+             in the metric beside it"
+        );
+
+        // A reading-scoped refusal reaches both, because it is about both.
+        let stale = [Judgement::about_reading(Verdict::stale(
+            Cause::ReadingTooOld,
+        ))];
+        for metric in Measured::ALL {
+            assert_eq!(
+                compose_for(*metric, &stale).cause(),
+                Some(Cause::ReadingTooOld),
+                "{metric:?}: a reading that is too old is too old in both its \
+                 numbers"
+            );
+        }
+
+        // And the meter-level verdict is the worst of everything, which is what
+        // a latch decision and an operator screen must read.
+        assert_eq!(
+            compose_for_meter(&judgements).cause(),
+            Some(Cause::CounterWentBackwards),
+            "the meter is not healthy just because one of its metrics is"
+        );
     }
 
     /// AC2 — the degenerate ends, stated rather than assumed.

@@ -14,7 +14,7 @@ is listed in section~\ref{sec:contract-limits} rather than described as though i
 \section{Contract version}
 
 The node BIRTH carries a metric \code{Contract/Version} (\code{Int64}), currently
-\textbf{5}. It is incremented on \emph{any} change to the topic grammar, to a metric name or
+\textbf{6}. It is incremented on \emph{any} change to the topic grammar, to a metric name or
 unit, or to the meaning of a published quality code. Publishing it means a consumer can
 \emph{see} the contract change instead of having to notice it from broken tags.
 
@@ -23,7 +23,13 @@ quality codes and the cause vocabulary to the version they belong to, and fails 
 moves without this number moving. Before that, the number was maintained by whoever
 remembered.
 
-The number does not say what \emph{kind} of change it was, so it is worth stating. Version~5
+The number does not say what \emph{kind} of change it was, so it is worth stating. Version~6
+is \textbf{breaking}: a verdict now belongs to a \emph{metric} rather than to the reading, so a
+fault in the energy index no longer withholds the power value beside it. Nothing is renamed and no
+tag is added --- but a consumer that recorded \code{Power = null} whenever the energy index was
+refused records a real value for the identical situation from this version on, and points from
+either side cannot be compared without knowing which side they are on. The change is a correction;
+a correction that alters what a stored point \emph{means} is still breaking. Version~5
 is \textbf{additive}: one new cause, \code{counter-went-backwards}, joins the vocabulary a
 \code{Cause} property can carry, so a consumer sees a value it had not seen before on a
 property it already held. Version~4
@@ -42,6 +48,9 @@ history.
 \toprule
 \textbf{Version} & \textbf{Kind} & \textbf{Change} \\
 \midrule
+6 & breaking & A verdict belongs to a \emph{metric}, not to the reading. A refused energy
+    index no longer nulls the power value nor labels it with the energy's cause. See
+    section~\ref{sec:quality}. \\
 5 & additive & A new cause, \code{counter-went-backwards}: the energy index dropped, so
     the meter was reset, rolled over or replaced. See section~\ref{sec:quality}. \\
 4 & additive & Every metric that is not \textsc{good} carries a \code{Cause} property
@@ -119,7 +128,7 @@ disabled cannot.
 \toprule
 \normalfont\textbf{Metric} & \textbf{Type} & \textbf{Unit} & \textbf{Meaning} \\
 \midrule
-Contract/Version & Int64  & ---   & Contract version, node BIRTH only. Currently 5. \\
+Contract/Version & Int64  & ---   & Contract version, node BIRTH only. Currently 6. \\
 Node Control/Rebirth & Boolean & --- & Always \code{false}. The command endpoint a host
                                        addresses to request a fresh birth; node BIRTH only. \\
 Power            & Double & kW    & Instantaneous power. \\
@@ -174,7 +183,8 @@ only because the alternative was a silent lie. A separate key costs nothing: a
 \end{note}
 
 \begin{note}
-\textbf{A counter that goes backwards is \textsc{bad}, not \textsc{stale}} (contract~5). The
+\textbf{A counter that goes backwards is \textsc{bad}, not \textsc{stale}} (contract~5, and
+since contract~6 the refusal lands on the \code{Energy} metric alone). The
 value may be perfectly current --- a replacement meter really does read 12~kWh --- and it is
 the \emph{relation} to the previous reading that is broken. \textsc{bad} publishes null
 values, which withholds exactly the number a consumer would difference; publishing it

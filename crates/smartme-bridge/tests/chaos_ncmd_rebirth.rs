@@ -198,7 +198,7 @@ fn rebirth_request() -> Vec<u8> {
 
 /// One judged reading, as the poll task would hand it over.
 fn reading(now: UtcMillis) -> MeterUpdate {
-    MeterUpdate::new(
+    MeterUpdate::uniform(
         MeterId::new("garage"),
         Measurement {
             meter: MeterId::new("garage"),

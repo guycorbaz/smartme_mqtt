@@ -116,7 +116,7 @@ fn checkpoint(step: &str, look_for: &[&str], false_pass: &[&str]) {
 }
 
 fn reading(power: f64, energy: f64, quality: Quality, now: UtcMillis) -> MeterUpdate {
-    MeterUpdate::new(
+    MeterUpdate::uniform(
         MeterId::new(METER),
         Measurement {
             meter: MeterId::new(METER),

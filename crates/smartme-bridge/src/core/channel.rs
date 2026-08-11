@@ -5,7 +5,7 @@
 //! decides nothing. PURE: no tokio, no transport — the channel TYPE is not the
 //! channel IMPLEMENTATION.
 
-use crate::core::oracle::Verdict;
+use crate::core::oracle::{Measured, Verdict, Verdicts};
 use crate::domain::{Measurement, MeterId, Quality};
 
 /// One judged reading on its way to the wire.
@@ -33,28 +33,53 @@ pub struct MeterUpdate {
     pub meter: MeterId,
     /// The reading itself, carrying the source-level quality.
     pub measurement: Measurement,
-    /// What to publish, and why — the composed verdict.
-    pub verdict: Verdict,
+    /// What to publish on each metric, and what the meter as a whole is worth.
+    ///
+    /// **Was a single `Verdict` until Story 2.3.** One verdict per reading meant
+    /// an oracle that judged only the energy index nulled the power value beside
+    /// it and labelled it with the energy's cause — so a fault in one number
+    /// withheld another the bridge had no complaint about.
+    pub verdicts: Verdicts,
 }
 
 impl MeterUpdate {
     /// Assembles an update from a judged reading.
-    pub fn new(meter: MeterId, measurement: Measurement, verdict: Verdict) -> Self {
+    pub fn new(meter: MeterId, measurement: Measurement, verdicts: Verdicts) -> Self {
         Self {
             meter,
             measurement,
-            verdict,
+            verdicts,
         }
     }
 
-    /// The quality to stamp on the wire.
+    /// Assembles an update whose every metric carries the same verdict.
     ///
-    /// A convenience over `self.verdict.quality()`, kept because the great
-    /// majority of readers want exactly this and nothing else — but the verdict
-    /// remains the field, so a reader that needs the cause cannot be handed a
-    /// value that has quietly dropped it.
+    /// For the paths where one judgement genuinely covers the whole reading: a
+    /// failed fetch, a republication, a cold start. Naming it rather than letting
+    /// callers reach for [`Verdicts::uniform`] keeps the *deliberate* uniform
+    /// cases distinguishable from a per-metric one that lost its detail.
+    pub fn uniform(meter: MeterId, measurement: Measurement, verdict: Verdict) -> Self {
+        Self::new(meter, measurement, Verdicts::uniform(verdict))
+    }
+
+    /// What the METER is worth — the worst verdict across its metrics.
+    ///
+    /// This is what a latch decision, `/healthz` and every operator screen must
+    /// read. A per-metric verdict answers *"can I use this number"*; this answers
+    /// *"is this meter telling me the truth"*, and the second question is the one
+    /// a status page is asking.
+    pub fn verdict(&self) -> Verdict {
+        self.verdicts.meter()
+    }
+
+    /// The quality to stamp on the wire for `metric`.
+    pub fn published_for(&self, metric: Measured) -> Quality {
+        self.verdicts.for_metric(metric).quality()
+    }
+
+    /// The meter-level quality — what a screen shows beside the meter's name.
     pub fn published(&self) -> Quality {
-        self.verdict.quality()
+        self.verdicts.meter().quality()
     }
 }
 
@@ -78,7 +103,7 @@ mod tests {
     #[test]
     fn the_two_qualities_stay_distinct() {
         // A source-Good reading the oracle judged Stale: both facts survive.
-        let update = MeterUpdate::new(
+        let update = MeterUpdate::uniform(
             MeterId::new("m1"),
             measurement(Quality::Good),
             Verdict::stale(Cause::ReadingTooOld),
@@ -87,6 +112,6 @@ mod tests {
         assert_eq!(update.published(), Quality::Stale);
         // Story 2.1: and the reason survives alongside, which a bare quality could
         // not carry — this is the whole difference the verdict makes here.
-        assert_eq!(update.verdict.cause(), Some(Cause::ReadingTooOld));
+        assert_eq!(update.verdict().cause(), Some(Cause::ReadingTooOld));
     }
 }
