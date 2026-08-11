@@ -67,6 +67,75 @@ story_location: _bmad-output/implementation-artifacts
 
 development_status:
   # ==========================================================================
+  # END OF 2026-08-11 — read this first tomorrow.
+  # ==========================================================================
+  #
+  # SIX COMMITS, all pushed, all three workflows green. The day was one long
+  # review cycle and it paid for itself twice.
+  #
+  # THE MORNING: stories 2.1, 2.2 and 4.17 reviewed by three layers. 41 raw
+  # findings, 35 after dedup. 21 patches applied, 6 decisions taken by Guy,
+  # 4 deferred, 3 dismissed. What it caught:
+  #   - **THE NORM IS NOT SILENT ON NDATA/DDATA.** Story 4.17 deleted an accurate
+  #     sentence and replaced it with a false one. `tck-id-payloads-ndata-qos`
+  #     and `-ddata-qos` mandate QoS 0, their `-retain` siblings mandate false:
+  #     FIVE of seven edge-node messages are constrained, not three. Behaviour was
+  #     always right; the account of it was not, and it landed in the very test
+  #     written to stop a MUST being moved while looking like a preference. Third
+  #     instance of the failure CLAUDE.md opens with.
+  #   - Three of the four mechanisms story 2.1 promised were wired to nothing:
+  #     `Cause::ALL` bypassable by appending (the only way a cause is ever added),
+  #     the golden not pinning the `Cause` key nor the oracle->quality mapping,
+  #     and nothing proving the cause reached the protobuf.
+  #   - 4.17 CLOSED. Two conformance rows upgraded once `register_will` was
+  #     extracted so a test could see the will: totals 89 -> 91 conformant,
+  #     35 -> 33 gaps.
+  #
+  # THE AFTERNOON: story 2.3 written, renumbered, implemented, reviewed, fixed.
+  # It is the output of the morning's decisions — a verdict belongs to a METRIC,
+  # ties are a total order, both memories follow the composed verdict, the
+  # reference survives a restart, the surfaces read what the wire says.
+  # `CONTRACT_VERSION` 5 -> 6, BREAKING. ADR 0031 and 0032.
+  #
+  # AND ITS OWN REVIEW FOUND FOUR CRITERIA I HAD TICKED AND SHOULD NOT HAVE.
+  # The central one was proved by RUNNING the mutation, not by reading: reverting
+  # `metrics_for` to the meter verdict — the whole of ADR 0031 undone — left the
+  # ENTIRE SUITE GREEN. The behaviour v6 is declared breaking for was asserted
+  # nowhere. Also: `last` republished a withheld index one tick later, `/` was
+  # never touched though AC6 names it, and ADR 0032 described as a mechanism a
+  # branch that cannot change any answer.
+  #
+  # THE PATTERN WORTH CARRYING, because it recurred three times in one story:
+  # **testing a property one layer above where it lives.** AC1 asserted on the
+  # in-process `MeterUpdate`, AC5 on the helper functions rather than on `run`,
+  # AC6 on `/healthz` rather than on the surfaces the criterion names. Each time
+  # the test was true and the property was unprotected. Worth a retrospective
+  # action when Epic 2 closes.
+  #
+  # WHERE TO PICK UP, in order:
+  #   1. **Decide the status of stories 2.1 and 2.2.** They are `in-progress`
+  #      because the decisions taken at their review opened work they did not
+  #      contain — work story 2.3 has now done. Their unmet criteria (2.1 AC4/AC5,
+  #      2.2 AC2) are satisfied. They can probably close; that is a call to make,
+  #      not one to assume.
+  #   2. **Story 2.4, physical bounds** — `ready-for-dev` is not set; it needs
+  #      writing. It is also the first real subject of story 2.3's AC3, recorded
+  #      unmet with [#69]: no oracle yet produces a `Bad` on a reading the SOURCE
+  #      called `Good`, and the bounds oracle is the first that will.
+  #   3. Then 2.5, 2.6, 2.7; the FR9/NFR7 verification owed at epic close; the
+  #      retrospective, which is the condition of closing.
+  #
+  # STILL `review`, not `done`, for 2.3: the corrections its review produced have
+  # been reviewed by nobody. Same standing as the 2026-08-05 round.
+  #
+  # ISSUES OPENED TODAY: [#67] NFR6's residual, [#68] story 2.1's deferred
+  # decision, [#69] story 2.3 AC3 unmet, [#70] ADR 0031, [#71] ADR 0032.
+  #
+  # AND THE DEPLOYMENT IS STILL `v0.4.0-rc2` — contract v3, now THREE versions
+  # behind. It is what blocks the two Ignition measurements owed, [#68] among
+  # them. Nothing from 2026-08-10 or 2026-08-11 is on the wire.
+  #
+  # ==========================================================================
   # END OF 2026-08-10 — read this first tomorrow.
   # ==========================================================================
   #
