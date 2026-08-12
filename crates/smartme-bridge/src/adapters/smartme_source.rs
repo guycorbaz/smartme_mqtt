@@ -18,7 +18,7 @@ use smart_me_client::{Device, SmartMeClient, SmartMeError, TokenState};
 
 use crate::core::clock::{Clock, MonotonicMs};
 use crate::core::oracle::Cause;
-use crate::core::source::{Reading, Source, SourceError, SourceFaults};
+use crate::core::source::{Reading, Refusal, Source, SourceError, SourceFaults};
 use crate::domain::{Kw, Kwh, Measurement, MeterId, Quality, Serial, UtcMillis};
 
 /// Safety margin subtracted from the reported token lifetime: refresh a little
@@ -184,6 +184,7 @@ impl UnverifiedReading {
         let reported = &self.0.value.serial;
         if reported != declared {
             return Err(SourceError::Fatal {
+                refusal: Refusal::Identity,
                 reason: format!(
                     "meter {meter} is declared with serial {declared}, but smart-me device \
                      {device_id} reports serial {reported}. The device is born on the wire \
@@ -207,6 +208,7 @@ impl Source for SmartMeCloudSource {
             if requested != self.meter {
                 // A wiring bug, not a network condition: fail fatal and loud.
                 return Err(SourceError::Fatal {
+                    refusal: Refusal::Configuration,
                     reason: format!(
                         "source wired for meter {} was asked for {}",
                         self.meter, requested
@@ -238,13 +240,37 @@ impl Source for SmartMeCloudSource {
 
 /// The client's own classification is authoritative: fatal → `Fatal`,
 /// timeout → `Timeout`, everything else transient.
+/// The longest wait a `Retry-After` can buy. See [`map_error`] for the argument.
+const RETRY_AFTER_CAP: std::time::Duration = std::time::Duration::from_secs(300);
+
 fn map_error(e: SmartMeError) -> SourceError {
     if e.is_fatal() {
+        // WHICH refusal, not merely THAT it was one (story 2.6). `AuthRejected` is
+        // the credential; `NotHttps` and `Misconfigured` are the configuration —
+        // the server was never even asked in those two.
+        let refusal = match e {
+            SmartMeError::AuthRejected { .. } => Refusal::Credential,
+            _ => Refusal::Configuration,
+        };
         SourceError::Fatal {
+            refusal,
             reason: e.to_string(),
         }
     } else if matches!(e, SmartMeError::Timeout) {
         SourceError::Timeout
+    } else if let SmartMeError::RateLimited { retry_after_secs } = e {
+        SourceError::RateLimited {
+            // CAPPED HERE, and the cap is a decision rather than an inheritance.
+            // A server may ask for an hour; honouring that literally would take a
+            // meter off the wire for an hour on the strength of one header we
+            // cannot verify, while ADR 0027 requires every cycle to publish a
+            // verdict. Five minutes is ten poll periods at the default and beyond
+            // any plausible rate-limit window for this API; a server asking for
+            // more is telling us to stop, and stopping is not this mechanism's
+            // decision to take.
+            retry_after: retry_after_secs
+                .map(|s| std::time::Duration::from_secs(s).min(RETRY_AFTER_CAP)),
+        }
     } else {
         SourceError::Transient {
             reason: e.to_string(),
@@ -627,11 +653,16 @@ mod tests {
         // FATAL, not Transient: a serial does not come back on its own, and a
         // transient verdict would poll a misconfigured meter for ever while
         // publishing Stale — a configuration fault reported as weather.
-        let SourceError::Fatal { reason } = error else {
+        let SourceError::Fatal { refusal, reason } = error else {
             panic!(
                 "must be Fatal, so the meter latches Failed and is named on the screen: {error:?}"
             );
         };
+        // AND IT IS THE IDENTITY REFUSAL, not one of its neighbours (story 2.6).
+        // Publishing `credential-rejected` here would send an operator to the
+        // token when the credential is fine and the configuration names the wrong
+        // physical meter.
+        assert_eq!(refusal, Refusal::Identity);
         // The message must send the operator to the two fields that can be
         // wrong. "Something is wrong" sends them to the logs; these send them to
         // the line of the form that needs editing.

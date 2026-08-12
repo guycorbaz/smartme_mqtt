@@ -1,6 +1,6 @@
 # Story 2.6: A failure says which kind it is, and the bridge waits only when waiting is what the other end asked for
 
-Status: ready-for-dev
+Status: review — **AC5 recorded UNMET**, [#73](https://github.com/guycorbaz/smartme_mqtt/issues/73)
 
 ## Story
 
@@ -110,20 +110,20 @@ runbook and the mechanical grep — the same discipline as v4 through v7.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Split the refusal** (AC1, AC2)
-  - [ ] Three causes where `SourceRefused` stood; decide its fate and record it, as story 2.5 did
+- [x] **Task 1 — Split the refusal** (AC1, AC2)
+  - [x] Three causes where `SourceRefused` stood; decide its fate and record it, as story 2.5 did
         for `ValueUnusable`
-  - [ ] `latches` decided per cause and pinned in the golden
-  - [ ] `Cause::successor`'s chain — a variant that misses it is a compile error by design
-- [ ] **Task 2 — Honour `Retry-After`** (AC3)
-  - [ ] Parse it where the HTTP status is already classified (`smart-me-client`)
-  - [ ] The wait respected by the poll loop **without** suppressing the cycle's verdict
-  - [ ] Fallback to `mqtt_driver`'s doubling arithmetic when the header is absent; the cap stated
-- [ ] **Task 3 — Record what NFR1 already has** (AC4)
-- [ ] **Task 4 — The field name survives a parse failure** (AC5)
-- [ ] **Task 5 — Contract 7 → 8** (AC7)
-- [ ] **Task 6 — Falsify, running each mutation BEFORE writing its note** (AC6)
-- [ ] **Task 7 — `./scripts/ci-local.sh` full run**, then `gh run list`
+  - [x] `latches` decided per cause and pinned in the golden
+  - [x] `Cause::successor`'s chain — a variant that misses it is a compile error by design
+- [x] **Task 2 — Honour `Retry-After`** (AC3)
+  - [x] Parse it where the HTTP status is already classified (`smart-me-client`)
+  - [x] The wait respected by the poll loop **without** suppressing the cycle's verdict
+  - [ ] ~~Fallback to `mqtt_driver`'s doubling arithmetic when the header is absent~~ — NOT built: it contradicts AC4 of this same story, see the notes. The cap IS stated.
+- [x] **Task 3 — Record what NFR1 already has** (AC4)
+- [ ] **Task 4 — The field name survives a parse failure** (AC5) — **NOT STARTED**, recorded UNMET
+- [x] **Task 5 — Contract 7 → 8** (AC7)
+- [x] **Task 6 — Falsify, running each mutation BEFORE writing its note** (AC6)
+- [x] **Task 7 — `./scripts/ci-local.sh` full run**, then `gh run list`
 
 ## Dev Notes
 
@@ -199,5 +199,64 @@ taxonomy fault or a discovery fault (story 3.4's business) is a judgement, not a
 ### Debug Log References
 
 ### Completion Notes List
+
+**2026-08-12 — seven ACs met, AC5 recorded UNMET.**
+
+**AC1/AC2 — the refusal names itself.** `SourceError::Fatal` carries a `Refusal`
+(`Credential` / `Configuration` / `Identity`) and `Policy::step` publishes the matching cause. The
+2026-08-11 finding from story 2.1's review is closed: an operator is now sent to the token, to the
+configuration, or to the physical meter, rather than to all three at once.
+
+**`SourceRefused` is NARROWED, not retired** — the same treatment story 2.5 gave `ValueUnusable`,
+and for a reason found during implementation rather than at drafting. `State::Failed` is absorbing,
+so a tick arriving AFTER the latch is published under it even when that tick is not itself a
+refusal. None of the three names that case. Inventing a fourth would claim a diagnosis we do not
+have; borrowing one would name a fault that is not happening.
+
+**A test demanded the justification, and that is the test working.**
+`identity_latches_and_value_does_not` failed the moment the three refusals were classified, with
+its own message: *"if it genuinely does latch, it belongs beside SourceRefused above"*. The
+extension is argued on `core::source::Refusal`: retrying against a refusal the other end has
+already given is how a bridge hammers an API.
+
+**ADR 0032 had named this moment in advance, and the clause was checked rather than noticed.** Its
+*"what would reopen this"* said a second latching cause makes tier 3 break ties within the latching
+set. The set went from one to four. **The condition is met in letter and not in fact**, and the
+reason is structural: `Policy::step` returns at its first guard on a fatal tick, before any other
+oracle, and a fatal tick carries no reading — so `SourceFaults` is empty and every metric-scoped
+judgement is `good()`. A latching cause reaches `compose` alone; two cannot meet. Verified in the
+code (`poll_publish.rs:422`), recorded in the ADR.
+
+**AC3 — the one wait this bridge honours.** `429` with `Retry-After` (seconds form only; the date
+form needs a trusted local clock, which is the thing this bridge doubts), capped at 300 s with the
+argument written at the cap. No fetch is attempted while waiting, **and the cycle still publishes**
+— skipping it would make a rate limit look like silence.
+
+**AC4 — the backoff NFR1 names is answered in writing, not in code.** The poll interval already
+spaces retries; the broker half already exists in `mqtt_driver`. Nothing was built.
+
+**AC3's fallback clause is deliberately NOT implemented, because it contradicts AC4 of the same
+story.** AC3 asked that a `429` without `Retry-After` fall back to a doubling backoff. AC4 argues
+that the poll interval already spaces retries and that a second timer would either duplicate it or
+fight it. **The contradiction is mine, and it was invisible until implementation.** A fallback
+below the interval does nothing; above it, it is exactly the competing timer AC4 refuses. So when
+the server names no delay, no wait is armed. Recorded rather than resolved by silently picking one.
+
+**AC5 IS UNMET AND NOT STARTED.** A parse failure still reaches the operator without the field
+name. `reqwest`'s decode error may or may not preserve serde's message, and I did not measure it —
+so I do not know whether this is a mapping fix or a client change. Ticking it would have been the
+defect this epic keeps finding. It needs an issue and a measurement, not a guess. Opened as [#73](https://github.com/guycorbaz/smartme_mqtt/issues/73).
+
+**AC6 — every falsification below was RUN BEFORE its note was written**, which is the criterion
+this story added because story 2.5 recorded four and had run one.
+
+| mutation | result |
+|---|---|
+| `waiting` guard forced to `false` | RED — *"no fetch may be attempted before the instant the source named"*, 3 fetches where 2 were owed |
+| the three refusals classified (no mutation — the change itself) | RED on `identity_latches_and_value_does_not` and on the state-machine table, both naming what they expected |
+| `contract_golden` before the bump | RED — *"the cause vocabulary changed size (19 live, 15 in the v7 golden)"* |
+
+**AC7** — `CONTRACT_VERSION` 7 → 8, additive, `GOLDEN_*_V8` written out. Manual rebuilt: 71 pages,
+five overfull boxes, the committed baseline exactly.
 
 ### File List

@@ -117,6 +117,58 @@ const GOLDEN_CAUSES_V4: CauseGolden = &[
     ("not-revalidated", false, Quality::Stale),
 ];
 
+/// The quality codes, as of contract v8. Its own copy — a golden is a historical
+/// record, and sharing an array means editing v7 rewrites what v7 attested to.
+const GOLDEN_QUALITY_V8: QualityGolden = &[
+    (Quality::Good, 192),
+    (Quality::Stale, 0x8000_0000 | 516),
+    (Quality::Bad, 0x8000_0000 | 512),
+];
+
+/// The cause vocabulary, as of contract v8: v7 plus the four story 2.6 added.
+///
+/// **Additive, and `source-refused` survives with its meaning NARROWED.** Three of
+/// the four split it — a rejected credential, a configuration smart-me
+/// contradicts, and a serial that is not the declared one — which is why an
+/// operator could not tell NFR7 from an expired token. What is left of
+/// `source-refused` is the one case none of the three describes: a meter latched
+/// by a refusal that already happened, whose current tick is not itself a refusal.
+///
+/// The fourth, `source-rate-limited`, is not a split: it is the first source
+/// failure that carries an INSTRUCTION rather than a diagnosis, and it degrades
+/// rather than latching because a rate limit passes.
+const GOLDEN_CAUSES_V8: CauseGolden = &[
+    ("source-unreachable", false, Quality::Stale),
+    ("source-refused", true, Quality::Bad),
+    ("host-clock-unsynced", false, Quality::Stale),
+    ("no-freshness-proof", false, Quality::Stale),
+    ("source-clock-implausible", false, Quality::Stale),
+    ("timestamps-disagree", false, Quality::Stale),
+    ("reading-too-old", false, Quality::Stale),
+    ("value-unusable", false, Quality::Bad),
+    ("source-marked-stale", false, Quality::Stale),
+    ("not-revalidated", false, Quality::Stale),
+    ("counter-went-backwards", false, Quality::Bad),
+    ("unit-not-recognised", false, Quality::Bad),
+    ("value-not-finite", false, Quality::Bad),
+    ("value-overflowed", false, Quality::Bad),
+    ("source-timestamp-unparseable", false, Quality::Bad),
+    ("credential-rejected", true, Quality::Bad),
+    ("configuration-contradicted", true, Quality::Bad),
+    ("identity-mismatch", true, Quality::Bad),
+    ("source-rate-limited", false, Quality::Stale),
+];
+
+/// The names and units, as of v8. Unchanged, and its own copy.
+const GOLDEN_NAMES_V8: NameGolden = &[
+    ("metric.power", "Power"),
+    ("metric.energy", "Energy"),
+    ("metric.rebirth", "Node Control/Rebirth"),
+    ("unit.power", "kW"),
+    ("unit.energy", "kWh"),
+    ("property.cause", "Cause"),
+];
+
 /// The quality codes, as of contract v7. Its own copy, again: a golden is a
 /// historical record, and sharing one array between two versions means editing v6
 /// retroactively rewrites what v6 attested to.
@@ -277,6 +329,11 @@ struct Golden {
 /// golden is what the `None` arm refuses.
 fn golden_for(version: i64) -> Option<Golden> {
     match version {
+        8 => Some(Golden {
+            quality: GOLDEN_QUALITY_V8,
+            causes: GOLDEN_CAUSES_V8,
+            names: GOLDEN_NAMES_V8,
+        }),
         7 => Some(Golden {
             quality: GOLDEN_QUALITY_V7,
             causes: GOLDEN_CAUSES_V7,

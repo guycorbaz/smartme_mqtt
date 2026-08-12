@@ -14,7 +14,7 @@ is listed in section~\ref{sec:contract-limits} rather than described as though i
 \section{Contract version}
 
 The node BIRTH carries a metric \code{Contract/Version} (\code{Int64}), currently
-\textbf{7}. It is incremented on \emph{any} change to the topic grammar, to a metric name or
+\textbf{8}. It is incremented on \emph{any} change to the topic grammar, to a metric name or
 unit, or to the meaning of a published quality code. Publishing it means a consumer can
 \emph{see} the contract change instead of having to notice it from broken tags.
 
@@ -23,7 +23,13 @@ quality codes and the cause vocabulary to the version they belong to, and fails 
 moves without this number moving. Before that, the number was maintained by whoever
 remembered.
 
-The number does not say what \emph{kind} of change it was, so it is worth stating. Version~7
+The number does not say what \emph{kind} of change it was, so it is worth stating. Version~8
+is \textbf{additive}: four more causes, three of which split \code{source-refused} into the
+refusals an operator repairs in different places --- a rejected credential, a configuration
+smart-me contradicts, and a meter answering under the wrong serial. \code{source-refused}
+survives, narrowed to the one case none of the three describes: a meter latched by a refusal that
+already happened. The fourth, \code{source-rate-limited}, is the first source failure carrying an
+\emph{instruction} rather than a diagnosis. Version~7
 is \textbf{additive}: four new causes join the vocabulary a \code{Cause} property can carry,
 listed under \emph{Why a value is not good} below. What they replace is not another cause but an
 \emph{absence} of one --- \code{value-unusable} was published for all four faults at once and
@@ -54,6 +60,10 @@ history.
 \toprule
 \textbf{Version} & \textbf{Kind} & \textbf{Change} \\
 \midrule
+8 & additive & \code{source-refused} splits into \code{credential-rejected},
+    \code{configuration-contradicted} and \code{identity-mismatch}, and keeps its name for a
+    meter already latched. \code{source-rate-limited} joins for a \code{429}.
+    See section~\ref{sec:quality}. \\
 7 & additive & Four new causes name what \code{value-unusable} used to say all at once:
     \code{unit-not-recognised}, \code{value-not-finite}, \code{value-overflowed} and
     \code{source-timestamp-unparseable}. A field the bridge could not read now degrades
@@ -138,7 +148,7 @@ disabled cannot.
 \toprule
 \normalfont\textbf{Metric} & \textbf{Type} & \textbf{Unit} & \textbf{Meaning} \\
 \midrule
-Contract/Version & Int64  & ---   & Contract version, node BIRTH only. Currently 7. \\
+Contract/Version & Int64  & ---   & Contract version, node BIRTH only. Currently 8. \\
 Node Control/Rebirth & Boolean & --- & Always \code{false}. The command endpoint a host
                                        addresses to request a fresh birth; node BIRTH only. \\
 Power            & Double & kW    & Instantaneous power. \\

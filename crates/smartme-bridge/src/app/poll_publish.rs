@@ -379,6 +379,10 @@ pub async fn step_once<S: Source + Send>(
     previous: State,
     last: &mut Option<crate::domain::Measurement>,
     energy_reference: &mut Option<crate::domain::Kwh>,
+    // When the source told us not to come back before. Story 2.6: the ONE
+    // source-side wait this bridge honours, because it is the one the poll
+    // interval cannot know about.
+    rate_limited_until: &mut Option<MonotonicMs>,
 ) -> (State, Verdict) {
     let Context {
         meter,
@@ -392,12 +396,41 @@ pub async fn step_once<S: Source + Send>(
     // Heartbeat FIRST: before anything that can block.
     heartbeat.touch(clock.monotonic(), config.interval.as_millis() as i64);
 
-    let tick: Tick = match tokio::time::timeout(config.fetch_timeout, source.fetch(meter)).await {
-        Ok(result) => result,
-        // The deadline elapsed: the cloud is silent. That is a verdict input,
-        // not an error to swallow.
-        Err(_elapsed) => Err(SourceError::Timeout),
+    // THE ONE WAIT THIS BRIDGE HONOURS (story 2.6). If the source asked us not to
+    // come back before an instant, no fetch is attempted — **but the cycle still
+    // publishes a verdict**, as ADR 0027 requires. Skipping the publication would
+    // make a rate limit look like silence, which is the failure this project
+    // exists to prevent.
+    let now_mono = clock.monotonic();
+    let waiting = matches!(*rate_limited_until, Some(until) if now_mono < until);
+    let tick: Tick = if waiting {
+        Err(SourceError::RateLimited { retry_after: None })
+    } else {
+        match tokio::time::timeout(config.fetch_timeout, source.fetch(meter)).await {
+            Ok(result) => result,
+            // The deadline elapsed: the cloud is silent. That is a verdict input,
+            // not an error to swallow.
+            Err(_elapsed) => Err(SourceError::Timeout),
+        }
     };
+
+    // A FRESH RATE LIMIT ARMS THE WAIT, and only when the server named a delay.
+    //
+    // **AC3 asked for a doubling fallback when `Retry-After` is absent, and it is
+    // deliberately not built** — because AC4 of the same story argues that the
+    // poll interval already spaces retries, bounded by ADR 0020 and never off. The
+    // two criteria contradict each other, and the contradiction is mine: a
+    // fallback timer below the interval would do nothing, and above it would be
+    // the second competing timer AC4 exists to refuse. Recorded in the story
+    // rather than resolved by silently picking one.
+    if let Err(SourceError::RateLimited {
+        retry_after: Some(delay),
+    }) = &tick
+    {
+        *rate_limited_until = Some(MonotonicMs(now_mono.0 + delay.as_millis() as i64));
+    } else if !waiting {
+        *rate_limited_until = None;
+    }
 
     let (freshness_state, freshness) = policy.step(previous, &tick, clock.wall());
 
@@ -852,6 +885,9 @@ pub async fn run<S: Source + Send>(
     // performs one, and Epic 7 will wire `/healthz` to an automatic one — so the
     // gap was not rare, it was scheduled.
     let mut energy_reference = load_energy_reference(&reference_dir, &meter);
+    // Story 2.6: a wait the SOURCE asked for, per meter, monotonic so a wall
+    // clock correction cannot shorten or extend it.
+    let mut rate_limited_until: Option<MonotonicMs> = None;
     // The last measurement this meter produced, carried so a failed tick can
     // publish a verdict about it rather than say nothing (Story 3.2).
     let mut last: Option<crate::domain::Measurement> = None;
@@ -896,8 +932,15 @@ pub async fn run<S: Source + Send>(
         };
         let published;
         let before = energy_reference;
-        (state, published) =
-            step_once(&ctx, &mut source, state, &mut last, &mut energy_reference).await;
+        (state, published) = step_once(
+            &ctx,
+            &mut source,
+            state,
+            &mut last,
+            &mut energy_reference,
+            &mut rate_limited_until,
+        )
+        .await;
         // Persisted only when it MOVED, so a quiet meter does not rewrite the
         // same number every period — an fsync per meter per cycle for a value
         // that did not change.
@@ -1094,6 +1137,90 @@ mod tests {
         );
     }
 
+    /// **Story 2.6 AC3 — a rate limit is honoured WITHOUT the cycle going silent.**
+    ///
+    /// The source asks for 60 s; the next tick must not fetch, and must still
+    /// publish. Skipping the publication would make a rate limit look like
+    /// silence, which is the failure this project exists to prevent (ADR 0027).
+    ///
+    /// FALSIFIED 2026-08-12, run before this note was written:
+    ///  - deleting the `waiting` guard lets the second tick call the source, and
+    ///    the fetch-count assertion goes red with `2` where `1` was owed;
+    ///  - returning early instead of synthesising a tick makes `sent.len()` 1,
+    ///    and the assertion names ADR 0027.
+    #[tokio::test]
+    async fn a_rate_limit_is_waited_out_without_the_cycle_going_silent() {
+        let clock = FakeClock::new(UtcMillis(SANE_NOW));
+        let mut source = FakeSource::new()
+            .then(Ok(reading(Quality::Good, 950)))
+            .then(Err(SourceError::RateLimited {
+                retry_after: Some(Duration::from_secs(60)),
+            }))
+            .then(Ok(reading(Quality::Good, 950)));
+        let (tx, mut rx) = mpsc::channel(8);
+        let meter = MeterId::new("garage");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let heartbeat = beats.of(&meter).expect("served");
+        let ctx = Context {
+            meter: &meter,
+            clock: &clock,
+            policy: policy(),
+            config: config(),
+            heartbeat: &heartbeat,
+            outbox: &tx,
+        };
+        let (mut last, mut energy, mut until) = (None, None, None);
+
+        // A good reading first: `last` must hold something, or a silent cycle has
+        // nothing to republish and ADR 0027's certificate path is a different test.
+        let (state, _) = step_once(
+            &ctx,
+            &mut source,
+            State::initial(),
+            &mut last,
+            &mut energy,
+            &mut None,
+        )
+        .await;
+        let (_, first) =
+            step_once(&ctx, &mut source, state, &mut last, &mut energy, &mut until).await;
+        assert_eq!(first.cause(), Some(Cause::SourceRateLimited));
+        assert!(
+            until.is_some(),
+            "the wait is armed by the server's own delay"
+        );
+
+        // The clock has NOT advanced past the deadline, so no fetch may happen.
+        let fetches_before = source.calls.len();
+        let (_, second) = step_once(
+            &ctx,
+            &mut source,
+            State::Stale,
+            &mut last,
+            &mut energy,
+            &mut until,
+        )
+        .await;
+        assert_eq!(
+            source.calls.len(),
+            fetches_before,
+            "no fetch may be attempted before the instant the source named"
+        );
+        assert_eq!(
+            second.cause(),
+            Some(Cause::SourceRateLimited),
+            "and the cycle still publishes a verdict — ADR 0027 forbids silence, \
+             so a rate limit must look like a rate limit rather than like nothing"
+        );
+
+        drop(tx);
+        let mut published = 0;
+        while rx.recv().await.is_some() {
+            published += 1;
+        }
+        assert_eq!(published, 3, "three cycles, three verdicts (ADR 0027)");
+    }
+
     /// A reading with a chosen energy index, for the monotonicity tests.
     fn reading_with_energy(quality: Quality, age_ms: i64, energy: f64) -> Reading {
         let mut r = reading(quality, age_ms);
@@ -1144,14 +1271,22 @@ mod tests {
         let mut energy = None;
 
         // THE PREMISE: a rising counter is Good, or the Bad below proves nothing.
-        let (s1, _) = step_once(&ctx, &mut source, State::initial(), &mut last, &mut energy).await;
+        let (s1, _) = step_once(
+            &ctx,
+            &mut source,
+            State::initial(),
+            &mut last,
+            &mut energy,
+            &mut None,
+        )
+        .await;
         assert_eq!(s1, State::Fresh);
 
         // The drop. The STATE is kept and asserted since 2026-08-11 (deferred
         // review patch): `let _ =` discarded exactly the value that would have
         // shown the wire and the operator surfaces disagreeing, which is what let
         // that divergence live until the review found it by reading.
-        let (s2, _) = step_once(&ctx, &mut source, s1, &mut last, &mut energy).await;
+        let (s2, _) = step_once(&ctx, &mut source, s1, &mut last, &mut energy, &mut None).await;
         assert_eq!(
             s2,
             State::Fresh,
@@ -1159,7 +1294,15 @@ mod tests {
         );
 
         // And a reading consistent with the NEW index.
-        let (s3, _) = step_once(&ctx, &mut source, State::initial(), &mut last, &mut energy).await;
+        let (s3, _) = step_once(
+            &ctx,
+            &mut source,
+            State::initial(),
+            &mut last,
+            &mut energy,
+            &mut None,
+        )
+        .await;
         assert_eq!(s3, State::Fresh);
         drop(tx);
 
@@ -1223,8 +1366,16 @@ mod tests {
 
         let mut last = None;
         let mut energy = None;
-        let (s1, _) = step_once(&ctx, &mut source, State::initial(), &mut last, &mut energy).await;
-        let _ = step_once(&ctx, &mut source, s1, &mut last, &mut energy).await;
+        let (s1, _) = step_once(
+            &ctx,
+            &mut source,
+            State::initial(),
+            &mut last,
+            &mut energy,
+            &mut None,
+        )
+        .await;
+        let _ = step_once(&ctx, &mut source, s1, &mut last, &mut energy, &mut None).await;
         drop(tx);
 
         let mut got = Vec::new();
@@ -1306,14 +1457,22 @@ mod tests {
         };
 
         let mut last = None;
-        let (good, _) = step_once(&ctx, &mut source, State::initial(), &mut last, &mut None).await;
+        let (good, _) = step_once(
+            &ctx,
+            &mut source,
+            State::initial(),
+            &mut last,
+            &mut None,
+            &mut None,
+        )
+        .await;
         assert_eq!(
             good,
             State::Fresh,
             "the premise: the meter must first be proven fresh"
         );
 
-        let (after, _) = step_once(&ctx, &mut source, good, &mut last, &mut None).await;
+        let (after, _) = step_once(&ctx, &mut source, good, &mut last, &mut None, &mut None).await;
         assert_eq!(after, State::Stale);
         drop(tx);
 
@@ -1529,6 +1688,7 @@ mod tests {
                 State::initial(),
                 &mut last,
                 &mut reference,
+                &mut None,
             )
             .await;
             let energy = reference.expect("a good reading is adopted as the reference");
@@ -1566,6 +1726,7 @@ mod tests {
             State::initial(),
             &mut last,
             &mut reference,
+            &mut None,
         )
         .await;
         drop(tx);
@@ -1834,7 +1995,8 @@ mod tests {
         let mut energy = None;
         let mut state = State::initial();
         for _ in 0..source.remaining() {
-            (state, _) = step_once(&ctx, &mut source, state, &mut last, &mut energy).await;
+            (state, _) =
+                step_once(&ctx, &mut source, state, &mut last, &mut energy, &mut None).await;
         }
         drop(tx);
         let mut got = Vec::new();
@@ -1859,7 +2021,15 @@ mod tests {
             heartbeat: &heartbeat,
             outbox: &tx,
         };
-        let (state, _) = step_once(&ctx, &mut source, State::initial(), &mut None, &mut None).await;
+        let (state, _) = step_once(
+            &ctx,
+            &mut source,
+            State::initial(),
+            &mut None,
+            &mut None,
+            &mut None,
+        )
+        .await;
         drop(tx);
         let mut got = Vec::new();
         while let Some(u) = rx.recv().await {
@@ -1904,6 +2074,7 @@ mod tests {
     #[tokio::test]
     async fn a_fatal_error_latches_failed() {
         let (state, _) = drive(FakeSource::new().then(Err(SourceError::Fatal {
+            refusal: crate::core::source::Refusal::Credential,
             reason: "auth rejected".to_string(),
         })))
         .await;
@@ -1943,7 +2114,15 @@ mod tests {
             heartbeat: &heartbeat,
             outbox: &tx,
         };
-        let _ = step_once(&ctx, &mut source, State::initial(), &mut None, &mut None).await;
+        let _ = step_once(
+            &ctx,
+            &mut source,
+            State::initial(),
+            &mut None,
+            &mut None,
+            &mut None,
+        )
+        .await;
         assert_eq!(
             heartbeat.last(),
             Some(MonotonicMs(7_000)),
@@ -2348,12 +2527,26 @@ mod tests {
             outbox: &tx,
         };
         let mut last = None;
-        let (after_timeout, _) =
-            step_once(&ctx, &mut source, State::initial(), &mut last, &mut None).await;
+        let (after_timeout, _) = step_once(
+            &ctx,
+            &mut source,
+            State::initial(),
+            &mut last,
+            &mut None,
+            &mut None,
+        )
+        .await;
         assert_eq!(after_timeout, State::Stale);
 
-        let (after_good, _) =
-            step_once(&ctx, &mut source, after_timeout, &mut last, &mut None).await;
+        let (after_good, _) = step_once(
+            &ctx,
+            &mut source,
+            after_timeout,
+            &mut last,
+            &mut None,
+            &mut None,
+        )
+        .await;
         assert_eq!(after_good, State::Fresh);
         drop(tx);
         let u = rx.recv().await.expect("the good reading was forwarded");

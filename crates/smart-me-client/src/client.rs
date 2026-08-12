@@ -51,6 +51,25 @@ pub enum SmartMeError {
     },
     /// Any other non-success HTTP status (5xx, 429, 3xx — redirects are not
     /// followed). Transient.
+    /// The server rate-limited us (`429`), and how long it asked us to wait if it
+    /// said so.
+    ///
+    /// **Story 2.6, and it is the ONE case a source-side wait is not redundant.**
+    /// The poll interval already spaces retries (ADR 0020 bounds it and forbids
+    /// turning it off), so a general backoff would be a second timer competing for
+    /// the same loop. What the interval cannot know is the other end asking for
+    /// longer than it.
+    ///
+    /// Transient: a rate limit passes.
+    #[error("rate limited{}", match .retry_after_secs { Some(s) => format!(", retry after {s}s"), None => String::new() })]
+    RateLimited {
+        /// `Retry-After` in seconds, when the header was present and parseable as
+        /// a delay. **The date form is not parsed**: it needs a trusted local
+        /// clock, and this bridge's whole subject is that a local clock may be
+        /// unsynced (`HostClockUnsynced` exists for that). Absent means "wait, but
+        /// we were not told how long".
+        retry_after_secs: Option<u64>,
+    },
     #[error("http status {status}")]
     HttpStatus {
         /// The HTTP status code returned.
@@ -384,6 +403,15 @@ impl SmartMeClient {
         let status = resp.status().as_u16();
         if status == 401 || status == 403 {
             return Err(SmartMeError::AuthRejected { status });
+        }
+        if status == 429 {
+            return Err(SmartMeError::RateLimited {
+                retry_after_secs: resp
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.trim().parse::<u64>().ok()),
+            });
         }
         if !resp.status().is_success() {
             return Err(SmartMeError::HttpStatus { status });

@@ -85,24 +85,90 @@ pub enum SourceError {
     /// (the timer lives in the async shell; the variant lives here so `FakeSource`
     /// can script it and downstream has a single error path). → STALE.
     Timeout,
-    /// Retryable trouble (network, 5xx, 429). → STALE, retry.
+    /// The source rate-limited us and, if it said so, for how long.
+    ///
+    /// **Story 2.6.** Separate from [`Self::Transient`] because it is the only
+    /// source failure that carries an INSTRUCTION rather than a diagnosis: the
+    /// other end told us when to come back. Everything else transient is retried
+    /// on the poll interval, which ADR 0020 bounds and forbids turning off.
+    RateLimited {
+        /// How long the server asked us to wait, when it said. Already capped by
+        /// the adapter — see `RETRY_AFTER_CAP`.
+        retry_after: Option<std::time::Duration>,
+    },
+    /// Retryable trouble (network, 5xx). → STALE, retry.
     Transient {
         /// Adapter-provided diagnostic, for tracing — never parsed for decisions.
         reason: String,
     },
     /// Non-retryable (auth rejected, config wrong). → FAILED; retrying would lie.
     Fatal {
+        /// WHICH refusal it is. Story 2.6: the taxonomy existed in this type and
+        /// was invisible on the wire, because every fatal published one cause.
+        refusal: Refusal,
         /// Adapter-provided diagnostic, for tracing — never parsed for decisions.
         reason: String,
     },
+}
+
+/// The three ways a source refuses us for good, kept apart because **an operator
+/// repairs each somewhere else**.
+///
+/// **Story 2.6.** They were one cause on the wire, `source-refused`, until
+/// 2026-08-12 — so a rejected token, a device id smart-me does not know and a
+/// meter answering under the wrong serial all read alike, and the 2026-08-11
+/// review of story 2.1 recorded that an operator *"cannot tell NFR7 from an
+/// expired credential"*.
+///
+/// All three latch. That is not the identity-versus-value rule of [ADR 0032] —
+/// a credential is neither — but its own reason: **retrying against a refusal the
+/// other end has already given is how a bridge hammers an API**, and no reading
+/// obtained that way would be more trustworthy than the refusal.
+///
+/// [ADR 0032]: ../../../docs/adr/0032-at-equal-severity-a-latching-cause-outranks-a-degrading-one.md
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The source rejected our credentials: 401/403, or a token exchange whose
+    /// OAuth error body attributes the failure to the client. **Go and look at
+    /// the credential.**
+    Credential,
+    /// The source contradicts the configuration, or the configuration contradicts
+    /// itself: a device id smart-me does not know, a base URL refused at
+    /// construction, a source wired for one meter and asked for another. **Go and
+    /// look at the configuration.**
+    Configuration,
+    /// The device answered and it is not the one declared ([ADR 0029]). **Go and
+    /// look at which physical meter is which** — the credential is fine and the
+    /// configuration is internally consistent; it simply names the wrong device.
+    ///
+    /// [ADR 0029]: ../../../docs/adr/0029-the-declared-serial-is-checked-against-the-one-smart-me-reports.md
+    Identity,
+}
+
+impl Refusal {
+    /// The cause published for this refusal.
+    pub fn cause(self) -> crate::core::oracle::Cause {
+        use crate::core::oracle::Cause;
+        match self {
+            Refusal::Credential => Cause::CredentialRejected,
+            Refusal::Configuration => Cause::ConfigurationContradicted,
+            Refusal::Identity => Cause::IdentityMismatch,
+        }
+    }
 }
 
 impl fmt::Display for SourceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Timeout => f.write_str("source fetch timed out"),
+            Self::RateLimited { retry_after } => match retry_after {
+                Some(d) => write!(f, "source rate-limited, asked for {}s", d.as_secs()),
+                None => f.write_str("source rate-limited, no delay given"),
+            },
             Self::Transient { reason } => write!(f, "transient source error: {reason}"),
-            Self::Fatal { reason } => write!(f, "fatal source error: {reason}"),
+            Self::Fatal { refusal, reason } => {
+                write!(f, "fatal source error ({refusal:?}): {reason}")
+            }
         }
     }
 }
@@ -205,6 +271,7 @@ impl Source for FakeSource {
             self.calls.push(meter);
             let entry = self.script.pop_front().unwrap_or_else(|| {
                 ScriptEntry::Respond(Err(SourceError::Fatal {
+                    refusal: Refusal::Configuration,
                     reason: "fake source: script exhausted".to_string(),
                 }))
             });

@@ -154,14 +154,31 @@ impl Policy {
         // clock-independent, so they are judged BEFORE the boot-sanity guard —
         // an unsynced RTC must not soften an auth failure into Stale.
         if prev == State::Failed || matches!(tick, Err(SourceError::Fatal { .. })) {
-            return (State::Failed, Verdict::bad(Cause::SourceRefused));
+            // THE REFUSAL NAMES ITSELF when there is one (story 2.6). A tick
+            // arriving after the latch, without being a refusal of its own, keeps
+            // the narrowed `SourceRefused`: the meter is latched by something that
+            // already happened, and re-deriving which is not something this
+            // function can do.
+            let cause = match tick {
+                Err(SourceError::Fatal { refusal, .. }) => refusal.cause(),
+                _ => Cause::SourceRefused,
+            };
+            return (State::Failed, Verdict::bad(cause));
         }
         // Boot sanity: an unsynced host clock poisons every local stamp.
         if now < PLAUSIBILITY_FLOOR {
             return (State::Stale, Verdict::stale(Cause::HostClockUnsynced));
         }
         match tick {
-            Err(SourceError::Fatal { .. }) => (State::Failed, Verdict::bad(Cause::SourceRefused)),
+            Err(SourceError::Fatal { refusal, .. }) => {
+                (State::Failed, Verdict::bad(refusal.cause()))
+            }
+            // Story 2.6: a rate limit is not unreachability. The source answered
+            // and told us to come back later — an operator sent to look at the
+            // network would find nothing wrong with it.
+            Err(SourceError::RateLimited { .. }) => {
+                (State::Stale, Verdict::stale(Cause::SourceRateLimited))
+            }
             Err(SourceError::Timeout) | Err(SourceError::Transient { .. }) => {
                 (State::Stale, Verdict::stale(Cause::SourceUnreachable))
             }
@@ -228,6 +245,7 @@ impl Policy {
 mod tests {
     use super::*;
     use crate::core::oracle::Cause;
+    use crate::core::source::Refusal;
     use crate::domain::{Kw, Kwh, Measurement, MeterId, Serial};
 
     const POLICY: Policy = Policy::DEFAULT;
@@ -503,6 +521,7 @@ mod tests {
         // A fatal auth error is clock-independent: an unsynced RTC must not
         // soften it into Stale.
         let fatal: Tick = Err(SourceError::Fatal {
+            refusal: Refusal::Credential,
             reason: "auth rejected".to_string(),
         });
         let pre_2020 = UtcMillis(PLAUSIBILITY_FLOOR.0 - 1);
@@ -519,6 +538,7 @@ mod tests {
         });
         let timeout: Tick = Err(SourceError::Timeout);
         let fatal: Tick = Err(SourceError::Fatal {
+            refusal: Refusal::Credential,
             reason: "auth rejected".to_string(),
         });
         assert_eq!(
@@ -621,16 +641,28 @@ mod tests {
     fn every_row_of_the_table_names_its_own_cause() {
         let fresh = Ok(reading(Quality::Good, BASE, Some(BASE + 1)));
         let fatal = Err(SourceError::Fatal {
+            refusal: Refusal::Credential,
             reason: "auth rejected".into(),
         });
 
-        // Latching identity trouble, from both doors: a previously-Failed meter,
-        // and a fatal tick.
-        for (prev, tick) in [(State::Failed, &fresh), (State::initial(), &fatal)] {
+        // Latching refusals, from both doors — and since story 2.6 THE TWO DOORS
+        // NO LONGER PUBLISH THE SAME CAUSE, which is the whole of the narrowing.
+        //
+        //  - a FATAL TICK names its own refusal: the fixture above builds a
+        //    `Refusal::Credential`, so the row says `credential-rejected` and an
+        //    operator is sent to the token rather than to a meter;
+        //  - a PREVIOUSLY-FAILED meter whose current tick is fine keeps the
+        //    narrowed `SourceRefused`: it is latched by something that already
+        //    happened, and this function cannot re-derive which. Naming one of the
+        //    three here would claim a fault that is not happening.
+        for (prev, tick, expected) in [
+            (State::Failed, &fresh, Cause::SourceRefused),
+            (State::initial(), &fatal, Cause::CredentialRejected),
+        ] {
             let (state, verdict) = POLICY.step(prev, tick, SANE_NOW);
             assert_eq!(state, State::Failed);
-            assert_eq!(verdict.cause(), Some(Cause::SourceRefused));
-            assert!(verdict.latches(), "identity trouble must latch");
+            assert_eq!(verdict.cause(), Some(expected));
+            assert!(verdict.latches(), "a refusal must latch");
         }
 
         // Everything else describes one reading and must not latch.

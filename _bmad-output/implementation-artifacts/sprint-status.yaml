@@ -680,7 +680,7 @@ development_status:
   # its note is written, and the note records the observed message rather than a
   # prediction. 2.5 recorded four and had run one.
   # OPEN QUESTION saved for Guy: whether [#61] belongs here or to story 3.4.
-  2-6-error-taxonomy-and-bounded-backoff: ready-for-dev
+  2-6-error-taxonomy-and-bounded-backoff: review  # AC5 UNMET; CONTRACT_VERSION 7 -> 8, additive
   # FR10, plus the parked frozen/replayed-feed oracle — a byte-identical replayed
   # response keeps a plausible age and stays `Fresh` today.
   2-7-utc-end-to-end-and-clock-skew: backlog

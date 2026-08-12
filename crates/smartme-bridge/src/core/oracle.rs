@@ -80,9 +80,21 @@ use crate::domain::{Kwh, Quality};
 pub enum Cause {
     /// The fetch did not complete: timeout, or a transient transport failure.
     SourceUnreachable,
-    /// The source refused us, fatally — rejected credentials, a configuration the
-    /// source contradicts, or a serial that is not the one smart-me reports
-    /// (ADR 0029). **Latches.**
+    /// The meter is latched by a refusal that already happened, and only a restart
+    /// clears it. **Latches.**
+    ///
+    /// **NARROWED by story 2.6, not retired.** It used to mean all three refusals
+    /// at once — a rejected credential, a configuration the source contradicts, and
+    /// a serial that is not the one reported — which is precisely why an operator
+    /// could not tell NFR7 from an expired token. Those three now name themselves.
+    ///
+    /// What is left is the case none of them can describe: `State::Failed` is
+    /// absorbing, so a tick arriving AFTER the latch is published under the latch
+    /// even when that tick is not itself a refusal. Reaching it needs a source that
+    /// starts answering again without the process restarting, which the
+    /// configuration's own `ProcessRestart` classification makes unlikely — but
+    /// inventing a fourth refusal for it would claim a diagnosis we do not have,
+    /// and borrowing one of the three would name a fault that is not happening.
     SourceRefused,
     /// The host wall clock is below the plausibility floor, so nothing it stamps
     /// can be trusted — including the judgement that would otherwise be made.
@@ -162,6 +174,19 @@ pub enum Cause {
     /// meter's clock, the other the cloud's, and they are repaired in different
     /// places.
     SourceTimestampUnparseable,
+    /// The source rejected our credentials. **Latches** — retrying with a
+    /// credential the other end refused is how a bridge hammers an API.
+    CredentialRejected,
+    /// The source contradicts the configuration: a device id it does not know, a
+    /// base URL refused at construction, a source asked for a meter it is not
+    /// wired for. **Latches.**
+    ConfigurationContradicted,
+    /// The device answered and it is not the one declared ([ADR 0029]). **Latches**
+    /// — this is the canonical identity case the latch rule was written for.
+    IdentityMismatch,
+    /// The source rate-limited us. **Degrades** — a rate limit passes, and the
+    /// next reading may be perfectly good.
+    SourceRateLimited,
 }
 
 impl Cause {
@@ -206,6 +231,10 @@ impl Cause {
         Cause::ValueNotFinite,
         Cause::ValueOverflowed,
         Cause::SourceTimestampUnparseable,
+        Cause::CredentialRejected,
+        Cause::ConfigurationContradicted,
+        Cause::IdentityMismatch,
+        Cause::SourceRateLimited,
     ];
 
     /// The next cause in [`Cause::ALL`]'s order, or `None` for the last one.
@@ -244,10 +273,14 @@ impl Cause {
             Cause::UnitNotRecognised => Some(Cause::ValueNotFinite),
             Cause::ValueNotFinite => Some(Cause::ValueOverflowed),
             Cause::ValueOverflowed => Some(Cause::SourceTimestampUnparseable),
+            Cause::SourceTimestampUnparseable => Some(Cause::CredentialRejected),
+            Cause::CredentialRejected => Some(Cause::ConfigurationContradicted),
+            Cause::ConfigurationContradicted => Some(Cause::IdentityMismatch),
+            Cause::IdentityMismatch => Some(Cause::SourceRateLimited),
             // The end of the chain. A new cause appended to `ALL` replaces this
             // arm's `None` with a `Some`, which is the edit the old positional
             // `discriminant` never demanded.
-            Cause::SourceTimestampUnparseable => None,
+            Cause::SourceRateLimited => None,
         }
     }
 
@@ -311,6 +344,13 @@ impl Cause {
             Cause::ValueNotFinite => Quality::Bad,
             Cause::ValueOverflowed => Quality::Bad,
             Cause::SourceTimestampUnparseable => Quality::Bad,
+            Cause::CredentialRejected => Quality::Bad,
+            Cause::ConfigurationContradicted => Quality::Bad,
+            Cause::IdentityMismatch => Quality::Bad,
+            // `Stale`, not `Bad`: the last value we hold is a real reading that is
+            // merely getting old, and the reason it is not refreshed is that we
+            // were asked to wait — not that anything about it is wrong.
+            Cause::SourceRateLimited => Quality::Stale,
             // Freshness refusals: the value was true, and may be old. The
             // difference from the three above is the whole reason a consumer is
             // told which of the two it is holding.
@@ -343,6 +383,10 @@ impl Cause {
             Cause::ValueNotFinite => "value-not-finite",
             Cause::ValueOverflowed => "value-overflowed",
             Cause::SourceTimestampUnparseable => "source-timestamp-unparseable",
+            Cause::CredentialRejected => "credential-rejected",
+            Cause::ConfigurationContradicted => "configuration-contradicted",
+            Cause::IdentityMismatch => "identity-mismatch",
+            Cause::SourceRateLimited => "source-rate-limited",
         }
     }
 
@@ -363,7 +407,13 @@ impl Cause {
     /// `a_degrading_cause_does_not_poison_the_next_reading` is what holds them
     /// there.
     pub const fn latches(self) -> bool {
-        matches!(self, Cause::SourceRefused)
+        matches!(
+            self,
+            Cause::SourceRefused
+                | Cause::CredentialRejected
+                | Cause::ConfigurationContradicted
+                | Cause::IdentityMismatch
+        )
     }
 }
 
@@ -939,23 +989,42 @@ mod tests {
     /// `!matches!(self, Cause::SourceUnreachable)` — the plausible "anything worse
     /// than a timeout is fatal" reading — turns the second assertion red on every
     /// degrading cause.
+    /// **The latching list grew from one to four on 2026-08-12 (story 2.6), and
+    /// this test is what demanded the justification.** It failed the moment the
+    /// three refusals were classified, with its own message: *"if it genuinely
+    /// does latch, it belongs beside SourceRefused above"*. That is the test
+    /// working, not the test being in the way.
+    ///
+    /// **The rule is extended rather than applied.** ADR 0032 draws the line at
+    /// identity-versus-value, and a credential is neither. The reason the three
+    /// latch is their own: **retrying against a refusal the other end has already
+    /// given is how a bridge hammers an API**, and no reading obtained that way
+    /// would be more trustworthy than the refusal was.
     #[test]
     fn identity_latches_and_value_does_not() {
-        // Identity: the answer is not the answer to our question.
-        assert!(Cause::SourceRefused.latches());
-        assert!(Verdict::bad(Cause::SourceRefused).latches());
+        // The four that latch, and each is a refusal rather than a reading.
+        const LATCHING: &[Cause] = &[
+            Cause::SourceRefused,
+            Cause::CredentialRejected,
+            Cause::ConfigurationContradicted,
+            Cause::IdentityMismatch,
+        ];
+        for cause in LATCHING {
+            assert!(cause.latches(), "{cause:?} is a refusal and must latch");
+            assert!(Verdict::bad(*cause).latches());
+        }
 
         // Value: this reading only. DERIVED FROM `Cause::ALL` since 2026-08-11 —
         // this used to be a hand-copied duplicate of the enum, so a newly
         // appended cause was never put to the latch question at all and silently
         // took `latches()`'s `matches!` default of "does not latch". Deriving it
         // means a new cause must be classified here or the test names it.
-        for cause in Cause::ALL.iter().filter(|c| **c != Cause::SourceRefused) {
+        for cause in Cause::ALL.iter().filter(|c| !LATCHING.contains(c)) {
             assert!(
                 !cause.latches(),
-                "{cause:?} describes a reading, not an identity, so it must not \
-                 latch. If it genuinely does, it belongs beside SourceRefused \
-                 above — and ADR 0029 records why that list is short."
+                "{cause:?} describes a reading, not a refusal, so it must not \
+                 latch. If it genuinely does, it belongs in LATCHING above — and \
+                 ADR 0029 and ADR 0032 record why that list is short."
             );
         }
     }

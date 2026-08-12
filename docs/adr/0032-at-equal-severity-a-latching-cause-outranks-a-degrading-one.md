@@ -123,6 +123,25 @@ composing incrementally in a different grouping is meaningful — `compose` take
   collision unreachable from now on. Tier 2 is therefore a rule with no live case today. It is kept
   because the *next* latching cause makes it live, and because a rule decided after its first
   collision is a rule decided under pressure.
+> **THE SET GREW TO FOUR ON 2026-08-12, and this clause is why the growth was examined rather than
+> noticed.** Story 2.6 split `source-refused` into `credential-rejected`,
+> `configuration-contradicted` and `identity-mismatch`; all three latch. The condition below is
+> therefore met in letter — tier 2 now has four members and could in principle have to break a tie
+> within itself.
+>
+> **It is not met in fact, and the reason is structural rather than lucky.** `Policy::step` returns
+> at its first guard on a fatal tick, before any other oracle is consulted, and a fatal tick carries
+> no reading — so `SourceFaults` is empty and the metric-scoped judgements are all `good()`. A
+> latching cause therefore reaches `compose` alone. **Two of them cannot meet**, because a tick has
+> at most one refusal.
+>
+> What would make it live is a latching cause produced by something OTHER than `Policy::step`'s
+> fatal guard — a metric-scoped oracle that latches, which nothing plans. Recorded here so the next
+> reader finds the check already done rather than the clause quietly outdated. The extension itself
+> is argued where it belongs, on `core::source::Refusal`: a credential is neither an identity nor a
+> value, and the reason those three latch is that **retrying against a refusal the other end has
+> already given is how a bridge hammers an API**.
+
 - **A second latching cause whose collision with `SourceRefused` matters.** Today the latching set
   has one member, so tier 2 never has to break a tie *within* itself. A second one makes tier 3 do
   that work, on an ordering chosen for a different purpose. That is the moment to give latching
