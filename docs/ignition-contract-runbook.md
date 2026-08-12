@@ -321,6 +321,13 @@ artifact that no longer exists**, so these are first measurements, not confirmat
 > future drift between this table and the code cannot be silent — but a missing run is still a
 > missing run.
 >
+> **The run became possible on 2026-08-12.** Until then the deployment spoke v3, so there was
+> nothing to point the gate at: panoramix ran `v0.4.0-rc2`, three contract versions behind its own
+> repository. It now runs `v0.4.0-rc3` at contract 6, observed on `/healthz`. A missing run is
+> still a missing run — but it is now a missing run rather than an impossible one, and the two
+> observations owed here (the `Cause` property's fate in the tag browser, [#68], and
+> `Rebirth (Last) Cause`) are both takeable.
+>
 > *Corrected 2026-08-11: this block said "the contract is now v4" while `CONTRACT_VERSION` had
 > already moved to 5. Story 2.1 instituted a mechanical grep for the stale number and story 2.2
 > did not re-run it — the check exists precisely because this block's job is to tell an operator

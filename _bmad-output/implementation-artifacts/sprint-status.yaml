@@ -67,6 +67,42 @@ story_location: _bmad-output/implementation-artifacts
 
 development_status:
   # ==========================================================================
+  # 2026-08-12 — THE DEPLOYMENT IS NO LONGER BEHIND. Read this first.
+  # ==========================================================================
+  #
+  # panoramix runs `v0.4.0-rc3`, CONTRACT 6, since this morning. Observed rather
+  # than reported: `http://smartme.home.arpa/healthz` answers
+  #
+  #     {"status":"running","intends_to_publish":true,"wedged":false,
+  #      "failed_sources":[],"degraded_meters":[],
+  #      "loop_age_ms":11245,"loop_age_allowed_ms":90000,
+  #      "version":"0.4.0-rc3","contract":6}
+  #
+  # THE STANDING IMPEDIMENT IS GONE, and this is the whole point of the release.
+  # From 2026-08-10 to 2026-08-12 every block below closes with "the deployment is
+  # still v0.4.0-rc2, contract v3" — a criterion cannot be left open because the
+  # instrument is out of reach and be called a decision. It is now in reach.
+  #
+  # WHAT IS NOW TAKEABLE, and neither is taken:
+  #   - [#68] — does Ignition show a property it never saw declared at BIRTH? The
+  #     `Cause` property is absent from a DBIRTH whose verdict is `Good`, which is
+  #     most of them, and appears later on a DDATA when a reading degrades. If the
+  #     host ignores it, the operator never sees the cause at the moment it
+  #     matters, and declaring `Cause` at BIRTH with a neutral value contradicts
+  #     the "a good metric carries no cause" rule. That is an arbitration, and it
+  #     could not be taken before this measurement.
+  #   - The `Rebirth (Last) Cause` observation, almost certainly overwritten by now.
+  #
+  # AND THE TIER-3 GATE CAN BE RUN AGAINST v6 — the runbook's rows attest to v3 and
+  # no run has happened against v4, v5 or v6. That run is what would make a FINAL
+  # `0.4.0` defensible; the tag alone does not.
+  #
+  # NOTE ON WHAT IS *NOT* MEASURED BY THE ABOVE: `degraded_meters: []` at one
+  # instant says the three meters were good at one instant. It is not evidence
+  # that the oracle layer behaves correctly on the wire, which is a Tier-3
+  # question and stays open.
+  #
+  # ==========================================================================
   # END OF 2026-08-11 — read this first tomorrow.
   # ==========================================================================
   #
@@ -434,8 +470,10 @@ development_status:
   # now say so instead of claiming a working mechanism.
   # TASK 3 IS RECORDED UNMET WITH [#68] and is the only thing this story leaves open:
   # whether the DBIRTH declares the `Cause` property. The legality half is settled by
-  # the norm; the arbitration half needs a measurement, and the measurement needs a
-  # deployment — still v0.4.0-rc2, contract v3, against code at v6.
+  # the norm; the arbitration half needs a measurement.
+  # THE MEASUREMENT IS NOW POSSIBLE (2026-08-12, same day): panoramix runs
+  # `v0.4.0-rc3` at contract 6. What kept [#68] open was reach, not judgement, and
+  # that excuse has expired — see the block at the top of this file.
   2-1-the-oracle-layer-and-how-verdicts-compose: done  # closed 2026-08-12; task 3 recorded UNMET [#68]
   # FR15, NFR6 — the one with a date on it. See the epic note above.
   # REVIEWED 2026-08-11. NOT `done` — AC2 is UNMET and AC6 partially so, and the

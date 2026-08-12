@@ -382,10 +382,16 @@ the table AC10 required preserved. The branch is a net for the first cause that 
 `Policy::step` knowing, not a mechanism doing work now.
 
 **Task 3 is recorded UNMET, and it is the only thing this story leaves open.** [#68]. The legality
-half is settled by the norm; the arbitration half cannot be taken before a measurement, and the
-measurement cannot be taken before the deployment moves — it is still `v0.4.0-rc2`, contract v3,
-while the code is at v6. Closing the story does not close the issue, and the issue is what carries
-it. This is the practice that let Epic 1 close honestly with two criteria in the open.
+half is settled by the norm; the arbitration half cannot be taken before a measurement. Closing the
+story does not close the issue, and the issue is what carries it. This is the practice that let
+Epic 1 close honestly with two criteria in the open.
+
+**And the measurement became possible the same day.** This paragraph read *"the measurement cannot
+be taken before the deployment moves — it is still `v0.4.0-rc2`, contract v3, while the code is at
+v6"*, which was true for about six hours. panoramix runs `v0.4.0-rc3` at contract 6 since
+2026-08-12, observed on `/healthz` rather than reported. What kept [#68] open was reach; it is now
+judgement, and the difference matters — an unmet criterion waiting on an instrument is a different
+thing from one waiting on a decision, and only the first is anybody's excuse.
 
 [ADR 0029]: ../../docs/adr/0029-the-declared-serial-is-checked-against-the-one-smart-me-reports.md
 [ADR 0032]: ../../docs/adr/0032-at-equal-severity-a-latching-cause-outranks-a-degrading-one.md
