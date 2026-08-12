@@ -25,7 +25,7 @@ services:
     # A pre-release (a tag carrying a `-`) never moves `latest` at all, which is why a
     # candidate can be deployed for a test without any `latest` pin picking it
     # up by surprise.
-    image: docker.io/gcorbaz/smartme_mqtt:0.4.0-rc2
+    image: docker.io/gcorbaz/smartme_mqtt:0.4.0-rc3
     restart: unless-stopped
 
     env_file:
