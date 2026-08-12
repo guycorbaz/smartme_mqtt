@@ -57,9 +57,13 @@ attests to an artifact state that no longer exists — see the drift note under 
 
 ```bash
 SPARKPLUG_CONTRACT_BROKER=<host>:1883 \
-SPARKPLUG_CONTRACT_GROUP=ContractV3 \
+SPARKPLUG_CONTRACT_GROUP=ContractV6 \
   cargo test -p smartme-bridge --test ignition_contract -- --ignored --nocapture
 ```
+
+> **Name the group after the contract you are attesting to.** `ContractV3` was the 2026-08-03 run;
+> reusing it would put two contracts' evidence in one Ignition folder, and the tag tree outlives
+> the test.
 
 Six steps. Steps 1–4 and 6 mirror the crate gate's; **step 5 is new and cannot be automated at
 all** — you trigger a rebirth *from the Ignition Designer*, and the gate reads the `bdSeq` off the
@@ -102,6 +106,70 @@ Each gate prints a checklist and waits for **Enter** at each step. Take as long 
 nothing times out. **Every checklist item is followed by what else could make that step pass
 wrongly**; read those, because this gate has already come within one step of returning a false
 pass twice.
+
+---
+
+## What changed since the last run — v3 → v6, and what this run can and cannot attest
+
+*Written 2026-08-12, before the v6 run, so that the run's scope is decided in advance rather than
+claimed afterwards.*
+
+The last complete run was 2026-08-03, contract v3. Three versions have shipped since:
+
+| | What it changed | What the operator sees that they did not see at v3 |
+|---|---|---|
+| **v4** | every non-good metric may carry a `Cause` property naming the oracle that refused it | a second property beside `Quality` in the tag browser |
+| **v5** | `counter-went-backwards` joins the cause vocabulary | nothing, unless a counter resets during the run |
+| **v6** | **breaking** — a verdict belongs to a METRIC, so a refused energy index no longer nulls the power beside it | nothing, unless one metric alone is refused |
+
+### What this run attests
+
+Everything the v3 run attested, re-observed against the shipped contract: the cold-start birth, the
+first reading, the update, the honest `Bad_Stale` while the node stays online, the rebirth issued
+by Ignition, and the two death certificates. **That is the whole of NFR17 and it is the point of
+the exercise** — a v3 attestation says nothing about v6 bytes, and the gap is [#72]'s sibling risk
+R3 in the project register.
+
+**Plus one new observation, at step 4: does the `Cause` property reach the tag browser at all?**
+The step publishes `Verdict::stale(Cause::ReadingTooOld)`, so both metrics carry
+`Cause = "reading-too-old"`. If Ignition shows it, the operator gains the *reason* a value is not
+good, which is the entire purpose of v4. **How this passes wrongly:** the property may be visible
+only in the tag's *properties* pane and not in the browser column, which is a display setting and
+not a contract failure — check both before recording an absence.
+
+### What this run does NOT attest, and both gaps are structural rather than oversights
+
+**1. The per-metric verdict — v6's breaking change — is not exercised.** Every step publishes one
+verdict for the whole reading, so `Verdicts::uniform` is what reaches the wire and the v6 code path
+that stamps metrics separately never diverges from the v5 one. Provoking it needs a meter whose
+energy index drops while its power is current — a counter reset, which cannot be staged on real
+hardware. **A run that passes therefore says nothing about v6's headline change**, and recording it
+as "v6 attested" without this sentence would be the drift [#40] is about, one version later.
+
+**2. [#68] cannot be answered by this gate, and it is worth saying exactly why.** The question is
+what Ignition does with a property it never saw declared at BIRTH. **This gate's step 1 publishes a
+cold-start DBIRTH with quality `Stale`** (Epic 1's guarantee, and correct), so the `Cause` property
+is present *in the BIRTH itself*. The gate therefore exercises the declared case and can only ever
+show the property working — which proves nothing about the undeclared one.
+
+The case [#68] needs is a device whose BIRTH is `Good` and which degrades later. Two ways to get it:
+
+- **On the live deployment, for free.** panoramix has published `Good` DBIRTHs since 2026-08-09 and
+  a meter degrades whenever the cloud goes quiet — it happened for ten hours on 2026-08-10. Look at
+  `PreProd/smartme-bridge` in the tag browser the next time a meter is not good, and the answer is
+  there. **How this passes wrongly:** a meter that was already not-good when its DBIRTH was
+  published is the declared case again; confirm the DBIRTH's own quality before concluding.
+- **By amending the gate**, if a controlled answer is wanted: publish `Good`, trigger a *second*
+  rebirth from the Designer so the re-DBIRTH carries no cause, then publish `Stale`. That is a new
+  step and a second manual trigger, and it is the only way to observe it on demand.
+
+Until one of the two happens, story 2.1's task 3 stays UNMET and the arbitration it blocks —
+whether to declare `Cause` at BIRTH with a neutral value, contradicting *"a good metric carries no
+cause"* — cannot be taken.
+
+[#40]: https://github.com/guycorbaz/smartme_mqtt/issues/40
+[#68]: https://github.com/guycorbaz/smartme_mqtt/issues/68
+[#72]: https://github.com/guycorbaz/smartme_mqtt/issues/72
 
 ---
 

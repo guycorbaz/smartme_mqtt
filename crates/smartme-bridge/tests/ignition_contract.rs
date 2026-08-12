@@ -165,9 +165,16 @@ fn device_births(seen: &Arc<std::sync::Mutex<Vec<Seen>>>) -> usize {
         .count()
 }
 
+/// **Renamed from `ignition_contract_v3` on 2026-08-12.** The gate attests to
+/// whatever contract the bridge currently publishes — v6 today — so a version in
+/// its own name goes stale at every bump and did: it read `_v3` while
+/// `CONTRACT_VERSION` was 6. Nothing cited the old name (checked, one hit: its own
+/// definition), so the rename cost nothing — unlike
+/// `every_edge_node_message_is_qos_zero_and_never_retained`, whose replacement left
+/// nine `conformant` rows citing a test that no longer existed.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "manual Tier-3 gate: drives the real bridge against a real broker for a human to inspect"]
-async fn ignition_contract_v3() {
+async fn ignition_contract_gate() {
     // WITHOUT THIS, THE BRIDGE IS SILENT — and the silence looks like a pass.
     //
     // This gate drives `mqtt_driver::run` in-process. The only subscriber in the
@@ -380,6 +387,20 @@ async fn ignition_contract_v3() {
     // The crate-level gate still publishes 500 here, deliberately, and its step 4
     // now expects `Good(500)`. If THIS step also showed good, the deviation would
     // have stopped working.
+    //
+    // **CONTRACT v4 ADDED A SECOND THING TO LOOK AT HERE, 2026-08-12.** The verdict
+    // below carries `Cause::ReadingTooOld`, so `metrics_for` attaches
+    // `Cause = "reading-too-old"` to both metrics. Whether Ignition SHOWS a metric
+    // property it was not asked about is the entire point of v4 and has never been
+    // observed — the last complete run was 2026-08-03, contract v3, before the
+    // property existed.
+    //
+    // **It does NOT answer [#68], and the checklist says so rather than leaving the
+    // operator to infer it.** That issue asks what a host does with a property
+    // absent from the BIRTH; step 1 above publishes a cold-start DBIRTH at
+    // `Quality::Stale`, which therefore DECLARES `Cause`. This gate can only
+    // exercise the declared case. The undeclared one needs a `Good` birth that
+    // degrades afterwards — free on the live deployment, or a second rebirth here.
     tx.send(reading(
         POWER_SECOND,
         ENERGY_SECOND,
@@ -397,6 +418,9 @@ async fn ignition_contract_v3() {
             "The VALUES are unchanged (2.345 / 5679.1): the bridge reports the last known \
              reading and marks it untrustworthy, rather than blanking it",
             "The quality overlay is visible in the tag browser without hovering",
+            "CONTRACT v4, FIRST OBSERVATION: each tag carries a second property, \
+             `Cause = reading-too-old`, beside `Quality`. RECORD WHETHER IGNITION SHOWS IT \
+             AT ALL — that is the whole purpose of v4, and no run has ever checked it",
         ],
         &[
             "★ the tag is stale because the BRIDGE DIED and Ignition applied its own \
@@ -408,6 +432,13 @@ async fn ignition_contract_v3() {
              node, not this one",
             "the value blanked instead of freezing — that is a different (and wrong) \
              behaviour that also looks 'not good'",
+            "★ the `Cause` property is visible AND YOU CONCLUDE [#68] IS ANSWERED — it is \
+             not, and this gate cannot answer it. Step 1's cold-start DBIRTH is STALE, so \
+             `Cause` was DECLARED in the birth. What #68 asks is what Ignition does with a \
+             property it never saw declared, which needs a `Good` birth that degrades later. \
+             See the runbook section 'What this run does NOT attest'",
+            "you record an absence without checking the tag's PROPERTIES pane as well as the \
+             browser column — a property hidden by a display setting is not a contract failure",
         ],
     );
 
