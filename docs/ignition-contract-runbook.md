@@ -146,26 +146,40 @@ energy index drops while its power is current — a counter reset, which cannot 
 hardware. **A run that passes therefore says nothing about v6's headline change**, and recording it
 as "v6 attested" without this sentence would be the drift [#40] is about, one version later.
 
-**2. [#68] cannot be answered by this gate, and it is worth saying exactly why.** The question is
-what Ignition does with a property it never saw declared at BIRTH. **This gate's step 1 publishes a
-cold-start DBIRTH with quality `Stale`** (Epic 1's guarantee, and correct), so the `Cause` property
-is present *in the BIRTH itself*. The gate therefore exercises the declared case and can only ever
-show the property working — which proves nothing about the undeclared one.
+**2. [#68] is not answered by this gate.** The question is what Ignition does with a property it
+never saw declared at BIRTH.
 
-The case [#68] needs is a device whose BIRTH is `Good` and which degrades later. Two ways to get it:
+> **CORRECTED 2026-08-12, hours after it was written.** This paragraph first claimed the gate
+> exercises the *declared* case, on the reasoning that step 1's cold-start DBIRTH is `Stale` and
+> therefore carries a `Cause`. **It does not.** `cold_start_metrics`
+> (`adapters/sparkplug_publisher.rs:611`) sets the quality code and attaches **no property at all** —
+> it bypasses `metrics_for` entirely. Story 2.1's own review recorded that gap and this document
+> contradicted it the same day. So the gate's DBIRTH declares nothing, exactly like production's
+> `Good` births, and **both are the undeclared case**: whatever separates them, it is not this.
 
-- **On the live deployment, for free.** panoramix has published `Good` DBIRTHs since 2026-08-09 and
-  a meter degrades whenever the cloud goes quiet — it happened for ten hours on 2026-08-10. Look at
-  `PreProd/smartme-bridge` in the tag browser the next time a meter is not good, and the answer is
-  there. **How this passes wrongly:** a meter that was already not-good when its DBIRTH was
-  published is the declared case again; confirm the DBIRTH's own quality before concluding.
-- **By amending the gate**, if a controlled answer is wanted: publish `Good`, trigger a *second*
-  rebirth from the Designer so the re-DBIRTH carries no cause, then publish `Stale`. That is a new
-  step and a second manual trigger, and it is the only way to observe it on demand.
+That leaves the difference unexplained, and an unexplained difference is not a finding. What was
+actually observed on 2026-08-12, and it is little: the operator saw no `Cause` on the gate's node
+and reported seeing one on production's — while adding, correctly, that they were not sure they had
+looked in the right place in the Designer. **An observation nobody can locate is not a
+measurement**, and nothing was recorded from it.
 
-Until one of the two happens, story 2.1's task 3 stays UNMET and the arbitration it blocks —
-whether to declare `Cause` at BIRTH with a neutral value, contradicting *"a good metric carries no
-cause"* — cannot be taken.
+**The half that belongs to us has its own instrument now.**
+`tests/observe_cause_property.rs` subscribes to the real broker, publishes nothing, and prints
+every metric with its quality and its properties. It separates *what the bridge emits* from *what a
+host displays*, which is the confusion this whole question kept collapsing into. Its first run
+(2026-08-12, 75 s) answered **INCONCLUSIVE by construction and said so**: all three meters were
+`Good`, so no `Cause` was owed and its absence proved nothing.
+
+**To settle it, the observation must happen while a meter is degraded** — the cloud going quiet is
+enough, and it did for ten hours on 2026-08-10. Run the observer then, and check the tag browser in
+the same minutes. **How that passes wrongly:** if Ignition *retains* a property it once saw, a
+`Cause` visible on a currently-`Good` tag is a stale reason rather than a live one — which would be
+a hazard of its own, and is worth checking before concluding anything from a tag that looks
+right.
+
+Until then, story 2.1's task 3 stays UNMET and the arbitration it blocks — whether to declare
+`Cause` at BIRTH with a neutral value, contradicting *"a good metric carries no cause"* — cannot be
+taken.
 
 [#40]: https://github.com/guycorbaz/smartme_mqtt/issues/40
 [#68]: https://github.com/guycorbaz/smartme_mqtt/issues/68
@@ -552,13 +566,15 @@ it was made.
 In the Designer's Tag Browser, under the **MQTT Engine** provider, delete:
 
 ```
-Edge Nodes/<your group>/ContractNodeV3     ← bridge gate
-Edge Nodes/<your group>/ContractNode       ← crate gate
+Edge Nodes/<your group>/BridgeContractNode  ← bridge gate
+Edge Nodes/<your group>/ContractNode        ← crate gate
 ```
 
-**The two gates use different node ids** — `ContractNodeV3` and `ContractNode`, from each test's own
-`NODE_ID`. This section named only the crate gate's until 2026-08-03, so following it after a bridge
-run left the folder behind.
+**The two gates use different node ids** — `BridgeContractNode` and `ContractNode`, from each test's
+own `NODE_ID`. This section named only the crate gate's until 2026-08-03, so following it after a
+bridge run left the folder behind. **The bridge gate's id was `ContractNodeV3` until 2026-08-12**;
+runs recorded before that date left a folder under the old name, and the record-of-runs entries
+below still name it because that is what they created.
 
 **Delete only that folder.** Removing MQTT Engine tags also discards their alarm and history
 configuration, and your real edge nodes live under the same parent.

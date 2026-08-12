@@ -34,7 +34,7 @@
 //!
 //! ```text
 //! SPARKPLUG_CONTRACT_BROKER=host:1883 \
-//! SPARKPLUG_CONTRACT_GROUP=ContractV3 \
+//! SPARKPLUG_CONTRACT_GROUP=ContractV6 \
 //!   cargo test -p smartme-bridge --test ignition_contract -- --ignored --nocapture
 //! ```
 //!
@@ -72,7 +72,19 @@ use smartme_bridge::domain::{Kw, Kwh, Measurement, MeterId, Quality, Serial, Utc
 
 use common::Seen;
 
-const NODE_ID: &str = "ContractNodeV3";
+/// **Version-agnostic since 2026-08-12**, for the reason that renamed the test
+/// itself: it read `ContractNodeV3` while the bridge published contract v6, so the
+/// node folder an operator finds in Ignition named the wrong contract. The GROUP
+/// still carries the version — it is chosen per run and is what separates one
+/// attestation's tag tree from another's.
+///
+/// **NOT `ContractNode`**, which is the CRATE gate's node id
+/// (`crates/sparkplug-b/tests/ignition_contract.rs:69`). The two gates publish
+/// deliberately different bytes — the bridge's Ignition codes and the
+/// specification's, which display as `Good(500)` — so sharing a node folder would
+/// mix a demonstration of the defect with the evidence that the deviation works.
+/// Caught by the mechanical grep before it shipped, not by review.
+const NODE_ID: &str = "BridgeContractNode";
 const SERIAL: &str = "30000001";
 const METER: &str = "contract-meter";
 
@@ -308,7 +320,7 @@ async fn ignition_contract_gate() {
     checkpoint(
         "STEP 1 — cold start: the node appears, and its tags are honestly STALE",
         &[
-            "The tag folder Edge Nodes/<group>/ContractNodeV3 exists",
+            "The tag folder Edge Nodes/<group>/BridgeContractNode exists",
             "Contract/Version is present and reads 3 (NOT 2 — v3 added the rebirth metric)",
             "Node Control/Rebirth is present, Boolean, and reads false",
             "Power and Energy exist for device 30000001",
@@ -397,10 +409,13 @@ async fn ignition_contract_gate() {
     //
     // **It does NOT answer [#68], and the checklist says so rather than leaving the
     // operator to infer it.** That issue asks what a host does with a property
-    // absent from the BIRTH; step 1 above publishes a cold-start DBIRTH at
-    // `Quality::Stale`, which therefore DECLARES `Cause`. This gate can only
-    // exercise the declared case. The undeclared one needs a `Good` birth that
-    // degrades afterwards — free on the live deployment, or a second rebirth here.
+    // absent from the BIRTH. Note that step 1's cold-start DBIRTH declares nothing
+    // either: `cold_start_metrics` sets the quality code and bypasses
+    // `metrics_for`, so it attaches NO property — a correction to what this
+    // comment and the runbook both claimed earlier on 2026-08-12. The gate and the
+    // deployment are therefore the same case, and what a host makes of it belongs
+    // to `tests/observe_cause_property.rs` plus a look at the tag browser while a
+    // meter is actually degraded.
     tx.send(reading(
         POWER_SECOND,
         ENERGY_SECOND,
@@ -433,10 +448,10 @@ async fn ignition_contract_gate() {
             "the value blanked instead of freezing — that is a different (and wrong) \
              behaviour that also looks 'not good'",
             "★ the `Cause` property is visible AND YOU CONCLUDE [#68] IS ANSWERED — it is \
-             not, and this gate cannot answer it. Step 1's cold-start DBIRTH is STALE, so \
-             `Cause` was DECLARED in the birth. What #68 asks is what Ignition does with a \
-             property it never saw declared, which needs a `Good` birth that degrades later. \
-             See the runbook section 'What this run does NOT attest'",
+             not. #68 asks what a host does with a property it never saw DECLARED at BIRTH, \
+             and seeing one here says nothing about a host that has been running for days. \
+             Use tests/observe_cause_property.rs, while a meter is degraded, to separate \
+             what the bridge EMITS from what Ignition DISPLAYS",
             "you record an absence without checking the tag's PROPERTIES pane as well as the \
              browser column — a property hidden by a display setting is not a contract failure",
         ],
