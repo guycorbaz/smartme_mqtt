@@ -70,7 +70,65 @@ story_location: _bmad-output/implementation-artifacts
 
 development_status:
   # ==========================================================================
-  # 2026-08-12 — THE DEPLOYMENT IS NO LONGER BEHIND. Read this first.
+  # END OF 2026-08-12 — read this first tomorrow.
+  # ==========================================================================
+  #
+  # SEVENTEEN COMMITS, all pushed, all three workflows green on each. EPIC 2 IS
+  # NOW ENTIRELY WRITTEN: 2.1, 2.2, 2.3 and 2.5 done; 2.4 WITHDRAWN with FR14;
+  # 2.6 in `review`; 2.7 `ready-for-dev`. What remains is 2.7's implementation and
+  # the retrospective, which is a condition of closing the epic.
+  #
+  # THE DAY'S LARGEST DECISION WAS A WITHDRAWAL. FR14 — flag values outside
+  # plausible physical bounds — is gone (ADR 0033, [#72]), on Guy's reading that
+  # judging a value is not this bridge's role. The line it draws is usable: CAN THE
+  # BRIDGE BE WRONG ABOUT THIS IN A WAY IT CANNOT DETECT? A counter going backwards
+  # is a fact about two numbers it holds; a power reading "too high" is an opinion
+  # about a building. It cost nothing — FR14 had no code — and it was story 2.4's
+  # DRAFT, unable to state its own criterion without knowing a breaker's rating,
+  # that made the misplacement legible.
+  #
+  # THE CONTRACT MOVED THREE TIMES: v5 -> v6 (BREAKING, per-metric verdicts),
+  # v6 -> v7 (additive, four causes naming what `value-unusable` said at once),
+  # v7 -> v8 (additive, `source-refused` split into three refusals plus a rate
+  # limit). THE DEPLOYMENT SPEAKS v6 — two versions behind, both additive, so a
+  # consumer does not break. It was brought to v6 this morning by publishing
+  # `v0.4.0-rc3`, which is what unblocked the Tier-3 measurements.
+  #
+  # WHAT I WOULD READ FIRST TOMORROW, in this order:
+  #
+  # 1. **2.6 and 2.5 were written, implemented AND reviewed by the same session.**
+  #    2.5's review found a live defect — the yardstick following the worst metric,
+  #    so an unreadable power unit froze the energy reference and a genuine counter
+  #    reset published `cause: None`. FR15 defeated by the oracle's own
+  #    bookkeeping. 2.6 has had NO review at all. Both touch the state machine and
+  #    the poll loop, which everything after them stands on. An independent pass
+  #    before 2.7 is worth more than another of mine.
+  # 2. **The retrospective has its material already, and it is two-shaped.**
+  #    Stories 2.1-2.3 kept testing a property ONE LAYER ABOVE where it lived.
+  #    Story 2.5 tested at the right layer and failed one level further out: THE
+  #    EVIDENCE RECORDED FOR ITS TESTS WAS NOT ITSELF CHECKED — three of four
+  #    falsification notes had never been run. All three held when played, which is
+  #    exactly why the practice is dangerous. Story 2.6 added AC6 to fix the
+  #    ordering: run the mutation, read the message, THEN write the note.
+  # 3. **Four criteria are recorded unmet, each with an issue**: [#67] NFR6's
+  #    residual, [#68] the `Cause` property at DBIRTH, [#69] the adoption rule with
+  #    no observable subject, [#73] a parse failure naming no field. [#69] SHOULD
+  #    close with 2.7 — a replay is marked `Good` by the source and refused by the
+  #    oracle, which is the disagreement it has been waiting for.
+  #
+  # OWED BY GUY, deferred deliberately today ("je procéderai aux mesures plus
+  # tard"): the Tier-3 gate's steps 5 and 6, `Rebirth (Last) Cause` after
+  # triggering, `Cause` on the wire while a meter is degraded (the observer
+  # `observe_cause_property` is built and waiting for a silent cloud), and the
+  # clean-up of the `ContractV6` folder in Ignition's tag tree.
+  #
+  # THE PROJECT SHEET IS UP TO DATE TOO, outside the repo: jalon 2 attained
+  # 2026-08-09, jalon 3 partially observed on the real outage of 2026-08-10, four
+  # risks open, and the two-gateway question answered — it is an inheritance, so
+  # there is no decision to find, there is one to take.
+  #
+  # ==========================================================================
+  # 2026-08-12, MORNING — the deployment stopped being behind. History from here.
   # ==========================================================================
   #
   # panoramix runs `v0.4.0-rc3`, CONTRACT 6, since this morning. Observed rather
