@@ -270,7 +270,7 @@ Thicken the skeleton's single FRESH→STALE transition into the full integrity g
 | 2.1 | the oracle layer, and how verdicts compose | `done` (2026-08-12) — task 3 recorded UNMET, [#68](https://github.com/guycorbaz/smartme_mqtt/issues/68) |
 | 2.2 | energy-counter monotonicity (FR15, NFR6) | `done` (2026-08-12) — AC2's distinguishing proof owed to 2.4, [#69](https://github.com/guycorbaz/smartme_mqtt/issues/69) |
 | 2.3 | **the oracle layer finished** — per-metric verdicts, total order on ties, both memories on the composed verdict, the reference across restarts, the surfaces reading the wire | `done` (2026-08-12) — AC3 recorded UNMET, [#69](https://github.com/guycorbaz/smartme_mqtt/issues/69) |
-| 2.4 | physical bounds (FR14) | backlog |
+| 2.4 | physical bounds (FR14) | `ready-for-dev` (2026-08-12) — closes [#69]; AC2 awaits two facts about the installation |
 | 2.5 | payload completeness and numeric domain (FR16) | backlog |
 | 2.6 | error taxonomy and bounded backoff (FR4, FR5, NFR1) | backlog |
 | 2.7 | UTC end-to-end and clock skew (FR10) | backlog |

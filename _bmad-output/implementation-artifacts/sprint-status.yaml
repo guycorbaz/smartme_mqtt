@@ -582,7 +582,23 @@ development_status:
   # comments that cite them by name were corrected in the same commit. The cost was
   # half an hour of references; what it buys is that the list can be read top to
   # bottom without a footnote.
-  2-4-physical-bounds: backlog
+  # WRITTEN 2026-08-12. It is the story that CLOSES [#69] — the first oracle to
+  # refuse a reading the SOURCE called `Good`, which is the only input that can
+  # tell story 2.3 AC3's adoption rule from the one it replaced.
+  # TWO CAUSES, not one, deliberately against story 2.2 AC5's precedent: that story
+  # merged reset/rollover/replacement because the bridge cannot tell them apart;
+  # here it can, and a power magnitude the supply cannot carry sends an operator to
+  # a different place than an index below zero.
+  # FR14 vs FR16 settled at drafting rather than left for 2.5 to guess: FR14 asks
+  # whether the quantity could take this value in the world, FR16 whether the
+  # payload is well-formed and inside its declared domain.
+  # NOT FULLY READY, AND IT SAYS SO: AC2 needs two numbers that are facts about the
+  # installation — the ceiling each supply can deliver, and whether injection is
+  # possible. If PV injection exists and the floor is set at zero, the oracle
+  # refuses real readings on the sunniest day of the year. The story refuses to
+  # invent them, on story 2.2 AC4's rule about numbers nobody measured. AC3 and AC6
+  # — the two that carry [#69] — are implementable today.
+  2-4-physical-bounds: ready-for-dev
   # FR16, plus `map_device`'s debt: three failure modes collapse into one
   # undifferentiated `Bad` naming no field.
   2-5-payload-completeness-and-numeric-domain: backlog
