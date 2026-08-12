@@ -662,7 +662,25 @@ development_status:
   2-5-payload-completeness-and-numeric-domain: done  # CONTRACT_VERSION 6 -> 7, additive
   # FR4, FR5, NFR1 — transient retries with bounded backoff, permanent stops and is
   # named. Absorbs the parked `429 Retry-After` item.
-  2-6-error-taxonomy-and-bounded-backoff: backlog
+  # WRITTEN 2026-08-12. Its largest decision is a REFUSAL: no general source-side
+  # backoff. NFR1 names one, and the temptation is strong — but ADR 0020 bounds the
+  # poll period and forbids turning it off, and ADR 0027 makes every cycle publish
+  # a verdict, so the loop IS the retry, spaced further apart than NFR1's 1 s floor.
+  # A second timer would either fight the period or duplicate it. What genuinely
+  # has no answer is the case where THE OTHER END asks us to wait longer than our
+  # period: a 429 with `Retry-After`, the item parked since Epic 2 opened.
+  # AND THE BROKER HALF IS ALREADY BUILT: `mqtt_driver.rs:342-420` carries a
+  # doubling backoff with additive jitter, floor 1 s, ceiling 30 s. The story cites
+  # it by line and forbids a second implementation.
+  # FR5's distinction exists in the type and is INVISIBLE on the wire: one cause,
+  # `source-refused`, covers a rejected credential, a configuration smart-me
+  # contradicts, and a serial that is not the declared one. Splitting it is the
+  # deferred finding from the 2026-08-11 review of story 2.1.
+  # AC6 IS NEW AND EXISTS BECAUSE OF STORY 2.5: a falsification must be RUN before
+  # its note is written, and the note records the observed message rather than a
+  # prediction. 2.5 recorded four and had run one.
+  # OPEN QUESTION saved for Guy: whether [#61] belongs here or to story 3.4.
+  2-6-error-taxonomy-and-bounded-backoff: ready-for-dev
   # FR10, plus the parked frozen/replayed-feed oracle — a byte-identical replayed
   # response keeps a plausible age and stays `Fresh` today.
   2-7-utc-end-to-end-and-clock-skew: backlog
