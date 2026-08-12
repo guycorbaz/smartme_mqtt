@@ -10,8 +10,13 @@ struct Sample {
     label: String,
 }
 
+/// Per test binary: the file names below are fixed (`roundtrip.toml`,
+/// `crash.toml`, …), so a fixed base would let two concurrent `cargo test` runs
+/// write and truncate each other's fixtures — in the suite whose whole subject
+/// is that a half-written file is never observed. Aligned 2026-08-12 with
+/// `poll_publish::tests::scratch_dir`.
 fn tmpdir() -> PathBuf {
-    let base = std::env::temp_dir().join("smartme_persist_test");
+    let base = std::env::temp_dir().join(format!("smartme_persist_{}", std::process::id()));
     std::fs::create_dir_all(&base).unwrap();
     base
 }

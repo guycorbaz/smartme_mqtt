@@ -284,3 +284,56 @@ property was unprotected.
 [#69]: https://github.com/guycorbaz/smartme_mqtt/issues/69
 [#70]: https://github.com/guycorbaz/smartme_mqtt/issues/70
 [#71]: https://github.com/guycorbaz/smartme_mqtt/issues/71
+
+### Review of the fix itself — 2026-08-12
+
+`90a7437` was never reviewed; it is the commit that repaired what the review of
+`3c17a14^..a6199da` found, and reviewing a repair is not the same act as reviewing the work it
+repairs. Three findings, all fixed here. **The first is a live defect the fix commit introduced,
+on the surface AC6 exists for.**
+
+- **`/` contradicted itself about a meter whose source had failed.** `FleetState::degraded`
+  filtered on the published quality alone; `failed` filters on `State::Failed`; `pulse.record`
+  writes both on every tick. A refused credential therefore put one meter in both lists, and the
+  page printed *"One meter is not being read: cellar … a restart is needed to clear"* directly
+  above *"One meter is being read … every reading reaches the host … Nothing here is cleared by a
+  restart"*. The operator is not lied to — they are told two opposite things and left to choose,
+  at the hour when they are least able to. The distinction was written in three places (the
+  method's own doc, the new comment in `index`, the ADR) and implemented in none. Proved by
+  running: an assertion added to `a_failed_source_is_named_on_the_page_and_in_healthz`, which
+  drives exactly this state and passed because it only ever asserted presences. Closed by
+  excluding `Failed` in `degraded` — at the source, because there were already two callers and
+  `/healthz` double-counted the same meter across `failed_sources` and `degraded_meters`.
+- **Three doc blocks had piled up above one test, and a recorded falsification sat next to a test
+  that cannot produce it.** `a_control_character_…` carried *"FALSIFIED 2026-08-07 by making
+  `Phase::failed_sources` return `Vec::new()`"*, and both
+  `a_failed_source_is_named_on_the_page_and_in_healthz` and
+  `the_status_code_follows_the_wedge_and_nothing_else` had no documentation at all. **Two of the
+  three were already orphaned before `90a7437`**, which added a third rather than noticing the
+  pile — so this is not a defect the fix introduced, but one it walked past. `ui/mod.rs` records
+  the previous occurrence of the same shape thirty lines from where it recurred (`590c78d`,
+  2026-08-07). All three blocks are back with their tests.
+- **The per-process scratch directory was applied to one path of six.** `90a7437`'s message
+  announces *"test scratch dirs are now per-process"* and writes the reasoning into the one
+  instance it was pointed at, leaving four fixed `/tmp` paths in `poll_publish.rs` — two of them
+  added by that same commit — plus `supervisor.rs`'s `bd_seq_path`, whose PARENT is the state
+  directory every poll task writes references into, and `prop_persist_atomic.rs`'s base, under
+  fixed file names, in the suite whose subject is that a half-written file is never observed. Now
+  one `scratch_dir` helper carrying the reason, and the two outside that file aligned with it.
+  Repairing the instance and naming the class in the same breath is the pattern the Epic 5
+  retrospective called out (action B1).
+
+**And one nit:** `json_string` carried the same two-line comment twice, the first copy above the
+`'\n'` arm where it described nothing.
+
+**What came back clean.** AC1's assertion is genuinely on the published `Metric`s, with three
+recorded mutations including the one that undoes ADR 0031. The `reference_adoptable` /
+`last_adoptable` split is the right cut and its test drives a real three-tick sequence.
+Percent-encoding plus the owner written inside the file are two independent locks, correctly
+argued. `run` is driven across two simulated processes. ADR 0032's correction withdraws a claim
+instead of dressing it up, which is the harder half.
+
+**AC6 names three surfaces and only two exist.** There is no per-meter view route today — it is
+FR28, Epic 6. Nothing is unprotected, but the criterion is ticked against a surface nobody has
+built, and nothing carries the requirement to the story that will build it. Worth a line in that
+story rather than an issue.

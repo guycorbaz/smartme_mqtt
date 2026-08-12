@@ -679,7 +679,14 @@ mod tests {
             node_id: "Bridge".to_string(),
             broker_host: "127.0.0.1".to_string(),
             broker_port: 1883,
-            bd_seq_path: std::env::temp_dir().join("smartme_supervisor_test_bdseq.toml"),
+            // Per test binary, not a fixed name: this path's PARENT is also the
+            // state directory every poll task writes its monotonicity reference
+            // into (`run_with_control`), so a fixed one puts two concurrent
+            // `cargo test` runs on the same reference files. Same reasoning as
+            // `poll_publish::tests::scratch_dir`, 2026-08-12.
+            bd_seq_path: std::env::temp_dir()
+                .join(format!("smartme_supervisor_{}", std::process::id()))
+                .join("bdseq.toml"),
             poll: PollConfig {
                 interval: Duration::from_secs(5),
                 fetch_timeout: Duration::from_secs(2),

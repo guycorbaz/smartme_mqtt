@@ -754,8 +754,8 @@ fn json_string(value: &str) -> String {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
 
-            // Every other control character, by code point. `\u007F` is legal
-            // unescaped and is left alone.
+            // The three RFC 8259 gives a short form, which keeps a meter id
+            // legible in a body an operator may well be reading by eye.
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
@@ -1153,46 +1153,6 @@ mod tests {
         let _: MonotonicMs = clock.monotonic();
     }
 
-    /// **The handler itself**, because the tests above exercise `loop_age` and a
-    /// mutation that returned `StatusCode::OK` unconditionally left every one of
-    /// them green — which is exactly how the unconditional 200 shipped in the
-    /// first place.
-    /// **Story 3.2 AC5, [ADR 0027] §1 and §2** — the page and `/healthz` must
-    /// agree with the wire about a source that has failed.
-    ///
-    /// The defect: a rejected smart-me credential puts every meter into an
-    /// absorbing `Failed`, nothing reaches the wire, and `/` went on saying the
-    /// bridge *"is polling the meters and publishing what it reads"* — a claim
-    /// about the source, made by a page that had no way to see one. `/healthz`
-    /// reported `intends_to_publish: true` and `wedged: false`, both true and
-    /// both beside the point.
-    ///
-    /// **Both halves are asserted.** A page that shouted about a fault whatever
-    /// the state would pass the first half and be useless; the healthy case is
-    /// checked first, and its silence is what gives the second case meaning.
-    ///
-    /// The status code stays 200 deliberately: Epic 7 restarts on it, and a
-    /// restart cannot clear a rejected credential — it would loop, eating the
-    /// screen that names the fault.
-    ///
-    /// FALSIFIED 2026-08-07 by making `Phase::failed_sources` return `Vec::new()`
-    /// unconditionally — the state the code was in before this story. Copied:
-    ///
-    /// ```text
-    /// test ui::tests::a_failed_source_is_named_on_the_page_and_in_healthz ... FAILED
-    ///
-    /// thread '…a_failed_source_is_named_on_the_page_and_in_healthz' (57) panicked at
-    /// crates/smartme-bridge/src/ui/mod.rs:797:9:
-    /// the page claims the bridge is publishing what it reads; a meter whose source has
-    /// FAILED must be named, or the operator is sent to the logs to discover it:
-    /// <!doctype html>…<p><strong>Running</strong></p><p>The bridge is configured and
-    /// confirmed, so it is polling the meters and publishing what it reads.…</p>…
-    /// ```
-    ///
-    /// The dump is the page itself, which is the point: the helper reads the
-    /// rendered bytes, so a mutation of what is rendered can reach the assertion.
-    ///
-    /// [ADR 0027]: ../../../docs/adr/0027-a-failed-source-is-a-fault-the-screen-must-name.md
     /// A meter id carrying a control character does not make `/healthz` emit
     /// invalid JSON (review of story 2.3, 2026-08-11).
     ///
@@ -1350,6 +1310,133 @@ mod tests {
         );
     }
 
+    /// **A meter is reported ONCE, and `/` never says both things about it**
+    /// (story 2.3 AC6, found by the 2026-08-12 review of the story's own fix).
+    ///
+    /// `degraded()` filtered on the published quality alone and excluded nothing,
+    /// while `failed()` filters on `State::Failed` — and `pulse.record` writes
+    /// both on every tick. A meter with a refused credential was therefore in both
+    /// lists, and `/` printed, one paragraph after the other:
+    ///
+    /// ```text
+    /// One meter is not being read: cellar. … No value is published for it …
+    /// This is a fault a restart is needed to clear …
+    ///
+    /// One meter is being read, but what is published must not be trusted:
+    /// cellar (source-refused). … every reading reaches the host …
+    /// Nothing here is cleared by a restart …
+    /// ```
+    ///
+    /// Not lied to, but told two contradictory things and left to pick — on the
+    /// surface an operator opens during the incident, which is the whole subject
+    /// of AC6. The code even carried the distinction in prose: *"that block is
+    /// about meters producing NOTHING, this one about meters producing something
+    /// marked."* It was written and not implemented.
+    ///
+    /// Fixed in `FleetState::degraded` rather than in this page, because
+    /// `/healthz` counted the same meter in `failed_sources` and `degraded` too —
+    /// defensible for two machine-read fields until a consumer adds them up.
+    ///
+    /// FALSIFIED 2026-08-12 against the code as `90a7437` left it: restoring
+    /// `degraded()` without its `Failed` filter turns the first assertion below
+    /// red, with the two paragraphs in the dump.
+    #[tokio::test]
+    async fn a_failed_meter_is_not_also_reported_as_being_read() {
+        use crate::core::clock::FakeClock;
+        use crate::core::state_machine::State as OracleState;
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let clock = Arc::new(FakeClock::new(UtcMillis(1_784_984_793_000)));
+        let cellar = crate::domain::MeterId::new("cellar");
+        let beats = Heartbeats::for_meters([cellar.clone()]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let state = ui(publishing(
+            beats.clone(),
+            clock.clone(),
+            Arc::clone(&config),
+        ));
+
+        // A refused credential: the state latches `Failed` AND the published
+        // verdict is `Bad(source-refused)`. Both are recorded, which is what put
+        // the meter in two lists.
+        beats.record(
+            &cellar,
+            OracleState::Failed,
+            crate::core::oracle::Verdict::bad(crate::core::oracle::Cause::SourceRefused),
+        );
+
+        let page = body(index(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            page.contains("not being read"),
+            "the premise: a failed source is still named:\n{page}"
+        );
+        assert!(
+            !page.contains("is being read, but what is published must not be trusted"),
+            "a meter reported as NOT being read must not also be reported as being \
+             read and publishing — the two paragraphs disagree about whether it is \
+             polled and about whether a restart clears it, and an operator reading \
+             at 3am has to guess which:\n{page}"
+        );
+
+        let health = body(healthz(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            health.contains("\"failed_sources\":[\"cellar\"]"),
+            "the machine-read surface still names it as failed:\n{health}"
+        );
+        assert!(
+            health.contains("\"degraded_meters\":[]"),
+            "and does not ALSO count it as degraded: a consumer adding the two \
+             fields would report two faulty meters where there is one:\n{health}"
+        );
+    }
+
+    /// **Story 3.2 AC5, [ADR 0027] §1 and §2** — the page and `/healthz` must
+    /// agree with the wire about a source that has failed.
+    ///
+    /// The defect: a rejected smart-me credential puts every meter into an
+    /// absorbing `Failed`, nothing reaches the wire, and `/` went on saying the
+    /// bridge *"is polling the meters and publishing what it reads"* — a claim
+    /// about the source, made by a page that had no way to see one. `/healthz`
+    /// reported `intends_to_publish: true` and `wedged: false`, both true and
+    /// both beside the point.
+    ///
+    /// **Both halves are asserted.** A page that shouted about a fault whatever
+    /// the state would pass the first half and be useless; the healthy case is
+    /// checked first, and its silence is what gives the second case meaning.
+    ///
+    /// The status code stays 200 deliberately: Epic 7 restarts on it, and a
+    /// restart cannot clear a rejected credential — it would loop, eating the
+    /// screen that names the fault.
+    ///
+    /// FALSIFIED 2026-08-07 by making `Phase::failed_sources` return `Vec::new()`
+    /// unconditionally — the state the code was in before this story. Copied:
+    ///
+    /// ```text
+    /// test ui::tests::a_failed_source_is_named_on_the_page_and_in_healthz ... FAILED
+    ///
+    /// thread '…a_failed_source_is_named_on_the_page_and_in_healthz' (57) panicked at
+    /// crates/smartme-bridge/src/ui/mod.rs:797:9:
+    /// the page claims the bridge is publishing what it reads; a meter whose source has
+    /// FAILED must be named, or the operator is sent to the logs to discover it:
+    /// <!doctype html>…<p><strong>Running</strong></p><p>The bridge is configured and
+    /// confirmed, so it is polling the meters and publishing what it reads.…</p>…
+    /// ```
+    ///
+    /// The dump is the page itself, which is the point: the helper reads the
+    /// rendered bytes, so a mutation of what is rendered can reach the assertion.
+    ///
+    /// **REUNITED WITH ITS TEST 2026-08-12.** This block, and the two beside it,
+    /// had drifted onto a pile above `a_control_character_…`: two of them were
+    /// already orphaned before the story 2.3 fix, which then added a third rather
+    /// than noticing the pile. So a recorded falsification sat next to a test that
+    /// could not produce it, which is the repository rule
+    /// (*"record the falsification next to the test"*) failing in the form that is
+    /// hardest to see — the note exists, it is just attached to the wrong thing.
+    /// The same file records the previous occurrence, on `Phase::loop_age`
+    /// (`590c78d`, 2026-08-07).
+    ///
+    /// [ADR 0027]: ../../../docs/adr/0027-a-failed-source-is-a-fault-the-screen-must-name.md
     #[tokio::test]
     async fn a_failed_source_is_named_on_the_page_and_in_healthz() {
         use crate::core::clock::FakeClock;
@@ -1427,6 +1514,14 @@ mod tests {
         );
     }
 
+    /// **The handler itself**, because the tests above exercise `loop_age` and a
+    /// mutation that returned `StatusCode::OK` unconditionally left every one of
+    /// them green — which is exactly how the unconditional 200 shipped in the
+    /// first place.
+    ///
+    /// **Reunited with its test 2026-08-12**, from the same pile as the block on
+    /// `a_failed_source_is_named_on_the_page_and_in_healthz`; the reason is
+    /// recorded there.
     #[tokio::test]
     async fn the_status_code_follows_the_wedge_and_nothing_else() {
         use crate::core::clock::FakeClock;

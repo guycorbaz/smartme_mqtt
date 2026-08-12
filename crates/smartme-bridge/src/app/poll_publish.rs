@@ -136,9 +136,24 @@ impl FleetState {
     /// ([#62]).
     ///
     /// A meter that has not completed a tick is absent rather than guessed at.
+    ///
+    /// **A meter in [`State::Failed`] is NOT here, and the exclusion is the point**
+    /// (added 2026-08-12 by the review of story 2.3's fix). This method shipped
+    /// claiming to be "distinct from `failed`" and filtered on the published
+    /// quality alone, while `record` writes the state and the verdict together on
+    /// every tick — so a refused credential put one meter in BOTH lists, and `/`
+    /// printed *"One meter is not being read: cellar … a restart is needed to
+    /// clear"* directly above *"One meter is being read … Nothing here is cleared
+    /// by a restart"*. The distinction was written in three places and implemented
+    /// in none of them.
+    ///
+    /// Excluded here rather than at each surface because there were already two —
+    /// `/` and `/healthz` — and a rule applied at the caller is a rule the third
+    /// caller will not know about.
     pub fn degraded(&self) -> Vec<(&MeterId, Verdict)> {
         self.meters
             .iter()
+            .filter(|m| m.verdict != Some(State::Failed))
             .filter_map(|m| m.published.map(|v| (&m.meter, v)))
             .filter(|(_, v)| v.quality() != Quality::Good)
             .collect()
@@ -847,6 +862,24 @@ mod tests {
     const SANE_NOW: i64 = 1_784_984_793_000;
     const BASE: i64 = 1_784_984_700_000;
 
+    /// A scratch directory belonging to THIS test binary and this purpose.
+    ///
+    /// **One helper rather than five literals, since 2026-08-12.** The story 2.3
+    /// review fixed a fixed `/tmp` path in `a_hanging_meter_does_not_cost_the_others_their_cadence`
+    /// and wrote the reason beside it — *"two concurrent `cargo test` runs cannot
+    /// couple through the filesystem"* — while leaving four others in this file
+    /// untouched, two of them added by that same commit. Reviewing the fix caught
+    /// the class the fix had named and not applied.
+    ///
+    /// It matters most for `a_reference_file_belongs_to_exactly_one_meter`, which
+    /// stores, renames and reloads a reference under one meter's name: a second
+    /// run interleaving with the rename does not fail cleanly, it fails as a
+    /// wrong verdict about which meter owns a file. `std::process::id` is the
+    /// right grain — the tasks within one run share the directory on purpose.
+    fn scratch_dir(purpose: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("smartme_{purpose}_{}", std::process::id()))
+    }
+
     fn config() -> PollConfig {
         PollConfig {
             interval: Duration::from_secs(5),
@@ -1278,7 +1311,7 @@ mod tests {
     /// index as `Good` — the defect, reproduced with the persistence removed.
     #[tokio::test]
     async fn the_monotonicity_reference_survives_a_restart() {
-        let dir = std::env::temp_dir().join("smartme_reference_restart_test");
+        let dir = scratch_dir("reference_restart");
         let _ = std::fs::create_dir_all(&dir);
         let meter = MeterId::new("garage");
         let _ = std::fs::remove_file(reference_path_for(&dir, &meter));
@@ -1382,7 +1415,7 @@ mod tests {
     /// since `x < NaN` is false for every x and the oracle goes quiet.
     #[test]
     fn an_unreadable_reference_is_absent_rather_than_fatal() {
-        let dir = std::env::temp_dir().join("smartme_reference_corrupt_test");
+        let dir = scratch_dir("reference_corrupt");
         let _ = std::fs::create_dir_all(&dir);
         let meter = MeterId::new("garage");
 
@@ -1539,7 +1572,7 @@ mod tests {
     /// coming back as `Some(4843.822)` for a meter that never wrote it.
     #[test]
     fn a_reference_file_belongs_to_exactly_one_meter() {
-        let dir = std::env::temp_dir().join("smartme_reference_identity_test");
+        let dir = scratch_dir("reference_identity");
         let _ = std::fs::create_dir_all(&dir);
 
         // DISTINCT PATHS. These three ids all collapsed to one file before.
@@ -1946,7 +1979,7 @@ mod tests {
     async fn run_persists_and_restores_the_reference_without_help_from_a_test() {
         use crate::app::supervisor::ConfigHandle;
 
-        let dir = std::env::temp_dir().join("smartme_run_persistence_test");
+        let dir = scratch_dir("run_persistence");
         let _ = std::fs::create_dir_all(&dir);
         let meter = MeterId::new("garage");
         let _ = std::fs::remove_file(reference_path_for(&dir, &meter));
@@ -2064,9 +2097,9 @@ mod tests {
                 // A directory unique to THIS test binary, so two concurrent
                 // `cargo test` runs cannot couple through the filesystem — which
                 // is the very thing this test asserts does not happen, and which
-                // a fixed path under /tmp reintroduced. `std::process::id` is
-                // enough: the tasks in one run share it deliberately.
-                std::env::temp_dir().join(format!("smartme_fleet_refs_{}", std::process::id())),
+                // a fixed path under /tmp reintroduced. See [`scratch_dir`],
+                // which is where that reasoning now lives for every test here.
+                scratch_dir("fleet_refs"),
             )));
         }
         drop(tx);
