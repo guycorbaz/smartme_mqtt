@@ -571,6 +571,12 @@ development_status:
   # it; and the per-process scratch dir applied to one path of six.
   # AC3 stays UNMET with [#69]. Each pass found less than the one before, which is
   # the only evidence available that this converges.
+  # DECIDED 2026-08-12, after FR14's withdrawal took away AC3's only identified
+  # subject: THE RULE STAYS. Correct by construction, while the guard it replaced
+  # asks the SOURCE whether a reading is trustworthy — the very question the oracle
+  # layer exists to answer instead. So AC3 is unmet by ACCEPTANCE, not pending
+  # anything, and nothing may describe it as met. [#69] stays open as the record;
+  # it closes the day an oracle first refuses a reading the source called good.
   2-3-the-oracle-layer-finished: done  # closed 2026-08-12; AC3 recorded UNMET [#69]
   # FR14 — does not exist at all today.
   # BLOCKED BY 2.3: physical bounds is a PER-METRIC oracle, and until 2.3 a verdict

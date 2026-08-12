@@ -361,7 +361,28 @@ exists for, and all three are fixed in `47e2d49`.
 **AC3 is the only criterion left open, and it is open by the rule rather than by omission.** No
 oracle yet produces a `Bad` on a reading the source called `Good`, so the new adoption rule and the
 one it replaced agree on every input that exists; a mutation swapping them back turns nothing red.
-Story 2.4's bounds oracle is its first subject, and the proof belongs there. Recorded, not ticked.
+Recorded, not ticked.
+
+**AMENDED 2026-08-12, twice in one day, and the second amendment is a decision rather than a
+correction.** This paragraph first named story 2.4's bounds oracle as AC3's first subject. FR14 was
+withdrawn that afternoon ([ADR 0033], [#72]) and story 2.4 with it, so AC3 lost the only subject
+anyone had identified. Guy then decided, on the choice that followed: **the rule stays.**
+
+It is kept because it is correct *by construction* and the guard it replaced is wrong by
+construction — `reading.value.quality != Quality::Bad` asks the SOURCE whether a reading is
+trustworthy, which is the question the oracle layer exists to answer instead. Reverting would
+restore a guard already known to be wrong for the oracles Epic 2 still owes, in exchange for a
+falsifiability it could only regain by being wrong first.
+
+**What is accepted, and it is not softened:** AC3 is unmet, it is no longer *pending* anything, and
+neither this file nor the code may describe it as met. The counter-argument stands on the record —
+an unfalsifiable rule is counted as protection while protecting nothing, which is exactly what
+`Verdict::latches()` was until this story's own review proved its branch could not change an
+answer. The treatment is the same: keep the mechanism, stop claiming it works. [#69] stays open as
+the standing record; it closes the day an oracle first refuses a reading the source called good.
+
+[ADR 0033]: ../../docs/adr/0033-fr14-is-withdrawn-physical-plausibility-is-not-the-bridge-s-to-judge.md
+[#72]: https://github.com/guycorbaz/smartme_mqtt/issues/72
 
 **What this story is worth beyond its code.** It was not planned — it is the output of a review —
 and its own review then found four criteria ticked that should not have been. Reviewing the fix
