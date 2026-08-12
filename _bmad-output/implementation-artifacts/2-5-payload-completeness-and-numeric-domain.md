@@ -274,3 +274,47 @@ published PDF. The overfull-box comparison is what sent me back to look at the p
 - `crates/smartme-bridge/tests/ignition_contract.rs`
 - `docs/manual/chapters/05-mqtt-sparkplug-contract.tex`
 - `docs/ignition-contract-runbook.md`
+
+### Review Findings — 2026-08-12
+
+Reviewed by the same session that implemented it, sequentially rather than in parallel layers —
+**the weak variant, and it is recorded as such.** What compensates a little: every finding below
+was established by RUNNING something, not by re-reading. Three findings, all patched here.
+
+- [x] [Review][Patch] **ADR 0031 reached the boundary and the wire, and stopped at the two
+  memories** [`app/poll_publish.rs:538`] — `reference_adoptable` read `published.meter()`, the worst
+  of all metrics, so **an unreadable POWER unit froze the energy yardstick**. Proved by running: an
+  index of 1000 read and converted perfectly never became the reference, and the genuine drop to
+  12.0 that followed published with `cause: None`. **FR15 defeated by the oracle's own
+  bookkeeping** — the exact failure story 2.3's review named for the replay case, re-introduced
+  through a different door by the very story whose subject is that metrics are independent. The
+  yardstick now follows the ENERGY metric.
+  `last_adoptable` had the same root cause with a smaller consequence: a reading with one
+  unreadable field was kept out of the republication buffer entirely, so a later silent cloud
+  republished an OLDER reading than the most recent one whose other metric was sound. Its rule is
+  now the one it always should have been — a reading is disqualified by a metric refused **while
+  holding a value**, since a refused metric whose value is `None` carries nothing to leak.
+- [x] [Review][Patch] **A null published at a GOOD quality** [`adapters/sparkplug_publisher.rs:650`]
+  — the `(_, None)` arm published the absence with whatever quality the verdict carried, and the
+  comment beside it called that "a second lock". Proved by running: `Null(Double)` at quality `192`,
+  which tells a consumer *this measurement is good, and it is nothing*. **A lock that publishes
+  "good" is not a lock.** Unreachable through `map_device`, which pairs every `None` with a fault —
+  which is exactly why it is degraded here rather than assumed away: the invariant lives in another
+  module. `ValueUnusable` is the honest cause, meaning precisely *not one usable number*.
+- [x] [Review][Patch] **Three of this story's four recorded falsifications had not been run**
+  — and this is the finding about method rather than code. The completion notes listed three
+  mutations; the code carried four `FALSIFIED 2026-08-12` notes. Only one had been played. The
+  other three — a cause pointed at its neighbour, the timestamp borrowing `ValueUnusable`,
+  `serde(default)` on `Device` — were run during this review and **all three held**. They were
+  nonetheless claims until they were run, which is the shape story 4.7's review found (*"a proof
+  cell that had inherited a mutation result from another chapter without being run"*), and the
+  repository's rule assumes the falsification happened.
+  **AC6 was therefore ticked wrongly**: it named the `Option`-replaced-by-a-sentinel mutation
+  explicitly and it had never been played. Played now — 10 compile errors, which is the assertion,
+  and the note lives next to the type rather than in this file.
+
+**What came back clean.** The per-field split at the boundary, the four causes and their narrowing
+of `ValueUnusable`, the contract guard firing before the bump, and the completeness verification
+all hold under mutation. Story 2.3's AC4 guarantee — the withheld number not republished a tick
+later — still passes after the `last_adoptable` rule changed, checked deliberately rather than
+assumed.

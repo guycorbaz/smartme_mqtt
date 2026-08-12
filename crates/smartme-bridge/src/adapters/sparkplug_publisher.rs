@@ -659,19 +659,31 @@ fn metrics_for(measurement: &Measurement, verdicts: Verdicts) -> Vec<Metric> {
     // value and stamped it with the energy's cause — a number the bridge had no
     // complaint about, withheld and then blamed.
     let build = |metric: Measured, name: &'static str, unit: &'static str, value: Option<f64>| {
-        let verdict = verdicts.for_metric(metric);
+        // AN ABSENT VALUE CANNOT BE GOOD, and saying it could was a defect.
+        //
+        // **Found by this story's own review, 2026-08-12.** The first version
+        // published the null with whatever quality the verdict carried, and called
+        // that "a second lock". It was not one: with a `Good` verdict it put
+        // `Null` on the wire at quality 192, which tells a consumer *this
+        // measurement is good, and it is nothing*. A lock that publishes "good" is
+        // not a lock.
+        //
+        // Unreachable today — `map_device` pairs every `None` with a fault, so the
+        // composition always refuses it — which is precisely why it is degraded
+        // here rather than asserted away: the invariant lives in another module,
+        // and this one must not depend on it silently. `ValueUnusable` is the
+        // honest cause, meaning exactly *not one usable number*, which is what an
+        // absent value is.
+        let verdict = match (verdicts.for_metric(metric), value) {
+            (v, None) if v.quality() != Quality::Bad => Verdict::bad(Cause::ValueUnusable),
+            (v, _) => v,
+        };
         let published = verdict.quality();
         let carried = match (published, value) {
             // `Bad` withholds the number. That is the point of `Bad` rather than
             // `Stale`: a consumer must not be handed a value it would compute
             // with, and the datatype is kept so the tag does not change shape.
             (Quality::Bad, _) => MetricValue::Null(DataType::Double),
-            // NO VALUE AT ALL — story 2.5. There is nothing to publish and, since
-            // `BAD_CARRIER` was removed, nothing to publish it WITH. Reaching here
-            // with a non-`Bad` verdict would mean the composition failed to refuse
-            // a metric the source could not read, so the null is a second lock
-            // rather than a fallback: the shape stays a `Double`, and the quality
-            // beside it is what a consumer reads.
             (_, None) => MetricValue::Null(DataType::Double),
             (_, Some(value)) => MetricValue::Double(value),
         };
@@ -780,6 +792,45 @@ mod tests {
                 metric.name
             );
         }
+    }
+
+    /// **An absent value is never published as good** (review of story 2.5,
+    /// 2026-08-12).
+    ///
+    /// The first version of the `None` arm published the null with the verdict's
+    /// own quality, so a `Good` verdict put `Null` on the wire at quality 192 —
+    /// *this measurement is good, and it is nothing*. Not reachable through
+    /// `map_device`, which pairs every absent field with a fault; asserted anyway,
+    /// because this module must not depend silently on an invariant that lives in
+    /// another one.
+    ///
+    /// FALSIFIED 2026-08-12: removing the degradation restores quality 192 beside
+    /// the null and the assertion goes red naming the code.
+    #[test]
+    fn an_absent_value_is_never_published_as_good() {
+        let mut m = measurement(Quality::Good);
+        m.power = None;
+        let metrics = super::metrics_for(&m, Verdicts::uniform(Verdict::good()));
+        let power = metrics
+            .iter()
+            .find(|x| x.name == super::METRIC_POWER)
+            .expect("power is published");
+        assert!(matches!(power.value, MetricValue::Null(_)));
+        assert_eq!(
+            power.quality_code,
+            Some(super::ignition_quality_code(super::Quality::Bad)),
+            "a null published at a GOOD quality tells a consumer the absence IS \
+             the measurement"
+        );
+        assert_eq!(
+            power.properties,
+            vec![(
+                super::METRIC_PROPERTY_CAUSE.to_string(),
+                "value-unusable".to_string()
+            )],
+            "and a non-good metric names its cause, here the one that means \
+             exactly `not one usable number`"
+        );
     }
 
     /// **Story 2.3 AC1, ON THE PUBLISHED METRICS** — the pair that ADR 0031

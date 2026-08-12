@@ -535,11 +535,43 @@ pub async fn step_once<S: Source + Send>(
     // verdict was publishable"* — and a reading published with a null value is
     // not publishable. The exemption's justification is an argument about the
     // yardstick and does not transfer.
-    let reference_adoptable = match published.meter().quality() {
-        Quality::Bad => published.meter().cause() == Some(Cause::CounterWentBackwards),
+    // **BOTH MEMORIES ARE PER-METRIC SINCE 2026-08-12**, and reading the METER
+    // verdict here was this story's own review finding. ADR 0031 had reached the
+    // adapter and the wire and stopped at the bookkeeping.
+    //
+    // THE YARDSTICK FOLLOWS THE ENERGY METRIC. It judges energy and nothing else,
+    // so a fault in the POWER field has no business freezing it. It did: an
+    // unreadable power unit made the meter verdict `Bad`, a perfectly readable
+    // index never became the reference, and a genuine counter reset afterwards was
+    // judged against a frozen one and published `Good` — FR15 defeated by the
+    // oracle's own bookkeeping, which is exactly the failure story 2.3's review
+    // named for the replay case.
+    let energy_verdict = published.for_metric(Measured::Energy);
+    let reference_adoptable = match energy_verdict.quality() {
+        Quality::Bad => energy_verdict.cause() == Some(Cause::CounterWentBackwards),
         _ => true,
     };
-    let last_adoptable = published.meter().quality() != Quality::Bad;
+    // THE REPUBLICATION BUFFER guards against one thing: a number the bridge
+    // REFUSED being handed over later, when the verdict that refused it is gone.
+    // So what disqualifies a reading is a metric that was refused **while holding
+    // a value** — a refused metric whose value is `None` carries nothing to leak,
+    // and since story 2.5 that is the ordinary shape of an unreadable field.
+    //
+    // Reading the meter verdict instead cost freshness for nothing: a reading with
+    // one unreadable field was kept out of `last` entirely, so the next silent
+    // cloud republished an OLDER reading than the most recent one whose other
+    // metric was sound.
+    let last_adoptable = match &tick {
+        Ok(reading) => Measured::ALL.iter().all(|metric| {
+            let refused = published.for_metric(*metric).quality() == Quality::Bad;
+            let carries_a_number = match metric {
+                Measured::Power => reading.value.power.is_some(),
+                Measured::Energy => reading.value.energy.is_some(),
+            };
+            !(refused && carries_a_number)
+        }),
+        Err(_) => false,
+    };
 
     if let Ok(reading) = &tick
         && reference_adoptable
@@ -1016,6 +1048,49 @@ mod tests {
         assert!(
             energy.properties.is_empty(),
             "and carries no cause — least of all its neighbour's"
+        );
+    }
+
+    /// **The yardstick follows the ENERGY metric, not the meter** — the review of
+    /// story 2.5 found it following the worst of both, on 2026-08-12.
+    ///
+    /// An unreadable power unit made the composed METER verdict `Bad`, so a
+    /// perfectly readable energy index never became the reference. A genuine
+    /// counter reset afterwards was then judged against a frozen index and could
+    /// publish `Good`: **FR15 defeated by the oracle's own bookkeeping**, which is
+    /// the failure story 2.3's review named for the replay case and this story
+    /// re-introduced through a different door — in the very change whose subject
+    /// is that metrics are independent.
+    ///
+    /// FALSIFIED 2026-08-12, run before the fix and again after: reading the
+    /// meter verdict instead of the energy metric's leaves the third assertion
+    /// with `cause: None`, the reset silently blessed.
+    #[tokio::test]
+    async fn a_readable_index_becomes_the_yardstick_even_when_its_neighbour_is_not() {
+        let mut broken_power = reading_with_unreadable_power(950);
+        broken_power.value.energy = Some(Kwh(1_000.0));
+        let mut after_reset = reading(Quality::Good, 950);
+        after_reset.value.energy = Some(Kwh(12.0));
+
+        let (_, sent) = drive_sequence(
+            FakeSource::new()
+                .then(Ok(broken_power))
+                .then(Ok(after_reset)),
+        )
+        .await;
+        assert_eq!(sent.len(), 2, "every tick publishes a verdict (ADR 0027)");
+
+        // The premise: the first reading's POWER is refused and its ENERGY is not.
+        assert_eq!(sent[0].published_for(Measured::Power), Quality::Bad);
+        assert_eq!(sent[0].published_for(Measured::Energy), Quality::Good);
+
+        // And the index it carried is the one the next reading is judged against.
+        assert_eq!(
+            sent[1].verdicts.for_metric(Measured::Energy).cause(),
+            Some(Cause::CounterWentBackwards),
+            "1000 kWh was read and converted perfectly; a fault in the POWER field \
+             must not stop it becoming the yardstick, or the drop to 12 is \
+             published as a valid measurement"
         );
     }
 

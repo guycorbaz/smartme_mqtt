@@ -120,6 +120,15 @@ pub struct Measurement {
     /// genuine `Double` marked `Stale` one tick later, through `last`, a path
     /// nobody had predicted. **A number that must never be published is safest
     /// when it cannot be constructed.**
+    ///
+    /// FALSIFIED 2026-08-12 — **and this note is late, which is the point.** Story
+    /// 2.5's AC6 named this mutation and its completion notes recorded it as
+    /// played; it had not been. Its own review caught that, and the mutation was
+    /// then run: replacing both `Option`s with the bare newtypes fails to compile
+    /// in **10 places**, which is the assertion — a sentinel cannot be restored
+    /// without the compiler naming every site that would carry it. Three other
+    /// falsifications in this story were written before being run for the same
+    /// reason; all three held, and all three were claims until they were run.
     pub power: Option<Kw>,
     /// Cumulative energy counter at `value_date`, or `None` — see [`Self::power`].
     pub energy: Option<Kwh>,
