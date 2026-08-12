@@ -1,6 +1,6 @@
 # Story 2.2: An energy counter that goes backwards is never published as a valid measurement
 
-Status: in-progress
+Status: done (2026-08-12) — **AC2's distinguishing proof owed to story 2.4**, [#69](https://github.com/guycorbaz/smartme_mqtt/issues/69)
 
 ## Story
 
@@ -218,4 +218,53 @@ third rule that is neither AC2's nor AC3's.
 
 **Deferred.**
 
-- [x] [Review][Defer] **A mid-stream unit change can produce a false `counter-went-backwards`** [`crates/smartme-bridge/src/core/oracle.rs:336`] — deferred, low likelihood. If smart-me reports `counter_reading` in `Wh` on one poll and `kWh` on the next, the same physical index reaches the oracle through two different conversion paths (`rescale`, `smartme_source.rs:300-315`) and can differ by an ULP. A downward ULP nulls a good reading for one tick. The "no tolerance band" decision is not being re-litigated; the unhandled input is the UNIT SWITCH, not jitter.
+- [x] [Review][Defer] **A mid-stream unit change can produce a false `counter-went-backwards`** [`crates/smartme-bridge/src/core/oracle.rs:336`] — deferred, low likelihood. **Still open at closure**, and it belongs to story 2.6's error taxonomy if it is ever taken up. If smart-me reports `counter_reading` in `Wh` on one poll and `kWh` on the next, the same physical index reaches the oracle through two different conversion paths (`rescale`, `smartme_source.rs:300-315`) and can differ by an ULP. A downward ULP nulls a good reading for one tick. The "no tolerance band" decision is not being re-litigated; the unhandled input is the UNIT SWITCH, not jitter.
+
+## Closure — 2026-08-12
+
+The review's worst finding against this story was that **the number it exists to withhold reached
+the wire one tick later**, as a real `Double` marked `Stale`. That is closed, and so is the
+adoption rule it turned out to share with every oracle Epic 2 still owes.
+
+| AC | state at closure | what closed it |
+|---|---|---|
+| AC1 | met | `energy_is_monotonic`, composed through `compose`, values published null |
+| AC2 | met **in code**; its distinguishing proof is owed to story 2.4 | story 2.3 AC3: adoption follows the COMPOSED verdict, with `CounterWentBackwards` exempted because AC3 below requires it. See the paragraph under this table — this is the one line that is not a plain "met" |
+| AC3 | met, and it is what forces AC2's exemption | the new index is adopted after a drop; the meter recovers rather than sticking `Bad` |
+| AC4 | met | strict `<`, no epsilon, the reasoning in the doc comment; not reopened by the review |
+| AC5 | met | one cause for reset/rollover/replacement, with the argument recorded |
+| AC6 | met | the third mutation — *letting the reference advance on a refused reading* — had been silently replaced by a different one; story 2.3 played it, as `the_reference_does_not_advance_on_a_refused_reading` |
+| AC7 | met | the guard built by story 2.1 caught this story's own vocabulary change before anything else did, which is the only kind of evidence a guard can offer |
+
+**AC2 is met by the code and unprovable by a test, and that distinction is the whole of [#69].**
+The reference now advances on the composed verdict rather than on the source's opinion, which is
+what AC2 asked in the first place. But no oracle today produces a `Bad` on a reading the SOURCE
+called `Good`, so on every input that exists the new rule and the one it replaced return the same
+answer — a mutation swapping them back turns nothing red. The rule is *prospective*, its first real
+subject is story 2.4's bounds oracle, and its proof belongs there rather than here. Recorded unmet
+against story 2.3's AC3 rather than re-recorded here; this story's own criterion is satisfied by
+what the code does.
+
+**The two review decisions that were not AC-shaped are both closed by story 2.3.** The republished
+number is closed by 2.3 AC4 (`last` holds only measurements whose composed verdict was publishable —
+which took two flags, not one, because the `CounterWentBackwards` exemption first let the withheld
+index straight back in). The amnesic reference is closed by 2.3 AC5: persisted per meter through
+`persist_atomic`, restored at startup, a failed load being absent rather than fatal.
+
+**The NaN patch closed by halves, and the second half is a refusal with a reason.** The reading is
+now refused when non-finite, falsified. The *reference* deliberately gets no guard: an explicit
+`!previous.is_finite() => good()` arm returns exactly what falling through already returns, since
+`x < NaN` is false. Writing it would have been an assertion that cannot fail, which this repository
+counts as worse than none.
+
+**What closing does not close.** [#67] — NFR6's residual: a consumer differencing the two VALID
+measurements either side of a refusal still gets a negative delta. AC3 mandates that behaviour, so
+it is no AC violation, and `prd.md` now carries it. It is settled at epic close, by amending the
+NFR's wording or by closing it on the wire — not by this story.
+
+**Still waiting on the real case.** `appart-est` froze on 2026-08-10 at 4926,766 kWh. FR15 has never
+been exercised outside a test, and the deployment that would exercise it is three contract versions
+behind.
+
+[#67]: https://github.com/guycorbaz/smartme_mqtt/issues/67
+[#69]: https://github.com/guycorbaz/smartme_mqtt/issues/69

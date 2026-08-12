@@ -1,6 +1,6 @@
 # Story 2.1: The oracle layer exists, and how verdicts compose is decided once
 
-Status: in-progress
+Status: done (2026-08-12) — **Task 3 recorded UNMET**, [#68](https://github.com/guycorbaz/smartme_mqtt/issues/68)
 
 ## Story
 
@@ -109,12 +109,20 @@ are migrated onto the layer with **no verdict changing**, proven by asserting th
 - [x] **Task 2 — Build the layer (AC1)**
   - [x] `core/oracle.rs`: the verdict type, the composition function, the registry an oracle joins
   - [x] Verify `arch_purity` covers the new module; break it deliberately and watch it fail
-- [x] **Task 3 — The cause channel (AC3)**
+- [ ] **Task 3 — The cause channel (AC3) — UNMET, [#68](https://github.com/guycorbaz/smartme_mqtt/issues/68)**
   - [x] Choose the property key and record why `Quality` cannot carry it
         (`tck-id-payloads-propertyset-quality-value-value` restricts it to 0/192/500, and ADR 0012
         already deviates)
-  - [x] Publish it on DDATA; decide and record whether the DBIRTH declares it
-  - [x] Read the norm before deciding the DBIRTH half — cite the `tck-id`, not prose
+  - [x] Publish it on DDATA
+  - [ ] **Decide and record whether the DBIRTH declares it — NOT DECIDED.** Ticked on 2026-08-10
+        while the completion notes deferred it to a tag-browser observation, which is the rule
+        `CLAUDE.md` opens the "specifications" section with. Untocked 2026-08-12 at closure.
+  - [x] Read the norm before deciding the DBIRTH half — cite the `tck-id`, not prose. Done during
+        the 2026-08-11 review, and it settles the legality half: a property present in DATA and
+        absent from BIRTH is legal (`Sparkplug_5_Operational_Behavior.adoc:862-864`,
+        `Sparkplug_6_Payloads.adoc:1448-1450`; the only property-level MUSTs are the two array-size
+        clauses and `tck-id-payloads-metric-propertyvalue-type-req`, satisfied unconditionally by
+        `encode.rs:273-310`). What Ignition *does* with such a property is the half that remains.
 - [x] **Task 4 — Migrate the three existing judgements (AC7)**
   - [x] Freshness, source `Bad`, ADR 0029's identity check
   - [x] Row-by-row equality of the `Policy::step` table before and after
@@ -346,3 +354,39 @@ position and are owed an ADR each; one of those also moves the wire contract.
 - [x] [Review][Defer] **`source-refused` is a generic string shared by a rejected credential and a wrong meter** [`crates/smartme-bridge/src/adapters/smartme_source.rs:191`] — deferred, belongs to story 2.6 (error taxonomy). An operator cannot tell NFR7 (wrong meter) from an expired credential, which is the reproach this story levels at `smartme_source.rs:261`.
 - [x] [Review][Defer] **A cold-start or newly-announced DBIRTH publishes a non-good quality with NO `Cause`** [`crates/smartme-bridge/src/adapters/sparkplug_publisher.rs:590-607`] — deferred, pre-existing path plus an owed measurement. `cold_start_metrics` bypasses `metrics_for`, so the invariant "a non-good metric names its cause" does not hold there, and no cause in the vocabulary means "never read yet". **Settled against the norm during review: adding a property in DATA that was absent from BIRTH is LEGAL** — the rebirth triggers at `Sparkplug_5_Operational_Behavior.adoc:862-864` concern metrics and aliases, not properties, and the only property-level MUSTs (`tck-id-payloads-propertyset-keys-array-size`, `-values-array-size`, `tck-id-payloads-metric-propertyvalue-type-req`) are satisfied unconditionally by `encode.rs:273-310`. What Ignition DOES with such a property is the Tier-3 measurement already owed in `sprint-status.yaml`.
 - [x] [Review][Defer] **"No opinion" and "I checked and it is fine" are the same value** [`crates/smartme-bridge/src/app/poll_publish.rs:357`] — deferred, harmless under worst-wins. There is no `Verdict::abstain()`, so any future rule needing "every oracle affirmed" (a coverage assertion, an operator page listing which oracles ran) cannot tell them apart after composition.
+
+## Closure — 2026-08-12
+
+The review sent this story back to `in-progress` on 2026-08-11 with AC4 and AC5 recorded UNMET and
+three of its four promised mechanisms wired to nothing. All three are now wired, and the closure is
+verified against the code rather than against the completion notes that made the claim the first
+time.
+
+| AC | state at closure | what closed it |
+|---|---|---|
+| AC1 | met | `core/oracle.rs` under `arch_purity`, falsified by a `tokio` import |
+| AC2 | met | the equal-severity tie the review found is closed by story 2.3 AC2 and [ADR 0032]: `compose` is a function of its inputs as a SET, permutation-tested, ties included |
+| AC3 | met **on the wire**, not only in the struct | `7b78928` added the encoding-loop coverage whose absence meant deleting the loop left the suite green |
+| AC4 | met on its letter | [ADR 0029] gained *"Identity latches; value degrades"*, naming itself the first latching case; the degrading half is attested by story 2.2's recovery test rather than by the stateless-fold tautology this file's own trap section predicted |
+| AC5 | met | the golden now pins WHICH QUALITY A CAUSE PRODUCES, the `Cause` property key, metric names and units, each version written out; `Cause::ALL` is a `successor` chain whose single `None` makes an appended variant a compile error |
+| AC6 | met | v3 → v4, and the mechanical grep instituted here caught its own first regression one story later |
+| AC7 | met | no oracle implemented; the 26 pre-2.1 assertions still pass verbatim |
+
+**AC4 closes on its letter and not on the stronger claim, and the difference is written where the
+claim was made.** The rule is *stated* in one place; it is *enforced* in two, and the second is
+inert. `latches()` is true only for `Cause::SourceRefused`, which `Policy::step` produces at exactly
+the two sites already returning `State::Failed` — so the composed-verdict latch branch cannot change
+an answer today. Story 2.3's review proved that by running it, and closed it by making
+`poll_publish.rs`'s comment and [ADR 0032] say so rather than by refactoring, which would have moved
+the table AC10 required preserved. The branch is a net for the first cause that latches without
+`Policy::step` knowing, not a mechanism doing work now.
+
+**Task 3 is recorded UNMET, and it is the only thing this story leaves open.** [#68]. The legality
+half is settled by the norm; the arbitration half cannot be taken before a measurement, and the
+measurement cannot be taken before the deployment moves — it is still `v0.4.0-rc2`, contract v3,
+while the code is at v6. Closing the story does not close the issue, and the issue is what carries
+it. This is the practice that let Epic 1 close honestly with two criteria in the open.
+
+[ADR 0029]: ../../docs/adr/0029-the-declared-serial-is-checked-against-the-one-smart-me-reports.md
+[ADR 0032]: ../../docs/adr/0032-at-equal-severity-a-latching-cause-outranks-a-degrading-one.md
+[#68]: https://github.com/guycorbaz/smartme_mqtt/issues/68

@@ -267,8 +267,8 @@ Thicken the skeleton's single FRESH→STALE transition into the full integrity g
 
 | # | story | status |
 | --- | --- | --- |
-| 2.1 | the oracle layer, and how verdicts compose | `in-progress` — reviewed, AC4/AC5 repaired; closing is a call to make |
-| 2.2 | energy-counter monotonicity (FR15, NFR6) | `in-progress` — same |
+| 2.1 | the oracle layer, and how verdicts compose | `done` (2026-08-12) — task 3 recorded UNMET, [#68](https://github.com/guycorbaz/smartme_mqtt/issues/68) |
+| 2.2 | energy-counter monotonicity (FR15, NFR6) | `done` (2026-08-12) — AC2's distinguishing proof owed to 2.4, [#69](https://github.com/guycorbaz/smartme_mqtt/issues/69) |
 | 2.3 | **the oracle layer finished** — per-metric verdicts, total order on ties, both memories on the composed verdict, the reference across restarts, the surfaces reading the wire | `review` |
 | 2.4 | physical bounds (FR14) | backlog |
 | 2.5 | payload completeness and numeric domain (FR16) | backlog |
@@ -279,7 +279,9 @@ Thicken the skeleton's single FRESH→STALE transition into the full integrity g
 
 **FR9 and NFR7 are NOT a story.** Serial-identity binding and its verification were delivered by [ADR 0029](../../docs/adr/0029-the-declared-serial-is-checked-against-the-one-smart-me-reports.md) on 2026-08-09, more strongly than the FR asked. They are owed a **verification at epic close**, not fresh work.
 
-**Two criteria stand recorded unmet, with issues** — the repository's practice rather than a tick: story 2.3 AC3 ([#69](https://github.com/guycorbaz/smartme_mqtt/issues/69)), whose adoption rule has no observable effect until 2.4 supplies the first oracle producing a `Bad` on a source-`Good` reading; and NFR6's residual ([#67](https://github.com/guycorbaz/smartme_mqtt/issues/67)), a negative delta between two valid measurements either side of a refusal, which AC3 of story 2.2 mandates and the NFR's letter does not admit.
+**Three criteria stand recorded unmet, with issues** — the repository's practice rather than a tick: story 2.3 AC3 ([#69](https://github.com/guycorbaz/smartme_mqtt/issues/69)), whose adoption rule has no observable effect until 2.4 supplies the first oracle producing a `Bad` on a source-`Good` reading; NFR6's residual ([#67](https://github.com/guycorbaz/smartme_mqtt/issues/67)), a negative delta between two valid measurements either side of a refusal, which AC3 of story 2.2 mandates and the NFR's letter does not admit; and story 2.1's task 3 ([#68](https://github.com/guycorbaz/smartme_mqtt/issues/68)), whether the DBIRTH declares the `Cause` property — ticked on 2026-08-10 while the decision sat unmade in a completion note, untocked at closure.
+
+**Stories 2.1 and 2.2 closed on 2026-08-12, and what closed them was story 2.3.** Their reviews sent them back on 2026-08-11 with four decisions rather than defects; 2.3 carried all four, and the closure was verified against the code rather than against the completion notes that had claimed the same properties once already. One caveat is recorded rather than smoothed: **story 2.1's AC4 closes on its letter and not on the stronger claim it was read as making.** The latch rule is *stated* in one place and *enforced* in two, the second inert — `latches()` is true only for `Cause::SourceRefused`, which `Policy::step` produces at exactly the two sites already returning `State::Failed`. Story 2.3's review proved the branch cannot change an answer today by running it, and closed it by making the code comment and [ADR 0032](../../docs/adr/0032-at-equal-severity-a-latching-cause-outranks-a-degrading-one.md) say so. It is a net for the first cause that latches without `Policy::step` knowing, not a mechanism doing work now.
 
 ### Epic 3: The Full Fleet — Multi-Meter Discovery & Per-Meter Isolation
 Grow from one meter to the author's actual 4-meter fleet on a single account: full discovery by name + serial, the real Sparkplug device topology (per-meter DBIRTH/DDEATH), and per-meter staleness isolation — one silent Kamstrup flips stale individually while the other three stay fresh. Delivers Journey 2 (A Meter Goes Silent) at fleet scale.

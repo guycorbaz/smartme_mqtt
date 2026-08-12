@@ -59,7 +59,7 @@
 #   Ignition contract test (human action required — stays backlog until Guy runs it).
 
 generated: 2026-07-25
-last_updated: 2026-08-11
+last_updated: 2026-08-12
 project: smartme_mqtt
 project_key: NOKEY
 tracking_system: file-system
@@ -421,7 +421,22 @@ development_status:
   # All three are FIXED, falsified, and green. What keeps the story open is the
   # decisions: per-metric verdicts, latching-wins-ties, and health surfaces reading
   # the composed verdict — story 2.3 below.
-  2-1-the-oracle-layer-and-how-verdicts-compose: in-progress
+  # CLOSED 2026-08-12, once story 2.3 had carried those decisions. AC2's tie hole is
+  # closed by ADR 0032 (compose is a function of its inputs as a SET, permutations
+  # included); AC4 and AC5 by the 2026-08-11 patches, verified in the code at closure
+  # rather than in the completion notes that first claimed them.
+  # AC4 closes ON ITS LETTER AND NOT ON THE STRONGER CLAIM: the latch rule is STATED
+  # in one place and ENFORCED in two, the second inert. `latches()` is true only for
+  # `SourceRefused`, which `Policy::step` produces at exactly the two sites already
+  # returning `Failed`, so the composed-verdict branch cannot change an answer today.
+  # Story 2.3's review proved that by running it; it stands as a net for the first
+  # cause that latches without `Policy::step` knowing, and the comment and ADR 0032
+  # now say so instead of claiming a working mechanism.
+  # TASK 3 IS RECORDED UNMET WITH [#68] and is the only thing this story leaves open:
+  # whether the DBIRTH declares the `Cause` property. The legality half is settled by
+  # the norm; the arbitration half needs a measurement, and the measurement needs a
+  # deployment — still v0.4.0-rc2, contract v3, against code at v6.
+  2-1-the-oracle-layer-and-how-verdicts-compose: done  # closed 2026-08-12; task 3 recorded UNMET [#68]
   # FR15, NFR6 — the one with a date on it. See the epic note above.
   # REVIEWED 2026-08-11. NOT `done` — AC2 is UNMET and AC6 partially so, and the
   # worst finding is that THE NUMBER THIS STORY REFUSES TO PUBLISH REACHES THE WIRE
@@ -439,7 +454,20 @@ development_status:
   # NFR6's residual is an accepted limitation and needs an issue.
   # Fixed and falsified today: a non-finite index is refused rather than blessed.
   # The rest lands in story 2.3, which refactors the code they live in.
-  2-2-energy-counter-monotonicity: in-progress
+  # CLOSED 2026-08-12. Story 2.3 landed all of it: AC4 stopped `last` adopting a
+  # refused reading (two flags, not one — the CounterWentBackwards exemption first
+  # let the withheld index straight back in), AC5 persisted the reference per meter,
+  # and AC9 played AC6's third mutation, which had been silently replaced.
+  # AC2 IS MET IN CODE AND UNPROVABLE BY A TEST, which is the whole of [#69]: the
+  # reference now advances on the composed verdict, but no oracle yet produces a
+  # `Bad` on a reading the SOURCE called `Good`, so swapping the new rule back for
+  # the old turns nothing red. Its first subject is story 2.4's bounds oracle.
+  # The NaN patch closed by halves, and the second half is a refusal with a reason:
+  # the reference gets no guard because an explicit `!is_finite => good()` arm
+  # returns what falling through already returns. An assertion that cannot fail is
+  # worse than none.
+  # [#67] stays open — NFR6's residual, settled at epic close, not by this story.
+  2-2-energy-counter-monotonicity: done  # closed 2026-08-12; AC2 proof owed to story 2.4 [#69]
   # ADDED 2026-08-11 by the review of stories 2.1 and 2.2. It exists because four
   # decisions taken that day are DESIGN work, not patches, and all four finish the
   # oracle layer rather than extending it — so they run FIRST, before 2.4, which
