@@ -1,6 +1,6 @@
 # Story 2.5: A field the bridge could not read degrades that field, names it, and substitutes nothing
 
-Status: review
+Status: done (2026-08-12)
 
 ## Story
 
@@ -318,3 +318,25 @@ of `ValueUnusable`, the contract guard firing before the bump, and the completen
 all hold under mutation. Story 2.3's AC4 guarantee — the withheld number not republished a tick
 later — still passes after the `last_adoptable` rule changed, checked deliberately rather than
 assumed.
+
+## Closure — 2026-08-12
+
+Closed after its review, whose three findings are patched and falsified above. All eight ACs met.
+
+**AC6 was ticked wrongly at implementation and is now met for real.** It named three mutations and
+one of them — the `Option` replaced by a sentinel — had never been played. That is the criterion
+this story leaves as its lesson rather than as a debt: the completion notes claimed three
+falsifications, the code carried four notes, and only one had happened.
+
+**The recurring shape of this epic changes form here, and it is worth carrying to the
+retrospective.** Stories 2.1 to 2.3 kept testing a property one layer above where it lived. Story
+2.5 tested at the right layer — the wire assertion exists and the ADR 0031 mutation goes red — and
+failed one level further out instead: **the evidence recorded for the tests was not itself
+checked.** A falsification note is a claim about the past, and nothing in the process verified it.
+That is a gap a mutation cannot close, because the mutation is the thing being claimed.
+
+**What the review could not do, and it is stated rather than glossed:** it was run by the session
+that wrote the code. It found what such a review can find — claims that do not match what happened,
+and defects a mutation exposes — and it cannot be counted as an independent one. Story 2.6 is
+where an independent pass would be worth arranging, since 2.5's changes to the memories are now
+load-bearing for every oracle that follows.

@@ -645,7 +645,21 @@ development_status:
   # MIGHT close [#69], and might not — it depends on whether the adapter stops
   # setting `Measurement::quality` and reports through judgements instead. Recorded
   # as a possible consequence, not a promise; not worth contorting the design for.
-  2-5-payload-completeness-and-numeric-domain: review  # implemented 2026-08-12; CONTRACT_VERSION 6 -> 7, additive
+  # CLOSED 2026-08-12 after review. Three findings, all patched and falsified:
+  #  - THE YARDSTICK FOLLOWED THE WORST METRIC, so an unreadable power unit froze
+  #    the energy reference and a genuine counter reset published `cause: None`.
+  #    FR15 defeated by the oracle's own bookkeeping — the failure story 2.3's
+  #    review named for the replay case, re-introduced through another door by the
+  #    story whose subject is that metrics are independent. ADR 0031 had reached
+  #    the adapter and the wire and stopped at the two memories.
+  #  - a null published at quality 192: "this measurement is good, and it is
+  #    nothing". A lock that publishes "good" is not a lock.
+  #  - THREE OF FOUR RECORDED FALSIFICATIONS HAD NOT BEEN RUN. All three held when
+  #    played, and were claims until then. AC6 was ticked wrongly.
+  # THE LESSON FOR THE EPIC 2 RETROSPECTIVE: 2.1-2.3 tested a property one layer
+  # above where it lived; 2.5 tested at the right layer and failed one level
+  # further out — the EVIDENCE recorded for the tests was not itself checked.
+  2-5-payload-completeness-and-numeric-domain: done  # CONTRACT_VERSION 6 -> 7, additive
   # FR4, FR5, NFR1 — transient retries with bounded backoff, permanent stops and is
   # named. Absorbs the parked `429 Retry-After` item.
   2-6-error-taxonomy-and-bounded-backoff: backlog
