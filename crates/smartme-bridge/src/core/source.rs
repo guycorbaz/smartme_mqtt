@@ -12,6 +12,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
 
+use crate::core::oracle::{Cause, Measured};
 use crate::domain::{Measurement, MeterId, UtcMillis};
 
 /// One per-meter reading as delivered by a source: the measured value and the two
@@ -19,13 +20,53 @@ use crate::domain::{Measurement, MeterId, UtcMillis};
 /// ADR 0004).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reading {
-    /// The mapped measurement (units already canonical; a failed unit conversion
-    /// arrives as `Quality::Bad` inside — fail-closed, Story 1.7 — never a guess).
+    /// The mapped measurement (units already canonical). A field the source could
+    /// not give us usably arrives as `None`, never as a substituted number —
+    /// story 2.5, FR16's *"never a substituted value"*.
     pub value: Measurement,
     /// HTTP response `Date` header, if present and parseable. `None` means the
     /// oracle input is missing — the source never invents a timestamp; the state
     /// machine draws the conservative conclusion.
     pub http_date: Option<UtcMillis>,
+    /// What the source could not read, per field.
+    pub faults: SourceFaults,
+}
+
+/// What a source could not read, said once per field rather than collapsed into
+/// one verdict for the whole reading.
+///
+/// **Story 2.5, and it is ADR 0031 reaching the boundary.** A verdict belongs to a
+/// metric; until this type existed, `map_device` set one `Quality::Bad` for the
+/// whole reading, so an unrecognised unit on `ActivePower` degraded a cumulative
+/// energy index that had been read and converted perfectly. The oracle layer had
+/// been fixed for that in story 2.3 and the adapter had not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SourceFaults {
+    /// A fault that makes the WHOLE reading unusable: no timestamp of its own, or
+    /// not one usable number in it. Judged before the freshness guards, as it
+    /// always was.
+    pub reading: Option<Cause>,
+    /// Why the power field is absent, when it is.
+    pub power: Option<Cause>,
+    /// Why the energy field is absent, when it is.
+    pub energy: Option<Cause>,
+}
+
+impl SourceFaults {
+    /// Nothing was wrong.
+    pub const NONE: SourceFaults = SourceFaults {
+        reading: None,
+        power: None,
+        energy: None,
+    };
+
+    /// The fault for one metric, if any.
+    pub fn of(&self, metric: Measured) -> Option<Cause> {
+        match metric {
+            Measured::Power => self.power,
+            Measured::Energy => self.energy,
+        }
+    }
 }
 
 impl Reading {
@@ -201,12 +242,13 @@ mod tests {
             value: Measurement {
                 meter: MeterId::new("m1"),
                 serial: Serial::new("S-1"),
-                power: Kw(power),
-                energy: Kwh(1.0),
+                power: Some(Kw(power)),
+                energy: Some(Kwh(1.0)),
                 value_date: UtcMillis(value_date),
                 quality: Quality::Good,
             },
             http_date: http_date.map(UtcMillis),
+            faults: SourceFaults::NONE,
         }
     }
 

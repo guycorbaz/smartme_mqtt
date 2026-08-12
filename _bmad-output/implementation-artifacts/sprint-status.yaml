@@ -645,7 +645,7 @@ development_status:
   # MIGHT close [#69], and might not — it depends on whether the adapter stops
   # setting `Measurement::quality` and reports through judgements instead. Recorded
   # as a possible consequence, not a promise; not worth contorting the design for.
-  2-5-payload-completeness-and-numeric-domain: ready-for-dev
+  2-5-payload-completeness-and-numeric-domain: review  # implemented 2026-08-12; CONTRACT_VERSION 6 -> 7, additive
   # FR4, FR5, NFR1 — transient retries with bounded backoff, permanent stops and is
   # named. Absorbs the parked `429 Retry-After` item.
   2-6-error-taxonomy-and-bounded-backoff: backlog

@@ -93,8 +93,8 @@ mod tests {
         Measurement {
             meter: MeterId::new("m1"),
             serial: Serial::new("S-1"),
-            power: Kw(1.0),
-            energy: Kwh(2.0),
+            power: Some(Kw(1.0)),
+            energy: Some(Kwh(2.0)),
             value_date: UtcMillis(1_000),
             quality,
         }

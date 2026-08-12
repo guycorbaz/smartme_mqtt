@@ -133,8 +133,8 @@ fn reading(power: f64, energy: f64, quality: Quality, now: UtcMillis) -> MeterUp
         Measurement {
             meter: MeterId::new(METER),
             serial: Serial::new(SERIAL),
-            power: Kw(power),
-            energy: Kwh(energy),
+            power: Some(Kw(power)),
+            energy: Some(Kwh(energy)),
             value_date: now,
             quality,
         },

@@ -99,12 +99,13 @@ fn reading_with(http_date: Option<UtcMillis>) -> Reading {
         value: Measurement {
             meter: MeterId::new("METER-A"),
             serial: Serial::new("30000001"),
-            power: Kw(0.018),
-            energy: Kwh(4_843.822),
+            power: Some(Kw(0.018)),
+            energy: Some(Kwh(4_843.822)),
             value_date: captured_value_date(),
             quality: Quality::Good,
         },
         http_date,
+        faults: smartme_bridge::core::SourceFaults::NONE,
     }
 }
 

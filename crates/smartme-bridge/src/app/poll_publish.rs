@@ -410,30 +410,55 @@ pub async fn step_once<S: Source + Send>(
     // 2.3 a backwards counter published `Power = null` labelled
     // `counter-went-backwards`, which withheld a perfectly current number and
     // then blamed it for a fault in its neighbour.
+    // WHAT THE SOURCE COULD NOT READ, PER FIELD (story 2.5). The adapter no longer
+    // sets one `Quality::Bad` for the whole reading when a single field fails; it
+    // says which field and why, and those judgements compose like every other
+    // oracle's. This is the first producer of a `Bad` on a metric while the
+    // READING-level quality stays `Good`, which is what makes the adoption rule of
+    // story 2.3 AC3 observable at last ([#69]).
+    let source_faults = match &tick {
+        Ok(reading) => reading.faults,
+        // A fetch that did not complete has no fields to fault.
+        Err(_) => crate::core::source::SourceFaults::NONE,
+    };
     let judgements = [
         // Freshness and identity judge the whole response: a reading that is too
         // old is too old in both its numbers.
         Judgement::about_reading(freshness),
         Judgement::about(
+            Measured::Power,
+            match source_faults.of(Measured::Power) {
+                Some(cause) => Verdict::bad(cause),
+                None => Verdict::good(),
+            },
+        ),
+        Judgement::about(
+            Measured::Energy,
+            match source_faults.of(Measured::Energy) {
+                Some(cause) => Verdict::bad(cause),
+                None => Verdict::good(),
+            },
+        ),
+        Judgement::about(
             Measured::Energy,
             match &tick {
-                // THE SOURCE'S OWN REFUSAL IS RESPECTED FIRST (deferred patch
-                // from the 2026-08-11 review). `map_device` substitutes
-                // `BAD_CARRIER = 0.0` when it cannot convert a unit and marks the
-                // value `Bad`; handing that documented non-value to an ordering
-                // oracle asks it to compare a number nobody claimed was a
-                // measurement. It duly answered `counter-went-backwards`, and the
-                // wire only read `value-unusable` because the tie-break happened
-                // to favour it — a right answer for a reason no caller should
-                // depend on ([ADR 0032] says so in as many words).
+                // NO INDEX, NOTHING TO ORDER. A reading whose energy field the
+                // source could not give us is already refused by its own
+                // judgement above; asking an ordering oracle about an absent
+                // number would answer a question nobody posed.
                 //
-                // The published cause is the operator's only diagnosis: sending
-                // them to hunt a meter reset when the fault is an API unit
-                // contract change is the wrong place at the wrong hour.
-                //
-                // [ADR 0032]: ../../../docs/adr/0032-at-equal-severity-a-latching-cause-outranks-a-degrading-one.md
-                Ok(reading) if reading.value.quality == Quality::Bad => Verdict::good(),
-                Ok(reading) => energy_is_monotonic(*energy_reference, reading.value.energy),
+                // **The guard this replaces was a workaround for the collapse
+                // story 2.5 removed.** It read `reading.value.quality ==
+                // Quality::Bad` and existed so that `BAD_CARRIER = 0.0` — the
+                // substituted non-value a failed conversion used to produce —
+                // was never handed to an ordering oracle, which duly answered
+                // `counter-went-backwards` about a number nobody claimed was a
+                // measurement. There is no such number any more: absence is
+                // `None`, and `None` is not comparable.
+                Ok(reading) => match reading.value.energy {
+                    Some(energy) => energy_is_monotonic(*energy_reference, energy),
+                    None => Verdict::good(),
+                },
                 // No new index to compare, and the freshness verdict already
                 // covers the silence.
                 Err(_) => Verdict::good(),
@@ -519,7 +544,11 @@ pub async fn step_once<S: Source + Send>(
     if let Ok(reading) = &tick
         && reference_adoptable
     {
-        *energy_reference = Some(reading.value.energy);
+        // Only a reading that HAS an index can become the yardstick. Absence is
+        // not a lower reading, and must not be mistaken for one.
+        if let Some(energy) = reading.value.energy {
+            *energy_reference = Some(energy);
+        }
     }
 
     // EVERY TICK PUBLISHES A VERDICT, or there is nothing to publish one about
@@ -896,19 +925,104 @@ mod tests {
             value: Measurement {
                 meter: MeterId::new("garage"),
                 serial: Serial::new("30000001"),
-                power: Kw(0.018),
-                energy: Kwh(4_843.822),
+                power: Some(Kw(0.018)),
+                energy: Some(Kwh(4_843.822)),
                 value_date: UtcMillis(BASE),
                 quality,
             },
             http_date: Some(UtcMillis(BASE + age_ms)),
+            faults: crate::core::source::SourceFaults::NONE,
         }
+    }
+
+    /// A reading whose POWER field the source could not read, its energy index
+    /// perfectly sound. The shape story 2.5 exists for.
+    fn reading_with_unreadable_power(age_ms: i64) -> Reading {
+        let mut r = reading(Quality::Good, age_ms);
+        r.value.power = None;
+        r.faults = crate::core::source::SourceFaults {
+            reading: None,
+            power: Some(Cause::UnitNotRecognised),
+            energy: None,
+        };
+        r
+    }
+
+    /// **Story 2.5 AC1, FROM THE SOURCE TO THE PUBLISHED METRICS.**
+    ///
+    /// A field the source could not read degrades that field and leaves its
+    /// neighbour alone — asserted where a consumer would see it, not on the
+    /// in-process verdict. **The story names this trap and story 2.3's review
+    /// found it for real one layer up**: every test reaching `metrics_for` handed
+    /// it a `Verdicts::uniform`, where the old and new code agree on every output,
+    /// so reverting the whole of ADR 0031 left the suite green.
+    ///
+    /// FALSIFIED 2026-08-12, three mutations, each red on its own assertion:
+    /// scoping the adapter's fault to the READING instead of the metric
+    /// (`Judgement::about_reading`) — the `Energy` value assertion goes red, the
+    /// index nulled for a fault in its neighbour, which is the pre-2.5 wire;
+    /// restoring `Quality::Bad` for a single failed field in `map_device` — same;
+    /// making `metrics_for` read `verdicts.meter()` — same.
+    #[tokio::test]
+    async fn an_unreadable_field_is_refused_alone_all_the_way_to_the_wire() {
+        let (_, sent) =
+            drive_sequence(FakeSource::new().then(Ok(reading_with_unreadable_power(950)))).await;
+        assert_eq!(sent.len(), 1);
+
+        // THE CORE composed it per metric.
+        assert_eq!(sent[0].published_for(Measured::Power), Quality::Bad);
+        assert_eq!(
+            sent[0].verdicts.for_metric(Measured::Power).cause(),
+            Some(Cause::UnitNotRecognised),
+            "the operator is sent to smart-me's unit contract, not to a meter"
+        );
+        assert_eq!(
+            sent[0].published_for(Measured::Energy),
+            Quality::Good,
+            "the energy index was read and converted perfectly; degrading it for \
+             a fault in its neighbour is exactly what ADR 0031 removed downstream \
+             and story 2.5 removes here"
+        );
+
+        // AND THE WIRE SAYS THE SAME THING. This is the half story 2.3's review
+        // found missing.
+        let metrics = crate::adapters::sparkplug_publisher::metrics_for_test(
+            &sent[0].measurement,
+            sent[0].verdicts,
+        );
+        let power = metrics
+            .iter()
+            .find(|m| m.name == "Power")
+            .expect("power is published");
+        let energy = metrics
+            .iter()
+            .find(|m| m.name == "Energy")
+            .expect("energy is published");
+        assert!(
+            matches!(power.value, sparkplug_b::model::MetricValue::Null(_)),
+            "a refused field withholds its number — and there is no substituted \
+             one left to publish. Got {:?}",
+            power.value
+        );
+        assert_eq!(
+            power.properties,
+            vec![("Cause".to_string(), "unit-not-recognised".to_string())]
+        );
+        assert!(
+            matches!(energy.value, sparkplug_b::model::MetricValue::Double(v) if v == 4_843.822),
+            "the sound index reaches the consumer at full value. Got {:?}",
+            energy.value
+        );
+        assert!(
+            energy.properties.is_empty(),
+            "and carries no cause — least of all its neighbour's"
+        );
     }
 
     /// A reading with a chosen energy index, for the monotonicity tests.
     fn reading_with_energy(quality: Quality, age_ms: i64, energy: f64) -> Reading {
         let mut r = reading(quality, age_ms);
-        r.value.energy = Kwh(energy);
+        r.value.energy = Some(Kwh(energy));
         r
     }
 
@@ -1283,7 +1397,7 @@ mod tests {
         );
         assert_eq!(
             sent[2].measurement.energy,
-            Kwh(4_843.822),
+            Some(Kwh(4_843.822)),
             "the republished value must be the last reading the bridge ACCEPTED. \
              Republishing the refused one hands over 0.0 as a real Double under a \
              `Stale` flag, and a consumer differencing it gets a delta of \
@@ -1540,7 +1654,7 @@ mod tests {
         );
         assert_eq!(
             sent[2].measurement.energy,
-            Kwh(4_843.822),
+            Some(Kwh(4_843.822)),
             "the republished value must be the last reading the bridge ACCEPTED. \
              Republishing the refused index hands over the very number withheld \
              one tick earlier, under a cause about the network — and the verdict \

@@ -109,10 +109,20 @@ pub struct Measurement {
     pub meter: MeterId,
     /// Physical device serial reported with the reading.
     pub serial: Serial,
-    /// Active power at `value_date`.
-    pub power: Kw,
-    /// Cumulative energy counter at `value_date`.
-    pub energy: Kwh,
+    /// Active power at `value_date`, or `None` when the source gave us nothing
+    /// usable for it.
+    ///
+    /// **`Option` since story 2.5, and the reason is FR16's own words: *"never a
+    /// substituted value"*.** Until then a failed unit conversion put
+    /// `BAD_CARRIER = 0.0` here and marked the reading `Bad`, on the reasoning
+    /// that a `Bad` metric is nulled before it reaches the wire. That held for
+    /// exactly one story: story 2.3's review found the sentinel republished as a
+    /// genuine `Double` marked `Stale` one tick later, through `last`, a path
+    /// nobody had predicted. **A number that must never be published is safest
+    /// when it cannot be constructed.**
+    pub power: Option<Kw>,
+    /// Cumulative energy counter at `value_date`, or `None` — see [`Self::power`].
+    pub energy: Option<Kwh>,
     /// When the meter says the values were true (source timestamp, UTC).
     pub value_date: UtcMillis,
     /// Explicit quality decision for this reading.
@@ -162,13 +172,13 @@ mod tests {
         let m = Measurement {
             meter: MeterId::new("garage"),
             serial: Serial::new("S-123"),
-            power: Kw(1.2),
-            energy: Kwh(34.5),
+            power: Some(Kw(1.2)),
+            energy: Some(Kwh(34.5)),
             value_date: UtcMillis(1_700_000_000_000),
             quality: Quality::Good,
         };
-        assert_eq!(m.power, Kw(1.2));
-        assert_eq!(m.energy, Kwh(34.5));
+        assert_eq!(m.power, Some(Kw(1.2)));
+        assert_eq!(m.energy, Some(Kwh(34.5)));
         assert_eq!(m.clone(), m);
     }
 }

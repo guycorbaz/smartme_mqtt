@@ -117,6 +117,54 @@ const GOLDEN_CAUSES_V4: CauseGolden = &[
     ("not-revalidated", false, Quality::Stale),
 ];
 
+/// The quality codes, as of contract v7. Its own copy, again: a golden is a
+/// historical record, and sharing one array between two versions means editing v6
+/// retroactively rewrites what v6 attested to.
+const GOLDEN_QUALITY_V7: QualityGolden = &[
+    (Quality::Good, 192),
+    (Quality::Stale, 0x8000_0000 | 516),
+    (Quality::Bad, 0x8000_0000 | 512),
+];
+
+/// The cause vocabulary, as of contract v7: v6 plus the four story 2.5 added.
+///
+/// **Additive.** Nothing a v6 consumer understood changed meaning; four strings
+/// joined the vocabulary. What they replace is not a cause but an ABSENCE of one —
+/// `value-unusable` used to be published for an unrecognised unit, a non-finite
+/// number, an arithmetic overflow AND an unparseable timestamp, four faults
+/// repaired in four different places under one word that named no field.
+///
+/// `value-unusable` survives with its meaning narrowed to exactly one case: not
+/// one usable number in the whole reading. A v6 consumer keyed on it still sees it,
+/// less often and more precisely.
+const GOLDEN_CAUSES_V7: CauseGolden = &[
+    ("source-unreachable", false, Quality::Stale),
+    ("source-refused", true, Quality::Bad),
+    ("host-clock-unsynced", false, Quality::Stale),
+    ("no-freshness-proof", false, Quality::Stale),
+    ("source-clock-implausible", false, Quality::Stale),
+    ("timestamps-disagree", false, Quality::Stale),
+    ("reading-too-old", false, Quality::Stale),
+    ("value-unusable", false, Quality::Bad),
+    ("source-marked-stale", false, Quality::Stale),
+    ("not-revalidated", false, Quality::Stale),
+    ("counter-went-backwards", false, Quality::Bad),
+    ("unit-not-recognised", false, Quality::Bad),
+    ("value-not-finite", false, Quality::Bad),
+    ("value-overflowed", false, Quality::Bad),
+    ("source-timestamp-unparseable", false, Quality::Bad),
+];
+
+/// The names and units, as of v7. Unchanged, and its own copy.
+const GOLDEN_NAMES_V7: NameGolden = &[
+    ("metric.power", "Power"),
+    ("metric.energy", "Energy"),
+    ("metric.rebirth", "Node Control/Rebirth"),
+    ("unit.power", "kW"),
+    ("unit.energy", "kWh"),
+    ("property.cause", "Cause"),
+];
+
 /// The quality codes, as of contract v6. Its own copy — see [`GOLDEN_QUALITY_V5`].
 const GOLDEN_QUALITY_V6: QualityGolden = &[
     (Quality::Good, 192),
@@ -229,6 +277,11 @@ struct Golden {
 /// golden is what the `None` arm refuses.
 fn golden_for(version: i64) -> Option<Golden> {
     match version {
+        7 => Some(Golden {
+            quality: GOLDEN_QUALITY_V7,
+            causes: GOLDEN_CAUSES_V7,
+            names: GOLDEN_NAMES_V7,
+        }),
         6 => Some(Golden {
             quality: GOLDEN_QUALITY_V6,
             causes: GOLDEN_CAUSES_V6,

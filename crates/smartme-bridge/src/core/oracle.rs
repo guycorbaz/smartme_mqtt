@@ -131,6 +131,37 @@ pub enum Cause {
     /// re-serialised on purpose. Publishing three causes would claim a
     /// discrimination we cannot make.
     CounterWentBackwards,
+    /// The unit the source attached to a value is not one the bridge converts.
+    ///
+    /// **The API's contract moved under us**, which is a different fault from a
+    /// number we cannot use: it is repaired by reading smart-me's documentation,
+    /// not by looking at a meter. Units are matched EXACTLY on purpose — a casing
+    /// drift like `"KW"` is a contract change and must surface, never be absorbed.
+    UnitNotRecognised,
+    /// The number itself is not finite: a `NaN` or an infinity arrived where a
+    /// measurement was owed.
+    ///
+    /// Distinct from [`Cause::UnitNotRecognised`] because it sends an operator to
+    /// the device or the cloud rather than to an integration contract, and
+    /// distinct from [`Cause::ValueOverflowed`] because nothing we did produced
+    /// it.
+    ValueNotFinite,
+    /// The unit conversion overflowed: a finite input became non-finite after the
+    /// rescale, which is arithmetic of ours rather than a fault of theirs.
+    ///
+    /// Reachable through the mega-unit path, where the value is multiplied by a
+    /// thousand. Naming it separately is what stops a bridge defect being reported
+    /// as a device defect.
+    ValueOverflowed,
+    /// The source's `ValueDate` could not be parsed, so the reading carries no
+    /// timestamp of its own.
+    ///
+    /// **It degrades freshness, not a value** — the numbers may be perfect and we
+    /// simply cannot say when they were true. Kept distinct from
+    /// [`Cause::NoFreshnessProof`], which is the ABSENT `Date` header: one is the
+    /// meter's clock, the other the cloud's, and they are repaired in different
+    /// places.
+    SourceTimestampUnparseable,
 }
 
 impl Cause {
@@ -171,6 +202,10 @@ impl Cause {
         Cause::SourceMarkedStale,
         Cause::NotRevalidated,
         Cause::CounterWentBackwards,
+        Cause::UnitNotRecognised,
+        Cause::ValueNotFinite,
+        Cause::ValueOverflowed,
+        Cause::SourceTimestampUnparseable,
     ];
 
     /// The next cause in [`Cause::ALL`]'s order, or `None` for the last one.
@@ -205,10 +240,14 @@ impl Cause {
             Cause::ValueUnusable => Some(Cause::SourceMarkedStale),
             Cause::SourceMarkedStale => Some(Cause::NotRevalidated),
             Cause::NotRevalidated => Some(Cause::CounterWentBackwards),
+            Cause::CounterWentBackwards => Some(Cause::UnitNotRecognised),
+            Cause::UnitNotRecognised => Some(Cause::ValueNotFinite),
+            Cause::ValueNotFinite => Some(Cause::ValueOverflowed),
+            Cause::ValueOverflowed => Some(Cause::SourceTimestampUnparseable),
             // The end of the chain. A new cause appended to `ALL` replaces this
             // arm's `None` with a `Some`, which is the edit the old positional
             // `discriminant` never demanded.
-            Cause::CounterWentBackwards => None,
+            Cause::SourceTimestampUnparseable => None,
         }
     }
 
@@ -265,6 +304,13 @@ impl Cause {
             Cause::SourceRefused => Quality::Bad,
             Cause::ValueUnusable => Quality::Bad,
             Cause::CounterWentBackwards => Quality::Bad,
+            // All four refuse a value or its timestamp: `Bad`, never `Stale`.
+            // `Stale` says "old but real"; none of these produced a number a
+            // consumer may difference or plot.
+            Cause::UnitNotRecognised => Quality::Bad,
+            Cause::ValueNotFinite => Quality::Bad,
+            Cause::ValueOverflowed => Quality::Bad,
+            Cause::SourceTimestampUnparseable => Quality::Bad,
             // Freshness refusals: the value was true, and may be old. The
             // difference from the three above is the whole reason a consumer is
             // told which of the two it is holding.
@@ -293,6 +339,10 @@ impl Cause {
             Cause::SourceMarkedStale => "source-marked-stale",
             Cause::NotRevalidated => "not-revalidated",
             Cause::CounterWentBackwards => "counter-went-backwards",
+            Cause::UnitNotRecognised => "unit-not-recognised",
+            Cause::ValueNotFinite => "value-not-finite",
+            Cause::ValueOverflowed => "value-overflowed",
+            Cause::SourceTimestampUnparseable => "source-timestamp-unparseable",
         }
     }
 

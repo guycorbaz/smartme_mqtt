@@ -123,7 +123,7 @@ use crate::domain::{Measurement, Serial, UtcMillis};
 /// vocabulary changed size (11 live, 10 in the v4 golden) without
 /// CONTRACT_VERSION moving"* — which is the first time that test caught a real
 /// change rather than a mutation written to try it.
-pub const CONTRACT_VERSION: i64 = 6;
+pub const CONTRACT_VERSION: i64 = 7;
 
 /// The quality code this bridge publishes for `quality`.
 ///
@@ -637,6 +637,20 @@ fn cold_start_metrics(timestamp_ms: u64) -> Vec<Metric> {
 /// history, so it is published, flagged, with its own `ValueDate` as the payload
 /// timestamp. The timestamp is what keeps that honest: a stale reading is
 /// visibly old even to a consumer that ignores the flag.
+/// [`metrics_for`], for a test in another module that needs to assert on the
+/// PUBLISHED metrics rather than on an in-process verdict.
+///
+/// **Exists because of a defect, and is narrow on purpose.** Story 2.3's review
+/// found that every test reaching `metrics_for` handed it a `Verdicts::uniform`,
+/// where the pre-2.3 code and the new one agree on every output — so the whole of
+/// ADR 0031 could be reverted with the suite green. A test that owns the source
+/// path and the wire path in one place is what stops that recurring, and it needs
+/// this function to be reachable.
+#[cfg(test)]
+pub fn metrics_for_test(measurement: &Measurement, verdicts: Verdicts) -> Vec<Metric> {
+    metrics_for(measurement, verdicts)
+}
+
 fn metrics_for(measurement: &Measurement, verdicts: Verdicts) -> Vec<Metric> {
     let timestamp = millis(measurement.value_date);
 
@@ -644,15 +658,22 @@ fn metrics_for(measurement: &Measurement, verdicts: Verdicts) -> Vec<Metric> {
     // the reading's single verdict, so an energy-only refusal nulled the power
     // value and stamped it with the energy's cause — a number the bridge had no
     // complaint about, withheld and then blamed.
-    let build = |metric: Measured, name: &'static str, unit: &'static str, value: f64| {
+    let build = |metric: Measured, name: &'static str, unit: &'static str, value: Option<f64>| {
         let verdict = verdicts.for_metric(metric);
         let published = verdict.quality();
-        let carried = match published {
+        let carried = match (published, value) {
             // `Bad` withholds the number. That is the point of `Bad` rather than
             // `Stale`: a consumer must not be handed a value it would compute
             // with, and the datatype is kept so the tag does not change shape.
-            Quality::Bad => MetricValue::Null(DataType::Double),
-            _ => MetricValue::Double(value),
+            (Quality::Bad, _) => MetricValue::Null(DataType::Double),
+            // NO VALUE AT ALL — story 2.5. There is nothing to publish and, since
+            // `BAD_CARRIER` was removed, nothing to publish it WITH. Reaching here
+            // with a non-`Bad` verdict would mean the composition failed to refuse
+            // a metric the source could not read, so the null is a second lock
+            // rather than a fallback: the shape stays a `Double`, and the quality
+            // beside it is what a consumer reads.
+            (_, None) => MetricValue::Null(DataType::Double),
+            (_, Some(value)) => MetricValue::Double(value),
         };
         let built = Metric::new(name, carried, timestamp)
             .with_quality_code(ignition_quality_code(published))
@@ -671,13 +692,13 @@ fn metrics_for(measurement: &Measurement, verdicts: Verdicts) -> Vec<Metric> {
             Measured::Power,
             METRIC_POWER,
             UNIT_POWER,
-            measurement.power.0,
+            measurement.power.map(|p| p.0),
         ),
         build(
             Measured::Energy,
             METRIC_ENERGY,
             UNIT_ENERGY,
-            measurement.energy.0,
+            measurement.energy.map(|e| e.0),
         ),
     ]
 }
@@ -825,7 +846,7 @@ mod tests {
 
         // THE METRIC NOBODY OBJECTED TO: its real value, at full trust, unlabelled.
         assert!(
-            matches!(power.value, MetricValue::Double(v) if v == m.power.0),
+            matches!(power.value, MetricValue::Double(v) if Some(v) == m.power.map(|p| p.0)),
             "the power reading is current and no oracle judged it; withholding it              publishes a fault where there is none. Got {:?}",
             power.value
         );
@@ -888,8 +909,8 @@ mod tests {
         Measurement {
             meter: MeterId::new("garage"),
             serial: Serial::new(SERIAL),
-            power: Kw(0.018),
-            energy: Kwh(4_843.822),
+            power: Some(Kw(0.018)),
+            energy: Some(Kwh(4_843.822)),
             value_date: UtcMillis(1_784_984_792_050),
             quality,
         }

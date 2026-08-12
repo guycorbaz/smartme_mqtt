@@ -152,4 +152,44 @@ mod tests {
             assert_eq!(parse_value_date(bad), None, "should reject {bad:?}");
         }
     }
+
+    /// **Story 2.5 AC5 — completeness is fail-closed, and this test is what says
+    /// so rather than the code being trusted to.**
+    ///
+    /// FR16 asks that *"a missing/null field yields degraded quality"*. This
+    /// deserializer does something stricter and better: `Device` carries no
+    /// `#[serde(default)]`, so a payload missing a field we consume fails to parse
+    /// and **nothing is published at all**. A reading assembled from a payload we
+    /// could not read would claim a measurement we do not have.
+    ///
+    /// The deviation from FR16's letter is deliberate and recorded in the story.
+    /// The residual belongs to story 2.6: an operator sees a parse failure and no
+    /// field name.
+    ///
+    /// FALSIFIED 2026-08-12: adding `#[serde(default)]` to `Device` makes both
+    /// assertions red — the missing power deserializes to `0.0`, which is a
+    /// substituted value reaching the bridge under the name of a measurement, and
+    /// it is exactly the class `BAD_CARRIER` was removed for.
+    #[test]
+    fn a_payload_missing_a_field_we_consume_does_not_parse_at_all() {
+        // Every field but `ActivePower`, which we consume.
+        let without_power = r#"{
+            "Id": "1", "Name": "n", "Serial": 30000001,
+            "ActivePowerUnit": "kW",
+            "CounterReading": 4843.822, "CounterReadingUnit": "kWh",
+            "ValueDate": "2026-07-25T13:06:32.0500519Z"
+        }"#;
+        let parsed: Result<Device, _> = serde_json::from_str(without_power);
+        assert!(
+            parsed.is_err(),
+            "a missing field must stop the reading, not be defaulted into one: a \
+             zero that nobody measured is indistinguishable from a meter reading \
+             zero"
+        );
+        assert!(
+            parsed.unwrap_err().to_string().contains("ActivePower"),
+            "and the error must name the field — it is the only thing an operator \
+             has to go on"
+        );
+    }
 }

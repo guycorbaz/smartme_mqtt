@@ -203,8 +203,8 @@ fn reading(now: UtcMillis) -> MeterUpdate {
         Measurement {
             meter: MeterId::new("garage"),
             serial: Serial::new(SERIAL),
-            power: Kw(0.018),
-            energy: Kwh(4_843.822),
+            power: Some(Kw(0.018)),
+            energy: Some(Kwh(4_843.822)),
             value_date: now,
             quality: Quality::Good,
         },

@@ -21,5 +21,5 @@ pub mod state_machine;
 pub use channel::MeterUpdate;
 pub use clock::{Clock, MonotonicMs, SystemClock};
 pub use oracle::{Cause, Verdict, compose};
-pub use source::{Reading, Source, SourceError, Tick};
+pub use source::{Reading, Source, SourceError, SourceFaults, Tick};
 pub use state_machine::{PLAUSIBILITY_FLOOR, Policy, State};

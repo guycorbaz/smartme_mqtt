@@ -50,14 +50,15 @@ fn reading(meter: &MeterId, quality: Quality) -> Reading {
         value: Measurement {
             meter: meter.clone(),
             serial: Serial::new("30000001"),
-            power: Kw(0.018),
-            energy: Kwh(4_843.822),
+            power: Some(Kw(0.018)),
+            energy: Some(Kwh(4_843.822)),
             value_date: UtcMillis(BASE),
             quality,
         },
         // 950 ms of age: comfortably fresh under the shipped allowance, so the
         // verdicts below are about the OUTAGE and not about staleness of value.
         http_date: Some(UtcMillis(BASE + 950)),
+        faults: smartme_bridge::core::SourceFaults::NONE,
     }
 }
 

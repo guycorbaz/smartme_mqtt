@@ -109,7 +109,7 @@ pass twice.
 
 ---
 
-## What changed since the last run — v3 → v6, and what this run can and cannot attest
+## What changed since the last run — v3 → v7, and what this run can and cannot attest
 
 *Written 2026-08-12, before the v6 run, so that the run's scope is decided in advance rather than
 claimed afterwards.*
@@ -121,6 +121,7 @@ The last complete run was 2026-08-03, contract v3. Three versions have shipped s
 | **v4** | every non-good metric may carry a `Cause` property naming the oracle that refused it | a second property beside `Quality` in the tag browser |
 | **v5** | `counter-went-backwards` joins the cause vocabulary | nothing, unless a counter resets during the run |
 | **v6** | **breaking** — a verdict belongs to a METRIC, so a refused energy index no longer nulls the power beside it | nothing, unless one metric alone is refused |
+| **v7** | additive — four causes name what `value-unusable` used to say at once, and a field the bridge could not read degrades that field alone | a more precise `Cause` string, and only on the field at fault |
 
 ### What this run attests
 
@@ -391,13 +392,13 @@ artifact that no longer exists**, so these are first measurements, not confirmat
   is named by the serial `30000001`.
 - **`Contract/Version = 3` was read by a real host** for the first time.
 
-> **These rows attest to contract v3, and the contract is now v6.** Story 2.1 (2026-08-10)
+> **These rows attest to contract v3, and the contract is now v7.** Story 2.1 (2026-08-10)
 > added a `Cause` property to every non-good metric, which is a change to the tag set (v4);
 > story 2.2, the same day, added the `counter-went-backwards` cause to that property's
 > vocabulary (v5); story 2.3 (2026-08-11) made a verdict belong to a METRIC rather than to the
 > reading, so a refused energy index no longer nulls the power value beside it (v6, **breaking**).
 > So a v3 run does **not** attest to what a consumer sees today, and **no run has happened against
-> v4, v5 or v6.** What the v3 rows still establish is everything independent
+> v4, v5, v6 or v7.** What the v3 rows still establish is everything independent
 > of that property: the quality codes on a `Good`→`Stale` transition, the rebirth flow, and the
 > double NDEATH. Since v4 the binding is machine-checked by `tests/contract_golden.rs`, so a
 > future drift between this table and the code cannot be silent — but a missing run is still a

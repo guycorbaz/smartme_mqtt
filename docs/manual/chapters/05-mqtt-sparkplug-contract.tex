@@ -14,7 +14,7 @@ is listed in section~\ref{sec:contract-limits} rather than described as though i
 \section{Contract version}
 
 The node BIRTH carries a metric \code{Contract/Version} (\code{Int64}), currently
-\textbf{6}. It is incremented on \emph{any} change to the topic grammar, to a metric name or
+\textbf{7}. It is incremented on \emph{any} change to the topic grammar, to a metric name or
 unit, or to the meaning of a published quality code. Publishing it means a consumer can
 \emph{see} the contract change instead of having to notice it from broken tags.
 
@@ -23,7 +23,13 @@ quality codes and the cause vocabulary to the version they belong to, and fails 
 moves without this number moving. Before that, the number was maintained by whoever
 remembered.
 
-The number does not say what \emph{kind} of change it was, so it is worth stating. Version~6
+The number does not say what \emph{kind} of change it was, so it is worth stating. Version~7
+is \textbf{additive}: four new causes join the vocabulary a \code{Cause} property can carry,
+listed under \emph{Why a value is not good} below. What they replace is not another cause but an
+\emph{absence} of one --- \code{value-unusable} was published for all four faults at once and
+named no field, so an operator was sent to look for a meter problem when smart-me's unit contract
+had moved. It survives with its meaning narrowed to one case, not a single usable number in the
+whole reading, so a consumer keyed on it still sees it: less often, and more precisely. Version~6
 is \textbf{breaking}: a verdict now belongs to a \emph{metric} rather than to the reading, so a
 fault in the energy index no longer withholds the power value beside it. Nothing is renamed and no
 tag is added --- but a consumer that recorded \code{Power = null} whenever the energy index was
@@ -48,6 +54,10 @@ history.
 \toprule
 \textbf{Version} & \textbf{Kind} & \textbf{Change} \\
 \midrule
+7 & additive & Four new causes name what \code{value-unusable} used to say all at once:
+    \code{unit-not-recognised}, \code{value-not-finite}, \code{value-overflowed} and
+    \code{source-timestamp-unparseable}. A field the bridge could not read now degrades
+    \emph{that field} alone. See section~\ref{sec:quality}. \\
 6 & breaking & A verdict belongs to a \emph{metric}, not to the reading. A refused energy
     index no longer nulls the power value nor labels it with the energy's cause. See
     section~\ref{sec:quality}. \\
@@ -128,7 +138,7 @@ disabled cannot.
 \toprule
 \normalfont\textbf{Metric} & \textbf{Type} & \textbf{Unit} & \textbf{Meaning} \\
 \midrule
-Contract/Version & Int64  & ---   & Contract version, node BIRTH only. Currently 6. \\
+Contract/Version & Int64  & ---   & Contract version, node BIRTH only. Currently 7. \\
 Node Control/Rebirth & Boolean & --- & Always \code{false}. The command endpoint a host
                                        addresses to request a fresh birth; node BIRTH only. \\
 Power            & Double & kW    & Instantaneous power. \\
@@ -172,6 +182,19 @@ property, \code{Cause}, typed \code{String}, naming the check that refused it --
 \code{reading-too-old}, \code{source-unreachable}, \code{counter-went-backwards} and so on. A
 \textsc{good} metric carries no \code{Cause} at all: a reason published beside every good
 value is noise a consumer learns to ignore, and then misses the day it means something.
+
+\begin{note}
+\textbf{Since contract~7, a cause names the field it is about.} A payload can fail in four
+ways the bridge tells apart, and each is repaired somewhere else:
+\code{unit-not-recognised} (smart-me's unit contract moved --- read their documentation),
+\code{value-not-finite} (a \textsc{nan} or an infinity arrived where a measurement was owed ---
+the device or the cloud), \code{value-overflowed} (a finite input became non-finite in
+\prog's own rescale --- ours), and \code{source-timestamp-unparseable} (the numbers may be
+perfect and we cannot say \emph{when} they were true --- a freshness fault, not a value one).
+All four were published as \code{value-unusable} before, which named no field and sent an
+operator to the wrong place three times out of four. \textbf{And the refusal lands on the
+field alone}: an unreadable power unit no longer withholds the energy index beside it.
+\end{note}
 
 \begin{note}
 \textbf{The reason cannot live in \code{Quality}, and the specification is what decides

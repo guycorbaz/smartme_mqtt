@@ -17,7 +17,8 @@ use std::sync::Arc;
 use smart_me_client::{Device, SmartMeClient, SmartMeError, TokenState};
 
 use crate::core::clock::{Clock, MonotonicMs};
-use crate::core::source::{Reading, Source, SourceError};
+use crate::core::oracle::Cause;
+use crate::core::source::{Reading, Source, SourceError, SourceFaults};
 use crate::domain::{Kw, Kwh, Measurement, MeterId, Quality, Serial, UtcMillis};
 
 /// Safety margin subtracted from the reported token lifetime: refresh a little
@@ -30,12 +31,6 @@ const TOKEN_MARGIN_MS: i64 = 30_000;
 /// hammering of the token endpoint). We keep such a token for this long instead
 /// and let the 401 refresh-retry path handle the fallout.
 const TOKEN_MIN_LIFETIME_MS: i64 = 5_000;
-
-/// The value carried by a `Quality::Bad` measurement — a documented non-value.
-/// Consumers must not use it (that is what `Bad` means); it is 0.0 so that a
-/// pipeline bug that ignores quality produces an obviously-flat trace, not a
-/// plausible one.
-const BAD_CARRIER: f64 = 0.0;
 
 struct AnchoredToken {
     token: TokenState,
@@ -267,15 +262,42 @@ fn map_device(device: &Device, http_date_ms: Option<i64>, meter: &MeterId) -> Un
     let energy = convert_energy(device.counter_reading, &device.counter_reading_unit);
     let value_date = smart_me_client::parse_value_date(&device.value_date);
 
-    let (power, energy, value_date, quality) = match (power, energy, value_date) {
-        (Some(p), Some(e), Some(vd)) => (p, e, UtcMillis(vd), Quality::Good),
-        (p, e, vd) => (
-            p.unwrap_or(Kw(BAD_CARRIER)),
-            e.unwrap_or(Kwh(BAD_CARRIER)),
-            UtcMillis(vd.unwrap_or(0)),
-            Quality::Bad,
-        ),
+    // ONE FIELD'S FAULT IS THAT FIELD'S (story 2.5). Until then any failure set
+    // `Quality::Bad` for the whole reading, so an unrecognised unit on
+    // `ActivePower` degraded an energy index read and converted perfectly. The
+    // oracle layer stopped doing that in story 2.3; this is the same rule
+    // reaching the boundary where the readings are built.
+    let faults = SourceFaults {
+        // THE READING AS A WHOLE is unusable in exactly two cases, and they are
+        // the two the freshness guards must see BEFORE they judge timestamps.
+        reading: match (value_date, &power, &energy) {
+            // No timestamp of its own: the numbers may be perfect and we cannot
+            // say when they were true. A freshness fault, not a value fault.
+            (None, _, _) => Some(Cause::SourceTimestampUnparseable),
+            // Not one usable number in it. `ValueUnusable` keeps precisely this
+            // meaning now that the field-level causes exist to name the rest.
+            (Some(_), Err(_), Err(_)) => Some(Cause::ValueUnusable),
+            _ => None,
+        },
+        power: power.as_ref().err().copied(),
+        energy: energy.as_ref().err().copied(),
     };
+
+    // The reading-level quality the state machine reads. `Bad` ONLY when the
+    // reading as a whole is unusable — a single failed field no longer speaks for
+    // the reading, which is what lets its neighbour stay `Good` on the wire.
+    let quality = if faults.reading.is_some() {
+        Quality::Bad
+    } else {
+        Quality::Good
+    };
+    let (power, energy, value_date) = (
+        power.ok(),
+        energy.ok(),
+        // No timestamp can be invented: the epoch floor keeps such a reading
+        // un-fresh for ever, which is what the plausibility guard is for.
+        UtcMillis(value_date.unwrap_or(0)),
+    );
     UnverifiedReading(Reading {
         value: Measurement {
             meter: meter.clone(),
@@ -291,6 +313,7 @@ fn map_device(device: &Device, http_date_ms: Option<i64>, meter: &MeterId) -> Un
             quality,
         },
         http_date: http_date_ms.map(UtcMillis),
+        faults,
     })
 }
 
@@ -299,9 +322,14 @@ fn map_device(device: &Device, http_date_ms: Option<i64>, meter: &MeterId) -> Un
 /// must surface as `Bad`, never be silently absorbed. Finiteness is checked both
 /// before and after the arithmetic — a finite input can still overflow the ×1000
 /// of the mega unit.
-fn rescale(value: f64, unit: &str, base: &str, milli: &str, mega: &str) -> Option<f64> {
+fn rescale(value: f64, unit: &str, base: &str, milli: &str, mega: &str) -> Result<f64, Cause> {
+    // WHICH FAULT, not just THAT there was one (story 2.5). All three used to
+    // return `None` and reach an operator as one undifferentiated `Bad` naming no
+    // field. They are repaired in three different places: a unit we do not know
+    // is smart-me's contract moving under us, a non-finite input is the device or
+    // the cloud, and an overflow is our own arithmetic.
     if !value.is_finite() {
-        return None;
+        return Err(Cause::ValueNotFinite);
     }
     let out = if unit == base {
         value
@@ -310,18 +338,18 @@ fn rescale(value: f64, unit: &str, base: &str, milli: &str, mega: &str) -> Optio
     } else if unit == mega {
         value * 1_000.0
     } else {
-        return None;
+        return Err(Cause::UnitNotRecognised);
     };
-    out.is_finite().then_some(out)
+    out.is_finite().then_some(out).ok_or(Cause::ValueOverflowed)
 }
 
 /// Power → kW. Exact-match units, fail-closed; non-finite values refused.
-fn convert_power(value: f64, unit: &str) -> Option<Kw> {
+fn convert_power(value: f64, unit: &str) -> Result<Kw, Cause> {
     rescale(value, unit, "kW", "W", "MW").map(Kw)
 }
 
 /// Energy → kWh. Exact-match units, fail-closed; non-finite values refused.
-fn convert_energy(value: f64, unit: &str) -> Option<Kwh> {
+fn convert_energy(value: f64, unit: &str) -> Result<Kwh, Cause> {
     rescale(value, unit, "kWh", "Wh", "MWh").map(Kwh)
 }
 
@@ -360,31 +388,113 @@ mod tests {
         let m = MeterId::new("m1");
         let r = mapped(&device("kW", "kWh", VD), Some(1_000), &m);
         assert_eq!(r.value.quality, Quality::Good);
-        assert_eq!(r.value.power, Kw(0.018));
-        assert_eq!(r.value.energy, Kwh(4_843.822));
+        assert_eq!(r.value.power, Some(Kw(0.018)));
+        assert_eq!(r.value.energy, Some(Kwh(4_843.822)));
         assert_eq!(r.http_date, Some(UtcMillis(1_000)));
         assert_eq!(r.value.serial.as_str(), "30000001");
 
         let w = mapped(&device("W", "Wh", VD), None, &m);
         // Same arithmetic as the converter — literal decimals differ in the
         // last binary digit.
-        assert_eq!(w.value.power, Kw(0.018 / 1_000.0));
-        assert_eq!(w.value.energy, Kwh(4_843.822 / 1_000.0));
+        assert_eq!(w.value.power, Some(Kw(0.018 / 1_000.0)));
+        assert_eq!(w.value.energy, Some(Kwh(4_843.822 / 1_000.0)));
 
         let mw = mapped(&device("MW", "MWh", VD), None, &m);
-        assert_eq!(mw.value.power, Kw(18.0));
-        assert_eq!(mw.value.energy, Kwh(4_843_822.0));
+        assert_eq!(mw.value.power, Some(Kw(18.0)));
+        assert_eq!(mw.value.energy, Some(Kwh(4_843_822.0)));
     }
 
+    /// **REWRITTEN for story 2.5, and the rewrite IS the change.** This test was
+    /// `unknown_unit_fails_closed_to_bad_with_non_value_carrier`, and it asserted
+    /// the two things the story removes: that ONE bad unit makes the whole
+    /// reading `Bad`, and that the failed side carries `Kw(0.0)` — the documented
+    /// non-value. There is no carrier any more, and one field's fault is that
+    /// field's.
+    ///
+    /// FALSIFIED 2026-08-12: restoring the reading-wide quality (`Quality::Bad`
+    /// whenever any field failed) turns the `Quality::Good` assertion red on the
+    /// first case; making `map_device` fall back to `Kw(0.0)` instead of `None`
+    /// turns the `is_none` assertions red.
     #[test]
-    fn unknown_unit_fails_closed_to_bad_with_non_value_carrier() {
+    fn one_unreadable_field_faults_that_field_and_leaves_its_neighbour_alone() {
         let m = MeterId::new("m1");
-        for (pu, eu) in [("kVA", "kWh"), ("kW", "MJ"), ("", ""), ("KW", "kWh")] {
-            let r = mapped(&device(pu, eu, VD), Some(1_000), &m);
-            assert_eq!(r.value.quality, Quality::Bad, "units {pu:?}/{eu:?}");
-            // No guessed value: at least one side is the documented non-value.
-            assert!(r.value.power == Kw(0.0) || r.value.energy == Kwh(0.0));
-        }
+
+        // POWER ALONE is unreadable. The energy index was read and converted
+        // perfectly, and nothing about it is in doubt.
+        let r = mapped(&device("kVA", "kWh", VD), Some(1_000), &m);
+        assert_eq!(
+            r.value.quality,
+            Quality::Good,
+            "the READING is usable: it has a timestamp and a number. Marking it \
+             Bad is what degraded a sound energy index for a fault in its \
+             neighbour"
+        );
+        assert_eq!(r.value.power, None, "no substituted value, ever (FR16)");
+        assert_eq!(r.faults.power, Some(Cause::UnitNotRecognised));
+        assert_eq!(r.value.energy, Some(Kwh(4_843.822)));
+        assert_eq!(r.faults.energy, None);
+        assert_eq!(r.faults.reading, None);
+
+        // ENERGY ALONE, the mirror image.
+        let r = mapped(&device("kW", "MJ", VD), Some(1_000), &m);
+        assert_eq!(r.value.quality, Quality::Good);
+        assert_eq!(r.value.power, Some(Kw(0.018)));
+        assert_eq!(r.value.energy, None);
+        assert_eq!(r.faults.energy, Some(Cause::UnitNotRecognised));
+
+        // BOTH unreadable: now the READING itself is unusable, and that is the
+        // one case `ValueUnusable` still names.
+        let r = mapped(&device("", "", VD), Some(1_000), &m);
+        assert_eq!(r.value.quality, Quality::Bad);
+        assert_eq!(r.faults.reading, Some(Cause::ValueUnusable));
+        assert_eq!(r.value.power, None);
+        assert_eq!(r.value.energy, None);
+    }
+
+    /// The three faults `Cause::ValueUnusable` used to mean at once, each named.
+    ///
+    /// FALSIFIED 2026-08-12: pointing any arm at its neighbour (`ValueNotFinite`
+    /// where `UnitNotRecognised` is owed) turns exactly one assertion red, and the
+    /// message names the fault the operator would have been sent to repair.
+    #[test]
+    fn each_conversion_fault_names_itself() {
+        assert_eq!(
+            convert_power(f64::NAN, "kW"),
+            Err(Cause::ValueNotFinite),
+            "the number is the fault — the unit was fine"
+        );
+        assert_eq!(
+            convert_power(1.0, "kVA"),
+            Err(Cause::UnitNotRecognised),
+            "the unit is the fault — smart-me's contract moved under us"
+        );
+        assert_eq!(
+            convert_power(f64::MAX, "MW"),
+            Err(Cause::ValueOverflowed),
+            "a finite input became non-finite in OUR arithmetic — reporting that \
+             as a device fault sends an operator to the wrong place"
+        );
+        assert_eq!(
+            convert_energy(f64::INFINITY, "kWh"),
+            Err(Cause::ValueNotFinite)
+        );
+    }
+
+    /// An unparseable `ValueDate` degrades FRESHNESS, not a value — and says so.
+    ///
+    /// FALSIFIED 2026-08-12: returning `Cause::ValueUnusable` for it instead makes
+    /// the cause assertion red, which is the whole point: the numbers may be
+    /// perfect and we simply cannot say when they were true.
+    #[test]
+    fn an_unparseable_timestamp_is_a_freshness_fault_and_names_itself() {
+        let m = MeterId::new("m1");
+        let r = mapped(&device("kW", "kWh", "not-a-date"), Some(1_000), &m);
+        assert_eq!(r.value.quality, Quality::Bad);
+        assert_eq!(r.faults.reading, Some(Cause::SourceTimestampUnparseable));
+        // The values themselves were readable, and are kept: what is missing is
+        // the instant they belong to.
+        assert_eq!(r.value.power, Some(Kw(0.018)));
+        assert_eq!(r.faults.power, None);
     }
 
     #[test]
@@ -393,24 +503,35 @@ mod tests {
         // must surface as Bad, not be silently absorbed.
         let m = MeterId::new("m1");
         let r = mapped(&device("KW", "kWh", VD), None, &m);
-        assert_eq!(r.value.quality, Quality::Bad);
+        assert_eq!(
+            r.faults.power,
+            Some(Cause::UnitNotRecognised),
+            "a casing drift is a contract change and must surface"
+        );
+        assert_eq!(r.value.power, None);
     }
 
     #[test]
     fn non_finite_values_fail_closed() {
-        assert_eq!(convert_power(f64::NAN, "kW"), None);
-        assert_eq!(convert_power(f64::INFINITY, "W"), None);
-        assert_eq!(convert_energy(f64::NEG_INFINITY, "kWh"), None);
+        assert_eq!(convert_power(f64::NAN, "kW"), Err(Cause::ValueNotFinite));
+        assert_eq!(
+            convert_power(f64::INFINITY, "W"),
+            Err(Cause::ValueNotFinite)
+        );
+        assert_eq!(
+            convert_energy(f64::NEG_INFINITY, "kWh"),
+            Err(Cause::ValueNotFinite)
+        );
     }
 
     #[test]
     fn scaling_overflow_fails_closed_too() {
         // A finite input can still overflow the ×1000 of the mega units: the
         // result must be refused, not published as an infinite "Good" value.
-        assert_eq!(convert_power(f64::MAX, "MW"), None);
-        assert_eq!(convert_energy(f64::MAX, "MWh"), None);
+        assert_eq!(convert_power(f64::MAX, "MW"), Err(Cause::ValueOverflowed));
+        assert_eq!(convert_energy(f64::MAX, "MWh"), Err(Cause::ValueOverflowed));
         // ...while the same magnitude in the base unit is fine.
-        assert_eq!(convert_power(f64::MAX, "kW"), Some(Kw(f64::MAX)));
+        assert_eq!(convert_power(f64::MAX, "kW"), Ok(Kw(f64::MAX)));
     }
 
     #[test]
@@ -433,11 +554,17 @@ mod tests {
             policy.step(State::initial(), &Ok(r), UtcMillis(1_784_984_793_000));
         assert_eq!(state, State::Stale);
         assert_eq!(published.quality(), Quality::Bad);
-        // Story 2.1: the cause now travels with it, and it is the source's own
-        // fail-closed conversion rather than anything about the timestamps.
+        // Story 2.1: the cause travels with it. **Story 2.5: it is now the
+        // SOURCE'S OWN fault, named.** This assertion read `ValueUnusable` until
+        // 2026-08-12, which was the one cause covering unknown units, non-finite
+        // numbers, arithmetic overflow AND an unparseable timestamp — four
+        // repairs in four different places, reported as one word naming no field.
+        // Here the reading has no timestamp of its own, so that is what it says;
+        // the unreadable power unit is a separate, metric-scoped judgement and no
+        // longer speaks for the reading.
         assert_eq!(
             published.cause(),
-            Some(crate::core::oracle::Cause::ValueUnusable)
+            Some(crate::core::oracle::Cause::SourceTimestampUnparseable)
         );
     }
 
@@ -537,7 +664,7 @@ mod tests {
             Quality::Good,
             "verifying identity must not touch the reading's own quality"
         );
-        assert_eq!(reading.value.power, Kw(0.018));
+        assert_eq!(reading.value.power, Some(Kw(0.018)));
     }
 
     /// A `Bad` reading is still checked for identity, and the identity verdict

@@ -174,7 +174,17 @@ impl Policy {
             // Bad is judged BEFORE the timestamp guards: "do not use this value"
             // must never be relabeled as the milder "old value" — a Bad reading
             // whose ValueDate also failed to parse stays Bad, not Stale.
-            return (State::Stale, Verdict::bad(Cause::ValueUnusable));
+            //
+            // THE CAUSE COMES FROM THE SOURCE since story 2.5. `ValueUnusable`
+            // used to mean all of "unknown unit", "non-finite number",
+            // "arithmetic overflow" and "unparseable timestamp" at once, and
+            // named no field. It now means exactly one thing — not one usable
+            // number in the whole reading — and the fallback below is what the
+            // type demands, not a case anyone expects to reach.
+            return (
+                State::Stale,
+                Verdict::bad(reading.faults.reading.unwrap_or(Cause::ValueUnusable)),
+            );
         }
         let Some(http_date) = reading.http_date else {
             // No oracle input (absent/malformed Date header): no freshness proof.
@@ -204,7 +214,10 @@ impl Policy {
         // (fail-closed unit conversion, Story 1.7) — Bad passes through, never
         // upgraded. The state stays Stale: a Bad value proves nothing.
         match reading.value.quality {
-            Quality::Bad => (State::Stale, Verdict::bad(Cause::ValueUnusable)),
+            Quality::Bad => (
+                State::Stale,
+                Verdict::bad(reading.faults.reading.unwrap_or(Cause::ValueUnusable)),
+            ),
             Quality::Stale => (State::Stale, Verdict::stale(Cause::SourceMarkedStale)),
             Quality::Good => (State::Fresh, Verdict::good()),
         }
@@ -227,12 +240,13 @@ mod tests {
             value: Measurement {
                 meter: MeterId::new("m1"),
                 serial: Serial::new("S-1"),
-                power: Kw(0.7),
-                energy: Kwh(40_437.8),
+                power: Some(Kw(0.7)),
+                energy: Some(Kwh(40_437.8)),
                 value_date: UtcMillis(value_date),
                 quality,
             },
             http_date: http_date.map(UtcMillis),
+            faults: crate::core::source::SourceFaults::NONE,
         }
     }
 
