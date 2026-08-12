@@ -625,7 +625,27 @@ development_status:
   2-4-physical-bounds: withdrawn
   # FR16, plus `map_device`'s debt: three failure modes collapse into one
   # undifferentiated `Bad` naming no field.
-  2-5-payload-completeness-and-numeric-domain: backlog
+  # WRITTEN 2026-08-12. Two boundaries drawn at drafting rather than left to be
+  # guessed:
+  #  - FR16's "per-metric min/max bounds" clause is DEAD. It is physical
+  #    plausibility under another name, withdrawn the same day by ADR 0033. This
+  #    story implements no bounds; what survives is completeness, the numeric
+  #    domain, and the prohibition on substituted values. Written down because a
+  #    reader finding `min/max` in the PRD and nothing in the code would reasonably
+  #    conclude something had been forgotten.
+  #  - Transport and auth faults stay with story 2.6. This story owns what arrives
+  #    INSIDE a payload the transport delivered.
+  # THE HEADLINE: ADR 0031 stopped at the oracle layer. `map_device` still sets one
+  # `Quality::Bad` for the whole reading, so an unknown power unit degrades a
+  # cumulative energy index that was read and converted perfectly.
+  # AND `BAD_CARRIER = 0.0` IS A SUBSTITUTED VALUE, which FR16 forbids in its own
+  # words. Story 2.3's review found it on the wire and closed that path; the number
+  # is still in the domain type, waiting for the next path nobody predicted. AC3
+  # removes it by making absence expressible, and names the blast radius.
+  # MIGHT close [#69], and might not — it depends on whether the adapter stops
+  # setting `Measurement::quality` and reports through judgements instead. Recorded
+  # as a possible consequence, not a promise; not worth contorting the design for.
+  2-5-payload-completeness-and-numeric-domain: ready-for-dev
   # FR4, FR5, NFR1 — transient retries with bounded backoff, permanent stops and is
   # named. Absorbs the parked `429 Retry-After` item.
   2-6-error-taxonomy-and-bounded-backoff: backlog
