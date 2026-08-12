@@ -37,7 +37,7 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 - FR11: The bridge can detect a meter's data going stale (aged past a configurable threshold, default 2× poll interval) and mark that value's quality as stale — even while still connected to the broker.
 - FR12: The bridge can signal staleness per meter independently (one silent meter doesn't affect the others).
 - FR13: The bridge can signal to the SCADA when the bridge itself is no longer alive.
-- FR14: The bridge can flag instantaneous values outside plausible physical bounds rather than propagating them silently.
+- ~~FR14: The bridge can flag instantaneous values outside plausible physical bounds rather than propagating them silently.~~ **WITHDRAWN 2026-08-12 — [ADR 0033](../../docs/adr/0033-fr14-is-withdrawn-physical-plausibility-is-not-the-bridge-s-to-judge.md), [#72](https://github.com/guycorbaz/smartme_mqtt/issues/72).**
 - FR15: The bridge can detect energy-counter non-monotonicity (reset / rollover / meter replacement), mark the quality, and never publish a negative delta as a valid measurement.
 - FR16: The bridge can validate the completeness and numeric domain of each smart-me payload before publishing; a missing/null/NaN field, or a value outside per-metric min/max bounds, yields degraded quality, never a substituted value.
 - FR45: The bridge can encode cumulative energy as a 64-bit double (never float32), preserving full kWh resolution up to at least 10⁷ kWh.
@@ -177,7 +177,7 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 - FR11: Epic 1 — staleness detection while still broker-connected (exhaustive transitions hardened in Epic 2)
 - FR12: Epic 3 — per-meter staleness isolation (needs the fleet)
 - FR13: Epic 1 — signal bridge-dead to the SCADA (LWT/NDEATH)
-- FR14: Epic 2 — flag values outside physical bounds (oracle)
+- ~~FR14: Epic 2 — flag values outside physical bounds (oracle)~~ — **WITHDRAWN**, ADR 0033. It was the only requirement asking the bridge to hold a fact about the electrical installation.
 - FR15: Epic 2 — detect energy-counter non-monotonicity (oracle)
 - FR16: Epic 2 — payload completeness / numeric-domain validation (oracle)
 - FR17: Epic 1 — publish in Sparkplug B form Ignition consumes
@@ -260,7 +260,7 @@ The thinnest possible vertical slice that proves the founding principle end-to-e
 
 ### Epic 2: Exhaustive "Never Lies" Oracles & Freshness Hardening
 Thicken the skeleton's single FRESH→STALE transition into the full integrity guarantee: all quality transitions and staleness edge cases, the resilience/backoff behaviour, error taxonomy (transient→retry vs fatal→stop), and the four runtime oracles — unit rejection, serial-identity binding + verification, physical bounds, energy-counter monotonicity, plus payload completeness/numeric-domain validation and UTC-timestamp/skew handling. This is where the "never lies" invariant is proven across every failure mode, not just the happy-path unplug.
-**FRs covered:** FR4, FR5, FR8, FR9, FR10, FR14, FR15, FR16
+**FRs covered:** FR4, FR5, FR8, FR9, FR10, FR15, FR16 *(FR14 withdrawn 2026-08-12, ADR 0033)*
 **NFR/AR:** NFR1, NFR4, NFR6, NFR7 · AR16 *(oracle→quality mapping)*, AR17 *(freshness + oracle property tests)*
 
 **Status 2026-08-11:** opened 2026-08-10 per [ADR 0030](../../docs/adr/0030-epics-run-in-numeric-order.md). Stories written just-in-time, as epics 3, 5 and 6 were. **Seven stories, and the numbering was corrected once** — the oracle-layer story was first written as 2.7 (the next free number) while running before 2.3, so the list said one order and the plan another; bounds/completeness/taxonomy/UTC each moved up one on Guy's instruction, *"j'aimerais traiter les stories dans l'ordre afin d'éviter la confusion"*.
@@ -270,7 +270,7 @@ Thicken the skeleton's single FRESH→STALE transition into the full integrity g
 | 2.1 | the oracle layer, and how verdicts compose | `done` (2026-08-12) — task 3 recorded UNMET, [#68](https://github.com/guycorbaz/smartme_mqtt/issues/68) |
 | 2.2 | energy-counter monotonicity (FR15, NFR6) | `done` (2026-08-12) — AC2's distinguishing proof owed to 2.4, [#69](https://github.com/guycorbaz/smartme_mqtt/issues/69) |
 | 2.3 | **the oracle layer finished** — per-metric verdicts, total order on ties, both memories on the composed verdict, the reference across restarts, the surfaces reading the wire | `done` (2026-08-12) — AC3 recorded UNMET, [#69](https://github.com/guycorbaz/smartme_mqtt/issues/69) |
-| 2.4 | physical bounds (FR14) | `ready-for-dev` (2026-08-12) — closes [#69]; AC2 awaits two facts about the installation |
+| 2.4 | ~~physical bounds (FR14)~~ | **withdrawn** (2026-08-12) — [ADR 0033](../../docs/adr/0033-fr14-is-withdrawn-physical-plausibility-is-not-the-bridge-s-to-judge.md). Written, never implemented; its draft is what exposed the problem |
 | 2.5 | payload completeness and numeric domain (FR16) | backlog |
 | 2.6 | error taxonomy and bounded backoff (FR4, FR5, NFR1) | backlog |
 | 2.7 | UTC end-to-end and clock skew (FR10) | backlog |
@@ -278,6 +278,8 @@ Thicken the skeleton's single FRESH→STALE transition into the full integrity g
 **Story 2.3 was not planned.** It is the output of the 2026-08-11 review of 2.1 and 2.2, which found four decisions rather than defects — the code did what it was written to do, and what it was written to do was wrong for the oracles still owed. It carries [ADR 0031](../../docs/adr/0031-a-verdict-belongs-to-a-metric.md) (a verdict belongs to a metric, [#70](https://github.com/guycorbaz/smartme_mqtt/issues/70)) and [ADR 0032](../../docs/adr/0032-at-equal-severity-a-latching-cause-outranks-a-degrading-one.md) (the tie rule, [#71](https://github.com/guycorbaz/smartme_mqtt/issues/71)), and moved `CONTRACT_VERSION` 5 → 6, **breaking**.
 
 **FR9 and NFR7 are NOT a story.** Serial-identity binding and its verification were delivered by [ADR 0029](../../docs/adr/0029-the-declared-serial-is-checked-against-the-one-smart-me-reports.md) on 2026-08-09, more strongly than the FR asked. They are owed a **verification at epic close**, not fresh work.
+
+**FR14 was withdrawn on 2026-08-12, and story 2.4 with it** ([ADR 0033](../../docs/adr/0033-fr14-is-withdrawn-physical-plausibility-is-not-the-bridge-s-to-judge.md), [#72](https://github.com/guycorbaz/smartme_mqtt/issues/72)). Physical plausibility was the only judgement in the list requiring knowledge the bridge does not receive and cannot verify — what the supply behind a meter can deliver. The internal contradictions stay, and the test that separates them is whether the bridge can be wrong in a way it cannot detect: a counter going backwards is a fact about two numbers it holds; a power reading "too high" is an opinion about a building. **It cost nothing on the wire** — FR14 had no code, `CONTRACT_VERSION` stays at 6 — and it was the draft of story 2.4, refusing to invent its own bounds, that exposed it. **Consequence carried on [#69]**: the withdrawn story was its only identified subject, so the question becomes whether a rule no input can distinguish from the one it replaced deserves to stay.
 
 **Three criteria stand recorded unmet, with issues** — the repository's practice rather than a tick: story 2.3 AC3 ([#69](https://github.com/guycorbaz/smartme_mqtt/issues/69)), whose adoption rule has no observable effect until 2.4 supplies the first oracle producing a `Bad` on a source-`Good` reading; NFR6's residual ([#67](https://github.com/guycorbaz/smartme_mqtt/issues/67)), a negative delta between two valid measurements either side of a refusal, which AC3 of story 2.2 mandates and the NFR's letter does not admit; and story 2.1's task 3 ([#68](https://github.com/guycorbaz/smartme_mqtt/issues/68)), whether the DBIRTH declares the `Cause` property — ticked on 2026-08-10 while the decision sat unmade in a completion note, untocked at closure.
 

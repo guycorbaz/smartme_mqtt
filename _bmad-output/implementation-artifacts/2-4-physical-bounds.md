@@ -1,6 +1,30 @@
 # Story 2.4: A number the physics forbids is refused, and it takes nothing else down with it
 
-Status: ready-for-dev — **AC2's two numbers are an input this story does not have yet.** See *The one input this story is missing*.
+Status: **WITHDRAWN 2026-08-12, unimplemented** — [ADR 0033](../../docs/adr/0033-fr14-is-withdrawn-physical-plausibility-is-not-the-bridge-s-to-judge.md), [#72](https://github.com/guycorbaz/smartme_mqtt/issues/72)
+
+> **This story is kept rather than deleted, because it is the artifact that killed its own
+> requirement.** It was written on 2026-08-12 and withdrawn the same day, before a line of code:
+> Guy read the draft and answered that judging a value is not this bridge's role — *« ton rôle est
+> de collecter des données de compteur et de les afficher, pas de les juger. »*
+>
+> **What made the objection legible was the draft's own honesty.** AC2 could not be filled in: it
+> needed the ceiling of each supply and whether a meter can see negative power, and refused to
+> invent either, on story 2.2 AC4's rule about numbers nobody measured. AC7 then had to argue at
+> length about where to store a constant describing a distribution board. A story that cannot
+> state its own criterion without a fact about someone's electrical installation is a story whose
+> component has taken on a responsibility that was never its own — and that reads much more
+> clearly in a draft than in a merged implementation.
+>
+> **Had it picked a comfortable 40 kW instead**, the requirement would have shipped, the oracle
+> would have passed its tests, and the first refusal of a real reading would have arrived on some
+> sunny afternoon with nobody expecting it.
+>
+> **Two things below survive the withdrawal** and are the reason to keep reading: the FR14/FR16
+> boundary drawn in the Dev Notes, which story 2.5 still needs; and AC6, which was the only
+> identified subject of [#69] — its disappearance is what turns that issue from a wait into a
+> question.
+>
+> Everything else stands as drafted and is not to be implemented.
 
 ## Story
 

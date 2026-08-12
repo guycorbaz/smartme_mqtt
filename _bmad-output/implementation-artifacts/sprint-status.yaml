@@ -22,6 +22,9 @@
 #   - in-progress: Developer actively working on implementation
 #   - review: Ready for code review (via Dev's code-review workflow)
 #   - done: Story completed
+#   - withdrawn: the story's REQUIREMENT was withdrawn; the file is kept as the
+#     record of why. Added 2026-08-12 for story 2.4 (FR14, ADR 0033). It is not
+#     `done` (nothing was built) and not `backlog` (nothing is waiting).
 #
 # Retrospective Status:
 #   - optional: Can be completed but not required
@@ -598,7 +601,22 @@ development_status:
   # refuses real readings on the sunniest day of the year. The story refuses to
   # invent them, on story 2.2 AC4's rule about numbers nobody measured. AC3 and AC6
   # — the two that carry [#69] — are implementable today.
-  2-4-physical-bounds: ready-for-dev
+  # WITHDRAWN 2026-08-12, unimplemented — ADR 0033, [#72]. Guy, on reading the
+  # draft: judging a value is not this bridge's role, collecting and publishing it
+  # is. Physical plausibility was the only requirement asking the bridge to hold a
+  # fact about the electrical installation — what the supply can deliver — which it
+  # never receives and cannot verify. It would have been wrong every time the
+  # building changed, and wrong silently.
+  # COST ON THE WIRE: none. FR14 had no code; CONTRACT_VERSION stays at 6.
+  # THE DRAFT IS WHAT KILLED IT, and that is the lesson worth keeping: AC2 refused
+  # to invent its bounds and said so in its own status line, per the rule about
+  # numbers nobody measured. A comfortable 40 kW would have shipped, passed its
+  # tests, and refused its first real reading on a sunny afternoon.
+  # CONSEQUENCE ON [#69]: this story was its only identified subject. The question
+  # is no longer "when will the rule be provable?" but "does a rule no input can
+  # distinguish from the one it replaced deserve to stay?" — reverting the old
+  # guard is a real answer. Deliberately left to its own decision.
+  2-4-physical-bounds: withdrawn
   # FR16, plus `map_device`'s debt: three failure modes collapse into one
   # undifferentiated `Bad` naming no field.
   2-5-payload-completeness-and-numeric-domain: backlog
