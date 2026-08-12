@@ -1,6 +1,6 @@
 # Story 2.3: The oracle layer finished — a verdict per metric, and ties that do not depend on order
 
-Status: review
+Status: done (2026-08-12) — **AC3 recorded UNMET**, [#69](https://github.com/guycorbaz/smartme_mqtt/issues/69)
 
 ## Story
 
@@ -337,3 +337,37 @@ instead of dressing it up, which is the harder half.
 FR28, Epic 6. Nothing is unprotected, but the criterion is ticked against a surface nobody has
 built, and nothing carries the requirement to the story that will build it. Worth a line in that
 story rather than an issue.
+
+## Closure — 2026-08-12
+
+Closed after its own fix commit was reviewed, which is the step the story had not had: `90a7437`
+repaired what the review of the implementation found, and a repair is not reviewed by the review
+that caused it. That second pass found three things, one of them a live defect on the surface AC6
+exists for, and all three are fixed in `47e2d49`.
+
+| AC | state at closure |
+|---|---|
+| AC1 | met — asserted on the published `Metric`s, three recorded mutations |
+| AC2 | met on the composition; its latch clause is a **net, not a mechanism**, and ADR 0032 now says so |
+| AC3 | **UNMET, [#69]** — the rule is in the code and no input can distinguish it from the one it replaced |
+| AC4 | met, after the two-flag split the fix commit's review of itself required |
+| AC5 | met — persisted per meter, restored through `run` rather than through a helper, with the owner written inside the file |
+| AC6 | met on the two surfaces that exist; the third is not built (see above) |
+| AC7 | met — v5 → v6, breaking, golden written out |
+| AC8 | met — ADR 0031 and ADR 0032, with [#70] and [#71] |
+| AC9 | met — the four patches deferred here, each falsified |
+| AC10 | met — the pre-2.3 assertions still pass verbatim |
+
+**AC3 is the only criterion left open, and it is open by the rule rather than by omission.** No
+oracle yet produces a `Bad` on a reading the source called `Good`, so the new adoption rule and the
+one it replaced agree on every input that exists; a mutation swapping them back turns nothing red.
+Story 2.4's bounds oracle is its first subject, and the proof belongs there. Recorded, not ticked.
+
+**What this story is worth beyond its code.** It was not planned — it is the output of a review —
+and its own review then found four criteria ticked that should not have been. Reviewing the fix
+found three more. Each pass found less than the one before, which is the only evidence available
+that the process converges. The recurring shape is written into the epic for its retrospective:
+**testing a property one layer above where it lives**, four instances across this one story.
+
+[#70]: https://github.com/guycorbaz/smartme_mqtt/issues/70
+[#71]: https://github.com/guycorbaz/smartme_mqtt/issues/71

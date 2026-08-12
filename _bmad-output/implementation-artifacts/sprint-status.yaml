@@ -516,7 +516,21 @@ development_status:
   # Its first wording also deferred to an oracle that does not exist (a replayed
   # feed, story 2.7) — in a story quoting the rule that forbids it. Reworded,
   # original kept beside it.
-  2-3-the-oracle-layer-finished: review
+  # CLOSED 2026-08-12, after its FIX COMMIT was reviewed — the step the story had
+  # not had. `90a7437` repaired what the review of the implementation found, and a
+  # repair is not reviewed by the review that caused it. That pass found three
+  # more, one of them live: `/` printed "One meter is not being read: cellar … a
+  # restart is needed to clear" directly above "One meter is being read … Nothing
+  # here is cleared by a restart", because `degraded()` filtered on the published
+  # quality alone while `failed()` filters on `State::Failed` and `record` writes
+  # both every tick. The operator is not lied to — they are told two opposite
+  # things and left to choose. Fixed in 47e2d49, falsified first.
+  # Also: three doc blocks piled above one test, two of them orphaned BEFORE the
+  # fix commit, leaving a recorded falsification beside a test that cannot produce
+  # it; and the per-process scratch dir applied to one path of six.
+  # AC3 stays UNMET with [#69]. Each pass found less than the one before, which is
+  # the only evidence available that this converges.
+  2-3-the-oracle-layer-finished: done  # closed 2026-08-12; AC3 recorded UNMET [#69]
   # FR14 — does not exist at all today.
   # BLOCKED BY 2.3: physical bounds is a PER-METRIC oracle, and until 2.3 a verdict
   # belongs to a READING. Written first, this story has to be rewritten and the wire
