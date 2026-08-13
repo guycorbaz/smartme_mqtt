@@ -62,13 +62,98 @@
 #   Ignition contract test (human action required — stays backlog until Guy runs it).
 
 generated: 2026-07-25
-last_updated: 2026-08-12
+last_updated: 2026-08-13
 project: smartme_mqtt
 project_key: NOKEY
 tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts
 
 development_status:
+  # ==========================================================================
+  # END OF 2026-08-13 — read this first tomorrow.
+  # ==========================================================================
+  #
+  # EIGHT COMMITS, all pushed, all three workflows green. STORY 2.6 IS CLOSED and
+  # STORY 2.7 IS HALF BUILT (AC1, AC4, AC6, AC7 done; AC2, AC3, AC5 remain). What is
+  # left of Epic 2 is those three criteria and the retrospective.
+  #
+  # THE DAY'S SHAPE WAS TWO REVIEWS, AND EACH FOUND A DEFECT THAT WAS LIVE.
+  # The first (morning, on story 2.6) found AC1 ticked with its own worked example
+  # unproducible: an unknown device id `404`s, `is_fatal` did not name it, so THE MOST
+  # LIKELY CONFIGURATION ERROR THERE IS was published as a network fault and the bridge
+  # polled a device that does not exist for ever.
+  # The second (evening, on the MORNING'S REPAIRS — story 2.3's rule that a repair is
+  # not reviewed by the review that caused it) found the repair itself lying: while the
+  # rate-limit wait was honoured, every cycle logged *"source rate-limited, no delay
+  # given"*, and the wait exists precisely BECAUSE a delay was given.
+  #
+  # THE SENTENCE TO CARRY INTO THE RETROSPECTIVE: that lie was OLDER than the log line
+  # that exposed it. Nothing rendered a `SourceError`'s reason on any operator surface —
+  # verified by deleting `impl Display` AND `impl Error`, after which the library still
+  # compiled. Every repair instruction this codebase had written for an operator, ADR
+  # 0029's included, reached nobody. Making a thing visible showed it was wrong within
+  # the hour, twice in two days.
+  #
+  # WHAT I WOULD READ FIRST TOMORROW, in this order:
+  #
+  # 1. **The Epic 2 retrospective now has FOUR shapes, not two**, and the last two are
+  #    today's:
+  #      - 2.1-2.3 tested a property one layer ABOVE where it lived;
+  #      - 2.5 tested at the right layer but never checked its own evidence;
+  #      - 2.6 had a property NOTHING COULD TEST, because its layer sat behind an
+  #        `async fn` and a live request — under a green suite that therefore said
+  #        nothing either way. `classify_device_status` and `decode_device` are pure
+  #        functions now for exactly that reason;
+  #      - 2.7 found THE FIXTURES MODELLING THE FAULT THEY ASSERTED HEALTH AGAINST:
+  #        every reading pinned both timestamps, so a sequence of ticks handed back a
+  #        byte-identical response — the frozen cloud the new oracle exists to refuse.
+  #        Our own tests could not tell a working feed from a replay.
+  # 2. **[#74] is a DESIGN decision and it is the largest thing Epic 2 leaves open.**
+  #    The smart-me API's own description — now kept at `docs/spec/smart-me-api/` —
+  #    declares SIX of the eight fields this client consumes as nullable, and `Device`
+  #    requires all eight. A `null` on power therefore costs the WHOLE reading, energy
+  #    index included, which contradicts ADR 0031. Two candidate designs are written in
+  #    the issue; neither is taken.
+  # 3. **Three arbitrations left story 2.6 with numbers**: [#75] the latched cause
+  #    depending on the last tick (an ADR, and the only one an operator sees), [#76] two
+  #    invariants with no test (an hour, NO decision needed — the one to take first),
+  #    [#77] the token endpoint's 429.
+  #
+  # THE API NOW HAS A PINNED DESCRIPTION, and it paid for itself the day it arrived:
+  # `openapi-v1.json` (OpenAPI 3.0.4, `info.version` = `v1`, retrieved 2026-08-13),
+  # with a rule in `CLAUDE.md` naming its three limits — it lies about property casing,
+  # it is near-silent about failure (`GET /Devices/{id}` declares only `200`), and there
+  # is NO VERSION ON THE WIRE, so the committed copy is the only way to notice movement.
+  # Re-fetch and diff; that is the whole mechanism.
+  #
+  # TWO VOCABULARY SWEEPS, on Guy's instruction: "vendored" (75 occurrences, 22 files)
+  # and "a fault reported as weather" (9 occurrences). Both replaced with the domain's
+  # own words. The rule going forward: name the mechanism, never coin a term a reader
+  # has to decode — it spreads, and it was not even used consistently.
+  #
+  # OWED BY GUY, unchanged from yesterday and now a day older: the Tier-3 gate's steps 5
+  # and 6, `Rebirth (Last) Cause` after triggering, `Cause` on the wire while a meter is
+  # degraded, and the `ContractV6` clean-up in Ignition's tag tree. Plus the decision
+  # nobody else can take: EPIC 4 STILL HAS NO PATH TO COMPLETION (ADR 0025 defers eight
+  # of its nine remaining stories, so it can never close and its retrospective can never
+  # come due). Finish it, or withdraw them from its scope.
+  #
+  # AN IMPEDIMENT THAT IS NOT THE CODE'S: port 8080 was held all day by another project
+  # on this machine, so the two unconfigured-bridge tests could not run locally and
+  # `ci-local.sh` could not complete. Every push was gated on everything else and then
+  # verified against GitHub, where both tests ran and passed. If it recurs, that is the
+  # reason — not a regression.
+  #
+  # NOTE FOR WHOEVER TOUCHES `poll_publish` NEXT: `a_payload_the_bridge_could_not_read_
+  # names_its_field_to_the_operator` failed ONCE on a loaded machine and never again in
+  # 17 runs. The mechanism that fits is the 2 s fetch deadline elapsing before the fake
+  # source is polled. The test now says so in its own assertion, so the next occurrence
+  # explains itself instead of looking like the property failing.
+  #
+  # TWO LOCAL BRANCHES ARE LEFT ON PURPOSE: `review/story-2.6` and
+  # `review/story-2.6-repairs`. Their content is fully on `main`; they are kept only as
+  # the isolated diffs the two reviews actually read, and are safe to delete.
+  #
   # ==========================================================================
   # END OF 2026-08-12 — read this first tomorrow.
   # ==========================================================================
