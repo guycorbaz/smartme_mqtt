@@ -1,6 +1,6 @@
 # Story 2.7: A feed that stopped moving stops being called fresh, and a clock that is wrong is not called old
 
-Status: ready-for-dev
+Status: in-progress — **AC4 done 2026-08-13**; AC1, AC2, AC3, AC5, AC7 outstanding
 
 ## Story
 
@@ -104,9 +104,10 @@ runbook, and the mechanical grep.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Bundle the per-meter memory** (AC4)
-  - [ ] One type carrying `last`, `energy_reference`, `rate_limited_until`
-  - [ ] Every existing assertion passes unchanged
+- [x] **Task 1 — Bundle the per-meter memory** (AC4) — 2026-08-13
+  - [x] `MeterMemory` carries `last`, `energy_reference`, `rate_limited_until`
+  - [x] Every existing assertion passes unchanged: 221 bridge tests, none edited for
+        content, 17 call sites rewritten mechanically
 - [ ] **Task 2 — The stalled-feed oracle** (AC1)
   - [ ] `http_date` of the previous accepted fetch, carried in the memory
   - [ ] Reading-scoped judgement, composed like the others
@@ -159,5 +160,22 @@ structural question — *is `value_date` advancing?* — is the one that needs n
 ### Debug Log References
 
 ### Completion Notes List
+
+**2026-08-13 — AC4, the refactor that pays for the two oracles.**
+
+`MeterMemory` replaces three threaded parameters. `step_once` goes from six parameters
+to four, and the two memories AC1 and AC2 need have somewhere to live that is not a
+seventh and eighth.
+
+**The proof is that nothing moved**: all 221 bridge tests pass with no assertion edited
+— only the 17 call sites, mechanically. No falsification is recorded here and that is
+deliberate rather than an omission: the repository's rule governs *new tests asserting
+an invariant*, and this task added none. A refactor's evidence is the unchanged suite.
+
+**One behaviour did change, in the tests only, and it is an improvement.** Several call
+sites passed `&mut None` for a memory, so every write to it was discarded and the next
+call started fresh. Sharing one `MeterMemory` makes it persist — which is what
+production always did. No test depended on the reset; the harness is now the more
+faithful of the two.
 
 ### File List

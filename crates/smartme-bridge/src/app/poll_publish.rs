@@ -369,6 +369,32 @@ pub struct Context<'a> {
     pub outbox: &'a mpsc::Sender<MeterUpdate>,
 }
 
+/// What one meter's loop carries from one tick to the next.
+///
+/// # Why this is a struct and not four parameters (story 2.7 AC4)
+///
+/// It was three, threaded individually through a `step_once` that already had six
+/// parameters, and every call site was a place to pass `last` where
+/// `energy_reference` belonged — two `Option`s of different types kept them apart
+/// by luck rather than by design. The fourth memory is what made it worth paying:
+/// `last_http_date` has the same type as nothing else here, and the oracle that
+/// needs it is the one whose whole subject is a value that stopped changing.
+///
+/// **Every field is a memory the ORACLES read, never bookkeeping.** Anything the
+/// loop needs for itself stays in the loop.
+#[derive(Debug, Default)]
+pub struct MeterMemory {
+    /// The last reading this meter ADOPTED — refused readings do not enter, which
+    /// is story 2.3 AC4 and the defect it closed.
+    pub last: Option<crate::domain::Measurement>,
+    /// The energy-monotonicity yardstick (story 2.2, persisted since 2.3 AC5).
+    pub energy_reference: Option<crate::domain::Kwh>,
+    /// When the source told us not to come back before. Story 2.6: the ONE
+    /// source-side wait this bridge honours, because it is the one the poll
+    /// interval cannot know about.
+    pub rate_limited_until: Option<MonotonicMs>,
+}
+
 /// Runs one iteration: heartbeat, fetch (bounded), judge, forward.
 ///
 /// Split out of the loop so a test can drive exactly one step without a timer.
@@ -377,13 +403,13 @@ pub async fn step_once<S: Source + Send>(
     ctx: &Context<'_>,
     source: &mut S,
     previous: State,
-    last: &mut Option<crate::domain::Measurement>,
-    energy_reference: &mut Option<crate::domain::Kwh>,
-    // When the source told us not to come back before. Story 2.6: the ONE
-    // source-side wait this bridge honours, because it is the one the poll
-    // interval cannot know about.
-    rate_limited_until: &mut Option<MonotonicMs>,
+    memory: &mut MeterMemory,
 ) -> (State, Verdict) {
+    let MeterMemory {
+        last,
+        energy_reference,
+        rate_limited_until,
+    } = memory;
     let Context {
         meter,
         clock,
@@ -903,13 +929,15 @@ pub async fn run<S: Source + Send>(
     // Restarts are routine here — any `Cost::ProcessRestart` configuration change
     // performs one, and Epic 7 will wire `/healthz` to an automatic one — so the
     // gap was not rare, it was scheduled.
-    let mut energy_reference = load_energy_reference(&reference_dir, &meter);
-    // Story 2.6: a wait the SOURCE asked for, per meter, monotonic so a wall
-    // clock correction cannot shorten or extend it.
-    let mut rate_limited_until: Option<MonotonicMs> = None;
-    // The last measurement this meter produced, carried so a failed tick can
-    // publish a verdict about it rather than say nothing (Story 3.2).
-    let mut last: Option<crate::domain::Measurement> = None;
+    // Everything this meter carries between ticks, in one place since story 2.7:
+    // the energy yardstick loaded above, the wait a rate limit may arm (story 2.6,
+    // monotonic so a wall-clock correction cannot shorten or extend it), and the
+    // last measurement adopted — carried so a failed tick publishes a verdict about
+    // it rather than saying nothing (story 3.2).
+    let mut memory = MeterMemory {
+        energy_reference: load_energy_reference(&reference_dir, &meter),
+        ..MeterMemory::default()
+    };
     // The period is READ FROM THE HANDLE, not captured (Story 5.2 AC4).
     //
     // `tokio::time::interval` fixes its period at construction, so a hot change
@@ -950,21 +978,13 @@ pub async fn run<S: Source + Send>(
             outbox: &outbox,
         };
         let published;
-        let before = energy_reference;
-        (state, published) = step_once(
-            &ctx,
-            &mut source,
-            state,
-            &mut last,
-            &mut energy_reference,
-            &mut rate_limited_until,
-        )
-        .await;
+        let before = memory.energy_reference;
+        (state, published) = step_once(&ctx, &mut source, state, &mut memory).await;
         // Persisted only when it MOVED, so a quiet meter does not rewrite the
         // same number every period — an fsync per meter per cycle for a value
         // that did not change.
-        if energy_reference != before
-            && let Some(energy) = energy_reference
+        if memory.energy_reference != before
+            && let Some(energy) = memory.energy_reference
         {
             store_energy_reference(&reference_dir, &meter, energy);
         }
@@ -1188,38 +1208,21 @@ mod tests {
             heartbeat: &heartbeat,
             outbox: &tx,
         };
-        let (mut last, mut energy, mut until) = (None, None, None);
+        let mut mem = MeterMemory::default();
 
         // A good reading first: `last` must hold something, or a silent cycle has
         // nothing to republish and ADR 0027's certificate path is a different test.
-        let (state, _) = step_once(
-            &ctx,
-            &mut source,
-            State::initial(),
-            &mut last,
-            &mut energy,
-            &mut None,
-        )
-        .await;
-        let (_, first) =
-            step_once(&ctx, &mut source, state, &mut last, &mut energy, &mut until).await;
+        let (state, _) = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
+        let (_, first) = step_once(&ctx, &mut source, state, &mut mem).await;
         assert_eq!(first.cause(), Some(Cause::SourceRateLimited));
         assert!(
-            until.is_some(),
+            mem.rate_limited_until.is_some(),
             "the wait is armed by the server's own delay"
         );
 
         // The clock has NOT advanced past the deadline, so no fetch may happen.
         let fetches_before = source.calls.len();
-        let (_, second) = step_once(
-            &ctx,
-            &mut source,
-            State::Stale,
-            &mut last,
-            &mut energy,
-            &mut until,
-        )
-        .await;
+        let (_, second) = step_once(&ctx, &mut source, State::Stale, &mut mem).await;
         assert_eq!(
             source.calls.len(),
             fetches_before,
@@ -1286,26 +1289,17 @@ mod tests {
             outbox: &tx,
         };
 
-        let mut last = None;
-        let mut energy = None;
+        let mut mem = MeterMemory::default();
 
         // THE PREMISE: a rising counter is Good, or the Bad below proves nothing.
-        let (s1, _) = step_once(
-            &ctx,
-            &mut source,
-            State::initial(),
-            &mut last,
-            &mut energy,
-            &mut None,
-        )
-        .await;
+        let (s1, _) = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
         assert_eq!(s1, State::Fresh);
 
         // The drop. The STATE is kept and asserted since 2026-08-11 (deferred
         // review patch): `let _ =` discarded exactly the value that would have
         // shown the wire and the operator surfaces disagreeing, which is what let
         // that divergence live until the review found it by reading.
-        let (s2, _) = step_once(&ctx, &mut source, s1, &mut last, &mut energy, &mut None).await;
+        let (s2, _) = step_once(&ctx, &mut source, s1, &mut mem).await;
         assert_eq!(
             s2,
             State::Fresh,
@@ -1313,15 +1307,7 @@ mod tests {
         );
 
         // And a reading consistent with the NEW index.
-        let (s3, _) = step_once(
-            &ctx,
-            &mut source,
-            State::initial(),
-            &mut last,
-            &mut energy,
-            &mut None,
-        )
-        .await;
+        let (s3, _) = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
         assert_eq!(s3, State::Fresh);
         drop(tx);
 
@@ -1383,18 +1369,9 @@ mod tests {
             outbox: &tx,
         };
 
-        let mut last = None;
-        let mut energy = None;
-        let (s1, _) = step_once(
-            &ctx,
-            &mut source,
-            State::initial(),
-            &mut last,
-            &mut energy,
-            &mut None,
-        )
-        .await;
-        let _ = step_once(&ctx, &mut source, s1, &mut last, &mut energy, &mut None).await;
+        let mut mem = MeterMemory::default();
+        let (s1, _) = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
+        let _ = step_once(&ctx, &mut source, s1, &mut mem).await;
         drop(tx);
 
         let mut got = Vec::new();
@@ -1475,23 +1452,15 @@ mod tests {
             outbox: &tx,
         };
 
-        let mut last = None;
-        let (good, _) = step_once(
-            &ctx,
-            &mut source,
-            State::initial(),
-            &mut last,
-            &mut None,
-            &mut None,
-        )
-        .await;
+        let mut mem = MeterMemory::default();
+        let (good, _) = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
         assert_eq!(
             good,
             State::Fresh,
             "the premise: the meter must first be proven fresh"
         );
 
-        let (after, _) = step_once(&ctx, &mut source, good, &mut last, &mut None, &mut None).await;
+        let (after, _) = step_once(&ctx, &mut source, good, &mut mem).await;
         assert_eq!(after, State::Stale);
         drop(tx);
 
@@ -1699,18 +1668,14 @@ mod tests {
             };
             let mut source =
                 FakeSource::new().then(Ok(reading_with_energy(Quality::Good, 950, 900_000.0)));
-            let mut last = None;
-            let mut reference = load_energy_reference(&dir, &meter);
-            let (_, _) = step_once(
-                &ctx,
-                &mut source,
-                State::initial(),
-                &mut last,
-                &mut reference,
-                &mut None,
-            )
-            .await;
-            let energy = reference.expect("a good reading is adopted as the reference");
+            let mut mem = MeterMemory {
+                energy_reference: load_energy_reference(&dir, &meter),
+                ..MeterMemory::default()
+            };
+            let (_, _) = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
+            let energy = mem
+                .energy_reference
+                .expect("a good reading is adopted as the reference");
             store_energy_reference(&dir, &meter, energy);
         }
 
@@ -1737,17 +1702,11 @@ mod tests {
             outbox: &tx,
         };
         let mut source = FakeSource::new().then(Ok(reading_with_energy(Quality::Good, 950, 12.0)));
-        let mut last = None;
-        let mut reference = restored;
-        let _ = step_once(
-            &ctx,
-            &mut source,
-            State::initial(),
-            &mut last,
-            &mut reference,
-            &mut None,
-        )
-        .await;
+        let mut mem = MeterMemory {
+            energy_reference: restored,
+            ..MeterMemory::default()
+        };
+        let _ = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
         drop(tx);
 
         let update = rx.recv().await.expect("the reading was published");
@@ -2010,12 +1969,10 @@ mod tests {
             heartbeat: &heartbeat,
             outbox: &tx,
         };
-        let mut last = None;
-        let mut energy = None;
+        let mut mem = MeterMemory::default();
         let mut state = State::initial();
         for _ in 0..source.remaining() {
-            (state, _) =
-                step_once(&ctx, &mut source, state, &mut last, &mut energy, &mut None).await;
+            (state, _) = step_once(&ctx, &mut source, state, &mut mem).await;
         }
         drop(tx);
         let mut got = Vec::new();
@@ -2040,15 +1997,8 @@ mod tests {
             heartbeat: &heartbeat,
             outbox: &tx,
         };
-        let (state, _) = step_once(
-            &ctx,
-            &mut source,
-            State::initial(),
-            &mut None,
-            &mut None,
-            &mut None,
-        )
-        .await;
+        let mut mem = MeterMemory::default();
+        let (state, _) = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
         drop(tx);
         let mut got = Vec::new();
         while let Some(u) = rx.recv().await {
@@ -2261,15 +2211,8 @@ mod tests {
             heartbeat: &heartbeat,
             outbox: &tx,
         };
-        let _ = step_once(
-            &ctx,
-            &mut source,
-            State::initial(),
-            &mut None,
-            &mut None,
-            &mut None,
-        )
-        .await;
+        let mut mem = MeterMemory::default();
+        let _ = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
         assert_eq!(
             heartbeat.last(),
             Some(MonotonicMs(7_000)),
@@ -2673,27 +2616,11 @@ mod tests {
             heartbeat: &heartbeat,
             outbox: &tx,
         };
-        let mut last = None;
-        let (after_timeout, _) = step_once(
-            &ctx,
-            &mut source,
-            State::initial(),
-            &mut last,
-            &mut None,
-            &mut None,
-        )
-        .await;
+        let mut mem = MeterMemory::default();
+        let (after_timeout, _) = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
         assert_eq!(after_timeout, State::Stale);
 
-        let (after_good, _) = step_once(
-            &ctx,
-            &mut source,
-            after_timeout,
-            &mut last,
-            &mut None,
-            &mut None,
-        )
-        .await;
+        let (after_good, _) = step_once(&ctx, &mut source, after_timeout, &mut mem).await;
         assert_eq!(after_good, State::Fresh);
         drop(tx);
         let u = rx.recv().await.expect("the good reading was forwarded");
