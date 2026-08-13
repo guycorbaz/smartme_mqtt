@@ -117,6 +117,57 @@ const GOLDEN_CAUSES_V4: CauseGolden = &[
     ("not-revalidated", false, Quality::Stale),
 ];
 
+/// The quality codes, as of contract v9. Its own copy — a golden is a historical
+/// record, and sharing an array means editing v8 rewrites what v8 attested to.
+const GOLDEN_QUALITY_V9: QualityGolden = &[
+    (Quality::Good, 192),
+    (Quality::Stale, 0x8000_0000 | 516),
+    (Quality::Bad, 0x8000_0000 | 512),
+];
+
+/// The cause vocabulary, as of contract v9: v8 plus the one story 2.7 added.
+///
+/// **Additive, and it is the last oracle Epic 2 owed.** `feed-not-advancing` says
+/// the CLOUD stopped rebuilding its answer — two consecutive successful fetches
+/// carried the same `Date` header. It degrades rather than latching: a frozen feed
+/// may thaw, and the meter behind it may be perfectly well.
+///
+/// It is the only cause in this vocabulary that cannot be produced by looking at
+/// one reading. Every other judgement here is a fact about a single response; this
+/// one is a relation between two, which is why it waited for cross-tick memory.
+const GOLDEN_CAUSES_V9: CauseGolden = &[
+    ("source-unreachable", false, Quality::Stale),
+    ("source-refused", true, Quality::Bad),
+    ("host-clock-unsynced", false, Quality::Stale),
+    ("no-freshness-proof", false, Quality::Stale),
+    ("source-clock-implausible", false, Quality::Stale),
+    ("timestamps-disagree", false, Quality::Stale),
+    ("reading-too-old", false, Quality::Stale),
+    ("value-unusable", false, Quality::Bad),
+    ("source-marked-stale", false, Quality::Stale),
+    ("not-revalidated", false, Quality::Stale),
+    ("counter-went-backwards", false, Quality::Bad),
+    ("unit-not-recognised", false, Quality::Bad),
+    ("value-not-finite", false, Quality::Bad),
+    ("value-overflowed", false, Quality::Bad),
+    ("source-timestamp-unparseable", false, Quality::Bad),
+    ("credential-rejected", true, Quality::Bad),
+    ("configuration-contradicted", true, Quality::Bad),
+    ("identity-mismatch", true, Quality::Bad),
+    ("source-rate-limited", false, Quality::Stale),
+    ("feed-not-advancing", false, Quality::Stale),
+];
+
+/// The names and units, as of v9. Unchanged, and its own copy.
+const GOLDEN_NAMES_V9: NameGolden = &[
+    ("metric.power", "Power"),
+    ("metric.energy", "Energy"),
+    ("metric.rebirth", "Node Control/Rebirth"),
+    ("unit.power", "kW"),
+    ("unit.energy", "kWh"),
+    ("property.cause", "Cause"),
+];
+
 /// The quality codes, as of contract v8. Its own copy — a golden is a historical
 /// record, and sharing an array means editing v7 rewrites what v7 attested to.
 const GOLDEN_QUALITY_V8: QualityGolden = &[
@@ -329,6 +380,11 @@ struct Golden {
 /// golden is what the `None` arm refuses.
 fn golden_for(version: i64) -> Option<Golden> {
     match version {
+        9 => Some(Golden {
+            quality: GOLDEN_QUALITY_V9,
+            causes: GOLDEN_CAUSES_V9,
+            names: GOLDEN_NAMES_V9,
+        }),
         8 => Some(Golden {
             quality: GOLDEN_QUALITY_V8,
             causes: GOLDEN_CAUSES_V8,

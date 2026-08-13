@@ -45,22 +45,34 @@ use tokio::sync::mpsc;
 const SANE_NOW: i64 = 1_784_984_793_000;
 const BASE: i64 = 1_784_984_700_000;
 
-fn reading(meter: &MeterId, quality: Quality) -> Reading {
+/// The `tick`-th answer a WORKING cloud gives: both timestamps advance by one
+/// period while the age between them stays put.
+///
+/// **`tick` exists because of story 2.7's stalled-feed oracle.** Every reading here
+/// used to be byte-identical, which the oracle correctly reads as a cloud that
+/// stopped rebuilding its answer — the fixtures were modelling the exact fault the
+/// oracle was written to catch. A sequence of identical responses is not a healthy
+/// meter, and this test is about an outage, not about a replay.
+fn reading(meter: &MeterId, quality: Quality, tick: i64) -> Reading {
+    let shift = tick * PERIOD_MS;
     Reading {
         value: Measurement {
             meter: meter.clone(),
             serial: Serial::new("30000001"),
             power: Some(Kw(0.018)),
             energy: Some(Kwh(4_843.822)),
-            value_date: UtcMillis(BASE),
+            value_date: UtcMillis(BASE + shift),
             quality,
         },
         // 950 ms of age: comfortably fresh under the shipped allowance, so the
         // verdicts below are about the OUTAGE and not about staleness of value.
-        http_date: Some(UtcMillis(BASE + 950)),
+        http_date: Some(UtcMillis(BASE + shift + 950)),
         faults: smartme_bridge::core::SourceFaults::NONE,
     }
 }
+
+/// One poll period, in the units the fixtures above shift by.
+const PERIOD_MS: i64 = 5_000;
 
 /// The pacing NFR2 binds at.
 ///
@@ -167,14 +179,14 @@ async fn a_silent_meters_verdict_arrives_inside_nfr2s_bound() {
         // 3.2 AC4 gives it nothing, deliberately).
         let source = if *meter == silent {
             FakeSource::new()
-                .then(Ok(reading(meter, Quality::Good)))
+                .then(Ok(reading(meter, Quality::Good, 0)))
                 .then_hang()
                 .then_hang()
                 .then_hang()
         } else {
             let mut s = FakeSource::new();
-            for _ in 0..6 {
-                s = s.then(Ok(reading(meter, Quality::Good)));
+            for tick in 0..6 {
+                s = s.then(Ok(reading(meter, Quality::Good, tick)));
             }
             s
         };

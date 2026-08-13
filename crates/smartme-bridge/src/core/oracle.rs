@@ -63,7 +63,7 @@
 //! what `Policy::step` reads, so it is no longer documented in one place and
 //! computed in another.
 
-use crate::domain::{Kwh, Quality};
+use crate::domain::{Kwh, Quality, UtcMillis};
 
 /// Why a reading was degraded or refused: the half of a verdict that reaches a
 /// consumer, under its own property key.
@@ -187,6 +187,28 @@ pub enum Cause {
     /// The source rate-limited us. **Degrades** — a rate limit passes, and the
     /// next reading may be perfectly good.
     SourceRateLimited,
+    /// **The cloud stopped regenerating its answer**: two consecutive successful
+    /// fetches carried the same `Date` header (story 2.7, the oracle parked since
+    /// Epic 1). **Degrades** — a frozen feed may thaw, and the meter behind it may
+    /// be perfectly well.
+    ///
+    /// # Why no other guard can see this
+    ///
+    /// Every freshness check compares two timestamps *inside one reading*, and a
+    /// byte-identical replay keeps them consistent with each other. The age stays
+    /// plausible, so the reading stays `Fresh`, and **a frozen cloud is
+    /// indistinguishable from a working one**. Only the relation between two
+    /// responses gives it away, which is why this needs cross-tick memory and why
+    /// `Policy::step` could never have produced it.
+    ///
+    /// # And why the reference is `http_date`, not `value_date`
+    ///
+    /// A meter that genuinely stops reporting keeps its `value_date` frozen while
+    /// the cloud's `Date` advances — that is ordinary staleness, already handled by
+    /// [`Cause::ReadingTooOld`], and calling it a replay would send an operator to
+    /// the wrong place entirely. Only the CLOUD's own clock standing still means the
+    /// response is not being rebuilt.
+    FeedNotAdvancing,
 }
 
 impl Cause {
@@ -235,6 +257,7 @@ impl Cause {
         Cause::ConfigurationContradicted,
         Cause::IdentityMismatch,
         Cause::SourceRateLimited,
+        Cause::FeedNotAdvancing,
     ];
 
     /// The next cause in [`Cause::ALL`]'s order, or `None` for the last one.
@@ -277,10 +300,11 @@ impl Cause {
             Cause::CredentialRejected => Some(Cause::ConfigurationContradicted),
             Cause::ConfigurationContradicted => Some(Cause::IdentityMismatch),
             Cause::IdentityMismatch => Some(Cause::SourceRateLimited),
+            Cause::SourceRateLimited => Some(Cause::FeedNotAdvancing),
             // The end of the chain. A new cause appended to `ALL` replaces this
             // arm's `None` with a `Some`, which is the edit the old positional
             // `discriminant` never demanded.
-            Cause::SourceRateLimited => None,
+            Cause::FeedNotAdvancing => None,
         }
     }
 
@@ -351,6 +375,7 @@ impl Cause {
             // merely getting old, and the reason it is not refreshed is that we
             // were asked to wait — not that anything about it is wrong.
             Cause::SourceRateLimited => Quality::Stale,
+            Cause::FeedNotAdvancing => Quality::Stale,
             // Freshness refusals: the value was true, and may be old. The
             // difference from the three above is the whole reason a consumer is
             // told which of the two it is holding.
@@ -387,6 +412,7 @@ impl Cause {
             Cause::ConfigurationContradicted => "configuration-contradicted",
             Cause::IdentityMismatch => "identity-mismatch",
             Cause::SourceRateLimited => "source-rate-limited",
+            Cause::FeedNotAdvancing => "feed-not-advancing",
         }
     }
 
@@ -809,9 +835,77 @@ pub fn energy_is_monotonic(reference: Option<Kwh>, reading: Kwh) -> Verdict {
     }
 }
 
+/// Whether the CLOUD is still rebuilding its answers, judged from the `Date`
+/// header of two consecutive successful fetches (story 2.7 AC1).
+///
+/// # The oracle parked since Epic 1
+///
+/// `Policy::step`'s doc carried this as an accepted limitation from the beginning:
+/// *"a byte-identical replayed response — `http_date` frozen WITH `value_date` —
+/// keeps a plausible age and stays Fresh."* Every other freshness guard compares
+/// two timestamps **inside one reading**, and a replay keeps them consistent, so no
+/// amount of care inside `judge_reading` can see it. This is the only judgement in
+/// the bridge whose input is a relation between two responses rather than a fact
+/// about one, which is why it lives here and not in the state machine.
+///
+/// # Reading-scoped, and both metrics with it
+///
+/// A response that was not regenerated says nothing about either number in
+/// particular — the whole answer is the previous answer. So this is
+/// `Judgement::about_reading`, not a per-metric judgement, and it is the one place
+/// where ADR 0031's per-metric rule genuinely does not apply.
+///
+/// # `<=`, not `==`
+///
+/// A frozen header is the case this exists for, but a header going BACKWARDS is not
+/// evidence of a working feed either — it is the same absence of progress with a
+/// worse explanation. Refusing both costs nothing and needs no second cause: what
+/// the operator is told is that the feed is not advancing, which is true either way.
+pub fn feed_is_advancing(previous: Option<UtcMillis>, current: UtcMillis) -> Verdict {
+    match previous {
+        Some(before) if current <= before => Verdict::stale(Cause::FeedNotAdvancing),
+        _ => Verdict::good(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Story 2.7 AC1 — the oracle parked since Epic 1, at the layer it lives.**
+    ///
+    /// A cloud that stops rebuilding its answer hands back the same `Date` header.
+    /// Nothing inside a single reading can see that: the replay is internally
+    /// consistent, so its age is plausible and every other guard passes it.
+    ///
+    /// The FIRST fetch has no predecessor and must be good — an oracle that refused
+    /// a meter's opening reading would make every restart look like a frozen cloud.
+    #[test]
+    fn a_date_header_that_stopped_moving_is_a_feed_that_stopped() {
+        let t = |ms: i64| UtcMillis(1_784_984_793_000 + ms);
+
+        assert_eq!(
+            feed_is_advancing(None, t(0)),
+            Verdict::good(),
+            "the first answer has nothing to be compared with, and a meter that has \
+             just started is not a meter being replayed"
+        );
+        assert_eq!(
+            feed_is_advancing(Some(t(0)), t(30_000)),
+            Verdict::good(),
+            "a cloud that rebuilt its answer is working, whatever the values did"
+        );
+        assert_eq!(
+            feed_is_advancing(Some(t(30_000)), t(30_000)),
+            Verdict::stale(Cause::FeedNotAdvancing),
+            "the same Date twice is the frozen cloud this exists to refuse"
+        );
+        assert_eq!(
+            feed_is_advancing(Some(t(30_000)), t(29_000)),
+            Verdict::stale(Cause::FeedNotAdvancing),
+            "and a Date going BACKWARDS is not evidence of a working feed either"
+        );
+    }
 
     /// AC2 — worst wins, and it does so independently of the order the verdicts
     /// arrive in.

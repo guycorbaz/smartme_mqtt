@@ -1,6 +1,6 @@
 # Story 2.7: A feed that stopped moving stops being called fresh, and a clock that is wrong is not called old
 
-Status: in-progress — **AC4 done 2026-08-13**; AC1, AC2, AC3, AC5, AC7 outstanding
+Status: in-progress — **AC1, AC4, AC6, AC7 done 2026-08-13**; AC2, AC3, AC5 outstanding
 
 ## Story
 
@@ -108,14 +108,15 @@ runbook, and the mechanical grep.
   - [x] `MeterMemory` carries `last`, `energy_reference`, `rate_limited_until`
   - [x] Every existing assertion passes unchanged: 221 bridge tests, none edited for
         content, 17 call sites rewritten mechanically
-- [ ] **Task 2 — The stalled-feed oracle** (AC1)
-  - [ ] `http_date` of the previous accepted fetch, carried in the memory
-  - [ ] Reading-scoped judgement, composed like the others
+- [x] **Task 2 — The stalled-feed oracle** (AC1) — 2026-08-13
+  - [x] `http_date` of the previous SUCCESSFUL fetch — not the previous *accepted* one;
+        the difference is decided and argued on `MeterMemory::last_http_date`
+  - [x] Reading-scoped judgement, composed like the others
 - [ ] **Task 3 — Skew told apart from staleness** (AC2)
   - [ ] The structural discrimination; no threshold
 - [ ] **Task 4 — Verify UTC end-to-end** (AC3)
 - [ ] **Task 5 — Close [#69]** (AC5)
-- [ ] **Task 6 — Contract 8 → 9** (AC7)
+- [x] **Task 6 — Contract 8 → 9** (AC7) — 2026-08-13: golden, manual, runbook, grep
 - [ ] **Task 7 — Falsify, running each mutation BEFORE writing its note** (AC6)
 - [ ] **Task 8 — `./scripts/ci-local.sh` full run**, then `gh run list`
 
@@ -179,3 +180,57 @@ production always did. No test depended on the reset; the harness is now the mor
 faithful of the two.
 
 ### File List
+
+**2026-08-13 — AC1, the oracle parked since Epic 1.**
+
+`Cause::FeedNotAdvancing`, `feed_is_advancing` in the pure core, composed in `step_once` as a
+reading-scoped judgement beside freshness. `CONTRACT_VERSION` 8 → 9, additive.
+
+**AC1 lives OUTSIDE `Policy::step` and AC2 will live inside it, and that split is deliberate.**
+The story warns that two oracles in one story make the first failure ambiguous. Putting them in
+different places makes a mutation to one structurally unable to touch the other — verified by
+running M2 below, which reddened only its own test and left the monotonicity suite green.
+
+**The memory does NOT follow the adoption rule, and that is the design decision here.** `last` and
+`energy_reference` refuse a reading the oracles refused (story 2.3 AC4) because they are yardsticks
+for a VALUE. `last_http_date` is a yardstick for the RESPONSE: the question is whether the cloud is
+still rebuilding its answer, which has nothing to do with whether we trusted the numbers inside.
+Recording it only on adopted readings would make a stale meter look like a frozen cloud one tick
+later — the exact confusion AC1 chose `http_date` over `value_date` to avoid.
+
+**`<=` rather than `==`**: a header going backwards is not evidence of a working feed either, and
+"the feed is not advancing" is true of both. No second cause for a distinction that changes no
+repair.
+
+**The state stays `Fresh` on a replay, which is correct, and the first draft of the test asserted
+otherwise.** `State` judges the timestamps INSIDE one reading and a replay's are impeccable. What
+an operator reads is the composed verdict, and `FleetState::degraded` filters on
+`published.quality()`, so the meter is reported degraded with its cause. The two answers differ on
+purpose and only one of them is a surface. What would be a defect is a latch — a frozen feed must
+not need a restart to clear — and that is what the test asserts instead.
+
+### The fixtures were modelling the fault they were asserting health against
+
+Three existing tests failed when the oracle landed, and none of them was a defect in the oracle:
+every reading fixture pinned `value_date` to `BASE` and `http_date` to `BASE + age`, so a sequence
+of ticks handed back a **byte-identical response**. The oracle read that as a frozen cloud, and it
+was right. **Our own tests could not tell a working feed from a replay** — which is precisely the
+blind spot `Policy::step`'s parked-oracle note described, reappearing one layer up. Fixed with a
+`later(reading, ticks)` helper that advances both timestamps while holding the age, and a `tick`
+parameter on the NFR2 test's fixture.
+
+### An observed-once flake, recorded rather than dismissed
+
+`a_payload_the_bridge_could_not_read_names_its_field_to_the_operator` (story 2.6's) failed once
+during a full workspace run on a loaded machine and **did not reproduce in 17 later runs**. The
+mechanism that fits: the fetch's 2 s deadline elapsing before the fake source was polled, making
+the tick a `Timeout` that never carried the decode failure. Unconfirmed. The test now asserts
+against that line explicitly and says so, so the next occurrence explains itself instead of looking
+like the property failing — the repository's rule about a flake that impersonates a real bug.
+
+### Falsification — AC1, both mutations RUN before this note
+
+| mutation | result |
+|---|---|
+| the comparison in `feed_is_advancing` neutered (`false &&`) | RED on **both layers** — the unit test and `a_replayed_response_is_refused_on_both_metrics`, which is the pipeline proof |
+| the reference switched from `http_date` to `value_date` | RED on `a_silent_meter_behind_a_live_cloud_is_not_called_a_replay` only — *"the FEED advanced; it is the METER that went quiet, and the two send an operator to different places"* — and the monotonicity tests stayed green, which is the independence the story asked for |

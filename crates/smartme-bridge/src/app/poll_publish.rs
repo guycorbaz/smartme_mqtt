@@ -393,6 +393,18 @@ pub struct MeterMemory {
     /// source-side wait this bridge honours, because it is the one the poll
     /// interval cannot know about.
     pub rate_limited_until: Option<MonotonicMs>,
+    /// The `Date` header of the last SUCCESSFUL fetch, for the stalled-feed oracle
+    /// (story 2.7 AC1).
+    ///
+    /// **This one does NOT follow the adoption rule, and the difference is the
+    /// point.** `last` and `energy_reference` refuse a reading the oracles refused
+    /// (story 2.3 AC4) because they are yardsticks for a VALUE, and a value we
+    /// distrusted must not become the reference. This is a yardstick for the
+    /// RESPONSE: the question it answers is *"is the cloud still rebuilding its
+    /// answer?"*, which has nothing to do with whether we trusted the numbers
+    /// inside. Refusing to record a header because the reading was stale would make
+    /// a stale meter look like a frozen cloud on the following tick.
+    pub last_http_date: Option<crate::domain::UtcMillis>,
 }
 
 /// Runs one iteration: heartbeat, fetch (bounded), judge, forward.
@@ -409,6 +421,7 @@ pub async fn step_once<S: Source + Send>(
         last,
         energy_reference,
         rate_limited_until,
+        last_http_date,
     } = memory;
     let Context {
         meter,
@@ -499,10 +512,37 @@ pub async fn step_once<S: Source + Send>(
         // A fetch that did not complete has no fields to fault.
         Err(_) => crate::core::source::SourceFaults::NONE,
     };
+    // THE FEED ITSELF, judged from the relation between two responses (story 2.7
+    // AC1). Separate from `freshness` on purpose: a replayed response is internally
+    // consistent, so nothing `Policy::step` can see distinguishes it from a working
+    // cloud. `feed_is_advancing` is the only judgement here whose input is not a
+    // fact about this reading.
+    let feed = match &tick {
+        Ok(reading) => match reading.http_date {
+            Some(http_date) => crate::core::oracle::feed_is_advancing(*last_http_date, http_date),
+            // No `Date` header at all: `judge_reading` already publishes
+            // `NoFreshnessProof` for it, and an oracle about a header that is not
+            // there would answer a question nobody asked.
+            None => Verdict::good(),
+        },
+        // A fetch that did not complete carries no response to compare.
+        Err(_) => Verdict::good(),
+    };
+    // RECORDED ON EVERY SUCCESSFUL FETCH, whatever the verdict — see
+    // `MeterMemory::last_http_date` for why this one does not follow the adoption
+    // rule the value memories obey.
+    if let Ok(reading) = &tick
+        && let Some(http_date) = reading.http_date
+    {
+        *last_http_date = Some(http_date);
+    }
+
     let judgements = [
         // Freshness and identity judge the whole response: a reading that is too
         // old is too old in both its numbers.
         Judgement::about_reading(freshness),
+        // And whether that response is a new one at all.
+        Judgement::about_reading(feed),
         Judgement::about(
             Measured::Power,
             match source_faults.of(Measured::Power) {
@@ -1250,6 +1290,23 @@ mod tests {
         r
     }
 
+    /// The same answer one poll period later — both timestamps advance, the AGE
+    /// between them does not.
+    ///
+    /// **Story 2.7 added this, and what it fixed is a blind spot in the fixtures
+    /// themselves.** Every reading here pinned `value_date` to `BASE` and
+    /// `http_date` to `BASE + age`, so a sequence of ticks handed back a
+    /// byte-identical response — which is precisely the frozen cloud the
+    /// stalled-feed oracle exists to refuse. The tests were modelling the fault
+    /// while asserting health, and nothing could see it until an oracle looked at
+    /// two responses instead of one.
+    fn later(mut r: Reading, ticks: i64) -> Reading {
+        let shift = ticks * config().interval.as_millis() as i64;
+        r.value.value_date = UtcMillis(r.value.value_date.0 + shift);
+        r.http_date = r.http_date.map(|d| UtcMillis(d.0 + shift));
+        r
+    }
+
     /// **Story 2.2 AC1 and AC3** — a counter that goes backwards is published
     /// `Bad`, and the meter is not stuck there.
     ///
@@ -1278,8 +1335,8 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(8);
         let mut source = FakeSource::new()
             .then(Ok(reading_with_energy(Quality::Good, 950, 4_843.822)))
-            .then(Ok(reading_with_energy(Quality::Good, 950, 12.0)))
-            .then(Ok(reading_with_energy(Quality::Good, 950, 12.5)));
+            .then(Ok(later(reading_with_energy(Quality::Good, 950, 12.0), 1)))
+            .then(Ok(later(reading_with_energy(Quality::Good, 950, 12.5), 2)));
         let ctx = Context {
             meter: &meter,
             clock: &clock,
@@ -1536,12 +1593,94 @@ mod tests {
     /// (`Judgement::about_reading` instead of `about(Measured::Energy, …)`) —
     /// which is exactly the pre-2.3 behaviour — turns the two `Power` assertions
     /// red, on quality and on cause.
+    /// **Story 2.7 AC1, through the pipeline rather than against the function.**
+    ///
+    /// The unit test in `core::oracle` proves the comparison compares. This proves
+    /// a REPLAYED response reaches the outbox marked as one — the distinction
+    /// stories 2.1 and 2.3 were both caught by, where an assertion on the
+    /// in-process value passed while nothing reached the wire.
+    ///
+    /// **Reading-scoped, so BOTH metrics carry it**, and that is not ADR 0031 being
+    /// violated: a response that was not regenerated says nothing about either
+    /// number in particular, because neither number is new.
+    #[tokio::test]
+    async fn a_replayed_response_is_refused_on_both_metrics() {
+        let identical = reading(Quality::Good, 950);
+        let (state, sent) = drive_sequence(
+            FakeSource::new()
+                .then(Ok(identical.clone()))
+                .then(Ok(identical)),
+        )
+        .await;
+
+        assert_eq!(sent.len(), 2, "every tick publishes a verdict (ADR 0027)");
+        assert_eq!(
+            sent[0].verdict().cause(),
+            None,
+            "the premise: the first answer is good, because it has no predecessor"
+        );
+        assert_eq!(
+            sent[1].verdict().cause(),
+            Some(Cause::FeedNotAdvancing),
+            "the second answer is the first answer, and a frozen cloud must not \
+             look like a working one"
+        );
+        for metric in [Measured::Power, Measured::Energy] {
+            assert_eq!(
+                sent[1].published_for(metric),
+                Quality::Stale,
+                "neither number is new, so neither may be published as current"
+            );
+        }
+        // AND THE STATE STAYS `Fresh`, WHICH IS CORRECT AND WORTH EXPLAINING,
+        // because the first draft of this test asserted `Stale` and was wrong.
+        //
+        // `State` is the freshness state machine's verdict on the timestamps INSIDE
+        // one reading, and a replay's are impeccable — that is the whole difficulty.
+        // What an operator reads is the COMPOSED verdict: `FleetState::degraded`
+        // filters on `published.quality()`, so this meter is reported degraded with
+        // its cause, which is the [#62] lesson already applied. The two answers
+        // differ on purpose and only one of them is a surface.
+        //
+        // What would be a defect is a LATCH — a frozen feed is not a refusal, and
+        // requiring a restart to clear a cloud that thawed by itself would be the
+        // fault ADR 0029 accepted for identity and nobody accepted for this.
+        assert_ne!(
+            state,
+            State::Failed,
+            "a frozen feed must not need a restart"
+        );
+    }
+
+    /// The other half, and the reason AC1 chose `http_date` over `value_date` at
+    /// drafting: **a meter that genuinely stops reporting is not a replay.** Its
+    /// `value_date` freezes while the cloud's `Date` keeps advancing — ordinary
+    /// staleness, and calling it a frozen feed would send an operator to smart-me
+    /// when the fault is at the meter.
+    #[tokio::test]
+    async fn a_silent_meter_behind_a_live_cloud_is_not_called_a_replay() {
+        let first = reading(Quality::Good, 950);
+        // The cloud rebuilt its answer — `http_date` moved — but the meter did not
+        // report again, so `value_date` did not.
+        let mut second = later(first.clone(), 1);
+        second.value.value_date = first.value.value_date;
+
+        let (_, sent) = drive_sequence(FakeSource::new().then(Ok(first)).then(Ok(second))).await;
+
+        assert_ne!(
+            sent[1].verdict().cause(),
+            Some(Cause::FeedNotAdvancing),
+            "the FEED advanced; it is the METER that went quiet, and the two send \
+             an operator to different places"
+        );
+    }
+
     #[tokio::test]
     async fn a_backwards_energy_index_does_not_withhold_the_power_reading() {
         let (_, sent) = drive_sequence(
             FakeSource::new()
                 .then(Ok(reading_with_energy(Quality::Good, 950, 4_843.822)))
-                .then(Ok(reading_with_energy(Quality::Good, 950, 12.0))),
+                .then(Ok(later(reading_with_energy(Quality::Good, 950, 12.0), 1))),
         )
         .await;
         assert_eq!(sent.len(), 2, "every tick publishes a verdict (ADR 0027)");
@@ -2105,6 +2244,14 @@ mod tests {
         assert!(sent.is_empty(), "there is no reading to carry");
 
         let line = unreadable_line(&sink.text());
+        assert!(
+            !line.contains("source fetch timed out"),
+            "NOT THIS PROPERTY: the 2 s fetch deadline elapsed before the fake source \
+             was polled, so the tick became a Timeout and never carried the decode \
+             failure. Observed once on 2026-08-13 during a full workspace run on a \
+             loaded machine, and not reproduced in 17 later runs. If this fires, the \
+             machine is busy — re-run before believing anything: {line:?}"
+        );
         assert!(
             line.contains("ActivePower"),
             "the operator must learn WHICH field the API changed: {line:?}"
