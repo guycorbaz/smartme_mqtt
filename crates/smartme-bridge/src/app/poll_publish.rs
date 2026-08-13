@@ -414,6 +414,25 @@ pub async fn step_once<S: Source + Send>(
         }
     };
 
+    // THE REASON REACHES AN OPERATOR HERE, AND NOWHERE ELSE DID (story 2.6 AC5).
+    //
+    // Every `SourceError` carries a `reason` written to tell someone what to
+    // repair — ADR 0029's *"correct the serial or the device id in the
+    // configuration, then restart"*, `UnknownDevice`'s two origins, serde's field
+    // name. **None of it was rendered anywhere.** Verified on 2026-08-13 by
+    // deleting both `impl Display` and `impl Error` for `SourceError`: the library
+    // compiled with zero errors. The `Cause` token reached the wire and the screen;
+    // the sentence that says what to DO reached nobody.
+    //
+    // One line per failing cycle, which is the cadence this codebase already uses
+    // for a fault it cannot fix by itself (the `DroppedUndeclaredDevice` warn). A
+    // latched meter therefore repeats — deliberately: ADR 0027's rule is that every
+    // cycle publishes a verdict rather than falling silent, and a log that goes
+    // quiet while the fault persists is the same lie in another medium.
+    if let Err(error) = &tick {
+        tracing::warn!(meter = %meter, %error, "this meter could not be read");
+    }
+
     // A FRESH RATE LIMIT ARMS THE WAIT, and only when the server named a delay.
     //
     // **AC3 asked for a doubling fallback when `Retry-After` is absent, and it is
@@ -2058,6 +2077,134 @@ mod tests {
             sent[0].measurement.quality,
             Quality::Good,
             "the source's own view is preserved alongside the verdict"
+        );
+    }
+
+    /// Captures what a trace macro actually wrote, so a log line can be an
+    /// assertion rather than a hope.
+    ///
+    /// A second copy of `mqtt_driver`'s helper, deliberately: sharing it means
+    /// editing Epic 4 test code from an Epic 2 story, and the duplication is
+    /// twenty lines that no production path depends on. Worth folding into one
+    /// `#[cfg(test)]` module the next time a third caller wants it.
+    #[derive(Clone, Default)]
+    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Captured {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().expect("not poisoned").clone()).expect("utf-8")
+        }
+    }
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("not poisoned").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+        type Writer = Captured;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// **Story 2.6 AC5's second half, and the half that was missing entirely.**
+    ///
+    /// Every `SourceError` carries a sentence written to tell an operator what to
+    /// repair. Until 2026-08-13 not one of them was rendered anywhere: deleting
+    /// both `impl Display` and `impl Error` for `SourceError` left the library
+    /// compiling with zero errors. Carrying serde's field name up from the client
+    /// would have been pointless on its own — it would have arrived nowhere.
+    ///
+    /// The needles are the FIELD NAME and the meter, never a bare digit: this
+    /// subscriber writes a full RFC-3339 timestamp on every line, and the story
+    /// 4.6 review found a one-character needle satisfied by the clock.
+    ///
+    /// FALSIFIED — two mutations, both RUN, both messages copied:
+    /// - the `warn!` deleted: RED, *"no line reported the failure to the operator;
+    ///   the log was: … INFO … no reading this tick and none ever …"* — and that
+    ///   remaining `INFO` is the whole reason `unreadable_line` exists;
+    /// - `meter = %meter` dropped from the `warn!`: RED, *"and which meter it was,
+    ///   ON THIS LINE …"*, over the line
+    ///   `WARN … this meter could not be read error=transient source error:
+    ///   response decode failed: missing field \`ActivePower\` at line 2 column 76`.
+    #[tokio::test]
+    async fn a_payload_the_bridge_could_not_read_names_its_field_to_the_operator() {
+        let sink = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(sink.clone())
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        let (state, sent) = drive(
+            FakeSource::new().then(Err(SourceError::Transient {
+                reason: "response decode failed: missing field `ActivePower` at line 2 column 76"
+                    .to_string(),
+            })),
+        )
+        .await;
+        drop(guard);
+
+        assert_eq!(state, State::Stale, "a payload anomaly is retried");
+        assert!(sent.is_empty(), "there is no reading to carry");
+
+        let line = unreadable_line(&sink.text());
+        assert!(
+            line.contains("ActivePower"),
+            "the operator must learn WHICH field the API changed: {line:?}"
+        );
+        assert!(
+            line.contains("garage"),
+            "and which meter it was, ON THIS LINE — at four meters a reason without \
+             a subject is a reason about nobody: {line:?}"
+        );
+    }
+
+    /// The warn this story added, isolated from everything else the tick logs.
+    ///
+    /// **It is isolated because it has to be.** The loop already emits an `INFO`
+    /// carrying `meter=garage` and the cause token, so `log.contains("garage")` over
+    /// the whole capture passes whether or not this story's line exists at all —
+    /// found by running the mutation rather than by reading, and it is the story 4.6
+    /// needle problem in a new place.
+    fn unreadable_line(log: &str) -> String {
+        log.lines()
+            .find(|l| l.contains("this meter could not be read"))
+            .unwrap_or_else(|| {
+                panic!("no line reported the failure to the operator; the log was: {log:?}")
+            })
+            .to_string()
+    }
+
+    /// The same surface for the refusal an operator can actually act on: ADR 0029's
+    /// identity message names the repair, and it reached nobody either.
+    #[tokio::test]
+    async fn a_refusal_reaches_the_operator_with_the_repair_it_names() {
+        let sink = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(sink.clone())
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        let (state, _) = drive(FakeSource::new().then(Err(SourceError::Fatal {
+            refusal: crate::core::source::Refusal::Configuration,
+            reason: "smart-me does not know device 9202685".to_string(),
+        })))
+        .await;
+        drop(guard);
+
+        assert_eq!(state, State::Failed);
+        let line = unreadable_line(&sink.text());
+        assert!(
+            line.contains("9202685"),
+            "a refusal that names no subject sends the operator nowhere: {line:?}"
         );
     }
 

@@ -1,7 +1,10 @@
 # Story 2.6: A failure says which kind it is, and the bridge waits only when waiting is what the other end asked for
 
-Status: review — **AC5 recorded UNMET**, [#73](https://github.com/guycorbaz/smartme_mqtt/issues/73).
-**AC1 was found unmet by the 2026-08-13 review and is now repaired** — see *Review findings* below.
+Status: review — **all eight ACs now met**, AC1 and AC5 both on 2026-08-13.
+AC5 closes **on its letter**: serde names a missing field and names none for a type mismatch, so
+[#73](https://github.com/guycorbaz/smartme_mqtt/issues/73) stays open on that residual, which the
+API's nullability declarations make the likely case. See *AC5 — 2026-08-13* below.
+Three of the review's nine remaining findings still want a decision before this story closes.
 
 ## Story
 
@@ -123,7 +126,8 @@ runbook and the mechanical grep — the same discipline as v4 through v7.
   - [x] The wait respected by the poll loop **without** suppressing the cycle's verdict
   - [ ] ~~Fallback to `mqtt_driver`'s doubling arithmetic when the header is absent~~ — NOT built: it contradicts AC4 of this same story, see the notes. The cap IS stated.
 - [x] **Task 3 — Record what NFR1 already has** (AC4)
-- [ ] **Task 4 — The field name survives a parse failure** (AC5) — **NOT STARTED**, recorded UNMET
+- [x] **Task 4 — The field name survives a parse failure** (AC5) — done 2026-08-13; the measurement
+      the note asked for was made, and it needed a second half nobody had noticed. Residual on [#73]
 - [x] **Task 5 — Contract 7 → 8** (AC7)
 - [x] **Task 6 — Falsify, running each mutation BEFORE writing its note** (AC6)
 - [x] **Task 7 — `./scripts/ci-local.sh` full run**, then `gh run list`
@@ -328,6 +332,66 @@ rejected as a heavier answer than the question deserved.
 | `UnknownDevice` removed from `is_fatal` | RED **on both layers** — client: *"…does not come into existence on its own…"*; bridge: *"must latch, not degrade: got Transient { … }"* |
 | the `UnknownDevice` arm pointed at `Refusal::Credential` | RED — *"must send the operator to the device id in the configuration; left: Credential, right: Configuration"* |
 | the second origin dropped from the `#[error]` string | RED — *"the operator is sent to one place only; \"removed from the smart-me account\" missing from …"* |
+
+## AC5 — 2026-08-13, and the measurement found a second half
+
+The story parked AC5 rather than guessing: *"`reqwest`'s decode error may or may not preserve
+serde's message, and I did not measure it."* Measured now, by reading the code that is compiled:
+**`reqwest::Error`'s `Display` writes its kind and the URL and nothing else** (`error.rs:227-272`,
+v0.13.1) — a decode failure renders as `error decoding response body for url (…)`. serde's text is
+in the `source()` chain, which `from_reqwest` never walked. The field name was lost at the client.
+
+**And then the second half, which the story did not know it needed.** Carrying the name up would
+have delivered it nowhere: **no `SourceError`'s `reason` was rendered on any operator surface.**
+Verified rather than argued — deleting both `impl Display` and `impl Error` for `SourceError` left
+the library compiling with **zero errors**.
+
+Be precise about what that means, because the first version of this note overstated it: the
+**cause token** did reach the operator, on the wire and in an existing `INFO` line carrying
+`meter=` and `Some(ConfigurationContradicted)`. What reached nobody was the **sentence** — ADR
+0029's *"correct the serial or the device id in the configuration, then restart"*, this morning's
+two origins for an unknown device id, and any field name AC5 might carry. Every repair instruction
+this codebase has written for an operator was invisible.
+
+### What was done
+
+1. **`get_device` parses the body itself** (`resp.text()` then `serde_json::from_str`) instead of
+   `resp.json()`, so serde's message survives. No new dependency: `serde_json` was already direct.
+2. **`decode_device` is a function**, for the reason `classify_device_status` is: the property
+   lives in the parse, and nothing could reach it behind an `async fn` and a live request.
+3. **The poll loop logs the failing tick** — `warn!(meter, %error, "this meter could not be
+   read")`. One line per failing cycle, the cadence this codebase already uses; a latched meter
+   repeats, deliberately, because ADR 0027's rule is that silence is the lie.
+
+### AC5 closes on its letter; the residual is real and stays on [#73]
+
+**serde names a field it did not find, and names none when the field is there with the wrong
+type** — an explicit `null` included:
+
+```
+missing field `ActivePower` at line 2 column 76      ← named
+invalid type: null, expected f64 at line 3 column 31 ← not named
+```
+
+AC5 asks that *"the field serde named"* be carried. Where serde names one it now is; where serde
+names none there is none to carry. **That is met on the letter and it is not the stronger claim** —
+the same standing as story 2.1's AC4.
+
+**The residual matters more than it looks, and it is today's other finding**: the API's own
+description declares **six of the eight fields this client consumes as nullable**
+(`docs/spec/smart-me-api/`). The nameless case is the one the wire is most likely to produce.
+Closing it needs `serde_path_to_error` or `Option` fields judged per metric — the second is
+ADR 0031's logic applied to the payload, and it is a design decision, recorded rather than taken.
+A test pins the current behaviour and says to delete itself if serde ever starts naming it.
+
+### Falsification — four mutations, each RUN before its note (AC6)
+
+| mutation | result |
+|---|---|
+| `decode_device` returns reqwest's text | RED — *"the refusal must at least say what arrived: \"response decode failed: error decoding response body\""*, which is what shipped before |
+| the `warn!` deleted | RED — *"no line reported the failure to the operator; the log was: … INFO … no reading this tick and none ever …"* |
+| `meter` dropped from the `warn!` | RED — *"and which meter it was, ON THIS LINE …"* |
+| (found by mutation, not by reading) the first version asserted `log.contains("garage")` over the WHOLE capture, which the pre-existing `INFO` line satisfies with the `warn!` deleted. `unreadable_line` exists because of it — the story 4.6 needle problem in a new place |
 
 ### What the review found and this commit did NOT settle
 

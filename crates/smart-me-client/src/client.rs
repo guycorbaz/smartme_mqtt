@@ -114,9 +114,34 @@ pub enum SmartMeError {
     },
     /// The response body did not match the audited contract. Transient
     /// (a payload anomaly is retried; persistence shows up in diagnostics).
+    ///
+    /// # The field name, and the one case it does not exist (story 2.6 AC5, [#73])
+    ///
+    /// `reason` carries **serde's own message**, because `get_device` parses the
+    /// body itself instead of using `resp.json()` — see the comment there. serde
+    /// names the field when a field is **missing**:
+    ///
+    /// ```text
+    /// missing field `ActivePower` at line 2 column 76
+    /// ```
+    ///
+    /// **It names none when the field is present with the wrong type**, an explicit
+    /// `null` included:
+    ///
+    /// ```text
+    /// invalid type: null, expected f64 at line 3 column 31
+    /// ```
+    ///
+    /// That gap is not ours to close from here, and it matters more than it looks:
+    /// the API's own description declares SIX of the eight fields this client
+    /// consumes as nullable (`docs/spec/smart-me-api/`), so the nameless case is the
+    /// one the wire is most likely to produce. Closing it needs either
+    /// `serde_path_to_error` or `Option` fields judged per metric — a design
+    /// decision, recorded rather than taken.
     #[error("response decode failed: {reason}")]
     Decode {
-        /// Diagnostic text, for tracing.
+        /// serde's message, verbatim. May quote an offending *value* as well as a
+        /// field name; device payloads carry readings, never credentials.
         reason: String,
     },
 }
@@ -444,12 +469,35 @@ impl SmartMeClient {
             .get(reqwest::header::DATE)
             .and_then(|v| v.to_str().ok())
             .and_then(parse_imf_fixdate);
-        let device: Device = resp.json().await.map_err(SmartMeError::from_reqwest)?;
+        // DECODED IN TWO STEPS, AND NOT WITH `resp.json()`, so that serde's message
+        // survives (story 2.6 AC5, [#73]). `reqwest::Error`'s `Display` writes only
+        // its kind and the URL — `error.rs:227-272` in 0.13.1 emits "error decoding
+        // response body for url (…)" and nothing else; serde's text sits in the
+        // `source()` chain, which `from_reqwest` does not walk. So `resp.json()`
+        // throws away the one thing an operator needs: WHICH field the API changed.
+        //
+        // Taking the body as text first and parsing it here keeps serde's own error,
+        // which names the field when it can — see `SmartMeError::Decode` for the case
+        // it cannot.
+        let body = resp.text().await.map_err(SmartMeError::from_reqwest)?;
+        let device = decode_device(&body)?;
         Ok(DeviceCapture {
             device,
             http_date_ms,
         })
     }
+}
+
+/// Parses a response body into a [`Device`], keeping serde's message when it fails.
+///
+/// Separate from `get_device` for the same reason [`classify_device_status`] is: the
+/// property lives in the parse, not in the HTTP round-trip, and this crate has no way
+/// to reach code that sits behind a live request. Story 2.6 AC5 could not be tested
+/// while this was one line inside an `async fn`.
+fn decode_device(body: &str) -> Result<Device, SmartMeError> {
+    serde_json::from_str(body).map_err(|e| SmartMeError::Decode {
+        reason: e.to_string(),
+    })
 }
 
 /// What a `GET /Devices/{id}` response status means, or `None` when it succeeded.
@@ -695,6 +743,69 @@ mod tests {
             secs(Some("Wed, 12 Aug 2026 14:05:00 GMT")),
             None,
             "the date form must not be read as a number of seconds"
+        );
+    }
+
+    /// **Story 2.6 AC5 — the field the API changed reaches the operator.**
+    ///
+    /// The residual story 2.5 left: a payload the deserializer refused arrived as a
+    /// failure naming nothing. It was `resp.json()` that lost it — `reqwest::Error`'s
+    /// `Display` writes only its kind and the URL (`error.rs:227-272`, v0.13.1), and
+    /// serde's text sits in a `source()` chain nobody walked.
+    ///
+    /// The assertion is on the OPERATOR-FACING string, not on the variant: the whole
+    /// criterion is what someone reads, and `Decode`'s `Display` is what they get.
+    ///
+    /// FALSIFIED — mutation RUN, message copied: `decode_device` made to return what
+    /// `reqwest` would have given (`reason: "error decoding response body"`) goes RED
+    /// here and in the null test — *"the refusal must at least say what arrived:
+    /// \"response decode failed: error decoding response body\""*. That string is
+    /// exactly what shipped before this change.
+    #[test]
+    fn a_refused_payload_names_the_field_the_api_changed() {
+        // Every field but `ActivePower`, which the bridge consumes.
+        let without_power = r#"{
+            "Id": "1", "Name": "n", "Serial": 30000001,
+            "ActivePowerUnit": "kW",
+            "CounterReading": 4843.822, "CounterReadingUnit": "kWh",
+            "ValueDate": "2026-07-25T13:06:32.0500519Z"
+        }"#;
+        let e = decode_device(without_power).expect_err("a payload we cannot read must not parse");
+        assert!(matches!(e, SmartMeError::Decode { .. }));
+        let shown = e.to_string();
+        assert!(
+            shown.contains("ActivePower"),
+            "an operator learns nothing from a decode failure that names no field: {shown:?}"
+        );
+        assert!(
+            !e.is_fatal(),
+            "a payload anomaly is retried; only the shape of the answer changed"
+        );
+    }
+
+    /// **And the case the field name does NOT exist, pinned so it is not mistaken for
+    /// a regression later.** serde names a field it did not find; it names none when
+    /// the field is there with the wrong type. The API declares six of the eight
+    /// fields this client consumes as nullable, so this is the likely case, not the
+    /// exotic one — [#73] stays open on it.
+    #[test]
+    fn a_null_is_refused_and_serde_names_no_field_for_it() {
+        let null_power = r#"{
+            "Id": "1", "Name": "n", "Serial": 30000001,
+            "ActivePower": null, "ActivePowerUnit": "kW",
+            "CounterReading": 4843.822, "CounterReadingUnit": "kWh",
+            "ValueDate": "2026-07-25T13:06:32.0500519Z"
+        }"#;
+        let e = decode_device(null_power).expect_err("a null is not a measurement");
+        let shown = e.to_string();
+        assert!(
+            shown.contains("invalid type: null"),
+            "the refusal must at least say what arrived: {shown:?}"
+        );
+        assert!(
+            !shown.contains("ActivePower"),
+            "if serde has started naming the field here, this limitation is over and \
+             [#73] can close — delete this test and say so: {shown:?}"
         );
     }
 
