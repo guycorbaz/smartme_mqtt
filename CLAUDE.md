@@ -21,6 +21,29 @@ because the alternative has already failed twice:
 
 Both came from reading about the specification instead of reading it.
 
+## smart-me: two sources, and neither answers the other's question
+
+**What the API DECLARES is at `docs/spec/smart-me-api/openapi-v1.json`. What it actually SENT is
+at `crates/smart-me-client/fixtures/`.** Check both, and know which one you are quoting.
+
+The description is authoritative for **presence, type and nullability**. It is **wrong about
+names** — it declares camelCase while the wire sends PascalCase, which is why `Device` carries
+`#[serde(rename_all = "PascalCase")]`. And it is **near-silent about failure**: 82 of its response
+declarations are `200`, and `GET /Devices/{id}` — the only call this bridge makes — declares
+nothing else. Error behaviour is learned from the wire, never from this file.
+
+This rule exists because not reading it cost two things on 2026-08-13. **Six of the eight fields
+the client consumes are declared nullable and `Device` requires all eight** — an exposure that
+stood unnoticed from story 1.6 in July, and one that matters because a null loses the field name
+where a missing field keeps it (`invalid type: null, expected f64 at line 3 column 31` against
+``missing field `ActivePower` ``), and because a single null would cost the whole reading, energy
+index included. And story 3.4's drop-down was being planned against a data source deduced from a
+code comment, while `GET /Devices` was there to be read.
+
+**There is no version on the wire** — no path segment, no header; `info.version` says `v1` and
+that is the only place it exists. So the copy is the only way to notice the API moved: re-fetch,
+diff against the committed file, read the diff. Never refresh it silently.
+
 ## Tests: falsify before trusting
 
 A test written against already-correct code proves nothing by passing. Any new test asserting an
