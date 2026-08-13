@@ -738,7 +738,43 @@ development_status:
   # its note is written, and the note records the observed message rather than a
   # prediction. 2.5 recorded four and had run one.
   # OPEN QUESTION saved for Guy: whether [#61] belongs here or to story 3.4.
-  2-6-error-taxonomy-and-bounded-backoff: review  # AC5 UNMET; CONTRACT_VERSION 7 -> 8, additive
+  # REVIEWED 2026-08-13, at `high`, on a branch carrying only this story's commit
+  # (`review/story-2.6` — the implementation replayed onto its own parent, because
+  # `main` was clean and a no-argument review would have found no diff). TEN
+  # FINDINGS. One repaired the same day; nine recorded in the story file, undecided.
+  #
+  # AC1 WAS UNMET AND ITS OWN WORKED EXAMPLE HAD NO LIVE PRODUCER. The AC names *"a
+  # configuration the source contradicts (the device id is unknown to smart-me)"*;
+  # a `404` fell through to `HttpStatus`, which `is_fatal` does not name, so it
+  # became `Transient` -> `source-unreachable`. THE MOST LIKELY CONFIGURATION ERROR
+  # THERE IS — a mistyped device id — WAS PUBLISHED AS A NETWORK FAULT, never
+  # latched, and the bridge polled a device that does not exist for ever, while the
+  # manual promised the operator a distinction it would not get.
+  # Repaired: `SmartMeError::UnknownDevice` carved out of `HttpStatus`, fatal,
+  # `Refusal::Configuration`. CONTRACT_VERSION does NOT move — the cause existed and
+  # was missing its producer. Four mutations run before their notes were written.
+  #
+  # THE REASON NO TEST CAUGHT IT is the finding worth carrying to the retrospective:
+  # `smart-me-client` has NO HTTP harness and no dev-dependencies, so the whole
+  # status-to-error decision sat inside an `async` method behind a live request and
+  # nothing could reach it. Story 2.6's own `429` branch and `Retry-After` parse
+  # shipped untested for the same reason. `classify_device_status` is now a pure
+  # function. This is the SAME lesson as 2.1-2.3 (a property tested one layer above
+  # where it lives) with a new face: a property that cannot be tested AT ALL because
+  # its layer is out of reach — and a green suite that says nothing either way.
+  #
+  # GUY'S READING, 2026-08-13, and it produced a second decision: meters added to
+  # the bridge come from what exists at smart-me, so a nonexistent one is a typo —
+  # which is the argument for A DROP-DOWN of the account's meters on the config
+  # screen. That is FR2 / story 3.4, already in Epic 3's backlog: the deferral of
+  # discovery now has an observed cost. Recorded in `epics.md` under Epic 3, WITH
+  # the boundary that prevention does not replace honesty — the file is hand-
+  # editable, a chosen device can disappear, and a list is one instant.
+  # THREE DECISIONS STILL OPEN on this story, all in its Review findings section:
+  # the latched meter reverting to the generic cause on any non-fatal tick (an ADR),
+  # two invariants with no test (the wait's expiry, `RETRY_AFTER_CAP`), and the
+  # token endpoint bypassing the rate limit entirely.
+  2-6-error-taxonomy-and-bounded-backoff: review  # AC5 UNMET [#73]; AC1 repaired 2026-08-13; CONTRACT_VERSION 7 -> 8, additive
   # FR10, plus the parked frozen/replayed-feed oracle — a byte-identical replayed
   # response keeps a plausible age and stays `Fresh` today.
   # WRITTEN 2026-08-12, the last story of the epic. Same discipline as 2.6's NFR1:

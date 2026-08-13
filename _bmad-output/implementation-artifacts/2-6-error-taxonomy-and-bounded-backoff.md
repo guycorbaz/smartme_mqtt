@@ -1,6 +1,7 @@
 # Story 2.6: A failure says which kind it is, and the bridge waits only when waiting is what the other end asked for
 
-Status: review — **AC5 recorded UNMET**, [#73](https://github.com/guycorbaz/smartme_mqtt/issues/73)
+Status: review — **AC5 recorded UNMET**, [#73](https://github.com/guycorbaz/smartme_mqtt/issues/73).
+**AC1 was found unmet by the 2026-08-13 review and is now repaired** — see *Review findings* below.
 
 ## Story
 
@@ -113,6 +114,8 @@ runbook and the mechanical grep — the same discipline as v4 through v7.
 - [x] **Task 1 — Split the refusal** (AC1, AC2)
   - [x] Three causes where `SourceRefused` stood; decide its fate and record it, as story 2.5 did
         for `ValueUnusable`
+  - [x] **The configuration refusal actually reaches the wire** — added 2026-08-13 after the review
+        found AC1's own worked example (`404`, an unknown device id) classified as a network fault
   - [x] `latches` decided per cause and pinned in the golden
   - [x] `Cause::successor`'s chain — a variant that misses it is a compile error by design
 - [x] **Task 2 — Honour `Retry-After`** (AC3)
@@ -207,6 +210,11 @@ taxonomy fault or a discovery fault (story 3.4's business) is a judgement, not a
 2026-08-11 finding from story 2.1's review is closed: an operator is now sent to the token, to the
 configuration, or to the physical meter, rather than to all three at once.
 
+> **This paragraph was true of the type and false of the wire, and the 2026-08-13 review is what
+> established it.** The configuration refusal had no live producer for the case AC1 names — an
+> unknown device id — because a `404` was classified transient. Kept as written, with the
+> correction below rather than in place of it.
+
 **`SourceRefused` is NARROWED, not retired** — the same treatment story 2.5 gave `ValueUnusable`,
 and for a reason found during implementation rather than at drafting. `State::Failed` is absorbing,
 so a tick arriving AFTER the latch is published under it even when that tick is not itself a
@@ -258,5 +266,94 @@ this story added because story 2.5 recorded four and had run one.
 
 **AC7** — `CONTRACT_VERSION` 7 → 8, additive, `GOLDEN_*_V8` written out. Manual rebuilt: 71 pages,
 five overfull boxes, the committed baseline exactly.
+
+## Review findings — 2026-08-13
+
+Reviewed at `high` on a branch carrying only this story's commit (`review/story-2.6`, the
+implementation replayed onto its own parent so the diff was exactly the story). Ten findings. This
+section records the one that was repaired; the rest are listed at the end, undecided.
+
+### AC1 WAS UNMET, and its own worked example had no live producer
+
+**AC1 names *"a configuration the source contradicts (the device id is unknown to smart-me)"*.**
+That case could not occur. An unknown device id returns `404`, which fell through to
+`SmartMeError::HttpStatus`; `is_fatal` names only `NotHttps | Misconfigured | AuthRejected`, so the
+`404` became `Transient` → `source-unreachable`. **The most likely configuration error there is — a
+mistyped device id — was published as a network fault, never latched, and the bridge polled a
+device that does not exist for ever.** The manual and the runbook meanwhile told an operator that
+v8 distinguishes a credential from a configuration.
+
+This is the failure this epic keeps finding, in its purest form: an acceptance criterion ticked,
+its behaviour absent, and the suite green. It was found by a review and not by a test because no
+test could reach the classification — see below.
+
+### The repair, decided 2026-08-13
+
+**`SmartMeError::UnknownDevice` is carved out of `HttpStatus`**, joins `is_fatal`, and maps to
+`Refusal::Configuration`. Fatal rather than transient on ADR 0029's own reasoning transposed from
+the serial to the id: a device id does not come into existence on its own, so retrying reports a
+fault as weather. The latch costs nothing an operator does not already pay — correcting a device id
+is a configuration change, which `reconfigure::classify_meters` already prices at a
+`ProcessRestart`, so the repair and the latch ask for the same thing.
+
+**Two origins, and the message names both** (Guy, 2026-08-13). A `404` is a typo *or* a device
+removed from the account after having worked — the second arrives on a configuration that was
+correct yesterday, and an operator sent hunting for a typo they never made is worse off than one
+told nothing. The disappearance case keeps its own home in **story 3.5 (FR6)**: this story owns
+*"smart-me refuses this id, on this fetch"*; 3.5 owns *"the meter is no longer in the account's
+inventory"*.
+
+**`404` only, and no other status.** A `400` would plausibly also mean "the id is wrong", but this
+API has never been observed returning one; guessing would be a fact about smart-me nobody measured,
+the refusal story 2.2 AC4 and ADR 0033 both made. A `400` arrives as `HttpStatus`, visibly.
+
+**`CONTRACT_VERSION` does not move.** `configuration-contradicted` already exists in the v8 golden
+and no cause was added — this fix gives an existing cause its missing producer.
+
+### The classification is now a pure function, and that is the point
+
+`classify_device_status` was extracted from `get_device` because **`smart-me-client` has no HTTP
+test harness and no dev-dependencies at all**, so while the status-to-error decision lived inside an
+`async` method behind a live request, nothing could reach it. That is why the `404` branch could be
+missing with a green suite, and why story 2.6's own `429` branch and `Retry-After` parse shipped
+with no test either. Both are the Epic 2 retrospective's subject — a property tested one layer above
+where it lives, or not at all because that layer is out of reach. Adding a mock-HTTP dependency was
+rejected as a heavier answer than the question deserved.
+
+### Falsification — four mutations, each RUN before its note was written (AC6)
+
+| mutation | result |
+|---|---|
+| the `404` arm deleted from `classify_device_status` | RED — *"a 404 must name the device smart-me refused, got HttpStatus { status: 404 }"*, i.e. the pre-fix behaviour |
+| `UnknownDevice` removed from `is_fatal` | RED **on both layers** — client: *"…does not come into existence on its own…"*; bridge: *"must latch, not degrade: got Transient { … }"* |
+| the `UnknownDevice` arm pointed at `Refusal::Credential` | RED — *"must send the operator to the device id in the configuration; left: Credential, right: Configuration"* |
+| the second origin dropped from the `#[error]` string | RED — *"the operator is sent to one place only; \"removed from the smart-me account\" missing from …"* |
+
+### What the review found and this commit did NOT settle
+
+Nine findings are left undecided, deliberately — they are recorded here so they are not re-derived:
+
+1. **A latched meter reverts to the generic `source-refused` on any non-fatal tick**
+   (`state_machine.rs:156`). Credentials expire → `credential-rejected`; one hiccup later →
+   `source-refused`; the network returns → `credential-rejected`. The `Cause` flaps with the
+   weather. Carrying the `Refusal` inside `State::Failed` would fix it — a state-machine change, so
+   an ADR.
+2. **Nothing tests that the rate-limit wait ever ends** (`poll_publish.rs:405`). Replacing the
+   deadline comparison with `is_some()` — a wait that never expires — leaves the suite green.
+3. **`RETRY_AFTER_CAP` is untested** (`smartme_source.rs`): `.min` → `.max` leaves the suite green.
+4. **The token endpoint bypasses the rate-limit mechanism entirely** (`client.rs`, `fetch_token`):
+   a `429` on `POST /oauth/token` arms no wait. AC3 covers one of the two endpoints called.
+5. **The stated reason for dropping the date form of `Retry-After` is contradicted by its own
+   function**: the response's `Date` header is already parsed a few lines below, so
+   `Retry-After(date) − Date(header)` needs no local clock.
+6. **`_ => Refusal::Configuration` still absorbs future fatal variants.** The three configuration
+   variants are now enumerated, but the wildcard remains and gives no compile-time protection.
+7. Two stale comments (`poll_publish.rs:512` claims `latches()` is true only for `SourceRefused`;
+   it is true for four) and one stale bullet in ADR 0032 left directly under the blockquote that
+   corrects it.
+
+**AC2's structural argument was checked and HOLDS.** The review confirmed that all four latching
+causes are produced only by `Policy::step`'s fatal guard, which already returns `Failed`, so two
+cannot meet in `compose`. The premise written in the comment is what is wrong, not the conclusion.
 
 ### File List

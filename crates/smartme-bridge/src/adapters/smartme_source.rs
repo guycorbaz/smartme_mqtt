@@ -247,9 +247,21 @@ fn map_error(e: SmartMeError) -> SourceError {
     if e.is_fatal() {
         // WHICH refusal, not merely THAT it was one (story 2.6). `AuthRejected` is
         // the credential; `NotHttps` and `Misconfigured` are the configuration —
-        // the server was never even asked in those two.
+        // the server was never even asked in those two — and so is `UnknownDevice`,
+        // which IS the server saying the configuration names something it does not
+        // have. That last one is named explicitly rather than left to the wildcard:
+        // story 2.6's review found its absence, and AC1's own example — *"the device
+        // id is unknown to smart-me"* — had no live producer at all.
         let refusal = match e {
             SmartMeError::AuthRejected { .. } => Refusal::Credential,
+            SmartMeError::NotHttps { .. }
+            | SmartMeError::Misconfigured { .. }
+            | SmartMeError::UnknownDevice { .. } => Refusal::Configuration,
+            // Unreachable: `is_fatal` gates this branch and names exactly the four
+            // variants above. The wildcard remains because the compiler cannot see
+            // that, and it is the finding story 2.6's review left open — a future
+            // fatal variant lands on the configuration and sends an operator to a
+            // file that is not the problem.
             _ => Refusal::Configuration,
         };
         SourceError::Fatal {
@@ -714,12 +726,89 @@ mod tests {
         assert!(matches!(error, SourceError::Fatal { .. }));
     }
 
+    /// **Each fatal error names WHICH refusal, and the assertion says where the
+    /// operator would be sent.** Asserting `Fatal { .. }` alone is what let story
+    /// 2.6 ship AC1 with its own example unproduced: the shape was right and the
+    /// name was missing.
+    ///
+    /// FALSIFIED — two mutations, RUN before this note was written:
+    /// - `UnknownDevice` removed from the client's `is_fatal`: RED, *"… must latch,
+    ///   not degrade: got Transient { reason: … }"* — which is precisely what the
+    ///   bridge published before this fix;
+    /// - the `UnknownDevice` arm pointed at `Refusal::Credential`: RED, *"… must
+    ///   send the operator to the device id in the configuration; left: Credential,
+    ///   right: Configuration"*.
+    #[test]
+    fn every_fatal_error_names_the_repair_it_asks_for() {
+        for (error, expected, sends_you_to) in [
+            (
+                SmartMeError::AuthRejected { status: 401 },
+                Refusal::Credential,
+                "the token",
+            ),
+            (
+                SmartMeError::UnknownDevice {
+                    device_id: "9202685".to_string(),
+                },
+                Refusal::Configuration,
+                "the device id in the configuration",
+            ),
+            (
+                SmartMeError::Misconfigured {
+                    reason: "x".to_string(),
+                },
+                Refusal::Configuration,
+                "the configuration file",
+            ),
+            (
+                SmartMeError::NotHttps {
+                    reason: "x".to_string(),
+                },
+                Refusal::Configuration,
+                "the endpoint in the configuration",
+            ),
+        ] {
+            let shown = error.to_string();
+            match map_error(error) {
+                SourceError::Fatal { refusal, .. } => assert_eq!(
+                    refusal, expected,
+                    "{shown} must send the operator to {sends_you_to}"
+                ),
+                other => panic!("{shown} must latch, not degrade: got {other:?}"),
+            }
+        }
+    }
+
+    /// A device id smart-me does not know is the configuration, not the weather.
+    /// Before story 2.6's review this fell through `HttpStatus` to `Transient`,
+    /// so the bridge polled a device that does not exist for ever and told the
+    /// operator the network was unwell.
+    ///
+    /// FALSIFIED — the same two mutations as above, RUN: dropping `UnknownDevice`
+    /// from `is_fatal` gives RED *"a device that is not there does not come back on
+    /// its own: Transient { … }"*, and classifying it `Credential` gives RED
+    /// *"left: Credential, right: Configuration"*.
+    #[test]
+    fn an_unknown_device_id_latches_instead_of_being_retried_for_ever() {
+        let e = map_error(SmartMeError::UnknownDevice {
+            device_id: "9202685".to_string(),
+        });
+        assert!(
+            !matches!(e, SourceError::Transient { .. } | SourceError::Timeout),
+            "a device that is not there does not come back on its own: {e:?}"
+        );
+        let SourceError::Fatal { refusal, reason } = e else {
+            panic!("an id smart-me refuses must latch");
+        };
+        assert_eq!(refusal, Refusal::Configuration);
+        assert!(
+            reason.contains("9202685"),
+            "the operator must be told WHICH id was refused: {reason}"
+        );
+    }
+
     #[test]
     fn error_mapping_follows_the_client_classification() {
-        assert!(matches!(
-            map_error(SmartMeError::AuthRejected { status: 401 }),
-            SourceError::Fatal { .. }
-        ));
         assert!(matches!(
             map_error(SmartMeError::Timeout),
             SourceError::Timeout

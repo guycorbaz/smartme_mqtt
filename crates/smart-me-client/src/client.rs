@@ -49,8 +49,28 @@ pub enum SmartMeError {
         /// The HTTP status code returned.
         status: u16,
     },
-    /// Any other non-success HTTP status (5xx, 429, 3xx — redirects are not
-    /// followed). Transient.
+    /// smart-me does not know the device id we asked for (`404`). **Fatal**, and
+    /// the reasoning is ADR 0029's applied to the id rather than the serial: a
+    /// device id does not come into existence on its own, so retrying is polling
+    /// something that is not there while publishing a fault as weather.
+    ///
+    /// **Two origins, not one**, and the message names both because they send an
+    /// operator to different places: the id is mistyped in the configuration, or
+    /// the device existed and has been removed from the account. The second
+    /// arrives on a configuration that worked yesterday, without anyone typing.
+    ///
+    /// Story 2.6's review found this reaching the wire as `source-unreachable`:
+    /// `is_fatal` did not name it, so the single most likely configuration error
+    /// was published as a network fault and never latched.
+    #[error(
+        "smart-me does not know device {device_id}. Either the device id is mistyped in the \
+         configuration, or the device has been removed from the smart-me account. Check it \
+         against the device list in the smart-me portal, correct the configuration, then restart"
+    )]
+    UnknownDevice {
+        /// The id smart-me refused, quoted back so the operator can search for it.
+        device_id: String,
+    },
     /// The server rate-limited us (`429`), and how long it asked us to wait if it
     /// said so.
     ///
@@ -70,6 +90,14 @@ pub enum SmartMeError {
         /// we were not told how long".
         retry_after_secs: Option<u64>,
     },
+    /// Any other non-success HTTP status (5xx, 3xx — redirects are not followed).
+    /// Transient.
+    ///
+    /// **The statuses this no longer covers are named above**: `401`/`403` are
+    /// [`AuthRejected`](Self::AuthRejected), `404` is
+    /// [`UnknownDevice`](Self::UnknownDevice), `429` is
+    /// [`RateLimited`](Self::RateLimited). Each was carved out because it names a
+    /// repair, and this variant names none.
     #[error("http status {status}")]
     HttpStatus {
         /// The HTTP status code returned.
@@ -102,6 +130,7 @@ impl SmartMeError {
             SmartMeError::NotHttps { .. }
                 | SmartMeError::Misconfigured { .. }
                 | SmartMeError::AuthRejected { .. }
+                | SmartMeError::UnknownDevice { .. }
         )
     }
 
@@ -400,21 +429,15 @@ impl SmartMeClient {
             }
         };
         let resp = req.send().await.map_err(SmartMeError::from_reqwest)?;
-        let status = resp.status().as_u16();
-        if status == 401 || status == 403 {
-            return Err(SmartMeError::AuthRejected { status });
-        }
-        if status == 429 {
-            return Err(SmartMeError::RateLimited {
-                retry_after_secs: resp
-                    .headers()
-                    .get(reqwest::header::RETRY_AFTER)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.trim().parse::<u64>().ok()),
-            });
-        }
-        if !resp.status().is_success() {
-            return Err(SmartMeError::HttpStatus { status });
+        let retry_after = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        if let Some(e) =
+            classify_device_status(resp.status().as_u16(), retry_after.as_deref(), device_id)
+        {
+            return Err(e);
         }
         let http_date_ms = resp
             .headers()
@@ -426,6 +449,46 @@ impl SmartMeClient {
             device,
             http_date_ms,
         })
+    }
+}
+
+/// What a `GET /Devices/{id}` response status means, or `None` when it succeeded.
+///
+/// # Why this is a function and not four `if`s inside `get_device`
+///
+/// **The status is what decides these, not the round-trip** — and this crate has
+/// no HTTP test harness, so while the classification lived inside `get_device`
+/// nothing could reach it. Story 2.6 shipped the `429` branch and the
+/// `Retry-After` parse with no test of either; story 2.6's review found the `404`
+/// branch missing entirely and the suite green. Both are the same failure the
+/// Epic 2 retrospective is about: a property tested one layer above where it
+/// lives, or not at all because that layer is out of reach.
+///
+/// `retry_after` is the raw header value; parsing it here keeps the whole
+/// status-to-error decision in one testable place.
+///
+/// # Only `404`, deliberately
+///
+/// A `400` on a device id that passed the local shape check would plausibly also
+/// mean "the id is wrong", but this API has never been observed returning one and
+/// guessing its meaning would be a fact about smart-me that nobody measured — the
+/// refusal story 2.2 AC4 and ADR 0033 both made. If a `400` appears in the field
+/// it arrives as `HttpStatus`, visibly, and gets classified then.
+fn classify_device_status(
+    status: u16,
+    retry_after: Option<&str>,
+    device_id: &str,
+) -> Option<SmartMeError> {
+    match status {
+        200..=299 => None,
+        401 | 403 => Some(SmartMeError::AuthRejected { status }),
+        404 => Some(SmartMeError::UnknownDevice {
+            device_id: device_id.to_string(),
+        }),
+        429 => Some(SmartMeError::RateLimited {
+            retry_after_secs: retry_after.and_then(|v| v.trim().parse::<u64>().ok()),
+        }),
+        _ => Some(SmartMeError::HttpStatus { status }),
     }
 }
 
@@ -515,8 +578,17 @@ mod tests {
             }
             .is_fatal()
         );
+        assert!(
+            SmartMeError::UnknownDevice {
+                device_id: String::new()
+            }
+            .is_fatal()
+        );
         assert!(!SmartMeError::Timeout.is_fatal());
-        assert!(!SmartMeError::HttpStatus { status: 429 }.is_fatal());
+        // 500 rather than 429: since story 2.6 a 429 is `RateLimited` and never
+        // reaches this variant, so asserting on it here would document a path
+        // that no longer exists.
+        assert!(!SmartMeError::HttpStatus { status: 500 }.is_fatal());
         assert!(
             !SmartMeError::Network {
                 reason: String::new()
@@ -528,6 +600,101 @@ mod tests {
                 reason: String::new()
             }
             .is_fatal()
+        );
+    }
+
+    /// **A device id smart-me does not know is a configuration fault, and it must
+    /// latch.** Before this, a `404` fell through to `HttpStatus`, which
+    /// `is_fatal` does not name, so the most likely configuration error there is —
+    /// a mistyped device id — was published as `source-unreachable` and the bridge
+    /// polled a device that does not exist for ever.
+    ///
+    /// The message is asserted, not merely the variant, because the whole point of
+    /// splitting the refusal is where it sends the operator. A `404` has two
+    /// origins and only one of them is a typo.
+    ///
+    /// FALSIFIED — three mutations, each RUN and its output copied here:
+    /// - the `404` arm deleted from `classify_device_status`: RED,
+    ///   *"a 404 must name the device smart-me refused, got HttpStatus { status:
+    ///   404 }"* — the pre-fix behaviour exactly;
+    /// - `UnknownDevice` removed from `is_fatal`: RED, *"an id smart-me does not
+    ///   know does not come into existence on its own, so retrying is polling
+    ///   nothing while reporting weather: …"*;
+    /// - the second origin dropped from the `#[error]` string: RED, *"the operator
+    ///   is sent to one place only; \"removed from the smart-me account\" missing
+    ///   from …"*.
+    #[test]
+    fn an_unknown_device_id_is_fatal_and_names_both_origins() {
+        let Some(e) = classify_device_status(404, None, "9202685") else {
+            panic!("a 404 must not be read as a successful response");
+        };
+        assert!(
+            matches!(&e, SmartMeError::UnknownDevice { device_id } if device_id == "9202685"),
+            "a 404 must name the device smart-me refused, got {e:?}"
+        );
+        assert!(
+            e.is_fatal(),
+            "an id smart-me does not know does not come into existence on its own, \
+             so retrying is polling nothing while reporting weather: {e}"
+        );
+        let shown = e.to_string();
+        for origin in ["mistyped", "removed from the smart-me account"] {
+            assert!(
+                shown.contains(origin),
+                "the operator is sent to one place only; {origin:?} missing from {shown:?}"
+            );
+        }
+    }
+
+    /// Each status that names a repair is its own error, and everything else is
+    /// the one that names none. Success must classify as `None` — a mapping that
+    /// invented an error on `200` would take every meter off the wire.
+    #[test]
+    fn each_status_that_names_a_repair_is_its_own_error() {
+        assert!(classify_device_status(200, None, "d").is_none());
+        assert!(classify_device_status(204, None, "d").is_none());
+        for status in [401, 403] {
+            assert!(
+                matches!(
+                    classify_device_status(status, None, "d"),
+                    Some(SmartMeError::AuthRejected { status: s }) if s == status
+                ),
+                "{status} is the credential, not the configuration"
+            );
+        }
+        assert!(
+            matches!(
+                classify_device_status(429, None, "d"),
+                Some(SmartMeError::RateLimited { .. })
+            ),
+            "429 is the one wait this bridge honours (story 2.6), not a generic status"
+        );
+        assert!(
+            matches!(
+                classify_device_status(500, None, "d"),
+                Some(SmartMeError::HttpStatus { status: 500 })
+            ),
+            "a server fault names no repair and must stay transient"
+        );
+    }
+
+    /// `Retry-After` is honoured only in its seconds form. The date form is not
+    /// parsed here — see [`SmartMeError::RateLimited`] — and the assertion pins
+    /// that it yields "wait, but we were not told how long" rather than a delay
+    /// silently read as zero.
+    #[test]
+    fn retry_after_is_read_only_as_a_delay_in_seconds() {
+        let secs = |h: Option<&str>| match classify_device_status(429, h, "d") {
+            Some(SmartMeError::RateLimited { retry_after_secs }) => retry_after_secs,
+            other => panic!("429 must classify as RateLimited, got {other:?}"),
+        };
+        assert_eq!(secs(Some("120")), Some(120));
+        assert_eq!(secs(Some("  120 ")), Some(120), "the header is trimmed");
+        assert_eq!(secs(None), None, "absent means we were not told how long");
+        assert_eq!(
+            secs(Some("Wed, 12 Aug 2026 14:05:00 GMT")),
+            None,
+            "the date form must not be read as a number of seconds"
         );
     }
 
