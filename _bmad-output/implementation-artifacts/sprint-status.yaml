@@ -774,7 +774,22 @@ development_status:
   # the latched meter reverting to the generic cause on any non-fatal tick (an ADR),
   # two invariants with no test (the wait's expiry, `RETRY_AFTER_CAP`), and the
   # token endpoint bypassing the rate limit entirely.
-  2-6-error-taxonomy-and-bounded-backoff: review  # AC5 UNMET [#73]; AC1 repaired 2026-08-13; CONTRACT_VERSION 7 -> 8, additive
+  # CLOSED 2026-08-13, after its REPAIRS were reviewed — the step story 2.3 established
+  # the day before. That second pass found five more, and the first was LIVE and in this
+  # story's own subject: while the rate-limit wait was being honoured, every cycle logged
+  # *"source rate-limited, no delay given"* — and the wait exists precisely BECAUSE a delay
+  # was given. At the minimum period a `Retry-After: 300` would have printed sixty lines
+  # denying it. THE LIE WAS OLDER THAN THE LOG LINE: nothing rendered a `SourceError` until
+  # AC5, so nobody had ever seen it. That is the argument for AC5 in one sentence.
+  # Also fixed: `resp.text()` was a LOSSY regression the AC5 repair introduced (a name in a
+  # non-UTF-8 locale would have been published with substituted characters), and the `404`
+  # message named two origins where there are three — a wrong `api_base` latches EVERY meter
+  # at once while sending the operator to a device id that is correct.
+  # FOUR ISSUES LEAVE WITH IT, each a number rather than a paragraph: [#74] the residual AC5
+  # cannot reach (serde names no field on a type mismatch, and the API declares six of our
+  # eight fields nullable — [#73] closed into it), [#75] the latched cause depending on the
+  # last tick, [#76] two invariants with no test, [#77] the token endpoint's 429.
+  2-6-error-taxonomy-and-bounded-backoff: done  # CONTRACT_VERSION 7 -> 8, additive; AC5 met on its letter, residual [#74]
   # FR10, plus the parked frozen/replayed-feed oracle — a byte-identical replayed
   # response keeps a plausible age and stays `Fresh` today.
   # WRITTEN 2026-08-12, the last story of the epic. Same discipline as 2.6's NFR1:
@@ -797,7 +812,17 @@ development_status:
   # since FR14's withdrawal took away story 2.4.
   # AC4 pays a debt: `step_once` has six parameters and three carried memories; a
   # fourth is the moment to bundle them rather than thread a fifth.
-  2-7-utc-end-to-end-and-clock-skew: ready-for-dev
+  # IN PROGRESS since 2026-08-13. AC4 (the three carried memories become `MeterMemory`,
+  # proved by 221 tests passing unchanged), AC1 (the stalled-feed oracle parked since Epic 1
+  # — `feed-not-advancing`, CONTRACT_VERSION 8 -> 9 additive), AC6 and AC7 are done.
+  # WHAT AC1 TURNED UP IS WORTH THE EPIC RETROSPECTIVE: three existing tests failed when the
+  # oracle landed, none of them the oracle's fault. Every fixture pinned both timestamps, so
+  # a sequence of ticks handed back a BYTE-IDENTICAL response — the tests were modelling the
+  # frozen cloud they asserted health against, and nothing could see it until an oracle
+  # compared two responses instead of one.
+  # AC2 (skew told from staleness, no threshold), AC3 (verify UTC end-to-end) and AC5 ([#69])
+  # remain.
+  2-7-utc-end-to-end-and-clock-skew: in-progress
 
   # NOT A STORY: FR9 and NFR7 (serial-identity binding and its verification) were
   # delivered by ADR 0029 on 2026-08-09, and more strongly than the FR asked. They

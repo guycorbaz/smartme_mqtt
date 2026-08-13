@@ -468,8 +468,23 @@ pub async fn step_once<S: Source + Send>(
     // latched meter therefore repeats — deliberately: ADR 0027's rule is that every
     // cycle publishes a verdict rather than falling silent, and a log that goes
     // quiet while the fault persists is the same lie in another medium.
+    // AND THE HONOURED WAIT SAYS SO INSTEAD OF LYING, which the 2026-08-13 review
+    // caught in this very block. While the wait is running, line ~407 mints a
+    // synthetic `RateLimited { retry_after: None }`, whose `Display` reads *"source
+    // rate-limited, no delay given"* — the exact opposite of what happened, since
+    // `rate_limited_until` is armed ONLY from a `Some(delay)`. At the minimum period
+    // a `Retry-After: 300` would have produced sixty lines denying that a delay was
+    // ever given. The lie predates this warn; nothing rendered it until now.
     if let Err(error) = &tick {
-        tracing::warn!(meter = %meter, %error, "this meter could not be read");
+        match *rate_limited_until {
+            Some(until) if waiting => tracing::warn!(
+                meter = %meter,
+                remaining_s = (until.0 - now_mono.0).max(0) / 1_000,
+                "not asking this meter: the source asked us to wait, and the wait is \
+                 being honoured"
+            ),
+            _ => tracing::warn!(meter = %meter, %error, "this meter could not be read"),
+        }
     }
 
     // A FRESH RATE LIMIT ARMS THE WAIT, and only when the server named a delay.
@@ -1218,6 +1233,79 @@ mod tests {
 
     /// **Story 2.6 AC3 — a rate limit is honoured WITHOUT the cycle going silent.**
     ///
+    /// **An honoured wait says so, instead of denying that a delay was given.**
+    ///
+    /// Found by the 2026-08-13 review of story 2.6's own repair. While the wait
+    /// runs, the loop synthesises `RateLimited { retry_after: None }`, whose
+    /// `Display` is *"source rate-limited, no delay given"* — and the wait exists
+    /// precisely BECAUSE a delay was given, since `rate_limited_until` is armed
+    /// only from a `Some`. At the minimum period a `Retry-After: 300` would have
+    /// printed sixty lines denying it.
+    ///
+    /// The lie is older than the log line; nothing rendered a `SourceError` until
+    /// story 2.6 AC5, so it had never been visible. Which is the argument for
+    /// AC5 in one sentence.
+    ///
+    /// FALSIFIED — mutation RUN, message copied: collapsing the two arms back into
+    /// the generic `warn!` goes RED with the pre-fix line quoted in full —
+    /// *"…: \"… WARN … this meter could not be read meter=garage error=source
+    /// rate-limited, no delay given\""*.
+    #[tokio::test]
+    async fn an_honoured_wait_does_not_deny_that_a_delay_was_given() {
+        let sink = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(sink.clone())
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .finish();
+        let clock = FakeClock::new(UtcMillis(SANE_NOW));
+        let mut source = FakeSource::new()
+            .then(Ok(reading(Quality::Good, 950)))
+            .then(Err(SourceError::RateLimited {
+                retry_after: Some(Duration::from_secs(60)),
+            }))
+            .then(Ok(later(reading(Quality::Good, 950), 1)));
+        let (tx, _rx) = mpsc::channel(8);
+        let meter = MeterId::new("garage");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let heartbeat = beats.of(&meter).expect("served");
+        let ctx = Context {
+            meter: &meter,
+            clock: &clock,
+            policy: policy(),
+            config: config(),
+            heartbeat: &heartbeat,
+            outbox: &tx,
+        };
+        let mut mem = MeterMemory::default();
+
+        let guard = tracing::subscriber::set_default(subscriber);
+        let (state, _) = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
+        // The 429 itself: a real refusal, logged as one.
+        let (_, _) = step_once(&ctx, &mut source, state, &mut mem).await;
+        let after_refusal = sink.text();
+        // And now the tick that is merely WAITING, which is the subject.
+        let (_, _) = step_once(&ctx, &mut source, State::Stale, &mut mem).await;
+        drop(guard);
+        let while_waiting = sink.text()[after_refusal.len()..].to_string();
+
+        assert!(
+            !while_waiting.contains("no delay given"),
+            "the wait is running because the server named a delay; denying it sends \
+             an operator looking for a rate limit nobody described: {while_waiting:?}"
+        );
+        assert!(
+            while_waiting.contains("the wait is being honoured"),
+            "and an honoured wait is not the same event as a fresh refusal: \
+             {while_waiting:?}"
+        );
+        assert!(
+            while_waiting.contains("remaining_s="),
+            "an operator waiting must be told how long, or the line says only that \
+             something is wrong: {while_waiting:?}"
+        );
+    }
+
     /// The source asks for 60 s; the next tick must not fetch, and must still
     /// publish. Skipping the publication would make a rate limit look like
     /// silence, which is the failure this project exists to prevent (ADR 0027).

@@ -55,18 +55,23 @@ pub enum SmartMeError {
     /// something that is not there while publishing the fault as `Transient` —
     /// telling an operator to wait for something that will never pass.
     ///
-    /// **Two origins, not one**, and the message names both because they send an
-    /// operator to different places: the id is mistyped in the configuration, or
-    /// the device existed and has been removed from the account. The second
-    /// arrives on a configuration that worked yesterday, without anyone typing.
+    /// **Three origins, and the message names all three because they send an
+    /// operator to different places**: the id is mistyped in the configuration, the
+    /// device existed and has been removed from the account, or `api_base` is not
+    /// the smart-me API at all. The second arrives on a configuration that worked
+    /// yesterday, without anyone typing. The third was added by the 2026-08-13
+    /// review, and it is the one with the widest blast radius: a wrong endpoint
+    /// `404`s EVERY meter, so all of them latch at once on a message that sends the
+    /// operator to a device id which is perfectly correct.
     ///
     /// Story 2.6's review found this reaching the wire as `source-unreachable`:
     /// `is_fatal` did not name it, so the single most likely configuration error
     /// was published as a network fault and never latched.
     #[error(
         "smart-me does not know device {device_id}. Either the device id is mistyped in the \
-         configuration, or the device has been removed from the smart-me account. Check it \
-         against the device list in the smart-me portal, correct the configuration, then restart"
+         configuration, the device has been removed from the smart-me account, or api_base is \
+         not the smart-me API — check that one first if EVERY meter is refused. Correct the \
+         configuration, then restart"
     )]
     UnknownDevice {
         /// The id smart-me refused, quoted back so the operator can search for it.
@@ -480,7 +485,13 @@ impl SmartMeClient {
         // Taking the body as text first and parsing it here keeps serde's own error,
         // which names the field when it can — see `SmartMeError::Decode` for the case
         // it cannot.
-        let body = resp.text().await.map_err(SmartMeError::from_reqwest)?;
+        // BYTES, NOT `text()`. Found by the 2026-08-13 review: `text()` performs a
+        // LOSSY UTF-8 conversion, so a body carrying invalid UTF-8 inside a JSON
+        // string — a device `Name` typed in a non-UTF-8 locale, say — would be
+        // silently accepted with U+FFFD substitutions where `resp.json()` used to
+        // refuse it outright. `from_slice` keeps serde's message, which is the whole
+        // point of parsing here, AND the byte-exact behaviour of what it replaced.
+        let body = resp.bytes().await.map_err(SmartMeError::from_reqwest)?;
         let device = decode_device(&body)?;
         Ok(DeviceCapture {
             device,
@@ -495,8 +506,8 @@ impl SmartMeClient {
 /// property lives in the parse, not in the HTTP round-trip, and this crate has no way
 /// to reach code that sits behind a live request. Story 2.6 AC5 could not be tested
 /// while this was one line inside an `async fn`.
-fn decode_device(body: &str) -> Result<Device, SmartMeError> {
-    serde_json::from_str(body).map_err(|e| SmartMeError::Decode {
+fn decode_device(body: &[u8]) -> Result<Device, SmartMeError> {
+    serde_json::from_slice(body).map_err(|e| SmartMeError::Decode {
         reason: e.to_string(),
     })
 }
@@ -671,9 +682,9 @@ mod tests {
     ///   poll nothing for ever and ask an operator to wait for it: …"* — re-run on
     ///   2026-08-13 after the assertion's wording changed, because a note that
     ///   quotes a message the test no longer emits is a prediction again;
-    /// - the second origin dropped from the `#[error]` string: RED, *"the operator
-    ///   is sent to one place only; \"removed from the smart-me account\" missing
-    ///   from …"*.
+    /// - an origin dropped from the `#[error]` string: RED, *"the operator is sent
+    ///   to one place only; \"not the smart-me API\" missing from …"* — re-run on
+    ///   2026-08-13 when the review added the third origin.
     #[test]
     fn an_unknown_device_id_is_fatal_and_names_both_origins() {
         let Some(e) = classify_device_status(404, None, "9202685") else {
@@ -690,7 +701,11 @@ mod tests {
              to wait for it: {e}"
         );
         let shown = e.to_string();
-        for origin in ["mistyped", "removed from the smart-me account"] {
+        for origin in [
+            "mistyped",
+            "removed from the smart-me account",
+            "not the smart-me API",
+        ] {
             assert!(
                 shown.contains(origin),
                 "the operator is sent to one place only; {origin:?} missing from {shown:?}"
@@ -774,7 +789,8 @@ mod tests {
             "CounterReading": 4843.822, "CounterReadingUnit": "kWh",
             "ValueDate": "2026-07-25T13:06:32.0500519Z"
         }"#;
-        let e = decode_device(without_power).expect_err("a payload we cannot read must not parse");
+        let e = decode_device(without_power.as_bytes())
+            .expect_err("a payload we cannot read must not parse");
         assert!(matches!(e, SmartMeError::Decode { .. }));
         let shown = e.to_string();
         assert!(
@@ -800,7 +816,7 @@ mod tests {
             "CounterReading": 4843.822, "CounterReadingUnit": "kWh",
             "ValueDate": "2026-07-25T13:06:32.0500519Z"
         }"#;
-        let e = decode_device(null_power).expect_err("a null is not a measurement");
+        let e = decode_device(null_power.as_bytes()).expect_err("a null is not a measurement");
         let shown = e.to_string();
         assert!(
             shown.contains("invalid type: null"),
@@ -810,6 +826,37 @@ mod tests {
             !shown.contains("ActivePower"),
             "if serde has started naming the field here, this limitation is over and \
              [#73] can close — delete this test and say so: {shown:?}"
+        );
+    }
+
+    /// **A body that is not valid UTF-8 is refused, not silently repaired.**
+    ///
+    /// Found by the 2026-08-13 review. The first version of this change took the
+    /// body through `resp.text()`, which performs a LOSSY conversion: invalid bytes
+    /// become U+FFFD and the payload parses. `resp.json()`, which it replaced, ran
+    /// `from_slice` on the raw bytes and refused. A device `Name` typed in a
+    /// non-UTF-8 locale would therefore have been accepted with substituted
+    /// characters — a value nobody sent, reaching the wire under a `Good` quality.
+    ///
+    /// FALSIFIED — mutation RUN, message copied: restoring the lossy path
+    /// (`from_str(&String::from_utf8_lossy(body))`) goes RED, and the panic prints
+    /// the defect itself — *"a byte sequence we cannot read is not a name we can
+    /// publish: Device { id: \"1\", name: \"\u{fffd}\", … }"*. The substituted
+    /// character reaching the domain type is the whole finding.
+    #[test]
+    fn a_body_that_is_not_utf8_is_refused_rather_than_repaired() {
+        let mut body = br#"{"Id":"1","Name":""#.to_vec();
+        body.push(0xFF); // not valid UTF-8, inside a JSON string
+        body.extend_from_slice(
+            br#"","Serial":30000001,"ActivePower":0.018,"ActivePowerUnit":"kW",
+                "CounterReading":4843.822,"CounterReadingUnit":"kWh",
+                "ValueDate":"2026-07-25T13:06:32.0500519Z"}"#,
+        );
+        let e = decode_device(&body)
+            .expect_err("a byte sequence we cannot read is not a name we can publish");
+        assert!(
+            matches!(e, SmartMeError::Decode { .. }),
+            "and it is a decode failure, retried, not a fatal one: {e:?}"
         );
     }
 

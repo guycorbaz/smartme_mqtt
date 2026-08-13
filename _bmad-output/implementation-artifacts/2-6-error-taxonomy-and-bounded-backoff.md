@@ -1,10 +1,16 @@
 # Story 2.6: A failure says which kind it is, and the bridge waits only when waiting is what the other end asked for
 
-Status: review — **all eight ACs now met**, AC1 and AC5 both on 2026-08-13.
-AC5 closes **on its letter**: serde names a missing field and names none for a type mismatch, so
-[#73](https://github.com/guycorbaz/smartme_mqtt/issues/73) stays open on that residual, which the
-API's nullability declarations make the likely case. See *AC5 — 2026-08-13* below.
-Three of the review's nine remaining findings still want a decision before this story closes.
+Status: **done** — closed 2026-08-13 after its repairs were reviewed, which is the step story 2.3
+established the day before: *a repair is not reviewed by the review that caused it.* That second
+pass found five more, one of them live and in this story's own subject. All eight ACs are met, AC5
+on its letter.
+
+What leaves with the story, each carrying a number rather than a paragraph:
+[#74](https://github.com/guycorbaz/smartme_mqtt/issues/74) (the residual AC5 cannot reach, which
+replaced [#73](https://github.com/guycorbaz/smartme_mqtt/issues/73), closed),
+[#75](https://github.com/guycorbaz/smartme_mqtt/issues/75) (the latched cause),
+[#76](https://github.com/guycorbaz/smartme_mqtt/issues/76) (two untested invariants) and
+[#77](https://github.com/guycorbaz/smartme_mqtt/issues/77) (the token endpoint's 429).
 
 ## Story
 
@@ -422,3 +428,58 @@ causes are produced only by `Policy::step`'s fatal guard, which already returns 
 cannot meet in `compose`. The premise written in the comment is what is wrong, not the conclusion.
 
 ### File List
+
+
+## Second review — 2026-08-13, of the repairs
+
+Run on `review/story-2.6-repairs`: the day's three commits replayed onto `d7cf779`, so the diff was
+exactly what the first review produced and nothing else. **Five findings, and the first is live.**
+
+### 1. An honoured wait denied that a delay was given — LIVE, and in AC5's own subject
+
+While the rate-limit wait runs, the loop synthesises `RateLimited { retry_after: None }`, whose
+`Display` reads *"source rate-limited, no delay given"*. But `rate_limited_until` is armed **only**
+from a `Some(delay)` — the wait exists precisely because a delay was given. At the minimum period a
+`Retry-After: 300` would have printed **sixty consecutive lines denying it**, reading as sixty fresh
+un-delayed rejections rather than one wait being honoured.
+
+**The lie is older than the log line.** Nothing rendered a `SourceError` until this story's AC5, so
+it had never been visible to anyone. That is the argument for AC5 in one sentence, and it is the
+second time in two days that making something visible immediately showed it was wrong.
+
+Fixed: an honoured wait logs itself, with the time remaining.
+
+### 2. The explicit `UnknownDevice` arm is documentation, not protection — recorded
+
+The reviewer ran it: deleting `| SmartMeError::UnknownDevice` from `map_error`'s configuration arm
+leaves all bridge tests green, because the wildcard below catches it with the identical result. The
+falsification table records only the *re-pointing* mutation, which does go red — so the table
+implied a guard that does not exist. **Recorded in the code rather than dressed up.** An assertion
+that cannot fail is worse than none, and so is a comment that implies one.
+
+### 3. `resp.text()` was a lossy regression — fixed
+
+The AC5 repair took the body through `resp.text()`, which converts invalid UTF-8 to U+FFFD. The
+`resp.json()` it replaced ran `from_slice` on raw bytes and refused. So a device `Name` typed in a
+non-UTF-8 locale would have been **accepted with substituted characters** — a value nobody sent,
+published as `Good`. `bytes()` + `from_slice` keeps serde's message *and* the byte-exactness. The
+falsification prints the defect itself: the replacement character sitting in `Device.name`.
+
+### 4. The `404` message named two origins and there are three — fixed
+
+`api_base` pointed at anything that is not the smart-me API also `404`s, and then **every meter
+latches at once** on a message sending the operator to a device id that is perfectly correct. The
+message now names it and says to check it first if every meter is refused.
+
+### 5. The dashboard contradicted the story — fixed
+
+`sprint-status.yaml` still read `AC5 UNMET [#73]` while this file said the opposite. Two sources of
+truth for one AC, and the machine-readable one is the one that gets trusted.
+
+### Falsification — three mutations, each RUN before its note
+
+| mutation | result |
+|---|---|
+| the honoured-wait arm collapsed back into the generic `warn!` | RED, quoting the pre-fix line in full: *"WARN … this meter could not be read meter=garage error=source rate-limited, no delay given"* |
+| the lossy path restored | RED, and the panic prints the substituted character reaching the domain, inside a fully-parsed `Device` |
+| the third origin dropped from the message | RED: *"the operator is sent to one place only; \"not the smart-me API\" missing from …"* |

@@ -262,6 +262,14 @@ fn map_error(e: SmartMeError) -> SourceError {
             // that, and it is the finding story 2.6's review left open — a future
             // fatal variant lands on the configuration and sends an operator to a
             // file that is not the problem.
+            //
+            // AND THE ARM ABOVE IS DOCUMENTATION, NOT PROTECTION. The 2026-08-13
+            // review ran the mutation: deleting `| SmartMeError::UnknownDevice`
+            // leaves all 225 bridge tests green, because the wildcard catches it
+            // with the identical result. Naming the variant tells a reader what was
+            // decided; it cannot fail, so no test can hold it. Recorded here rather
+            // than dressed up as a guard — an assertion that cannot fail is worse
+            // than none, and so is a comment that implies one.
             _ => Refusal::Configuration,
         };
         SourceError::Fatal {
