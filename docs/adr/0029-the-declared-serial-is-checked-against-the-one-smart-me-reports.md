@@ -74,7 +74,8 @@ where a verdict is reached.
 ### 2. `Fatal`, so it latches
 
 A serial does not come back on its own. `Transient` would poll a misconfigured meter for ever
-while publishing `Stale`, which reports a configuration fault as weather. `Fatal` latches
+while publishing `Stale`, which reports a configuration fault as one that passes by itself.
+`Fatal` latches
 `State::Failed`, which names the meter on `/` and in `failed_sources` and clears only on a
 restart.
 

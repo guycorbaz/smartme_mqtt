@@ -52,7 +52,8 @@ pub enum SmartMeError {
     /// smart-me does not know the device id we asked for (`404`). **Fatal**, and
     /// the reasoning is ADR 0029's applied to the id rather than the serial: a
     /// device id does not come into existence on its own, so retrying is polling
-    /// something that is not there while publishing a fault as weather.
+    /// something that is not there while publishing the fault as `Transient` —
+    /// telling an operator to wait for something that will never pass.
     ///
     /// **Two origins, not one**, and the message names both because they send an
     /// operator to different places: the id is mistyped in the configuration, or
@@ -666,8 +667,10 @@ mod tests {
     ///   *"a 404 must name the device smart-me refused, got HttpStatus { status:
     ///   404 }"* — the pre-fix behaviour exactly;
     /// - `UnknownDevice` removed from `is_fatal`: RED, *"an id smart-me does not
-    ///   know does not come into existence on its own, so retrying is polling
-    ///   nothing while reporting weather: …"*;
+    ///   know does not come into existence on its own, so a Transient verdict would
+    ///   poll nothing for ever and ask an operator to wait for it: …"* — re-run on
+    ///   2026-08-13 after the assertion's wording changed, because a note that
+    ///   quotes a message the test no longer emits is a prediction again;
     /// - the second origin dropped from the `#[error]` string: RED, *"the operator
     ///   is sent to one place only; \"removed from the smart-me account\" missing
     ///   from …"*.
@@ -683,7 +686,8 @@ mod tests {
         assert!(
             e.is_fatal(),
             "an id smart-me does not know does not come into existence on its own, \
-             so retrying is polling nothing while reporting weather: {e}"
+             so a Transient verdict would poll nothing for ever and ask an operator \
+             to wait for it: {e}"
         );
         let shown = e.to_string();
         for origin in ["mistyped", "removed from the smart-me account"] {

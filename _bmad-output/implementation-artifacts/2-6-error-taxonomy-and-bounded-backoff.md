@@ -295,8 +295,8 @@ test could reach the classification — see below.
 
 **`SmartMeError::UnknownDevice` is carved out of `HttpStatus`**, joins `is_fatal`, and maps to
 `Refusal::Configuration`. Fatal rather than transient on ADR 0029's own reasoning transposed from
-the serial to the id: a device id does not come into existence on its own, so retrying reports a
-fault as weather. The latch costs nothing an operator does not already pay — correcting a device id
+the serial to the id: a device id does not come into existence on its own, so a `Transient`
+verdict reports a fault that needs a person as one that passes. The latch costs nothing an operator does not already pay — correcting a device id
 is a configuration change, which `reconfigure::classify_meters` already prices at a
 `ProcessRestart`, so the repair and the latch ask for the same thing.
 
@@ -399,8 +399,9 @@ Nine findings are left undecided, deliberately — they are recorded here so the
 
 1. **A latched meter reverts to the generic `source-refused` on any non-fatal tick**
    (`state_machine.rs:156`). Credentials expire → `credential-rejected`; one hiccup later →
-   `source-refused`; the network returns → `credential-rejected`. The `Cause` flaps with the
-   weather. Carrying the `Refusal` inside `State::Failed` would fix it — a state-machine change, so
+   `source-refused`; the network returns → `credential-rejected`. **The published cause depends
+   on the last tick rather than on the fault that latched the meter.** Carrying the `Refusal`
+   inside `State::Failed` would fix it — a state-machine change, so
    an ADR.
 2. **Nothing tests that the rate-limit wait ever ends** (`poll_publish.rs:405`). Replacing the
    deadline comparison with `is_some()` — a wait that never expires — leaves the suite green.

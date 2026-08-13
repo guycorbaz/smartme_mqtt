@@ -163,8 +163,8 @@ impl UnverifiedReading {
     /// # Fatal, deliberately
     ///
     /// A serial does not drift back on its own, so `Transient` would poll a
-    /// misconfigured meter for ever while publishing `Stale` — a fault reported
-    /// as weather. `Fatal` latches [`State::Failed`](crate::core::state_machine::State),
+    /// misconfigured meter for ever while publishing `Stale` — a fault that needs a
+    /// person, published as one that passes by itself. `Fatal` latches [`State::Failed`](crate::core::state_machine::State),
     /// which names the meter on `/` and in `failed_sources`, and only a restart
     /// clears it. That is not a limitation here: `reconfigure::classify_meters`
     /// already costs a serial change a `ProcessRestart`, so the repair and the
@@ -664,7 +664,7 @@ mod tests {
 
         // FATAL, not Transient: a serial does not come back on its own, and a
         // transient verdict would poll a misconfigured meter for ever while
-        // publishing Stale — a configuration fault reported as weather.
+        // publishing Stale — a configuration fault published as one that passes.
         let SourceError::Fatal { refusal, reason } = error else {
             panic!(
                 "must be Fatal, so the meter latches Failed and is named on the screen: {error:?}"
@@ -779,7 +779,8 @@ mod tests {
         }
     }
 
-    /// A device id smart-me does not know is the configuration, not the weather.
+    /// A device id smart-me does not know is a configuration fault, not a passing
+    /// one.
     /// Before story 2.6's review this fell through `HttpStatus` to `Transient`,
     /// so the bridge polled a device that does not exist for ever and told the
     /// operator the network was unwell.
