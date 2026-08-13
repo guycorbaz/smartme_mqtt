@@ -41,7 +41,7 @@ anyone knowing there was one.
 - A new `Metric::with_quality_code(u32)` publishes a raw, host-specific code. Deviating is
   possible only by calling it — at the call site, where it is visible.
 - `smartme_bridge::adapters::sparkplug_publisher::ignition_quality_code` holds the deviation,
-  in the crate that is allowed to name a vendor.
+  in the crate that is allowed to name a supplier.
 
 The wire is unchanged: the bridge publishes the same bytes as before this ADR, so
 `CONTRACT_VERSION` stayed at 2 **for this change**.
@@ -64,7 +64,7 @@ conforming. Between the two, we do not lie.
 `sparkplug-b` is generic and intended for crates.io, and its purity guard forbids the token
 `ignition` in its source. Before this ADR the crate satisfied that guard to the letter while
 returning Ignition-specific integers from a method documented as *the* quality code — a
-vendor-specific choice hidden inside a library claiming to implement a specification. That is
+supplier-specific choice hidden inside a library claiming to implement a specification. That is
 worse than either alternative: a future consumer of the crate would have inherited our
 deployment's deviation without being told.
 

@@ -638,7 +638,7 @@ Record that in the matrix as part of Task 7, citing
 ### The passages this story falsifies (AC7)
 
 Produced mechanically: `grep -rn "no command\|not answer\|nothing acts on\|does not implement\|is ignored"`
-over `docs/`, `crates/*/src/`, `_bmad-output/planning-artifacts/`, excluding the vendored spec, then
+over `docs/`, `crates/*/src/`, `_bmad-output/planning-artifacts/`, excluding the pinned spec, then
 **reading the neighbourhood of every hit** — which is where the Story 4.6 review found three passages
 no keyword search could reach.
 
@@ -1065,7 +1065,7 @@ and [#39](https://github.com/guycorbaz/smartme_mqtt/issues/39).
 - The trace cap now bounds the **line**, not just one value: `MAX_TRACED_METRICS` plus the true total,
   and the two unbounded protobuf variants are shortened before they are formatted rather than after.
 - A rebirth answered alongside unknown metrics now names them, restoring *"never silently"*.
-- `set_max_packet_size` is stated in this repository rather than inherited from a vendor `Default`.
+- `set_max_packet_size` is stated in this repository rather than inherited from the library's `Default`.
 
 **What it changed in evidence:**
 

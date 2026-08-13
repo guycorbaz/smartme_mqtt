@@ -357,7 +357,7 @@ retain=true  qos=AtLeastOnce  STATE/ignition  "OFFLINE" (7 bytes)
 retain=true  qos=AtLeastOnce  STATE/SCADA     "ONLINE"  (6 bytes)
 ```
 
-**Two departures from the vendored norm, as this pass read them** — and **both descriptions are
+**Two departures from the pinned norm, as this pass read them** — and **both descriptions are
 superseded by Task 4**, which found the conformant 3.0 form published *as well*. The host does not
 depart on topic or on payload; it publishes an additional legacy form alongside a conformant one.
 Left standing with this correction rather than rewritten, for the same reason the ⚠️ block below is:
@@ -389,11 +389,11 @@ Left standing with this correction rather than rewritten, for the same reason th
 > confident, evidenced, wrong premise.
 
 **What this pass deliberately does NOT claim.** The `ONLINE`/`OFFLINE`-on-`STATE/<id>` form looks
-like a pre-3.0 Sparkplug convention, but **only the 3.0.0 specification is vendored here** and it
+like a pre-3.0 Sparkplug convention, but **only the 3.0.0 specification is kept here** and it
 contains no changelog and no mention of that form. So the deviation from 3.0.0 is established; the
 claim "this is the v2.2 form" is not, and is left as a question for Story 4.5 rather than asserted.
 Same discipline as [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34), where the MQTT
-character set could not be cited because that norm is not vendored either.
+character set could not be cited because no copy of that norm is kept here either.
 
 **And which client owns which host id is undetermined.** Four ids, three OFFLINE and one ONLINE,
 two differing only in case (`scada` / `SCADA`). Retained messages outlive their publisher, so some
@@ -424,7 +424,7 @@ spBv1.0/STATE/SCADA   {"online":true,"timestamp":1785263196684}   retain=true  q
 STATE/SCADA           ONLINE                                       retain=true  qos=1
 ```
 
-Checked clause by clause against the vendored norm: topic `spBv1.0/STATE/sparkplug_host_id` ✅
+Checked clause by clause against the pinned norm: topic `spBv1.0/STATE/sparkplug_host_id` ✅
 (`-connect-will-topic`, `:757-759`); JSON UTF-8 with `online` boolean and `timestamp` number ✅
 (`-connect-will-payload`, `:760-764`); retain true ✅ (`-connect-birth-retained`, `:786-787`);
 QoS 1 ✅ (`-connect-birth-qos`, `:784-785`). **The bridge can implement the specification as written
@@ -506,7 +506,7 @@ is the same position the story took for the observer as a whole.
 ### Tasks 5 and 6 — done 2026-07-29, from the committed record, with no second observation
 
 **All four ACs are now met.** No broker was touched: every claim below is drawn from
-`docs/primary-host-state-observation.md`, from the vendored specification, or from a grep over
+`docs/primary-host-state-observation.md`, from the pinned specification, or from a grep over
 `crates/`.
 
 **AC2 — and it argues *against* the obvious reading of the specification.** The plain answer is that
@@ -695,9 +695,9 @@ story creation, `ac1ea16`, and is not part of this implementation's diff.)*
 ### Review Findings
 
 Adversarial review 2026-07-29, three independent layers (Blind Hunter — diff only, no project access;
-Edge Case Hunter — diff + repository + vendored spec; Acceptance Auditor — diff + story + spec). All
+Edge Case Hunter — diff + repository + pinned spec; Acceptance Auditor — diff + story + spec). All
 three ran read-only; verified afterwards by re-hashing 97 files and by `git status`. Every finding
-below was re-verified by hand against the vendored specification or the code before being recorded —
+below was re-verified by hand against the pinned specification or the code before being recorded —
 several layer findings were refuted and are not listed.
 
 **Per-AC verdict from the Acceptance Auditor:** AC1 partially met · AC2 partially met · AC3 partially
@@ -720,7 +720,7 @@ no subscription, its NBIRTH is QoS 0 / not retained, and it has no store-and-for
 
 #### Patches
 
-- [x] [Review][Patch] The observed **birth** is validated against the **will** clauses, and the will clause mandates `online: false` [`docs/primary-host-state-observation.md:163-164`] — cited `-connect-will-topic` (`:757-759`) and `-connect-will-payload` (`:760-764`); the latter reads *"one key MUST be 'online' and it's value is a boolean **'false'**"*, so the observed `{"online":true,…}` **fails the clause it is ticked against**. Correct clauses are `-connect-birth-topic` (`:776-778`) and `-connect-birth-payload` (`:779-783`) — already used correctly two rows below for retain and QoS. Found independently by all three layers; verified against the vendored text. This is the evidence for the headline *"the 3.0 form is fully conformant"*
+- [x] [Review][Patch] The observed **birth** is validated against the **will** clauses, and the will clause mandates `online: false` [`docs/primary-host-state-observation.md:163-164`] — cited `-connect-will-topic` (`:757-759`) and `-connect-will-payload` (`:760-764`); the latter reads *"one key MUST be 'online' and it's value is a boolean **'false'**"*, so the observed `{"online":true,…}` **fails the clause it is ticked against**. Correct clauses are `-connect-birth-topic` (`:776-778`) and `-connect-birth-payload` (`:779-783`) — already used correctly two rows below for retain and QoS. Found independently by all three layers; verified against the pinned text. This is the evidence for the headline *"the 3.0 form is fully conformant"*
 - [x] [Review][Patch] **The manual now states something false about the bridge** [`docs/manual/chapters/05-mqtt-sparkplug-contract.tex`] — the new text says \prog *"never re-births"* and that *"no mechanism in the protocol restores the tag definitions **until \prog itself is restarted**"*. `mqtt_driver.rs:257` emits `Transport::Connected` on **every** `ConnAck`, and `:175-189` publishes a full BIRTH on it — so any bridge-side reconnect (broker restart, keep-alive expiry, network blip) restores the tag definitions without restarting the bridge. The AC2 conclusion survives (an *Ignition* restart leaves the bridge's own session untouched), but the absolute phrasing is wrong and understates the operator's remedies. **This is a fresh instance of the very pattern the story diagnoses three paragraphs earlier**
 - [x] [Review][Patch] **AC3's ACL elimination is unsound and is contradicted twelve lines later** [`docs/primary-host-state-observation.md:60`, `:69-72`] — step 1 eliminates *"a broker ACL hiding the topic"* on the grounds that the `#` sweep returned 78 messages on 61 topics. ACLs are per-topic; traffic on 61 other topics says nothing about `spBv1.0/#`. Step 2 then states the opposite explicitly. The sound eliminator is already in the same file (*"Mosquitto broker on the LAN, no auth"*) and is not the one used. This is the centrepiece of AC3
 - [x] [Review][Patch] **`-host-reordering-rebirth` is the wrong clause** [`docs/primary-host-state-observation.md:230`, and the manual] — the clause (`:565-568`) is conditional: *"**If** a Sparkplug Host Application is configured with a 'reordering timeout' parameter and the Reorder Timeout elapses…"*. It is the out-of-order-sequence remedy, not the host-restart remedy, and it binds only hosts with that parameter configured. The applicable text (`:943-951`) is non-normative and says *"can"*, not MUST. The conclusion survives; the citation does not support the sentence
@@ -731,12 +731,12 @@ no subscription, its NBIRTH is QoS 0 / not retained, and it has no store-and-for
 - [x] [Review][Patch] **`-termination-host-offline-timestamp`'s evidence is a category error** [`docs/primary-host-state-observation.md:284`] — the ruling offers the three ids permanently retained at `OFFLINE` as an instance of the stale-death class. Those are legacy payloads carrying **no timestamp at all** (6/7 bytes), and the clause compares timestamp values, so it cannot fire on them
 - [x] [Review][Patch] **"two independent passes over `#` and `spBv1.0/#`" names a run that was never made** [`docs/primary-host-state-observation.md:197`] — Run 1 used `spBv1.0/STATE/#` (25 s), `#` (20 s) and `STATE/#` (8 s). **The conclusion holds** — `spBv1.0/STATE/#` covers the topic and a retained message would have arrived on subscribe — but the two passes named are not the two that were run
 - [x] [Review][Patch] **"Retained residue from clients long gone" is an inference stated as a measurement** [`docs/primary-host-state-observation.md:178-180`] — step 3's own confound table says this step *"cannot tell a live host from a client that died months ago"*. The restart proved Ignition owns `SCADA`; it did not prove the other three are dead. A second host that simply did not restart is observationally identical
-- [x] [Review][Patch] **Sentences above the retained ⚠️ correction block were not re-examined** — *"Two departures from the vendored norm, both measured"* is no longer true after Task 4 (the host publishes the conformant form **as well**), and *"This makes the Ignition restart more valuable … it **will** show which id Ignition actually owns"* is still in the future tense after the restart answered it. The findings document handles this correctly; the story record does not
+- [x] [Review][Patch] **Sentences above the retained ⚠️ correction block were not re-examined** — *"Two departures from the pinned norm, both measured"* is no longer true after Task 4 (the host publishes the conformant form **as well**), and *"This makes the Ignition restart more valuable … it **will** show which id Ignition actually owns"* is still in the future tense after the restart answered it. The findings document handles this correctly; the story record does not
 - [x] [Review][Patch] **The Completion Notes header contradicts its own body, and a paragraph is duplicated with a different count** — the header reads *"Tasks 1 and 2 complete. Tasks 3–6 are blocked … and are NOT claimed"* above four sections claiming Tasks 3–6 done. *"**Two** defects in the observer"* is followed four lines later by *"**One** defect in the observer"* describing the same connection-timeout defect
 - [x] [Review][Patch] **"four carrying a named undetermined residue" — the membership is wrong in both directions** — `-phid-offline` is listed but states a *cost*, not an undetermined; `-…-state-subs` carries a residue (*"its applicability turns on a reading 4.5 must fix"*) and is not listed. The count of four survives. **The sentence is replicated into `docs/sparkplug-conformance.md:1583` and `sprint-status.yaml`**, so the mislabel reaches two artefacts 4.5 will read
 - [x] [Review][Patch] **"Nine of the eleven are conditional on *if the Edge Node is configured to wait*" is not verbatim for two of the nine** — `-host-offline-reconnect` (`:368-371`) conditions on an **event**, `-state-subs` (`:586-589`) on a **topology**. The 9/2 arithmetic is consistent, but the document never names which two clauses are the exceptions, so a reader cannot reproduce the count
 - [x] [Review][Patch] **"Steps 1–3 above are measured" is false, and the inference label points at the wrong chain item** — chain item 3 (*"The bridge sees nothing … its own broker session is untouched"*) was never observed; nothing in the record shows the bridge was even running during either run. Indeed the `#` sweep found *"not one `spBv1.0/…` topic"*, which implies it was not. The proposition the label names actually lives in item 2, not item 4
-- [x] [Review][Patch] **The `retain` heuristic omits the MQTT rule it depends on** — MQTT 3.1.1 [MQTT-3.3.1-9] requires a broker to deliver a retained publish to an *already-subscribed* client with RETAIN **cleared**, so the live birth arriving `retain=false` is silent about how it was published. The conformance row *"Retain true ✅"* is scored from a different observation the reader must join up unaided. Note the same document correctly refuses to cite un-vendored MQTT elsewhere
+- [x] [Review][Patch] **The `retain` heuristic omits the MQTT rule it depends on** — MQTT 3.1.1 [MQTT-3.3.1-9] requires a broker to deliver a retained publish to an *already-subscribed* client with RETAIN **cleared**, so the live birth arriving `retain=false` is silent about how it was published. The conformance row *"Retain true ✅"* is scored from a different observation the reader must join up unaided. Note the same document correctly refuses to cite MQTT, of which no copy is kept here, elsewhere
 - [x] [Review][Patch] **Observed QoS 1 does not establish published QoS 1** — delivered QoS is bounded by the subscription, which was made at QoS 1, so the observation cannot distinguish a publisher using 1 from one using 2. The clause is a MUST on a specific value; the ✅ is one notch stronger than the measurement supports
 - [x] [Review][Patch] **The "Sparkplug Aware MQTT Server" behaviour is cited to the conformance-profile chapter** — `Sparkplug_10_Conformance.adoc:71-83` enumerates profiles; the retained-`$sparkplug`-republication behaviour has its own clauses with their own tck-ids. This option is offered to 4.5 as a third remedy, so it is decision-bearing
 - [x] [Review][Patch] **The transcript blocks are retyped, not pasted, and disagree with each other** — the story renders `qos=AtLeastOnce`, the findings document `qos=1`; the tool's format string emits `{:?}` on `rumqttc::QoS`, which is `AtLeastOnce` and never `1`. Separately *"78 messages, 61 distinct topics"* is not a figure the instrument computes — its SUMMARY prints retained, live and distinct host ids only

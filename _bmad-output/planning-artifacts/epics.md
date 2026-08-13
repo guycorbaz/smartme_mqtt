@@ -835,7 +835,7 @@ So that conformance is a document I can audit rather than a belief.
 
 **Acceptance Criteria:**
 
-**Given** the vendored specification at `docs/spec/sparkplug-b-3.0.0/` (release tag v3.0.0, EPL-2.0) and `crates/sparkplug-b/src/topic.rs`
+**Given** the pinned specification at `docs/spec/sparkplug-b-3.0.0/` (release tag v3.0.0, EPL-2.0) and `crates/sparkplug-b/src/topic.rs`
 **When** every namespace and topic-grammar clause is walked
 **Then** `docs/sparkplug-conformance.md` exists with one row per clause: the `tck-id-…` identifier, requirement level (MUST/SHOULD/MAY), our behaviour, the test that proves it, and a verdict of `conformant` / `deviation` / `gap`
 **And** the matrix names the specification version it was built against — a conformance claim is meaningless without one, and a version change invalidates the matrix rather than merely dating it
@@ -863,7 +863,7 @@ So that the hand-rolled protobuf is trustworthy for reasons beyond "Ignition acc
 **When** the matrix records the `Quality` property row
 **Then** it states explicitly that the *values* are host-defined and were established by measurement (`quality_code_probe`), not by reading a table — the failure mode that caused contract v1.
 
-**Given** the 109 `tck-id-payloads-*` clauses of chapter 6 — the whole set, verified to live in that chapter and nowhere else in the vendored specification
+**Given** the 109 `tck-id-payloads-*` clauses of chapter 6 — the whole set, verified to live in that chapter and nowhere else in the pinned specification
 **When** the pass ends
 **Then** every one of them is accounted for by a row or by a collective block that **names its member ids**, and the arithmetic `conformant + deviation + gap + n/a = 109` is stated in the matrix
 **And** a clause satisfied by construction but exercised by no named test is recorded as a `gap`, not as a `conformant`
@@ -889,7 +889,7 @@ So that the gaps we suspect are counted and the ones we do not suspect are found
 **When** Epic 4's remaining stories are reviewed against it
 **Then** any newly discovered `gap` is either scheduled into this epic or recorded with an issue and an owning epic — no gap is left unassigned.
 
-**Given** the **124 clauses** that no story owns after 4.1 (chapter 4) and 4.2 (chapter 6) — chapters **1, 2, 3, 5 and 10** — verified by mechanical enumeration to be the exact remainder of the vendored specification's **303** ids
+**Given** the **124 clauses** that no story owns after 4.1 (chapter 4) and 4.2 (chapter 6) — chapters **1, 2, 3, 5 and 10** — verified by mechanical enumeration to be the exact remainder of the pinned specification's **303** ids
 **When** the pass ends
 **Then** every one of them is accounted for by a row or by a collective block that **names its member ids**, and the arithmetic `conformant + deviation + gap + n/a = 124` is stated in the matrix
 **And** the matrix states the whole-specification total — `70 + 109 + 124 = 303` — so a reader can tell audited-in-full from audited-in-part
@@ -1249,7 +1249,7 @@ So that the next person reasoning from it is not misled the way we were.
 **Acceptance Criteria:**
 
 **Given** ADR 0010, which states *"The Sparkplug B specification requires QoS 0 for **every** edge-node message (NBIRTH/NDATA/NDEATH/DBIRTH/DDATA/DDEATH). Only host STATE messages use QoS 1"*
-**When** it is checked against the vendored specification
+**When** it is checked against the pinned specification
 **Then** its **conclusion is confirmed**: `topics-ndata-mqtt` and `topics-ddata-mqtt` both require QoS 0 with retain false, so no broker acknowledgement exists for data and FR20 was genuinely unimplementable as written
 **And** its **premise is corrected**: the blanket "every edge-node message" is wrong — the Will Message MUST be QoS 1 (chapter 5), and chapter 4 states no QoS for NDEATH at all.
 
@@ -1261,7 +1261,7 @@ So that the next person reasoning from it is not misled the way we were.
 **When** resolved in the same pass
 **Then** it is amended to a measurable analogue (read→accepted-for-transmission), since the QoS-0 requirement for data is confirmed and no ACK will ever exist. Story 4.16 unblocks on that amendment.
 
-*History worth keeping: this story was first written to **re-open** ADR 0010, on my claim that DATA carried no QoS requirement. That claim came from grepping chapter 5 alone and concluding from absence. Chapter 4 has the requirements. The vendored specification caught the error within minutes of being vendored — which is the argument for vendoring it.*
+*History worth keeping: this story was first written to **re-open** ADR 0010, on my claim that DATA carried no QoS requirement. That claim came from grepping chapter 5 alone and concluding from absence. Chapter 4 has the requirements. The pinned specification caught the error within minutes of the copy being committed — which is the argument for keeping one.*
 
 ### Story 4.19: Finish chapter 4 — the 29 clauses Story 4.1 did not record
 

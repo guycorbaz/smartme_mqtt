@@ -317,7 +317,7 @@ property.
 ### The eleven sentences this story falsifies (AC5)
 
 Produced by `grep -rn "no MQTT subscription\|no subscription\|not subscribed"` over `docs/` and
-`_bmad-output/planning-artifacts/`, excluding the vendored spec. **Every one of these is true today
+`_bmad-output/planning-artifacts/`, excluding the pinned spec. **Every one of these is true today
 and false once this story lands.** Two of them are load-bearing in an argument, not just
 descriptive — amend the claim *and* re-check what it was holding up.
 
@@ -536,7 +536,7 @@ would have caught them, since reconstructing this table is how they were found. 
 now, for the next story that inherits a list like this.
 
 Rows 1–11 are the story's own grep (`no MQTT subscription\|no subscription\|not subscribed` over
-`docs/` and `_bmad-output/planning-artifacts/`, excluding the vendored spec). Rows 12–13 were found by
+`docs/` and `_bmad-output/planning-artifacts/`, excluding the pinned spec). Rows 12–13 were found by
 the dev pass. Rows 14–18 were found by the review, after the story had reported AC5 complete.
 
 | # | Passage | Found by | Disposition |

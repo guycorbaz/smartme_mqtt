@@ -1,4 +1,4 @@
-# Sparkplug B specification, v3.0.0 — vendored
+# Sparkplug B specification, v3.0.0 — the copy kept here
 
 **This directory is third-party content and is NOT covered by this project's MIT licence.**
 
@@ -12,7 +12,7 @@
 
 Every `.adoc` file keeps its original EPL-2.0 header. Nothing here has been modified.
 
-## Why it is vendored
+## Why a copy lives here
 
 The conformance audit (Epic 4, stories 4.1–4.3) walks the specification clause by clause against
 the implementation. That needs a source that is **greppable** and, more importantly, **pinned**:
@@ -20,7 +20,7 @@ the implementation. That needs a source that is **greppable** and, more importan
 specification" is not — the document moves.
 
 It also removes a failure mode this project has already hit twice. The quality-code defect
-(contract v1) and the QoS misunderstanding in ADR 0010 both came from reading a *vendor's*
+(contract v1) and the QoS misunderstanding in ADR 0010 both came from reading a *supplier's*
 documentation or a summary table instead of the normative text. The normative statements carry
 `tck-id-…` identifiers; cite those, not prose.
 

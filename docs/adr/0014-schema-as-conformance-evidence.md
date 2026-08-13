@@ -1,4 +1,4 @@
-# ADR 0014 — The vendored protobuf schema is admissible conformance evidence, for field types only
+# ADR 0014 — The pinned protobuf schema is admissible conformance evidence, for field types only
 
 - **Status:** Accepted
 - **Date:** 2026-07-28
@@ -27,13 +27,13 @@ Demanding a test here would produce a test that cannot fail, which is precisely 
 
 The chapter-6 pass invented this exception in passing, in the shared "How to read this" section that
 governs every chapter, with no ADR and no issue — and justified it on a claim that is simply false:
-that the schema is *"external to this repository"*. It is vendored **inside** it, at
+that the schema is *"external to this repository"*. It is kept **inside** it, at
 `crates/sparkplug-b/proto/sparkplug_b.proto`, and is editable by the same hands as the code the rule
 refuses to trust. The code review of Story 4.2 caught both the missing ADR and the false premise.
 
 ## Decision
 
-**The vendored `sparkplug_b.proto` schema is an admissible witness, and the property that makes it
+**The pinned `sparkplug_b.proto` schema is an admissible witness, and the property that makes it
 one is compile-time unrepresentability — not the file's location.**
 
 A row may cite the schema as its proof when, and only when, the generated type makes the clause
@@ -63,7 +63,7 @@ Rows relying on this witness say so explicitly, in the Proof column.
   row in the chapter naming no test). Both are type clauses.
 - **The rule change is retroactive across chapters**, since "How to read this" governs all of them.
   No chapter-4 verdict moves as a result: none of its rows cited a schema.
-- **The vendored schema becomes load-bearing.** Editing
+- **The pinned schema becomes load-bearing.** Editing
   `crates/sparkplug-b/proto/sparkplug_b.proto` away from the v3.0.0 release would silently weaken
   two conformance claims. It is pinned to the release tag and should be treated as read-only; a
   version bump invalidates the matrix anyway, which the document already states at its head.

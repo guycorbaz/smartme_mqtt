@@ -1,6 +1,6 @@
 # Sparkplug B conformance matrix
 
-**Specification version: v3.0.0**, vendored at `docs/spec/sparkplug-b-3.0.0/` (EPL-2.0).
+**Specification version: v3.0.0**, pinned at `docs/spec/sparkplug-b-3.0.0/` (EPL-2.0).
 
 A conformance claim is meaningless without a version. **A version change invalidates this matrix
 rather than merely dating it** — the clause set moves, so the audit must be re-run, not patched.
@@ -28,12 +28,12 @@ quality codes a real host read as `Good` while every internal test agreed with i
 
 **One addition, made during the chapter-6 pass and ratified by
 [ADR 0014](adr/0014-schema-as-conformance-evidence.md).** A named test is not the only admissible
-witness: the **vendored `sparkplug_b.proto` schema** is one too, where it makes the violation
+witness: the **pinned `sparkplug_b.proto` schema** is one too, where it makes the violation
 *unrepresentable*. A clause requiring a field to be an unsigned 32-bit integer is discharged by the
 generated type being `Option<u32>`: there is no program we could write that emits anything else, so
 the guarantee fails at **compile time** rather than on a test run — stronger than a test, not
 weaker. That is the property that matters. It is *not* that the witness is external to this
-repository: the schema is vendored **inside** it, and the first draft of this paragraph claimed
+repository: the schema is kept **inside** it, and the first draft of this paragraph claimed
 otherwise, which was simply wrong.
 
 **A second non-test witness, ratified at the code review of Story 4.3 —
@@ -144,7 +144,7 @@ Assuming chapter 1's set equalled chapter 4's `+`/`/`/`#` rejection — which is
 and which this matrix nearly took — would have produced three `conformant` rows over a demonstrated
 defect.
 
-**And the audit's reach stops short of the clause.** The MQTT specification is **not vendored in
+**And the audit's reach stops short of the clause.** This repository keeps **no copy of the MQTT specification in
 this repository**; only Sparkplug B is. So the admissible set cannot be cited the way `CLAUDE.md`
 requires, and this matrix does not claim to know it. What is established is narrower and enough:
 the implemented set is chapter 4's, the clause's is MQTT's, and at least one character separates
@@ -373,7 +373,7 @@ do below.
 | `message-flow-edge-node-birth-publish-connect` | MUST | `publisher.birth(...)` is driven from `Transport::Connected`, which is raised only on `Packet::ConnAck` (`mqtt_driver.rs:956-971`; `Packet::ConnAck` at `:1109`) | `chaos_sigterm_no_lie` observes the NBIRTH arriving on a real broker after a real CONNECT | conformant |
 | `message-flow-edge-node-birth-publish-will-message` | MUST | the will is registered in the CONNECT packet (`mqtt_driver.rs:931`), built **before** the client exists | `chaos_stale_on_death` — the bridge's task is aborted without a shutdown signal (`:68`), the socket drops, and an independent subscriber receives the certificate the broker was holding. An external witness against a real broker | conformant |
 | `message-flow-edge-node-birth-publish-will-message-topic` | MUST | `spBv1.0/{group}/NDEATH/{node}`, built by `node_topic` (`sparkplug_publisher.rs:242`, `:367`) | `node_topics_follow_the_namespace_grammar` pins the full literal. `chaos_stale_on_death` is **not** a second witness for the grammar: it tests only `.contains("/NDEATH/")` (`:70-72`), which `foo/NDEATH/bar` would satisfy | conformant |
-| `message-flow-edge-node-birth-publish-will-message-payload` | MUST | the will payload is `encode(&payload)` — the vendored protobuf | `chaos_stale_on_death` decodes it from a real broker; `prop_every_numbered_payload_round_trips` | conformant |
+| `message-flow-edge-node-birth-publish-will-message-payload` | MUST | the will payload is `encode(&payload)` — the pinned protobuf | `chaos_stale_on_death` decodes it from a real broker; `prop_every_numbered_payload_round_trips` | conformant |
 | `message-flow-edge-node-birth-publish-will-message-payload-bdSeq` | MUST | the metric is present, named `bdSeq`, INT64, **and the value now increments per CONNECT** — the driver owns its reconnect loop and registers a fresh will carrying the new session number (Story 4.10, 2026-08-01) | `the_will_matches_the_session_before_and_after_the_birth`, `prop_will_birth_and_death_agree_on_bdseq_for_every_session_number` (presence and pairing) + `chaos_bd_seq_advances_on_every_connect` (the INCREMENT, observed by an independent subscriber across a real disconnect, and falsified) | **conformant** (Story 4.10) |
 | `message-flow-edge-node-birth-publish-will-message-qos` | MUST (QoS 1) | the will is registered at **QoS 1** — `qos_for(MessageType::NDeath)` returns `AtLeastOnce` and the will is built from it (`mqtt_driver.rs`, `qos_for` and the `set_last_will` call) | `the_delivery_table_matches_the_specification_clause_by_clause` — falsified 2026-08-10 by restoring QoS 0, red with the clause named | **conformant** (Story 4.17, closes [#26](https://github.com/guycorbaz/smartme_mqtt/issues/26)) |
 | `message-flow-edge-node-birth-publish-will-message-will-retained` | MUST (false) | retain false, from the same `qos_for` | `the_registered_will_carries_the_qos_and_retain_the_norm_mandates` — reads the will back out of the `MqttOptions` the broker receives, so this row and its QoS sibling now rest on the SAME artefact at the same standard. Falsified 2026-08-11 (retain hard-coded true goes red). **Upgraded from `gap (unproven)` on 2026-08-11**, by the story's own review | **conformant** (Story 4.17 review) |
@@ -799,7 +799,7 @@ grep -oE 'tck-id-[A-Za-z0-9-]+' docs/spec/sparkplug-b-3.0.0/chapters/Sparkplug_6
 
 The chapter boundary was verified rather than assumed: `grep -rl 'tck-id-payloads-'` over
 `docs/spec/sparkplug-b-3.0.0/chapters/` returns **only** `Sparkplug_6_Payloads.adoc`, and the same
-pattern over the whole vendored tree yields the same 109 ids. No `payloads-*` clause hides in
+pattern over the whole pinned tree yields the same 109 ids. No `payloads-*` clause hides in
 another chapter, and chapter 6 holds nothing else. The regex is case-inclusive on purpose: two ids
 carry uppercase (`…-timestamp-in-UTC`, `…-metric-timestamp-in-UTC`) and a lowercase-only pattern
 truncates them.
@@ -830,7 +830,7 @@ them again.
 | tck-id | Level | Our behaviour | Proof | Verdict |
 | --- | --- | --- | --- | --- |
 | `payloads-name-requirement` | MUST | `encode_metric` always sets `name` (`encode.rs:240`) | `encode.rs::a_birth_is_self_describing`, `sparkplug_publisher.rs::cold_start_birth_declares_tags_with_no_value_and_stale_quality` (both locate metrics *by name*; drop the field and they panic) | conformant |
-| `payloads-metric-datatype-value-type` | MUST | `datatype` is an unsigned 32-bit integer | the vendored `sparkplug_b.proto` types the field `optional uint32`; `DataType::code` is a `#[repr(u32)]` cast (`datatype.rs:55`) — **schema witness**, plus `datatype.rs::codes_match_the_specification_numbering` | conformant |
+| `payloads-metric-datatype-value-type` | MUST | `datatype` is an unsigned 32-bit integer | the pinned `sparkplug_b.proto` types the field `optional uint32`; `DataType::code` is a `#[repr(u32)]` cast (`datatype.rs:55`) — **schema witness**, plus `datatype.rs::codes_match_the_specification_numbering` | conformant |
 | `payloads-metric-datatype-value` | MUST | every `MetricValue` variant maps to an enumerated code; no variant can produce an unlisted one | `model.rs::value_variants_pin_their_datatype`, `a_float_value_is_always_double_never_float32`, `a_null_value_still_declares_its_type`, `datatype.rs::codes_match_the_specification_numbering` | conformant |
 | `payloads-metric-datatype-req` | MUST | set on every metric of every BIRTH | `encode.rs::birth_carries_seq_zero_and_the_session_number`, `sparkplug_publisher.rs::cold_start_birth_declares_tags_with_no_value_and_stale_quality` | conformant |
 | `payloads-metric-datatype-not-req` | SHOULD NOT | **set on DDATA metrics too** — one encoder serves every message type (`encode.rs:243`) | — | **deviation** ([#28](https://github.com/guycorbaz/smartme_mqtt/issues/28)) |
@@ -864,7 +864,7 @@ expressed in the type system.
 | --- | --- | --- | --- | --- |
 | `payloads-propertyset-keys-array-size` | MUST | `encode_properties` pushes key and value together in each branch, and Story 2.1's caller-supplied properties are pushed as pairs from a `Vec<(String, String)>` — a shape in which they cannot diverge | — **correct by construction; no test asserts the invariant**, though one incidentally notices a surplus key — see the mutation note below | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
 | `payloads-propertyset-values-array-size` | MUST | as above — the same invariant stated from the other side; the Story 2.1 property carries its key in the same tuple | — **correct by construction, wholly unproven**: a surplus value passes entirely unnoticed | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
-| `payloads-metric-propertyvalue-type-type` | MUST | property `type` is an unsigned 32-bit integer | vendored `sparkplug_b.proto` types it `optional uint32` — **schema witness** ([ADR 0014](adr/0014-schema-as-conformance-evidence.md)); a non-`u32` here does not fail a test, it fails to compile | conformant |
+| `payloads-metric-propertyvalue-type-type` | MUST | property `type` is an unsigned 32-bit integer | pinned `sparkplug_b.proto` types it `optional uint32` — **schema witness** ([ADR 0014](adr/0014-schema-as-conformance-evidence.md)); a non-`u32` here does not fail a test, it fails to compile | conformant |
 | `payloads-metric-propertyvalue-type-value` | MUST | we emit `Int32` (3) for quality and `String` (12) for `engUnit`; both enumerated | **neither half is proven** — see the row below; delete the `r#type` line from `string_property` (`encode.rs:300`) and the suite stays green, and the `Int32` half is a tautology | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
 | `payloads-metric-propertyvalue-type-req` | MUST | `int_property` / `string_property` always set `type` (`encode.rs:290-306`) | — **half-witnessed at best**: deleting `r#type` from `int_property` goes red, from `string_property` goes green. The clause says *every* property value, so a witness for one of the two constructors does not prove it. The BIRTH scope (`:593-594`) is bridged only by "one `encode_metric` serves every message type" — the code-shape reasoning this matrix refuses elsewhere | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
 | `payloads-propertyset-quality-value-type` | MUST | property type `Int32` (code 3) | — **the cited assertion is a tautology; see below** | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
@@ -1125,7 +1125,7 @@ number"*), the id filed `n/a` above. It was flagged here for Story 4.6 rather th
 row, because one clause gets one row.
 
 **Story 4.6 landed and the tolerance holds, for a structural reason rather than a handled case.**
-`seq` is `optional` in the vendored proto, so a payload without one decodes; `classify`
+`seq` is `optional` in the pinned proto, so a payload without one decodes; `classify`
 (`mqtt_driver.rs:601`) reads only `metrics`, and nothing in the inbound path ever looks at `seq`.
 `a_rebirth_request_is_the_name_and_the_value_never_the_name_alone` builds its payloads with
 `seq: None` and passes, so the absence is exercised rather than merely permitted. There is nothing
@@ -1357,8 +1357,8 @@ not only here.
 | ~~**`bdSeq` is fixed for a client's lifetime**, so `-nbirth-bdseq-repeat` passes for the wrong reason and the per-CONNECT increment the clause requires never happens~~ **CLOSED (Story 4.10, 2026-08-01).** The driver owns its reconnect loop; each CONNECT advances the number and registers a will carrying it. **Found while closing it:** no NDEATH reaches a subscriber on the reconnect path at all — [#43](https://github.com/guycorbaz/smartme_mqtt/issues/43) — so the *will* half is verified only on the SIGTERM path | 6 | ~~Story 4.10~~ done |
 | Specification editorial: `sequence-num-req-nbirth` / `-zero-nbirth` are one clause with two spellings, so a mechanical count of chapter 6 reads 109 where 108 requirements exist | 6 | recorded above; upstream, not ours |
 | Specification editorial: `-name-birth-data-requirement` and `-name-cmd-requirement` are timestamp clauses carrying `name` ids | 6 | recorded above; upstream, not ours |
-| **Identifier validation implements Sparkplug's wildcard rule, not MQTT's character set — measured: a `U+0000` passes `check_identifier` and reaches the published topic.** Three chapter-1 clauses defer their character set to a specification this repository does not vendor | 1 | [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34) |
-| **The MQTT specification is not vendored here**, so three `-chars` clauses cannot be audited in full against their own norm — only a demonstrated violation of them | 1 | [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34) — start by pinning the MQTT clause |
+| **Identifier validation implements Sparkplug's wildcard rule, not MQTT's character set — measured: a `U+0000` passes `check_identifier` and reaches the published topic.** Three chapter-1 clauses defer their character set to a specification this repository keeps no copy of | 1 | [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34) |
+| **This repository keeps no copy of the MQTT specification**, so three `-chars` clauses cannot be audited in full against their own norm — only a demonstrated violation of them | 1 | [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34) — start by pinning the MQTT clause |
 | **`Clean Session` is true only because rumqttc defaults it that way** (`rumqttc-0.25.1/src/lib.rs:513`); `set_clean_session` is never called and no test asserts the flag. The first `gap (unproven)` whose guarantee comes from *outside* our code — a dependency default has none of the compile-time force [ADR 0014](adr/0014-schema-as-conformance-evidence.md) requires | 2 | [#35](https://github.com/guycorbaz/smartme_mqtt/issues/35), Story 4.10 |
 | **Nothing asserts that only one MQTT server is ever connected**; the guarantee is `MqttConfig`'s shape and dissolves the day Story 4.5 adds a server list | 5 | [#35](https://github.com/guycorbaz/smartme_mqtt/issues/35), Story 4.10 |
 | **The Primary Host / STATE mechanism is absent end to end** — no *STATE* subscription, no STATE parsing, no birth-wait, no offline-disconnect, no server walk. **Eleven chapter-5 clauses**, and they are `gap` rather than `n/a` because the condition they turn on is a capability the bridge lacks, not a deployment fact. Story 4.6 added an NCMD subscription and no STATE handling whatever, so all eleven stand unchanged. **Story 4.5 closed this as a DECISION rather than a gap** — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism, and the verdict word itself is [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42) | 5 | Stories 4.4, 4.5 — **done** |
@@ -1385,7 +1385,7 @@ unrepresentable at compile time.
 The draft cited `node_topics_follow_the_namespace_grammar` and
 `device_topics_append_the_device_identifier` as proof — topic-grammar tests that exercise nothing
 about UTF-8. Two of the three review layers flagged it independently. The witness is sound but it
-extended [ADR 0014](adr/0014-schema-as-conformance-evidence.md), which admits only the vendored
+extended [ADR 0014](adr/0014-schema-as-conformance-evidence.md), which admits only the pinned
 protobuf schema and explicitly warns that *"the compiler proves it"* would swallow half the matrix.
 It is now ratified as [**ADR 0015**](adr/0015-language-type-invariants-as-conformance-evidence.md)
 ([#36](https://github.com/guycorbaz/smartme_mqtt/issues/36)) under three conditions — the clause
@@ -1656,7 +1656,7 @@ NCMD/DCMD section above. That is the single reclassification in this chapter, an
 Story 4.2 and **propagated**: chapter 4's `topics-ncmd-mqtt` and `-dcmd-mqtt` became `n/a` too,
 because one obligation may not carry two verdicts in one document.
 
-Every `conformant` row names a test, or names the vendored protobuf schema where the schema makes
+Every `conformant` row names a test, or names the pinned protobuf schema where the schema makes
 the violation unrepresentable ([ADR 0014](adr/0014-schema-as-conformance-evidence.md)). No row is
 asserted from reading the code alone. **Eight behaviours that are correct by construction are
 recorded as `gap (unproven)` rather than `conformant`**, because no test proves them: six would

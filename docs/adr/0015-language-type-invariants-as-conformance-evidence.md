@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-07-28
 - **Related:** [#36](https://github.com/guycorbaz/smartme_mqtt/issues/36), [ADR 0014](0014-schema-as-conformance-evidence.md), `docs/sparkplug-conformance.md` §"How to read this", Story 4.3
-- **Extends:** ADR 0014, which admitted exactly one non-test witness — the vendored protobuf schema.
+- **Extends:** ADR 0014, which admitted exactly one non-test witness — the pinned protobuf schema.
 
 ## Context
 

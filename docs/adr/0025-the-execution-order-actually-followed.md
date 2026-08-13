@@ -65,7 +65,7 @@ rather than the order that was planned:
   falsification found two more — including an assertion that passed while the property it named
   was not implemented at all. Green is not a review.
 - **Story 4.17 is pulled out of the Epic 4 backlog and runs before Epic 7.** It fixes a
-  confirmed violation of the specification, read in the vendored norm rather than remembered:
+  confirmed violation of the specification, read in the pinned norm rather than remembered:
   `tck-id-message-flow-edge-node-birth-publish-will-message-qos` (`Sparkplug_5:184`) —
   *"The Edge Node's MQTT Will Message's MQTT QoS MUST be 1"* — and the bridge publishes it at
   QoS 0, with a unit test that locks the violation in ([#26]). It runs before Epic 7 because

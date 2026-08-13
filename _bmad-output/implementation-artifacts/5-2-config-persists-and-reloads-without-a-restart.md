@@ -180,7 +180,7 @@ one place a refactor could put it back without any test noticing.
   - [x] DBIRTH on enable, DDEATH on disable, same `bdSeq`, DBIRTH before any DDATA. Proven against
         a real broker by `chaos_device_certificates.rs`, which counts NBIRTHs and requires exactly
         one. Conformant per `tck-id-message-flow-device-birth-publish-nbirth-wait`, read in the
-        vendored spec rather than remembered.
+        pinned spec rather than remembered.
 
 - [x] **Task 5 — falsification** (AC: all) — *twelve mutations run 2026-08-04, all red, records
       copied next to their tests. The log-search for the secret is

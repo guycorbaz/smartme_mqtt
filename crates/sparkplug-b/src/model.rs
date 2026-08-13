@@ -56,7 +56,7 @@ impl Quality {
     ///
     /// This crate does not resolve that conflict, because it cannot: the right
     /// answer depends on the consumer, and a generic library that silently
-    /// emitted one vendor's encoding while claiming to implement the
+    /// emitted one supplier's encoding while claiming to implement the
     /// specification would be the worst of both. Use
     /// [`Metric::with_quality_code`] to publish a host-specific value, at the
     /// call site, where the deviation is visible and can be justified.

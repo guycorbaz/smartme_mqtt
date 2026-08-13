@@ -430,7 +430,7 @@ fn jittered(backoff: Duration, entropy: i64) -> Duration {
 /// The same value `rumqttc` defaults to, set EXPLICITLY. A bound that
 /// `AC-LEAK-01` relies on for bounded memory must not be able to change under a
 /// dependency bump with nothing failing, and a reader must be able to find it in
-/// this repository rather than in a vendor's `Default` impl. See where it is
+/// this repository rather than in the library's `Default` impl. See where it is
 /// applied in [`run`] for the exposure it does and does not close.
 const MAX_INCOMING_PACKET: usize = 10 * 1024;
 
@@ -1771,7 +1771,7 @@ mod tests {
     #[test]
     fn the_delivery_table_matches_the_specification_clause_by_clause() {
         // MANDATED. Each row names the clause that fixes it; changing a row here
-        // means the norm changed, and the norm is vendored at
+        // means the norm changed, and the norm is pinned at
         // `docs/spec/sparkplug-b-3.0.0/`.
         let mandated = [
             // `tck-id-payloads-nbirth-qos` (`Sparkplug_6:1087`), and

@@ -101,7 +101,7 @@ a broker to clear the RETAIN flag when it delivers a retained message to a clien
 subscribed. So `retain=true` proves a snapshot, but `retain=false` proves only *live delivery* — it
 is silent about whether the message was **published** retained. That is why finding 1 scores "retain
 true" from the settled-state re-read rather than from the live transition. (MQTT 3.1.1 is **not**
-vendored here, so this is cited as the reason for a caution, never as evidence for a verdict — the
+kept here, so this is cited as the reason for a caution, never as evidence for a verdict — the
 same bound as [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34).)
 
 **What else could produce each observation:**
@@ -196,7 +196,7 @@ retain=true  qos=1  spBv1.0/STATE/SCADA   {"online":true,"timestamp":17852631966
 
 ### 1. MQTT Engine v5.0.0-rc1 publishes **both** forms, and the 3.0 form is fully conformant
 
-Checked clause by clause against the vendored `docs/spec/sparkplug-b-3.0.0/`:
+Checked clause by clause against the pinned `docs/spec/sparkplug-b-3.0.0/`:
 
 The observed message is a **birth** (`"online":true`), so it is checked against the **birth** clauses.
 An earlier edition of this table cited `-connect-will-topic` and `-connect-will-payload` for the
@@ -225,7 +225,7 @@ transcribed. Finding 1's claim of conformance covers the **birth** only.
 
 It **also** publishes a legacy form on `STATE/SCADA` carrying the bare literals `ONLINE` / `OFFLINE`,
 which matches no clause of the 3.0.0 specification. Whether that is a pre-3.0 convention cannot be
-settled here: **only 3.0.0 is vendored**, and it carries no changelog. Same bound as
+settled here: **only 3.0.0 is kept here**, and it carries no changelog. Same bound as
 [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34), where the MQTT character set could not be
 cited for the same reason.
 

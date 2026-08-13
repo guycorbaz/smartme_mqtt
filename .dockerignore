@@ -13,7 +13,7 @@ target/
 .env.*
 !.env.example
 
-# Documentation, planning artifacts and the vendored specification are ~50 MB
+# Documentation, planning artifacts and the pinned specification are ~50 MB
 # and none of it is compiled.
 docs/
 _bmad-output/

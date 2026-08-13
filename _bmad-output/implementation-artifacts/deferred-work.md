@@ -563,7 +563,7 @@ in the three story files.
   the vocabulary means "never read yet" — all eleven describe a reading that happened. Reached on
   every first session and whenever an operator enables a meter at runtime.
 
-  **Settled against the vendored norm during the review, so it need not be re-litigated:** a
+  **Settled against the pinned norm during the review, so it need not be re-litigated:** a
   property present in DATA but absent from BIRTH is LEGAL. The rebirth triggers at
   `Sparkplug_5_Operational_Behavior.adoc:862-864` concern *metrics* and *aliases*, not
   properties; `Sparkplug_6_Payloads.adoc:1448-1450` says the same. The only property-level MUSTs

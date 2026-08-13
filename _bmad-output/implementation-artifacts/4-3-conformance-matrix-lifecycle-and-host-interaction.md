@@ -27,7 +27,7 @@ so that the gaps we suspect are counted and the ones we do not suspect are found
 
 **AC3 — the pass closes the specification, not just a chapter**
 
-**Given** the **124 clauses** that no story owns after 4.1 (chapter 4) and 4.2 (chapter 6) — chapters **1, 2, 3, 5 and 10** — verified by mechanical enumeration to be the exact remainder of the vendored specification's **303** ids
+**Given** the **124 clauses** that no story owns after 4.1 (chapter 4) and 4.2 (chapter 6) — chapters **1, 2, 3, 5 and 10** — verified by mechanical enumeration to be the exact remainder of the pinned specification's **303** ids
 **When** the pass ends
 **Then** every one of them is accounted for by a row or by a collective block that **names its member ids**, and the arithmetic `conformant + deviation + gap + n/a = 124` is stated in the matrix
 **And** the matrix states the whole-specification total — `70 + 109 + 124 = 303` — so a reader can tell audited-in-full from audited-in-part
@@ -141,7 +141,7 @@ in the run: the chapter-1 `-string` proof cells, and the undisclosed chaos-test 
   without an ADR** — `intro-group-id-string`, `-edge-node-id-string`, `-device-id-string` are
   `conformant` because a Rust `String` is UTF-8 by construction. The document's ratified rule
   ([ADR 0014](../../docs/adr/0014-schema-as-conformance-evidence.md)) admits exactly one non-test
-  witness, the vendored protobuf schema, and says that where the guarantee comes from *our own code
+  witness, the pinned protobuf schema, and says that where the guarantee comes from *our own code
   shape* the verdict is `gap (unproven)` — the reading this same pass applied to downgrade
   `-single-server`. This is the one place the pass **loosened** a rule. Options: (a) amend ADR 0014
   to admit language-level type invariants, with an issue, keeping `conformant`; (b) downgrade all
@@ -238,7 +238,7 @@ It is an **audit that records**. It does not fix. Every defect becomes a row plu
 
 ### The scope decision — taken here, not deferred
 
-The epic scopes 4.3 to *"chapters 2 and 5"*. Mechanically that is **103** clauses (4 + 99), and the vendored specification holds **303**. Chapters 4 and 6 account for 179. **That leaves 21 clauses — chapters 1 (8), 3 (1) and 10 (12) — owned by no story in any epic.**
+The epic scopes 4.3 to *"chapters 2 and 5"*. Mechanically that is **103** clauses (4 + 99), and the pinned specification holds **303**. Chapters 4 and 6 account for 179. **That leaves 21 clauses — chapters 1 (8), 3 (1) and 10 (12) — owned by no story in any epic.**
 
 They are not filler. Chapter 1 carries the identifier character and uniqueness rules that sit underneath chapter 4's topic grammar; chapter 10 carries the **conformance profiles** — the specification's own statement of what it means to claim conformance, which is the direct input to NFR19's "documented conformance scope".
 
@@ -272,7 +272,7 @@ So: `deviation` owned by **[#32](https://github.com/guycorbaz/smartme_mqtt/issue
 
 **The flag is true, and nothing in this repository says so.** `mqtt_driver.rs:156` calls `MqttOptions::new(...)` and **never calls `set_clean_session`**. It is true only because rumqttc 0.25.1 defaults it that way (`rumqttc-0.25.1/src/lib.rs:513`, `mqttbytes/v4/connect.rs:27`). No test asserts it; a rumqttc upgrade that flips the default would violate a MUST in total silence.
 
-This is the textbook `gap (unproven)` under the taxonomy adopted on 2026-07-28: *we do the thing, nothing proves we do*. It is also the first one whose guarantee comes from **outside** our code, which the row should say — [ADR 0014](../../docs/adr/0014-schema-as-conformance-evidence.md) admits the vendored schema as a witness precisely because the compiler enforces it, and a dependency's runtime default has none of that property.
+This is the textbook `gap (unproven)` under the taxonomy adopted on 2026-07-28: *we do the thing, nothing proves we do*. It is also the first one whose guarantee comes from **outside** our code, which the row should say — [ADR 0014](../../docs/adr/0014-schema-as-conformance-evidence.md) admits the pinned schema as a witness precisely because the compiler enforces it, and a dependency's runtime default has none of that property.
 
 Suggested owner: a new issue, or fold into **Story 4.10** (which already owns the CONNECT packet). Decide in the pass; do not leave it unowned.
 
@@ -297,7 +297,7 @@ From the matrix's "How to read this", as amended on 2026-07-28:
 
 | Verdict | Condition |
 | --- | --- |
-| `conformant` | We do what the clause requires **and a named test proves it** — or the vendored schema makes the violation unrepresentable ([ADR 0014](../../docs/adr/0014-schema-as-conformance-evidence.md), **field types only, never values**) |
+| `conformant` | We do what the clause requires **and a named test proves it** — or the pinned schema makes the violation unrepresentable ([ADR 0014](../../docs/adr/0014-schema-as-conformance-evidence.md), **field types only, never values**) |
 | `deviation` | We knowingly do otherwise; row carries rationale + ADR or deferred-work link |
 | `gap (unimplemented)` | We do not do the thing the clause requires |
 | `gap (unproven)` | We do it; nothing proves that we do |
@@ -440,7 +440,7 @@ no named test was recorded as `gap (unproven)`; every gap carries an owner.
    `+`/`/`/`#` rule, and chapter 1 defers its character set to the *MQTT* specification. A `U+0000`
    reaches a published topic. Assuming the two sets were equal — the natural reading, and the one
    this pass nearly took — would have produced three false `conformant` rows.
-2. **The audit's reach has a limit worth stating.** The MQTT specification is **not vendored** here,
+2. **The audit's reach has a limit worth stating.** This repository keeps **no copy** of the MQTT specification,
    so those three clauses cannot be audited in full against their own norm. #34 should begin by
    pinning it.
 3. **Six `operational-behavior-edge-node-*` ids bind Host Applications despite their prefix**, and

@@ -5,10 +5,10 @@ Short, hard-won rules. Each one exists because ignoring it already cost somethin
 ## Sparkplug: read the norm first
 
 **Any doubt about Sparkplug B is settled by reading the specification, before anything else.**
-It is vendored, pinned and greppable at `docs/spec/sparkplug-b-3.0.0/` (release tag v3.0.0,
-EPL-2.0). Cite the `tck-id-…` identifier, not prose.
+A copy is committed here, pinned and greppable at `docs/spec/sparkplug-b-3.0.0/` (release tag
+v3.0.0, EPL-2.0). Cite the `tck-id-…` identifier, not prose.
 
-Not a vendor's documentation page, not a summary table, not memory. That rule is written here
+Not a supplier's documentation page, not a summary table, not memory. That rule is written here
 because the alternative has already failed twice:
 
 - **Contract v1 published quality codes a real host read as `Good`.** `Stale` was `500` and
