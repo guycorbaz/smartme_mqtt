@@ -413,7 +413,13 @@ pub async fn run_with_control(
                 meter.device_id.clone(),
             );
             tokio::spawn(poll_publish::run(
-                meter.meter.clone(),
+                poll_publish::PolledMeter {
+                    meter: meter.meter.clone(),
+                    // Captured at spawn: the serial the DBIRTH below uses, so
+                    // every certificate this task sends names the IN-FORCE
+                    // device rather than a stored, not-yet-restarted edit.
+                    serial: meter.serial.clone(),
+                },
                 source,
                 Arc::clone(&clock),
                 Arc::clone(&handle),

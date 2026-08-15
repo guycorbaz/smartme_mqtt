@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use smartme_bridge::app::config::MeterConfig;
 use smartme_bridge::app::mqtt_driver::DeviceCommand;
-use smartme_bridge::app::poll_publish::{Heartbeats, run};
+use smartme_bridge::app::poll_publish::{Heartbeats, PolledMeter, run};
 use smartme_bridge::app::supervisor::{BridgeConfig, ConfigHandle};
 use smartme_bridge::app::{PollConfig, config};
 use smartme_bridge::core::clock::{Clock, FakeClock};
@@ -126,7 +126,10 @@ async fn a_disabled_meters_alarm_retires_with_it_and_a_re_enable_judges_afresh()
         .then(Ok(reading(&meter, 3)));
 
     let task = tokio::spawn(run(
-        meter.clone(),
+        PolledMeter {
+            meter: meter.clone(),
+            serial: Serial::new("9202685"),
+        },
         source,
         Arc::clone(&clock) as Arc<dyn Clock + Send + Sync>,
         Arc::clone(&handle),
@@ -228,7 +231,10 @@ async fn a_device_the_account_refuses_ends_with_one_certificate_and_the_alarm_st
         .then(Ok(reading(&meter, 2)));
 
     let task = tokio::spawn(run(
-        meter.clone(),
+        PolledMeter {
+            meter: meter.clone(),
+            serial: Serial::new("9202685"),
+        },
         source,
         Arc::clone(&clock) as Arc<dyn Clock + Send + Sync>,
         Arc::clone(&handle),

@@ -191,7 +191,10 @@ async fn a_silent_meters_verdict_arrives_inside_nfr2s_bound() {
             s
         };
         tasks.push(tokio::spawn(run(
-            meter.clone(),
+            smartme_bridge::app::poll_publish::PolledMeter {
+                meter: meter.clone(),
+                serial: Serial::new("30000001"),
+            },
             source,
             Arc::clone(&clock) as Arc<dyn Clock + Send + Sync>,
             Arc::clone(&handle),

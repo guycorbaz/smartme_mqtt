@@ -1070,6 +1070,23 @@ fn store_energy_reference(dir: &std::path::Path, meter: &MeterId, energy: crate:
     }
 }
 
+/// The identity one poll task serves: the meter, and the serial its Sparkplug
+/// device was BIRTHED under — captured at spawn, which is what makes it the
+/// IN-FORCE serial (story 3.5's review found the certificate taking the serial
+/// from the stored row instead, and `Control::apply` stores a serial edit that
+/// `reconfigure` classified ProcessRestart — not in force until the restart —
+/// so a Death could name a device the wire never birthed while the born one
+/// was left alive for ever). Bundled per the 2.7 rule: these two travel
+/// together — they are ADR 0029's pair, seen from the wire's side.
+#[derive(Debug, Clone)]
+pub struct PolledMeter {
+    /// The logical meter.
+    pub meter: MeterId,
+    /// The serial the DBIRTH used. Every certificate this task ever sends
+    /// names THIS serial, whatever a not-yet-in-force edit desires.
+    pub serial: crate::domain::Serial,
+}
+
 /// The task: loops until the outbox closes.
 ///
 /// Eight parameters, the eighth being story 3.5's device channel. The lint is
@@ -1080,7 +1097,7 @@ fn store_energy_reference(dir: &std::path::Path, meter: &MeterId, energy: crate:
 /// travel together; these do not. A ninth parameter is the revisit trigger.
 #[allow(clippy::too_many_arguments)]
 pub async fn run<S: Source + Send>(
-    meter: MeterId,
+    polled: PolledMeter,
     mut source: S,
     clock: Arc<dyn Clock + Send + Sync>,
     config: crate::app::supervisor::ConfigHandle,
@@ -1098,6 +1115,7 @@ pub async fn run<S: Source + Send>(
     // (ADR 0034). Births and disable-deaths stay `reconfigure`'s.
     devices: mpsc::Sender<crate::app::mqtt_driver::DeviceCommand>,
 ) {
+    let PolledMeter { meter, serial } = polled;
     let heartbeat = pulse.of(&meter).unwrap_or_else(|| {
         panic!("no heartbeat for {meter}; the collection is built from the served meters")
     });
@@ -1142,6 +1160,7 @@ pub async fn run<S: Source + Send>(
     // the loop stops asking a question whose answer cannot change the verdict.
     let mut was_enabled = true;
     let mut certified_gone = false;
+    let mut gone_pending = false;
     loop {
         ticker.tick().await;
         if outbox.is_closed() {
@@ -1149,6 +1168,30 @@ pub async fn run<S: Source + Send>(
             return;
         }
         let current = config.load();
+        // THE PERIOD RE-ARMS BEFORE ANY SKIP — the review of this story found
+        // it below the two idle `continue`s, where a hot interval change left
+        // the ticker pacing the OLD period while every touch recorded the NEW
+        // one. `loop_age` divides age by the recorded period, so one meter
+        // idling on purpose read as WEDGED for most of every window — the
+        // false 503 `LastLoopTick::touch`'s own doc records as a past defect,
+        // reintroduced on the idle paths, and `loop_age` takes the WORST
+        // meter, so one disabled meter poisoned the whole bridge's health.
+        // An idle loop still re-paces; the touches below then record the
+        // cadence the ticker actually runs at.
+        if current.poll.interval != period {
+            tracing::info!(
+                from_secs = period.as_secs(),
+                to_secs = current.poll.interval.as_secs(),
+                "publish period changed; the next tick uses the new one"
+            );
+            period = current.poll.interval;
+            ticker = tokio::time::interval(period);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // `interval` fires immediately on its first tick, and that first tick
+            // is this rebuild's — so it is consumed here rather than letting a
+            // period change slip an extra unscheduled poll into the loop.
+            ticker.tick().await;
+        }
         // THE ENABLED FLAG IS READ EVERY TICK ([#65] items 1 and 2). The loop
         // read only the period and the policy until story 3.5, so disabling a
         // meter kept calling the smart-me API every period for ever and filled
@@ -1160,10 +1203,15 @@ pub async fn run<S: Source + Send>(
         let row = current.meters.iter().find(|m| m.meter == meter);
         // A MISSING row reads as enabled, and the direction is deliberate: the
         // operator's "stop" is `enabled: false` on a row that exists, never a
-        // row's absence — removal costs a ProcessRestart (`classify_meters`),
-        // so a served meter without a row is a harness's abbreviation, not a
-        // gesture. Reading absence as "stop" would also make a future
-        // hot-removal silently idle a task the classifier promised to restart.
+        // row's absence. The review of this story corrected the first version
+        // of this comment, which called a rowless served meter "unreachable":
+        // `Control::apply` stores `new.meters` wholesale, so REMOVING a served
+        // row and saving produces exactly this state — classified
+        // ProcessRestart, its DDEATH sent by `classify_meters`, and the task
+        // keeps polling until the restart the classifier demanded (the
+        // pre-existing zombie, unchanged here). Reading absence as "stop"
+        // would HIDE that restart debt behind a quiet meter; the loud
+        // dropped-undeclared warns are the debt staying visible.
         let enabled = row.is_none_or(|m| m.enabled);
         if !enabled {
             heartbeat.touch(clock.monotonic(), current.poll.interval.as_millis() as i64);
@@ -1183,6 +1231,7 @@ pub async fn run<S: Source + Send>(
                 // re-certifies within one tick — loudly, which is the point.
                 state = State::initial();
                 certified_gone = false;
+                gone_pending = false;
             }
             was_enabled = false;
             continue;
@@ -1208,19 +1257,41 @@ pub async fn run<S: Source + Send>(
             heartbeat.touch(clock.monotonic(), current.poll.interval.as_millis() as i64);
             continue;
         }
-        if current.poll.interval != period {
-            tracing::info!(
-                from_secs = period.as_secs(),
-                to_secs = current.poll.interval.as_secs(),
-                "publish period changed; the next tick uses the new one"
-            );
-            period = current.poll.interval;
-            ticker = tokio::time::interval(period);
-            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            // `interval` fires immediately on its first tick, and that first tick
-            // is this rebuild's — so it is consumed here rather than letting a
-            // period change slip an extra unscheduled poll into the loop.
-            ticker.tick().await;
+        // THE CERTIFICATE GOES OUT ONE TICK AFTER THE LATCH VERDICT, and the
+        // review of this story is why: verdict and certificate travel on
+        // sibling channels into the driver's `select!`, so sending them in the
+        // same tick left their wire order to a coin toss — a Death winning
+        // meant the final `device-not-in-account` verdict was dropped as
+        // undeclared and never reached the host. One period of separation is
+        // what makes "the latch verdict, then the certificate" true on the
+        // wire, not merely in queueing order. Certified only on a SUCCESSFUL
+        // send (the second review finding here): a failed send retries next
+        // tick rather than entering a silence nothing ever ended.
+        if gone_pending {
+            heartbeat.touch(clock.monotonic(), current.poll.interval.as_millis() as i64);
+            if devices
+                .send(crate::app::mqtt_driver::DeviceCommand::Death(
+                    serial.clone(),
+                ))
+                .await
+                .is_ok()
+            {
+                tracing::warn!(
+                    meter = %meter,
+                    "the account has no such device; its DDEATH ends it on the \
+                     wire, and the fault stays named until a restart or a \
+                     configuration change"
+                );
+                gone_pending = false;
+                certified_gone = true;
+            } else {
+                tracing::warn!(
+                    meter = %meter,
+                    "mqtt task is gone; the device certificate could not be \
+                     queued and will be retried next tick"
+                );
+            }
+            continue;
         }
         let ctx = Context {
             meter: &meter,
@@ -1246,43 +1317,15 @@ pub async fn run<S: Source + Send>(
         // healthy while the broker is being told otherwise ([#62]).
         pulse.record(&meter, state, published);
 
-        // THE ENDING (story 3.5 AC3, ADR 0034): the account pronounced this
-        // device absent, so the device ends — one DDEATH, sent once, after the
-        // latch verdict above went out. Only THIS latch: a credential or
+        // THE ENDING ARMS HERE (story 3.5 AC3, ADR 0034): the account
+        // pronounced this device absent. Only THIS latch: a credential or
         // base-URL latch is evidence about the ASKING, not about the device,
         // and a certificate there would declare dead a device nobody has
-        // evidence about.
-        if !certified_gone && published.cause() == Some(Cause::DeviceNotInAccount) {
-            certified_gone = true;
-            match row.map(|m| m.serial.clone()) {
-                Some(serial) => {
-                    tracing::warn!(
-                        meter = %meter,
-                        "the account has no such device; its DDEATH ends it on \
-                         the wire, and the fault stays named until a restart or \
-                         a configuration change"
-                    );
-                    if devices
-                        .send(crate::app::mqtt_driver::DeviceCommand::Death(serial))
-                        .await
-                        .is_err()
-                    {
-                        tracing::warn!(
-                            meter = %meter,
-                            "mqtt task is gone; the device certificate could \
-                             not be queued"
-                        );
-                    }
-                }
-                // Unreachable while meter removal costs a ProcessRestart, and
-                // said rather than unwrapped: a future hot-removal would land
-                // here, and a missing row must not panic the poll task.
-                None => tracing::warn!(
-                    meter = %meter,
-                    "no configuration row for this meter; its certificate \
-                     cannot name a serial and is not sent"
-                ),
-            }
+        // evidence about. The certificate itself goes out next tick — see the
+        // `gone_pending` arm above for why the separation is the ordering.
+        if !certified_gone && !gone_pending && published.cause() == Some(Cause::DeviceNotInAccount)
+        {
+            gone_pending = true;
         }
     }
 }
@@ -3037,8 +3080,12 @@ mod tests {
             .with_ansi(false)
             .finish();
         let guard = tracing::subscriber::set_default(subscriber);
+        // The refusal matches what `map_error` actually produces for this
+        // reason since story 3.5's split — the review caught the fixture
+        // staging a pairing (`Configuration` + a 404's message) that no code
+        // path can emit any more, the fixture-models-the-impossible class.
         let (state, _) = drive(FakeSource::new().then(Err(SourceError::Fatal {
-            refusal: crate::core::source::Refusal::Configuration,
+            refusal: crate::core::source::Refusal::DeviceNotInAccount,
             reason: "smart-me does not know device 9202685".to_string(),
         })))
         .await;
@@ -3347,7 +3394,10 @@ mod tests {
                 .then(Ok(reading_with_energy(Quality::Good, 950, 4_843.822)))
                 .then(Ok(reading_with_energy(Quality::Good, 950, 4_843.822)));
             let task = tokio::spawn(run(
-                meter.clone(),
+                PolledMeter {
+                    meter: meter.clone(),
+                    serial: Serial::new("9202685"),
+                },
                 source,
                 Arc::clone(&clock) as Arc<dyn Clock + Send + Sync>,
                 Arc::clone(&handle),
@@ -3376,7 +3426,10 @@ mod tests {
         let beats = Heartbeats::for_meters([meter.clone()]);
         let source = FakeSource::new().then(Ok(reading_with_energy(Quality::Good, 950, 12.0)));
         let task = tokio::spawn(run(
-            meter.clone(),
+            PolledMeter {
+                meter: meter.clone(),
+                serial: Serial::new("9202685"),
+            },
             source,
             Arc::clone(&clock) as Arc<dyn Clock + Send + Sync>,
             Arc::clone(&handle),
@@ -3442,7 +3495,10 @@ mod tests {
                     .then(Ok(mine(Quality::Good)))
             };
             tasks.push(tokio::spawn(run(
-                meter.clone(),
+                PolledMeter {
+                    meter: meter.clone(),
+                    serial: Serial::new("30000001"),
+                },
                 source,
                 Arc::clone(&clock) as Arc<dyn Clock + Send + Sync>,
                 Arc::clone(&handle),

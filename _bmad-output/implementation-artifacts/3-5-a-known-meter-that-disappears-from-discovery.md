@@ -195,6 +195,72 @@ changes; `./scripts/ci-local.sh` full run; `gh run list`.** [#65] closes with th
 [#65]: https://github.com/guycorbaz/smartme_mqtt/issues/65
 [#62]: https://github.com/guycorbaz/smartme_mqtt/issues/62
 
+## Review Findings (2026-08-15, independent pass, five finder angles)
+
+The richest haul of the epic — five finders, strong convergence on the gravest item — triaged
+into six repairs, one citation debt paid, two issues, two ADR notes. Every repair falsified
+where a falsification was possible, run before its note.
+
+**REPAIRED:**
+
+1. **The wedge on idle (three finders converged).** Both idle `continue`s sat ABOVE the
+   period-rebuild block, so a hot interval change left the ticker pacing the OLD period while
+   every touch recorded the NEW one — `loop_age` divides age by the recorded period and takes
+   the WORST meter, so one meter idling on purpose read the whole bridge as wedged for most of
+   every window, and Epic 7 will wire wedged to a restart that kills the session fleet-wide.
+   The re-arm is hoisted above every skip: an idle loop still re-paces.
+2. **The certificate named the DESIRED serial, not the in-force one.** `Control::apply` stores
+   a serial edit that `reconfigure` classified ProcessRestart — not in force until the restart
+   — so the Death could bury a device the wire never birthed while the born one stayed alive
+   for ever. `PolledMeter` bundles the meter with its SPAWN-TIME serial (ADR 0029's pair,
+   seen from the wire's side); every certificate names the device the DBIRTH used.
+3. **The wire order of verdict and certificate was a coin toss**: both queued in one tick on
+   sibling channels into the driver's `select!`, so a Death winning dropped the final
+   `device-not-in-account` verdict as undeclared. The certificate now goes out ONE TICK after
+   the latch verdict (`gone_pending`) — a full period of separation is what makes "the
+   verdict, then the certificate" true on the wire and not merely in queueing order.
+4. **`certified_gone` was set before the send was known to succeed** — a failed send (or the
+   old missing-row arm) entered a permanent silence nothing ever ended. Certified only on a
+   successful send; a failure retries next tick. The missing-row arm is GONE entirely: the
+   spawn-time serial needs no row.
+5. **A stale fixture staged an impossible pairing** (`Refusal::Configuration` + a 404's
+   message, which `map_error` can no longer produce) — the fixture-models-the-impossible
+   class; updated to the refusal the 404 actually yields.
+6. **The runbook's scope heading said v3 → v9 while its table said v10** — the
+   attestation-drift its own preamble exists to prevent; heading and count move with the
+   table now, and the note says who caught it.
+
+**THE CITATION DEBT:** ADR 0034 decided Sparkplug wire behaviour citing internal ADRs alone —
+the exact habit CLAUDE.md's opening rule exists to break, flagged by a reviewer who then
+VERIFIED the claims hold: `Sparkplug_4_Topics.adoc:458-461` (the DDEATH is the edge node's job
+when a device "becomes unavailable for any reason") and
+`tck-id-operational-behavior-edge-node-termination-host-action-ddeath-devices-offline` /
+`-ddeath-devices-tags-stale` (the host-side consequence). Cited now, in the ADR.
+
+**ISSUES:** [#82] — the enabled level is observed at tick granularity, so a
+disable-and-re-enable inside one poll period is a silent no-op (the reset gesture is an EVENT
+only `reconfigure` sees; an eventing path to the poll tasks is the fix direction). And the
+"unreachable missing row" comment was FALSE — `Control::apply` stores `new.meters` wholesale,
+so removing a served row is reachable through Save; the comment now tells the truth (the
+pre-existing zombie polls until the restart the classifier demanded, loudly).
+
+**ADR NOTES:** the observation grain and the repeat-burial sequences (gone→disable→re-enable
+produces Death/Death/Birth/Death — each truthful at its instant, re-burial idempotent),
+recorded in "What this does NOT decide".
+
+**The two missing falsifications, found by a reviewer reading the falsification TABLE against
+the assertions** (the story claimed the two-sender race "asserted" while no mutation had ever
+made that assertion fire): the send-path deleted goes RED on *"the certificate follows the
+latch: Elapsed"*, and a disable-branch Death goes RED on *"the poll task sends NO certificate
+on disable"*. Both run, both now in the table below.
+
+### Falsification — the review round's additions (2026-08-15, run before their notes)
+
+| mutation | result |
+|---|---|
+| the certificate never sent (send deleted, certify anyway) | RED — *"the certificate follows the latch: Elapsed"* |
+| the disable branch sends a Death (a second sender) | RED — *"the poll task sends NO certificate on disable — two senders for one ending would race"* |
+
 ## Dev Agent Record
 
 ### Agent Model Used

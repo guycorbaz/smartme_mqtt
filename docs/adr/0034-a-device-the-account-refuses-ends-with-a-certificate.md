@@ -31,6 +31,19 @@ usually transient, a DDEATH destroys the device's online state in the host, and 
 poll does not undo it. But a latch is not a silence. It is absorbing by design (ADR 0009), so
 "may recover on its own" — the premise of ADR 0012's choice — is false for it by construction.
 
+**What the norm says, cited rather than remembered** (added by the story's review — the first
+draft argued from internal ADRs alone, which is the exact habit CLAUDE.md's opening rule
+exists to break):
+
+- Publishing the DDEATH is the Edge Node's job when a device *"becomes unavailable for any
+  reason"* — `Sparkplug_4_Topics.adoc:458-461`. A device the account refuses is unavailable.
+- The host-side consequence the Consequences section relies on is mandated, not hoped:
+  `tck-id-operational-behavior-edge-node-termination-host-action-ddeath-devices-offline` and
+  `tck-id-operational-behavior-edge-node-termination-host-action-ddeath-devices-tags-stale`
+  (`Sparkplug_5_Operational_Behavior.adoc:503-510`) — on DDEATH the host marks the device
+  offline and its tags STALE, keeping last values. "DEAD, stale, last values kept" is the
+  norm's own description.
+
 ## Decision
 
 **The epic's 2026-08-06 reservation is honoured: DDEATH is the ending for disable and for
@@ -68,6 +81,16 @@ disappearance, and an ending is followed by silence, not by an endless `Bad`.**
   its own issue rather than absorbed here.
 - **Mistyped vs removed.** One `404` covers both; the refusal's text names both origins and
   claims no discrimination.
+- **The observation grain.** The `enabled` level (and the row's existence) is read once per
+  tick. A disable-and-re-enable completed WITHIN one poll period is unobserved — like any
+  level read — so the reset gesture takes effect at the first tick that sees the level
+  changed. Making the gesture edge-triggered needs an eventing path from `reconfigure` to the
+  poll tasks that does not exist; recorded as an issue, not absorbed.
+- **Repeat burials.** A gone-then-disabled meter produces the poll task's certificate and
+  then `classify_meters`' disable-Death for an already-dead device; a re-enable of a
+  still-gone meter births and re-buries within a tick. Each certificate is a truthful event
+  about the state at its instant, re-burial is idempotent for a host, and serialising the two
+  senders would couple the poll loop to the reconfigure path for a cosmetic gain.
 
 ## Consequences
 

@@ -109,12 +109,14 @@ pass twice.
 
 ---
 
-## What changed since the last run — v3 → v9, and what this run can and cannot attest
+## What changed since the last run — v3 → v10, and what this run can and cannot attest
 
 *Written 2026-08-12, before the v6 run, so that the run's scope is decided in advance rather than
-claimed afterwards.*
+claimed afterwards. The heading and the count move WITH the table (v10 appended 2026-08-15 —
+the story 3.5 review caught them one version apart, which is exactly the attestation-drift this
+section exists to prevent).*
 
-The last complete run was 2026-08-03, contract v3. Three versions have shipped since:
+The last complete run was 2026-08-03, contract v3. Seven versions have shipped since:
 
 | | What it changed | What the operator sees that they did not see at v3 |
 |---|---|---|
