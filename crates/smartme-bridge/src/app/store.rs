@@ -459,6 +459,14 @@ pub(crate) fn same_mapping(a: &StoredConfig, b: &StoredConfig) -> bool {
 /// reason: it would withdraw confirmations on changes that have nothing to do
 /// with the mapping, the same defect wearing the fix.
 ///
+/// **A `field: _` in the destructure IS a classification** — it says
+/// NOT-MAPPING — and it must be written into the lists below with its reason,
+/// like every other. The build-stop makes the question unavoidable; only the
+/// answer's honesty is still a human's (the review of story 3.4 named this
+/// residual: the mechanism forces AN answer, not a considered one, and
+/// `the_projection_decides_membership_for_every_field` enumerates by hand, so
+/// a thoughtless `_` must also be added there to be caught).
+///
 /// # The classification, field by field
 ///
 /// **MAPPING** (a change re-attributes what lands where, or under which name —
@@ -535,23 +543,46 @@ pub(crate) struct MappingProjection {
 }
 
 impl MappingProjection {
-    /// The canonical byte form the fingerprint hashes. Unit separators between
-    /// a row's fields, record separators between rows — the shape the
-    /// fingerprint has always used. Safe to evolve: the fingerprint is never
-    /// stored, so its byte form only ever lives between one rendered page and
-    /// its submission.
+    /// The canonical byte form the fingerprint hashes — INJECTIVE since the
+    /// story 3.4 review, by length-prefixing every field.
+    ///
+    /// The separator scheme it replaces was ambiguous: `\u{1f}` and `\u{1e}`
+    /// are legal inside every field they delimited (the topic grammar refuses
+    /// only `/`, `+`, `#`), so two mappings that [`same_mapping`] calls
+    /// DIFFERENT could hash identically — `("a\u{1f}b", "")` and `("a", "b")`
+    /// emitted the same bytes, and a group id containing `\u{1e}` could
+    /// impersonate a node boundary. Exotic names, but the fingerprint exists
+    /// precisely to catch an interleaved write, and a guard with forgeable
+    /// bytes is a guard with a hole. A length prefix disambiguates every
+    /// boundary; equality of canonicals is now equality of projections.
+    ///
+    /// Safe to evolve (this change included): the fingerprint is never stored,
+    /// so its byte form only ever lives between one rendered page and its
+    /// submission. One consequence, accepted and fail-closed: a confirm page
+    /// held open across THIS upgrade answers 409 once ("the configuration
+    /// changed between the mapping you were shown and this click") and the
+    /// operator looks again — the same one-click cost the sort-key change in
+    /// this commit can produce for names carrying control characters.
     pub(crate) fn canonical(&self) -> String {
+        fn sized(value: &str) -> String {
+            format!("{}:{value}", value.len())
+        }
         let rows: Vec<String> = self
             .rows
             .iter()
             .map(|(meter_id, device_id, serial, enabled)| {
-                format!("{meter_id}\u{1f}{device_id}\u{1f}{serial}\u{1f}{enabled}")
+                format!(
+                    "{}\u{1f}{}\u{1f}{}\u{1f}{enabled}",
+                    sized(meter_id),
+                    sized(device_id),
+                    sized(serial)
+                )
             })
             .collect();
         format!(
             "{}\u{1e}{}\u{1e}{}",
-            self.node.0,
-            self.node.1,
+            sized(&self.node.0),
+            sized(&self.node.1),
             rows.join("\u{1e}")
         )
     }
@@ -835,6 +866,42 @@ mod tests {
                  projection, two readers, one answer"
             );
         }
+    }
+
+    /// **Review repair — the canonical form is injective.** The separators are
+    /// legal inside every field they delimit, so before the length prefixes two
+    /// mappings that `same_mapping` calls DIFFERENT could hash identically —
+    /// and the fingerprint exists precisely to catch an interleaved write.
+    #[test]
+    fn the_canonical_form_is_injective_where_the_separators_are_hostile() {
+        // The field boundary: ("a\u{1f}b", "") vs ("a", "b").
+        let mut left = sound();
+        left.meters[0].meter_id = "a\u{1f}b".into();
+        left.meters[0].device_id = String::new();
+        let mut right = sound();
+        right.meters[0].meter_id = "a".into();
+        right.meters[0].device_id = "b".into();
+        assert!(!same_mapping(&left, &right), "the premise: they differ");
+        assert_ne!(
+            mapping_projection(&left).canonical(),
+            mapping_projection(&right).canonical(),
+            "a separator inside a field must not let two different mappings \
+             hash to one fingerprint — that is a forgeable guard"
+        );
+
+        // The record boundary: group "A\u{1e}B" / node "C" vs "A" / "B\u{1e}C".
+        let mut left = sound();
+        left.group_id = "A\u{1e}B".into();
+        left.node_id = "C".into();
+        let mut right = sound();
+        right.group_id = "A".into();
+        right.node_id = "B\u{1e}C".into();
+        assert!(!same_mapping(&left, &right), "the premise: they differ");
+        assert_ne!(
+            mapping_projection(&left).canonical(),
+            mapping_projection(&right).canonical(),
+            "a group id must not be able to impersonate a node boundary"
+        );
     }
 
     #[test]

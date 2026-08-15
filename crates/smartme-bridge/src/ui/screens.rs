@@ -332,6 +332,10 @@ enum Discovery {
     /// A device was picked from the previous round's listing: its pair is now
     /// in the row below, waiting for a name and a deliberate Save.
     Picked { serial: String },
+    /// The picked device is already among the rows — a second click adds
+    /// nothing, said rather than silently duplicated (the duplicate would be
+    /// refused at save by a rule the screen never names).
+    AlreadyMapped { serial: String },
 }
 
 /// The discovery section of the form, rendered from the outcome alone.
@@ -410,8 +414,20 @@ fn discovery_section(discovery: Option<&Discovery>) -> String {
                 escape(serial)
             ));
         }
+        Some(Discovery::AlreadyMapped { serial }) => {
+            out.push_str(&format!(
+                "<p>The meter with serial <strong>{}</strong> is already among \
+                 the rows below — nothing was added.</p>",
+                escape(serial)
+            ));
+        }
     }
-    out.push_str("</fieldset>");
+    out.push_str(
+        "<p>The account is asked at the SAVED API base. A base typed above but \
+         not yet saved is not used — the file is the configuration, and this \
+         button must not be a way to send the credential anywhere the file \
+         does not say.</p></fieldset>",
+    );
     out
 }
 
@@ -478,9 +494,19 @@ fn form(
         }
     }
 
+    // THE HIDDEN FIRST BUTTON IS THE ENTER KEY'S TARGET, and it must stay
+    // first. HTML implicit submission activates the first submit button in
+    // tree order, and the discovery section put its `formaction=/config/discover`
+    // buttons before Save — so pressing Enter in any text box DISCOVERED
+    // instead of saving, silently, on a page that re-renders almost
+    // identically (the review of story 3.4 walked the scenario: an operator
+    // corrects the broker, presses Enter, and walks away unsaved). This
+    // button restores Enter-means-Save; it is hidden because the visible Save
+    // at the bottom is the affordance, and inert to keyboards and readers.
     format!(
         "{orphans}\
          <form method=post action=/config>\
+         <button type=submit hidden aria-hidden=true tabindex=-1>Save</button>\
          {group}{node}{host}{port}{period}\
          <fieldset><legend>Meters</legend>{meter_rows}\
          <fieldset><legend>Add a meter</legend>\
@@ -597,11 +623,14 @@ pub(super) async fn config_form(State(state): State<Arc<UiState>>) -> Response {
     .into_response()
 }
 
-/// How long one interactive discovery fetch may take. Deliberately shorter than
-/// the bridge's own `http_timeout`: an operator is waiting on this page, and a
-/// timeout that RENDERS as "the account could not be asked" beats a browser
-/// spinner — the taxonomy message is the feature.
-const DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// The PER-REQUEST budget for discovery — and a round is TWO requests (token,
+/// then listing), so the worst wait is about twice this. The first version
+/// claimed 10 s while delivering up to 20; the review read the constant against
+/// the code and the doc lost. 5 s per request keeps the worst round near the
+/// 10 s an operator will actually wait out, and a timeout that RENDERS as "the
+/// account could not be asked" beats a browser spinner — the taxonomy message
+/// is the feature.
+const DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// `POST /config/discover` — the account's meters, on demand (story 3.4).
 ///
@@ -626,24 +655,47 @@ pub(super) async fn discover(
     }
     let raw = posted(&fields, state.state_dir());
     let mut values = as_typed(&fields, &raw);
+    // THE FAULTS RENDER HERE TOO — the review of this story found the omission.
+    // `as_typed` is lossy by design (a mistyped port re-renders as its default,
+    // an unparsable value as blank), and the save path pairs that loss with the
+    // fault beside the box. Rendering with `None` here made the discover round
+    // trip the one door through which a value could be rewritten WITHOUT a word
+    // — the exact `publish_period_secs = 0` incident `as_typed`'s own doc
+    // memorialises, reopened. Same helper, same faults, both paths.
+    let errors = config::validate(raw.clone()).err();
 
     let outcome = if let Some(pick) = field(&fields, "pick") {
         match pick.split_once('|') {
             Some((serial, device_id)) if !serial.is_empty() && !device_id.is_empty() => {
-                values.meters.push(StoredMeter {
-                    // The operator names the row; discovery does not
-                    // (a smart-me display name is not a Sparkplug topic level,
-                    // and nothing invents a name).
-                    meter_id: String::new(),
-                    device_id: device_id.to_string(),
-                    serial: serial.to_string(),
-                    // Published stays a deliberate tick, never a side effect
-                    // of picking: an unconfirmed mapping must gain nothing
-                    // publishable from this screen's convenience.
-                    enabled: false,
-                });
-                Discovery::Picked {
-                    serial: serial.to_string(),
+                // A SECOND CLICK ADDS NOTHING — from the same review. The
+                // listing disappears on the way back, so "did that register?"
+                // ends in Back-and-click-again, and two identical rows are
+                // refused at save by the duplicate-serial rule with no repair
+                // the screen ever names. Idempotence is the honest answer.
+                if values
+                    .meters
+                    .iter()
+                    .any(|m| m.device_id == device_id || m.serial == serial)
+                {
+                    Discovery::AlreadyMapped {
+                        serial: serial.to_string(),
+                    }
+                } else {
+                    values.meters.push(StoredMeter {
+                        // The operator names the row; discovery does not
+                        // (a smart-me display name is not a Sparkplug topic
+                        // level, and nothing invents a name).
+                        meter_id: String::new(),
+                        device_id: device_id.to_string(),
+                        serial: serial.to_string(),
+                        // Published stays a deliberate tick, never a side
+                        // effect of picking: an unconfirmed mapping must gain
+                        // nothing publishable from this screen's convenience.
+                        enabled: false,
+                    });
+                    Discovery::Picked {
+                        serial: serial.to_string(),
+                    }
                 }
             }
             _ => Discovery::Failed {
@@ -653,34 +705,59 @@ pub(super) async fn discover(
             },
         }
     } else {
-        fetch_listing(raw.api_base.as_deref()).await
+        fetch_listing(state.state_dir()).await
     };
 
     page(
         "Configuration — smartme_mqtt",
-        &form(&values, None, Some(&outcome)),
+        &form(&values, errors.as_ref(), Some(&outcome)),
     )
     .into_response()
 }
 
+/// Which base URL discovery asks — the SAVED one, never the submitted one.
+///
+/// **This is the review's gravest finding repaired, and the rule is ADR 0023's
+/// own letter**: the file is the configuration, and a form value that has not
+/// been saved is not the configuration. The first version took the submitted
+/// `api_base`, and `fetch_token` POSTs the client credential to
+/// `{base}/oauth/token` — so one un-Origined request (`origin::refusal`'s
+/// documented curl pass-through) could hand `SMARTME_CLIENT_SECRET` to any
+/// https host, persisting nothing and leaving no trace. Reading the STORE
+/// restores the pre-story invariant: a request-supplied base reaches the
+/// credential only by being validated AND written to disk first, where the
+/// operator can see it.
+fn discovery_base(state_dir: &std::path::Path) -> String {
+    store::read(state_dir)
+        .ok()
+        .and_then(|stored| stored.api_base)
+        .unwrap_or_else(|| SmartMeClient::DEFAULT_BASE.to_string())
+}
+
 /// One fetch of the account listing, mapped to what the screen renders.
 ///
-/// The credential comes from the environment exactly as `posted` reads it —
-/// never from the form, which has no field for it (ADR 0023). The base is the
-/// submitted `api_base` when there is one, the default otherwise, so discovery
-/// asks the same account the bridge would poll.
-async fn fetch_listing(api_base: Option<&str>) -> Discovery {
+/// The credential comes from the environment — never from the form, which has
+/// no field for it — and the base from the FILE ([`discovery_base`]); the one
+/// thing the submission contributes to a fetch is the click. Trimmed like
+/// `config::present` trims, because a trailing newline from a `docker env_file`
+/// otherwise turns a working credential into a rendered 401 the bridge itself
+/// does not have. No token reuse and no retry-once here, recorded rather than
+/// hidden: discovery is stateless by decision 2, so a server-side hiccup renders
+/// its taxonomy line and the operator's retry is the retry.
+async fn fetch_listing(state_dir: &std::path::Path) -> Discovery {
     let client_id = std::env::var("SMARTME_CLIENT_ID")
         .ok()
-        .filter(|v| !v.trim().is_empty());
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
     let client_secret = std::env::var("SMARTME_CLIENT_SECRET")
         .ok()
-        .filter(|v| !v.trim().is_empty());
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
     let (Some(client_id), Some(client_secret)) = (client_id, client_secret) else {
         return Discovery::NoCredential;
     };
     let client = match SmartMeClient::new(
-        api_base.unwrap_or(SmartMeClient::DEFAULT_BASE),
+        discovery_base(state_dir),
         Credentials::ClientCredentials {
             client_id,
             client_secret,
@@ -1230,6 +1307,156 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **Review repair — Enter still means Save.** The discovery buttons sit
+    /// before the visible Save in tree order, and HTML implicit submission
+    /// activates the FIRST submit button — so without the hidden leading Save,
+    /// pressing Enter in a text box discovered instead of saving, silently, on
+    /// a page that re-renders almost identically.
+    #[test]
+    fn enter_still_means_save() {
+        let rendered = form(
+            &current_or_blank(std::path::Path::new("/nonexistent")),
+            None,
+            None,
+        );
+        let hidden_save = rendered
+            .find("<button type=submit hidden")
+            .expect("the hidden leading Save button exists");
+        let first_discover = rendered
+            .find("formaction=/config/discover")
+            .expect("the discovery affordance exists");
+        assert!(
+            hidden_save < first_discover,
+            "the first submit button in tree order is the Enter key's target, \
+             and it must be Save — not the discovery fetch"
+        );
+    }
+
+    /// **Review repair — the gravest one: discovery asks the SAVED base, never
+    /// the submitted one.** `fetch_token` POSTs the client credential to
+    /// `{base}/oauth/token`, and the first version took the base from the form
+    /// — one un-Origined request could hand the secret to any https host,
+    /// persisting nothing. The file is the configuration (ADR 0023): a base
+    /// reaches the credential only by being validated and SAVED first.
+    #[test]
+    fn discovery_asks_the_saved_base_never_the_submitted_one() {
+        let dir =
+            std::env::temp_dir().join(format!("smartme_discovery_base_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+
+        assert_eq!(
+            discovery_base(&dir),
+            SmartMeClient::DEFAULT_BASE,
+            "no file: the default base, not whatever a request carried"
+        );
+
+        let mut stored = store_fixture();
+        stored.api_base = Some("https://mirror.example".into());
+        store::save(&dir, &stored).expect("save");
+        assert_eq!(
+            discovery_base(&dir),
+            "https://mirror.example",
+            "a SAVED base is the operator's committed, visible choice — that \
+             one is honoured"
+        );
+        // And by signature: `discovery_base` and `fetch_listing` take the state
+        // dir alone. The submitted `api_base` cannot reach the client without
+        // this test's subject changing shape.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Review repair — a mistyped number survives the discover round trip in
+    /// its fault.** `as_typed` is lossy by design (the box comes back blank or
+    /// defaulted); the save path pairs that with the fault beside the box, and
+    /// the discover path rendered `errors: None` — so a typo vanished without a
+    /// word, the exact `publish_period_secs = 0` incident `as_typed`'s doc
+    /// memorialises, reopened through the new route.
+    #[tokio::test]
+    async fn a_mistyped_number_survives_the_discover_round_trip_in_its_fault() {
+        let dir =
+            std::env::temp_dir().join(format!("smartme_discover_fault_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let state = Arc::new(UiState::new(
+            crate::ui::Phase::silent(crate::ui::Lifecycle::Unconfigured).into_handle(),
+            dir.clone(),
+            Arc::new(tokio::sync::Notify::new()),
+        ));
+        let fields: Fields = vec![
+            ("ui_port".into(), "8O80".into()),
+            ("pick".into(), "9202685|aaa-1".into()),
+        ];
+        let response = discover(State(Arc::clone(&state)), HeaderMap::new(), Form(fields)).await;
+        let page = crate::ui::rendered_body(response).await;
+        assert!(
+            page.contains("8O80"),
+            "the mistyped value must survive ON the page — the box is blanked \
+             by `as_typed`, so the fault that QUOTES it is the only witness: {page}"
+        );
+        assert!(
+            page.contains("class=fault"),
+            "and it renders as a fault, beside its box, exactly as the save \
+             path would have said it: {page}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Review repair — a second pick of the same meter adds nothing.** The
+    /// listing disappears on the way back, so "did that register?" ends in
+    /// Back-and-click-again — and a duplicated row is refused at save by a
+    /// rule the screen never names.
+    #[tokio::test]
+    async fn a_second_pick_of_the_same_meter_adds_nothing() {
+        let state = Arc::new(UiState::new(
+            crate::ui::Phase::silent(crate::ui::Lifecycle::Unconfigured).into_handle(),
+            std::path::PathBuf::from("/nonexistent"),
+            Arc::new(tokio::sync::Notify::new()),
+        ));
+        // The pair is already row 0 — the operator picked it a moment ago.
+        let fields: Fields = vec![
+            ("meter.0.meter_id".into(), "garage".into()),
+            ("meter.0.device_id".into(), "aaa-1".into()),
+            ("meter.0.serial".into(), "9202685".into()),
+            ("pick".into(), "9202685|aaa-1".into()),
+        ];
+        let response = discover(State(Arc::clone(&state)), HeaderMap::new(), Form(fields)).await;
+        let page = crate::ui::rendered_body(response).await;
+        assert!(
+            !page.contains("meter.2."),
+            "one existing row plus the blank one: a second pick must not have \
+             appended a third row for save to refuse: {page}"
+        );
+        assert!(
+            page.contains("already among"),
+            "and the screen says WHY nothing was added, rather than looking \
+             like a click that did not register: {page}"
+        );
+    }
+
+    /// A minimal stored configuration for the tests above.
+    fn store_fixture() -> StoredConfig {
+        StoredConfig {
+            schema_version: store::SCHEMA_VERSION,
+            group_id: "Group".into(),
+            node_id: "Node".into(),
+            broker_host: "broker".into(),
+            broker_port: 1883,
+            publish_period_secs: 30,
+            api_base: None,
+            log_dir: None,
+            log_keep: None,
+            mapping_confirmed: false,
+            ui_port: None,
+            meters: vec![StoredMeter {
+                meter_id: "meter-a".into(),
+                device_id: "dev-a".into(),
+                serial: "9202685".into(),
+                enabled: true,
+            }],
+        }
+    }
+
     #[test]
     fn markup_in_a_meter_name_cannot_escape_the_attribute_it_is_rendered_into() {
         let hostile = "\"><script>alert(1)</script>";
@@ -1379,6 +1606,17 @@ mod tests {
     /// Neither module's own tests could catch that, because each was internally
     /// consistent. This is the only test that puts them side by side, so it must
     /// stay exhaustive over the fields either one reads.
+    ///
+    /// **NARROWED IN WHAT IT CAN CATCH since story 3.4, and honestly so** (the
+    /// review of that story read this doc against the new code): both sides now
+    /// derive from ONE `store::mapping_projection` call, so the two-readers
+    /// divergence this test was written for is impossible by construction and
+    /// the 2026-08-06 falsification below can no longer be reproduced. What it
+    /// still guards is the remaining seam: `canonical()` dropping or merging a
+    /// field that the projection's `PartialEq` keeps (the fingerprint reads the
+    /// bytes, the withdrawal rule reads the value). The exhaustive-destructure
+    /// build-stop and `store::…::the_projection_decides_membership_for_every_field`
+    /// are where the membership question now lives.
     ///
     /// FALSIFIED 2026-08-06 by removing the identity comparison from
     /// `store::same_mapping` — the exact state of the code before today. Copied:

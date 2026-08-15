@@ -616,6 +616,13 @@ fn decode_devices(body: &[u8]) -> Result<DeviceList, SmartMeError> {
 /// `retry_after` is the raw header value; parsing it here keeps the whole
 /// status-to-error decision in one testable place.
 ///
+/// **Two callers since story 3.4, and only one has a device id.** `get_devices`
+/// pre-empts `404` and passes a placeholder for `device_id` — so any FUTURE
+/// id-bearing arm added here (the doc below contemplates a `400`) must first
+/// ask what the message reads like from the collection caller, or a latching
+/// instruction naming "device the collection" reaches an operator. The
+/// story 3.4 review flagged the trap; this sentence is the tripwire.
+///
 /// # Only `404`, deliberately
 ///
 /// A `400` on a device id that passed the local shape check would plausibly also

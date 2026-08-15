@@ -233,6 +233,62 @@ without the run's copied output is a prediction).
 [#64]: https://github.com/guycorbaz/smartme_mqtt/issues/64
 [#74]: https://github.com/guycorbaz/smartme_mqtt/issues/74
 
+## Review Findings (2026-08-15, independent pass, fresh context, three angles)
+
+Three finder agents (diff scan, deleted-lines audit, cross-file trace) converged on largely the
+same list — the convergence itself corroborating. Triaged: six repairs, four notes, nothing
+dismissed silently. Every repair falsified, mutation run before its note.
+
+**REPAIRED:**
+
+1. **The gravest: the client secret could be sent to an arbitrary host in one click.**
+   `fetch_listing` took the SUBMITTED `api_base`, and `fetch_token` POSTs the credential to
+   `{base}/oauth/token`; `origin::refusal`'s documented curl pass-through (no `Origin` header)
+   meant one un-Origined request exfiltrated `SMARTME_CLIENT_SECRET`, persisting nothing.
+   Repaired by the repository's own principle read literally — **the file is the configuration**
+   (ADR 0023): `discovery_base` reads the SAVED `api_base` (default when absent), so a
+   request-supplied base reaches the credential only after being validated and written where
+   the operator can see it. The screen says the rule; the signature enforces it.
+2. **Enter discovered instead of saving.** The discovery buttons preceded Save in tree order,
+   and HTML implicit submission activates the FIRST submit button — the habitual Enter-to-save
+   silently fetched, on a page that re-renders almost identically. A hidden leading Save button
+   restores Enter-means-Save; the test pins the order.
+3. **The discover round trip rewrote mistyped numbers without a word.** `as_typed` is lossy by
+   design and the save path pairs it with faults; discover rendered `errors: None` — the
+   `publish_period_secs = 0` incident `as_typed`'s own doc memorialises, reopened. Discover now
+   validates and renders faults exactly as save does; the test's witness is the fault QUOTING
+   the typo (`"8O80"`) after the box was blanked.
+4. **The untrimmed credential.** The env values were emptiness-tested trimmed but sent raw, so
+   a `docker env_file` trailing newline made discovery render a 401 the bridge itself does not
+   have. Trimmed as `config::present` trims.
+5. **A second pick duplicated the row**, to be refused at save by a rule the screen never
+   names. Picks are idempotent now, and the screen says why nothing was added.
+6. **`canonical()` was not injective** — the separators are legal inside every field, so two
+   mappings `same_mapping` calls different could hash to one fingerprint (a forgeable guard,
+   at the exact moment the story centralised it). Length prefixes disambiguate every boundary;
+   the collision is a test's copied output now.
+
+**NOTED, not repaired:**
+
+- The sort key moved from formatted strings to tuples: for names carrying control characters
+  below `0x1F`, a confirm page held open across this upgrade answers one fail-closed 409.
+  Same one-click cost as the canonical change; recorded in `canonical()`'s doc.
+- `classify_device_status` now has a second, id-less caller: a tripwire sentence in its doc
+  warns any future id-bearing arm about the "device the collection" message.
+- `the_withdrawal_rule_and_the_fingerprint_answer_the_same_question` is narrowed by the
+  unification (both sides read one projection); its doc now says what it still guards
+  (canonical-vs-equality drift) and where the membership question moved.
+- `DISCOVERY_TIMEOUT` was documented as the round's budget while being per-request over two
+  requests; halved to 5 s and the doc now tells the truth. Discovery's deliberate lack of
+  token reuse/retry-once is recorded in `fetch_listing`'s doc: stateless by decision 2, the
+  operator's retry is the retry.
+
+**Falsification of the repairs** — each mutation RUN first: the hidden button removed (RED,
+"the hidden leading Save button exists"); `discovery_base` ignoring the file (RED, mirror vs
+default); `errors` silenced (RED, `8O80` vanishes from the page entirely — the copied render
+shows it); the dedup removed (RED, a third row appears); the length prefix removed (RED, the
+two canonicals byte-identical in the output).
+
 ## Dev Agent Record
 
 ### Agent Model Used
