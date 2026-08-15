@@ -397,7 +397,7 @@ artifact that no longer exists**, so these are first measurements, not confirmat
   is named by the serial `30000001`.
 - **`Contract/Version = 3` was read by a real host** for the first time.
 
-> **These rows attest to contract v3, and the contract is now v9.** Story 2.1 (2026-08-10)
+> **These rows attest to contract v3, and the contract is now v10.** Story 2.1 (2026-08-10)
 > added a `Cause` property to every non-good metric, which is a change to the tag set (v4);
 > story 2.2, the same day, added the `counter-went-backwards` cause to that property's
 > vocabulary (v5); story 2.3 (2026-08-11) made a verdict belong to a METRIC rather than to the

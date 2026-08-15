@@ -1262,11 +1262,15 @@ pub async fn run<S: Source + Send>(
         // sibling channels into the driver's `select!`, so sending them in the
         // same tick left their wire order to a coin toss — a Death winning
         // meant the final `device-not-in-account` verdict was dropped as
-        // undeclared and never reached the host. One period of separation is
-        // what makes "the latch verdict, then the certificate" true on the
-        // wire, not merely in queueing order. Certified only on a SUCCESSFUL
-        // send (the second review finding here): a failed send retries next
-        // tick rather than entering a silence nothing ever ended.
+        // undeclared and never reached the host. One period of separation
+        // NARROWS that race to a driver stalled for a full poll period (a
+        // reconnect backoff spanning >= PERIOD_MIN can still leave both queued
+        // together, and the `select!` is unbiased) — said rather than claimed
+        // away, per the review of the repair; closing it fully needs an
+        // ordered path the driver does not have. Certified only on a
+        // SUCCESSFUL send (the second review finding here): a failed send
+        // retries next tick rather than entering a silence nothing ever
+        // ended.
         if gone_pending {
             heartbeat.touch(clock.monotonic(), current.poll.interval.as_millis() as i64);
             if devices

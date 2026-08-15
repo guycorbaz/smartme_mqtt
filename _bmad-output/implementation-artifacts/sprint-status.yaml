@@ -1198,7 +1198,15 @@ development_status:
   # virtual time. DISCOVERED ADJACENT, issue to file: every OTHER latch still
   # fetches each period although the answer cannot change an absorbing verdict.
   3-5-a-known-meter-that-disappears-from-discovery: review
-  3-6-orphan-retained-purge-on-a-mapping-change: backlog
+  # DRAFTED 2026-08-15, and the draft ends in an ARBITRATION rather than code, on
+  # purpose: FR21's premise is a retained message on the bridge's old topics, and
+  # the bridge CANNOT produce one — retain=false is mandated or chosen for all
+  # seven message types and pinned by 4.17's clause-cited tests. Read literally the
+  # FR asks this bridge to clean up after tools that are not it, onto topics it can
+  # only guess. Three options are written in the story (withdraw, the FR14 pattern;
+  # reshape into a manual section — the draft's recommendation; build the purge
+  # anyway), and the choice is Guy's, per the repository's rule on requirements.
+  3-6-orphan-retained-purge-on-a-mapping-change: blocked  # awaiting Guy's arbitration on FR21
   # NOT owed yet: Epic 3 is at 3/6 stories (3.4, 3.5, 3.6 remain). `required`
   # means it must run BEFORE the epic closes, not that it is late.
   epic-3-retrospective: required

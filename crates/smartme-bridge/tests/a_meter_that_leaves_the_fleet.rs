@@ -58,6 +58,10 @@ fn reading(meter: &MeterId, tick: i64) -> Reading {
 }
 
 fn fleet_config(enabled: bool) -> BridgeConfig {
+    fleet_config_at(enabled, config::PERIOD_MIN)
+}
+
+fn fleet_config_at(enabled: bool, interval: Duration) -> BridgeConfig {
     BridgeConfig {
         api_base: "https://192.0.2.1".to_string(),
         credentials: smart_me_client::Credentials::ClientCredentials {
@@ -77,7 +81,7 @@ fn fleet_config(enabled: bool) -> BridgeConfig {
         broker_port: 1883,
         bd_seq_path: std::path::PathBuf::from("/tmp/leaves-bdseq.toml"),
         poll: PollConfig {
-            interval: config::PERIOD_MIN,
+            interval,
             fetch_timeout: Duration::from_secs(2),
         },
         policy: Policy::DEFAULT,
@@ -202,6 +206,77 @@ async fn a_disabled_meters_alarm_retires_with_it_and_a_re_enable_judges_afresh()
     task.abort();
 }
 
+/// **The review-of-the-repair's pin: an idle loop still re-paces.** The hoist
+/// of the period-rebuild above the skips was the round's gravest repair and no
+/// test held it — reverting it left the whole suite green. This is the pin: a
+/// DISABLED meter under a slow period gets a hot interval shrink, and both
+/// halves of the honest cadence are asserted — the recorded `period_ms` is the
+/// new ask AND the ticks actually arrive at it. Under the reverted hoist the
+/// ticker stays parked on the old period while recording the new one, which is
+/// `loop_age`'s false-wedge denominator, fleet-wide.
+///
+/// FALSIFIED 2026-08-15, the revert RUN before this note: moving the rebuild
+/// back below the skips goes RED here — no tick lands inside the whole window
+/// while `period_ms` claims the short pace.
+#[tokio::test(start_paused = true)]
+async fn an_idle_meter_still_repaces_when_the_interval_changes() {
+    let meter = MeterId::new("garage");
+    let slow = Duration::from_secs(300);
+    let handle: ConfigHandle =
+        Arc::new(arc_swap::ArcSwap::from_pointee(fleet_config_at(true, slow)));
+    let clock = Arc::new(FakeClock::new(UtcMillis(SANE_NOW)));
+    let beats = Heartbeats::for_meters([meter.clone()]);
+    let (tx, mut rx) = mpsc::channel(16);
+    let (device_tx, _device_rx) = mpsc::channel(4);
+
+    let source = FakeSource::new().then(Ok(reading(&meter, 0)));
+    let task = tokio::spawn(run(
+        PolledMeter {
+            meter: meter.clone(),
+            serial: Serial::new("9202685"),
+        },
+        source,
+        Arc::clone(&clock) as Arc<dyn Clock + Send + Sync>,
+        Arc::clone(&handle),
+        beats.clone(),
+        tx,
+        refs_dir("repace"),
+        device_tx,
+    ));
+    // One good tick at the slow pace, then the operator disables the meter and
+    // hot-shortens the interval — the reviewed scenario.
+    let _ = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("the first tick publishes");
+    handle.store(Arc::new(fleet_config_at(false, Duration::from_secs(5))));
+
+    // A period change takes effect at the NEXT tick of the OLD period — the
+    // loop is parked in `ticker.tick()` until then, exactly as the enabled
+    // path has always documented ("the next tick uses the new one"). The
+    // reviewed false-wedge begins AFTER that tick: the old code then recorded
+    // the 5 s ask while staying parked on 300 s. So the window under test
+    // opens past the first slow tick.
+    clock.advance_ms(301_000);
+    tokio::time::sleep(Duration::from_secs(301)).await;
+    let before = beats.snapshot().of(&meter).and_then(|m| m.last_tick);
+    clock.advance_ms(30_000);
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    let cell = beats.snapshot();
+    let state = cell.of(&meter).expect("served");
+    assert_ne!(
+        state.last_tick, before,
+        "thirty seconds passed under a five-second ask and the idle loop never \
+         ticked: the ticker is parked on the OLD period while the cell records \
+         the new one — the false-wedge denominator, fleet-wide, reintroduced"
+    );
+    assert_eq!(
+        state.period_ms, 5_000,
+        "and the recorded pace is the pace the ticks actually arrive at — the \
+         `period_ms` doc's own invariant"
+    );
+    task.abort();
+}
+
 /// **AC3 — the account's refusal ends the device: one certificate, then
 /// silence, and the alarm STAYS.**
 ///
@@ -219,6 +294,12 @@ async fn a_device_the_account_refuses_ends_with_one_certificate_and_the_alarm_st
     let beats = Heartbeats::for_meters([meter.clone()]);
     let (tx, mut rx) = mpsc::channel(16);
     let (device_tx, mut device_rx) = mpsc::channel(4);
+    // THE DIVERGENCE IS STAGED (the review-of-the-repair's pin): the spawn-time
+    // serial differs from the stored row's, as it does after a serial edit is
+    // saved but not yet restarted into force. The certificate must name the
+    // device the DBIRTH used — the spawn serial — or it buries a device the
+    // wire never birthed while the born one stays alive for ever.
+    let born_serial = Serial::new("1111111");
 
     let source = FakeSource::new()
         .then(Err(SourceError::Fatal {
@@ -233,7 +314,7 @@ async fn a_device_the_account_refuses_ends_with_one_certificate_and_the_alarm_st
     let task = tokio::spawn(run(
         PolledMeter {
             meter: meter.clone(),
-            serial: Serial::new("9202685"),
+            serial: born_serial.clone(),
         },
         source,
         Arc::clone(&clock) as Arc<dyn Clock + Send + Sync>,
@@ -244,18 +325,34 @@ async fn a_device_the_account_refuses_ends_with_one_certificate_and_the_alarm_st
         device_tx,
     ));
 
-    // Then the ending: exactly one certificate. (The latch itself reaches no
-    // outbox update here — a meter that has NEVER answered has nothing to
-    // republish, story 3.2 AC4 — so the latch is attested below on the
-    // snapshot, which is where the operator surfaces read it anyway.)
+    // THE SEPARATION IS ASSERTED (the review-of-the-repair's pin): the latch
+    // tick queues the verdict; the certificate must NOT share that tick, or
+    // verdict and Death race through the driver's unbiased `select!` and the
+    // final `device-not-in-account` can be dropped as undeclared. One short
+    // sleep lets the latch tick run without reaching the next period.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        beats.snapshot().of(&meter).and_then(|m| m.verdict),
+        Some(smartme_bridge::core::state_machine::State::Failed),
+        "the premise: the latch tick has run"
+    );
+    assert!(
+        device_rx.try_recv().is_err(),
+        "the certificate must not share the latch verdict's tick — the one          period of separation IS the ordering"
+    );
+
+    // Then the ending: exactly one certificate, one period later. (The latch
+    // itself reaches no outbox update here — a meter that has NEVER answered
+    // has nothing to republish, story 3.2 AC4 — so the latch is attested on
+    // the snapshot, which is where the operator surfaces read it anyway.)
     let ended = tokio::time::timeout(Duration::from_secs(30), device_rx.recv())
         .await
         .expect("the certificate follows the latch")
         .expect("channel open");
     assert_eq!(
         ended,
-        DeviceCommand::Death(Serial::new("9202685")),
-        "the device the account refuses ends with its DDEATH (ADR 0034)"
+        DeviceCommand::Death(born_serial),
+        "the certificate names the SPAWN-TIME serial — the device the DBIRTH          used — never the stored row's, which may hold an edit not yet          restarted into force"
     );
     let cell = beats.snapshot();
     let published = cell

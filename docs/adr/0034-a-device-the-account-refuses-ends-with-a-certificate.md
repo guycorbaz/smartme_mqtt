@@ -36,11 +36,14 @@ draft argued from internal ADRs alone, which is the exact habit CLAUDE.md's open
 exists to break):
 
 - Publishing the DDEATH is the Edge Node's job when a device *"becomes unavailable for any
-  reason"* — `Sparkplug_4_Topics.adoc:458-461`. A device the account refuses is unavailable.
+  reason"* — `docs/spec/sparkplug-b-3.0.0/chapters/Sparkplug_4_Topics.adoc:458-461`. A device the account
+  refuses is unavailable.
 - The host-side consequence the Consequences section relies on is mandated, not hoped:
   `tck-id-operational-behavior-edge-node-termination-host-action-ddeath-devices-offline` and
   `tck-id-operational-behavior-edge-node-termination-host-action-ddeath-devices-tags-stale`
-  (`Sparkplug_5_Operational_Behavior.adoc:503-510`) — on DDEATH the host marks the device
+  (`docs/spec/sparkplug-b-3.0.0/chapters/Sparkplug_5_Operational_Behavior.adoc:503-510`; the
+  two clauses sit under the edge-node-termination heading, their text covering any DDEATH
+  reception) — on DDEATH the host marks the device
   offline and its tags STALE, keeping last values. "DEAD, stale, last values kept" is the
   norm's own description.
 

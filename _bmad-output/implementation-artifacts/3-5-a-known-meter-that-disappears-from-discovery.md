@@ -254,6 +254,38 @@ made that assertion fire): the send-path deleted goes RED on *"the certificate f
 latch: Elapsed"*, and a disable-branch Death goes RED on *"the poll task sends NO certificate
 on disable"*. Both run, both now in the table below.
 
+### The review of the repair (2026-08-15, same round) — sound mechanics, unproven repairs
+
+The repair commit's own pass found NO functional break — the loop logic, flag interleaves and
+tick sequencing were verified sound — and found instead that the round's three largest repairs
+were PINNED BY NOTHING: the reviewer reverted each (the hoist, the spawn-time serial, the
+one-tick delay) and the whole suite stayed green, which contradicted this file's own "every
+repair falsified" sentence. The sentence was the overclaim; the pins now exist:
+
+- `an_idle_meter_still_repaces_when_the_interval_changes` — and writing it taught the true
+  kinetics: a period change takes effect at the next tick of the OLD period (the loop is
+  parked in `ticker.tick()`), exactly as the enabled path always documented; the false wedge
+  begins after that tick, and the pin's window opens there;
+- the gone test now STAGES the serial divergence (spawn `1111111` vs stored `9202685`) and
+  asserts the certificate names the spawn-time one;
+- and asserts the certificate does NOT share the latch verdict's tick.
+
+Also from that pass: the ordering comment overclaimed ("makes it true on the wire") — a driver
+stalled a full period can still leave verdict and Death queued together in an unbiased
+`select!`; the comment now says NARROWS and names the residual. The runbook's SECOND drift site
+("attests to v3, and the contract is now v9" / "v4 through v9") moved to v10 with the first.
+The ADR's spec paths gained their `chapters/` directory and the tck-id heading nuance. And the
+sibling of the serial repair — `classify_meters` still certifying from the stored serial — is
+[#83], pre-existing, one seam over.
+
+### Falsification — the pins (2026-08-15, each revert RUN before its note)
+
+| reverted repair | result |
+|---|---|
+| the hoist (rebuild moved back below the skips) | RED — *"thirty seconds passed under a five-second ask and the idle loop never ticked"*, `left == right == MonotonicMs(301000)` |
+| the certificate from the stored row's serial | RED — *"left: Death(Serial(\"9202685\")), right: Death(Serial(\"1111111\"))"* |
+| same-tick certification | RED — *"the certificate must not share the latch verdict's tick"* |
+
 ### Falsification — the review round's additions (2026-08-15, run before their notes)
 
 | mutation | result |
