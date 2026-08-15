@@ -1186,7 +1186,18 @@ development_status:
   # write), with the asymmetry that matters: DISABLE quietens the operator's surfaces
   # ([#65]'s three never-decided consequences, all taken), DISAPPEARANCE keeps the
   # alarm — only the wire's device retires. [#65] closes with this story.
-  3-5-a-known-meter-that-disappears-from-discovery: ready-for-dev
+  # IMPLEMENTED 2026-08-15, the day it was written. Contract 9 -> 10 (additive):
+  # `device-not-in-account` splits out of `configuration-contradicted` as 2.6 split
+  # the refusals — the one latch that is EVIDENCE ABOUT THE DEVICE, so the device
+  # ends: one DDEATH after the latch, then silence toward both the API and the wire
+  # (ADR 0034, on ADR 0027 §3's own licence), the alarm staying for as long as the
+  # latch holds. Disable takes the opposite side of the asymmetry: fetch, publish,
+  # warn and ALARM all retire with the meter ([#65], all three consequences), the
+  # task and heartbeat stay (re-enable = DBIRTH + Stale-until-proven). Six mutations
+  # run before their notes; loop-level integration tests drive `run` itself under
+  # virtual time. DISCOVERED ADJACENT, issue to file: every OTHER latch still
+  # fetches each period although the answer cannot change an absorbing verdict.
+  3-5-a-known-meter-that-disappears-from-discovery: review
   3-6-orphan-retained-purge-on-a-mapping-change: backlog
   # NOT owed yet: Epic 3 is at 3/6 stories (3.4, 3.5, 3.6 remain). `required`
   # means it must run BEFORE the epic closes, not that it is late.

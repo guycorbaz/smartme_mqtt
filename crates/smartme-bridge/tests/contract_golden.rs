@@ -117,6 +117,58 @@ const GOLDEN_CAUSES_V4: CauseGolden = &[
     ("not-revalidated", false, Quality::Stale),
 ];
 
+/// The quality codes, as of contract v10. Its own copy — a golden is a
+/// historical record, and sharing an array means editing v9 rewrites what v9
+/// attested to.
+const GOLDEN_QUALITY_V10: QualityGolden = &[
+    (Quality::Good, 192),
+    (Quality::Stale, 0x8000_0000 | 516),
+    (Quality::Bad, 0x8000_0000 | 512),
+];
+
+/// The cause vocabulary, as of contract v10: v9 plus the one story 3.5 added.
+///
+/// **Additive, and it is a split, not an oracle.** `device-not-in-account` says
+/// the ACCOUNT pronounced this id absent — story 2.6's `404`, which until now
+/// travelled as `configuration-contradicted`. It is split out the way 2.6 split
+/// the refusals: the repair site differs (the meter row or the account, not the
+/// file's plumbing), and it is the one latch that is evidence about the DEVICE,
+/// which is why the fleet topology answers it with a DDEATH (ADR 0034) where its
+/// siblings say nothing about theirs. Latches, `Bad`, like every refusal.
+const GOLDEN_CAUSES_V10: CauseGolden = &[
+    ("source-unreachable", false, Quality::Stale),
+    ("source-refused", true, Quality::Bad),
+    ("host-clock-unsynced", false, Quality::Stale),
+    ("no-freshness-proof", false, Quality::Stale),
+    ("source-clock-implausible", false, Quality::Stale),
+    ("timestamps-disagree", false, Quality::Stale),
+    ("reading-too-old", false, Quality::Stale),
+    ("value-unusable", false, Quality::Bad),
+    ("source-marked-stale", false, Quality::Stale),
+    ("not-revalidated", false, Quality::Stale),
+    ("counter-went-backwards", false, Quality::Bad),
+    ("unit-not-recognised", false, Quality::Bad),
+    ("value-not-finite", false, Quality::Bad),
+    ("value-overflowed", false, Quality::Bad),
+    ("source-timestamp-unparseable", false, Quality::Bad),
+    ("credential-rejected", true, Quality::Bad),
+    ("configuration-contradicted", true, Quality::Bad),
+    ("identity-mismatch", true, Quality::Bad),
+    ("source-rate-limited", false, Quality::Stale),
+    ("feed-not-advancing", false, Quality::Stale),
+    ("device-not-in-account", true, Quality::Bad),
+];
+
+/// The names and units, as of v10. Unchanged, and its own copy.
+const GOLDEN_NAMES_V10: NameGolden = &[
+    ("metric.power", "Power"),
+    ("metric.energy", "Energy"),
+    ("metric.rebirth", "Node Control/Rebirth"),
+    ("unit.power", "kW"),
+    ("unit.energy", "kWh"),
+    ("property.cause", "Cause"),
+];
+
 /// The quality codes, as of contract v9. Its own copy — a golden is a historical
 /// record, and sharing an array means editing v8 rewrites what v8 attested to.
 const GOLDEN_QUALITY_V9: QualityGolden = &[
@@ -380,6 +432,11 @@ struct Golden {
 /// golden is what the `None` arm refuses.
 fn golden_for(version: i64) -> Option<Golden> {
     match version {
+        10 => Some(Golden {
+            quality: GOLDEN_QUALITY_V10,
+            causes: GOLDEN_CAUSES_V10,
+            names: GOLDEN_NAMES_V10,
+        }),
         9 => Some(Golden {
             quality: GOLDEN_QUALITY_V9,
             causes: GOLDEN_CAUSES_V9,

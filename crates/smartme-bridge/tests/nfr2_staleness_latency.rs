@@ -198,6 +198,7 @@ async fn a_silent_meters_verdict_arrives_inside_nfr2s_bound() {
             beats.clone(),
             tx.clone(),
             std::env::temp_dir().join(format!("smartme_nfr2_refs_{}", std::process::id())),
+            tokio::sync::mpsc::channel(4).0,
         )));
     }
     drop(tx);

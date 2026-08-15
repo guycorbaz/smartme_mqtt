@@ -221,6 +221,14 @@ pub enum Cause {
     /// the wrong place entirely. Only the CLOUD's own clock standing still means the
     /// response is not being rebuilt.
     FeedNotAdvancing,
+    /// The account says it has no such device (story 3.5, split out of
+    /// [`Cause::ConfigurationContradicted`] the way story 2.6 split the
+    /// refusals: a refusal names itself). One `404` covers a mistyped id and a
+    /// device removed from the account, and the bridge says so rather than
+    /// pretending to tell them apart. **Latches** — and it is the one latch
+    /// that is evidence ABOUT THE DEVICE, so the fleet topology answers it
+    /// with a DDEATH (ADR 0034) where its siblings say nothing about theirs.
+    DeviceNotInAccount,
 }
 
 impl Cause {
@@ -270,6 +278,7 @@ impl Cause {
         Cause::IdentityMismatch,
         Cause::SourceRateLimited,
         Cause::FeedNotAdvancing,
+        Cause::DeviceNotInAccount,
     ];
 
     /// The next cause in [`Cause::ALL`]'s order, or `None` for the last one.
@@ -313,10 +322,11 @@ impl Cause {
             Cause::ConfigurationContradicted => Some(Cause::IdentityMismatch),
             Cause::IdentityMismatch => Some(Cause::SourceRateLimited),
             Cause::SourceRateLimited => Some(Cause::FeedNotAdvancing),
+            Cause::FeedNotAdvancing => Some(Cause::DeviceNotInAccount),
             // The end of the chain. A new cause appended to `ALL` replaces this
             // arm's `None` with a `Some`, which is the edit the old positional
             // `discriminant` never demanded.
-            Cause::FeedNotAdvancing => None,
+            Cause::DeviceNotInAccount => None,
         }
     }
 
@@ -388,6 +398,9 @@ impl Cause {
             // were asked to wait — not that anything about it is wrong.
             Cause::SourceRateLimited => Quality::Stale,
             Cause::FeedNotAdvancing => Quality::Stale,
+            // A refusal of the device itself: the number must not be handed
+            // over, like every latch's.
+            Cause::DeviceNotInAccount => Quality::Bad,
             // Freshness refusals: the value was true, and may be old. The
             // difference from the three above is the whole reason a consumer is
             // told which of the two it is holding.
@@ -425,6 +438,7 @@ impl Cause {
             Cause::IdentityMismatch => "identity-mismatch",
             Cause::SourceRateLimited => "source-rate-limited",
             Cause::FeedNotAdvancing => "feed-not-advancing",
+            Cause::DeviceNotInAccount => "device-not-in-account",
         }
     }
 
@@ -451,6 +465,7 @@ impl Cause {
                 | Cause::CredentialRejected
                 | Cause::ConfigurationContradicted
                 | Cause::IdentityMismatch
+                | Cause::DeviceNotInAccount
         )
     }
 }
@@ -1108,12 +1123,16 @@ mod tests {
     /// would be more trustworthy than the refusal was.
     #[test]
     fn identity_latches_and_value_does_not() {
-        // The four that latch, and each is a refusal rather than a reading.
+        // The five that latch, and each is a refusal rather than a reading.
         const LATCHING: &[Cause] = &[
             Cause::SourceRefused,
             Cause::CredentialRejected,
             Cause::ConfigurationContradicted,
             Cause::IdentityMismatch,
+            // Story 3.5's split: the account pronounced the device absent —
+            // a refusal like its siblings, and the only one that is evidence
+            // about the DEVICE (hence the DDEATH, ADR 0034).
+            Cause::DeviceNotInAccount,
         ];
         for cause in LATCHING {
             assert!(cause.latches(), "{cause:?} is a refusal and must latch");

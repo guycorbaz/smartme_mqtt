@@ -284,6 +284,27 @@ impl Heartbeats {
         });
     }
 
+    /// Clears one meter's recorded opinion — the operator disabled it, and the
+    /// alarm it carried is retired with it (story 3.5 AC2, [#65] item 3).
+    ///
+    /// **Retiring is clearing the OPINION, not the meter**: `last_tick` stays,
+    /// so the wedge detector still sees a live loop, and a cleared cell reads
+    /// exactly like a meter that has not completed a tick — absent from
+    /// `failed()` and `degraded()` by the rule those two already apply
+    /// ("absent rather than guessed at"), so no surface needs a new filter.
+    /// The asymmetry with the account's refusal is deliberate: disable is the
+    /// operator saying "stop" and quietens their screens; a device the account
+    /// refuses keeps its alarm for as long as the latch holds (story 3.5 AC3).
+    pub fn retire(&self, meter: &MeterId) {
+        self.0.send_modify(|fleet| {
+            if let Some(entry) = fleet.meters.iter_mut().find(|m| &m.meter == meter) {
+                entry.verdict = None;
+                entry.published = None;
+                fleet.generation += 1;
+            }
+        });
+    }
+
     /// The meters the runtime is **actually serving** — one entry per spawned
     /// poll task, because that is how this collection is built
     /// (`supervisor::run_with_control`).
@@ -1050,6 +1071,14 @@ fn store_energy_reference(dir: &std::path::Path, meter: &MeterId, energy: crate:
 }
 
 /// The task: loops until the outbox closes.
+///
+/// Eight parameters, the eighth being story 3.5's device channel. The lint is
+/// right that this is a lot; a bundling struct is deferred deliberately — every
+/// parameter is a distinct wiring concern the supervisor threads once, and a
+/// struct would add ceremony at four call sites without removing a decision.
+/// The 2.7 precedent (bundle at the FOURTH member) applies to values that
+/// travel together; these do not. A ninth parameter is the revisit trigger.
+#[allow(clippy::too_many_arguments)]
 pub async fn run<S: Source + Send>(
     meter: MeterId,
     mut source: S,
@@ -1064,6 +1093,10 @@ pub async fn run<S: Source + Send>(
     // 2.3 AC5). The directory, not the file: the file name is derived from the
     // meter id so that a corrupt one costs exactly the meter it belongs to.
     reference_dir: std::path::PathBuf,
+    // The device-topology channel (story 3.5): the one thing this loop ever
+    // sends on it is the DDEATH that ends a device the account refuses
+    // (ADR 0034). Births and disable-deaths stay `reconfigure`'s.
+    devices: mpsc::Sender<crate::app::mqtt_driver::DeviceCommand>,
 ) {
     let heartbeat = pulse.of(&meter).unwrap_or_else(|| {
         panic!("no heartbeat for {meter}; the collection is built from the served meters")
@@ -1102,6 +1135,13 @@ pub async fn run<S: Source + Send>(
     let mut period = config.load().poll.interval;
     let mut ticker = tokio::time::interval(period);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Story 3.5's two loop facts. `was_enabled` starts true because tasks are
+    // spawned for the enabled set; `certified_gone` records that this device's
+    // ending — the one DDEATH ADR 0034 prescribes when the account refuses the
+    // id — has been sent, after which the certificate IS the publication and
+    // the loop stops asking a question whose answer cannot change the verdict.
+    let mut was_enabled = true;
+    let mut certified_gone = false;
     loop {
         ticker.tick().await;
         if outbox.is_closed() {
@@ -1109,6 +1149,65 @@ pub async fn run<S: Source + Send>(
             return;
         }
         let current = config.load();
+        // THE ENABLED FLAG IS READ EVERY TICK ([#65] items 1 and 2). The loop
+        // read only the period and the policy until story 3.5, so disabling a
+        // meter kept calling the smart-me API every period for ever and filled
+        // the log with one warn per discarded reading — nobody chose either;
+        // they fell out. A disabled meter's task stays bound (the deliberate
+        // design: re-enabling is a DBIRTH, not a restart) and keeps its
+        // heartbeat (idling on purpose is not wedging), but it asks nothing,
+        // publishes nothing, and warns about nothing.
+        let row = current.meters.iter().find(|m| m.meter == meter);
+        // A MISSING row reads as enabled, and the direction is deliberate: the
+        // operator's "stop" is `enabled: false` on a row that exists, never a
+        // row's absence — removal costs a ProcessRestart (`classify_meters`),
+        // so a served meter without a row is a harness's abbreviation, not a
+        // gesture. Reading absence as "stop" would also make a future
+        // hot-removal silently idle a task the classifier promised to restart.
+        let enabled = row.is_none_or(|m| m.enabled);
+        if !enabled {
+            heartbeat.touch(clock.monotonic(), current.poll.interval.as_millis() as i64);
+            if was_enabled {
+                // Said ONCE, and the fault goes with the meter ([#65] item 3):
+                // the operator disabling a broken meter is the obvious gesture,
+                // and it must quieten the alarm it is aimed at.
+                tracing::info!(
+                    meter = %meter,
+                    "meter disabled by the operator; polling idles and its \
+                     fault, if any, is retired with it"
+                );
+                pulse.retire(&meter);
+                // A re-enable starts from Stale-until-proven, and a gone
+                // episode ends with the disable: if the device is still not in
+                // the account, the next enabled fetch re-latches and
+                // re-certifies within one tick — loudly, which is the point.
+                state = State::initial();
+                certified_gone = false;
+            }
+            was_enabled = false;
+            continue;
+        }
+        if !was_enabled {
+            tracing::info!(
+                meter = %meter,
+                "meter re-enabled; judged afresh — Stale until proven, as at \
+                 any start"
+            );
+            was_enabled = true;
+        }
+        // AFTER THE CERTIFICATE, SILENCE — and the silence is the honesty
+        // (ADR 0034). The account said it has no such device; the DDEATH said
+        // so on the wire; re-asking every period would hammer the API with a
+        // question whose answer cannot change an absorbing latch, and
+        // republishing `Bad` would tell a host "misbehaving" about a device
+        // that is GONE. The alarm stays: the cell keeps its `Failed`, so
+        // `failed_sources` and `/` name the meter until a restart or a
+        // configuration change — the certificate retires the WIRE's device,
+        // never the operator's alarm.
+        if certified_gone {
+            heartbeat.touch(clock.monotonic(), current.poll.interval.as_millis() as i64);
+            continue;
+        }
         if current.poll.interval != period {
             tracing::info!(
                 from_secs = period.as_secs(),
@@ -1146,6 +1245,45 @@ pub async fn run<S: Source + Send>(
         // BOTH halves of it since Story 2.3, so a screen cannot call a meter
         // healthy while the broker is being told otherwise ([#62]).
         pulse.record(&meter, state, published);
+
+        // THE ENDING (story 3.5 AC3, ADR 0034): the account pronounced this
+        // device absent, so the device ends — one DDEATH, sent once, after the
+        // latch verdict above went out. Only THIS latch: a credential or
+        // base-URL latch is evidence about the ASKING, not about the device,
+        // and a certificate there would declare dead a device nobody has
+        // evidence about.
+        if !certified_gone && published.cause() == Some(Cause::DeviceNotInAccount) {
+            certified_gone = true;
+            match row.map(|m| m.serial.clone()) {
+                Some(serial) => {
+                    tracing::warn!(
+                        meter = %meter,
+                        "the account has no such device; its DDEATH ends it on \
+                         the wire, and the fault stays named until a restart or \
+                         a configuration change"
+                    );
+                    if devices
+                        .send(crate::app::mqtt_driver::DeviceCommand::Death(serial))
+                        .await
+                        .is_err()
+                    {
+                        tracing::warn!(
+                            meter = %meter,
+                            "mqtt task is gone; the device certificate could \
+                             not be queued"
+                        );
+                    }
+                }
+                // Unreachable while meter removal costs a ProcessRestart, and
+                // said rather than unwrapped: a future hot-removal would land
+                // here, and a missing row must not panic the poll task.
+                None => tracing::warn!(
+                    meter = %meter,
+                    "no configuration row for this meter; its certificate \
+                     cannot name a serial and is not sent"
+                ),
+            }
+        }
     }
 }
 
@@ -3216,6 +3354,7 @@ mod tests {
                 beats.clone(),
                 tx,
                 dir.clone(),
+                mpsc::channel(4).0,
             ));
             // Two ticks: the interval fires immediately, then once more.
             tokio::time::sleep(Duration::from_secs(6)).await;
@@ -3244,6 +3383,7 @@ mod tests {
             beats,
             tx,
             dir.clone(),
+            mpsc::channel(4).0,
         ));
         let update = rx.recv().await.expect("the first tick published");
         task.abort();
@@ -3314,6 +3454,7 @@ mod tests {
                 // a fixed path under /tmp reintroduced. See [`scratch_dir`],
                 // which is where that reasoning now lives for every test here.
                 scratch_dir("fleet_refs"),
+                mpsc::channel(4).0,
             )));
         }
         drop(tx);

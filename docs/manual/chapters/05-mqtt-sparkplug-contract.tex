@@ -23,8 +23,16 @@ quality codes and the cause vocabulary to the version they belong to, and fails 
 moves without this number moving. Before that, the number was maintained by whoever
 remembered.
 
-The number does not say what \emph{kind} of change it was, so it is worth stating. Version~9
-is \textbf{additive}: one new cause, \code{feed-not-advancing}, says that the \emph{cloud} stopped
+The number does not say what \emph{kind} of change it was, so it is worth stating. Version~10
+is \textbf{additive}: one new cause, \code{device-not-in-account}, says the account itself
+pronounced the configured device id absent --- smart-me's own \code{404}, which until this
+version travelled under \code{configuration-contradicted}. It is split out the way version~8
+split the refusals: the repair site differs (the meter row, or the account the device left ---
+not the file's plumbing), and it is the one latch that is evidence about the \emph{device},
+which is why the bridge answers it with a DDEATH where the other latches say nothing about
+theirs. One \code{404} covers a mistyped id and a removed device alike; the bridge cannot tell
+them apart and its message says so rather than guessing. Version~9
+was also additive: one new cause, \code{feed-not-advancing}, says that the \emph{cloud} stopped
 rebuilding its answer --- two consecutive successful fetches carried the same \code{Date} header.
 It is the only cause in the vocabulary that cannot be produced by looking at a single reading:
 every other judgement is a fact about one response, this one is a relation between two. A replayed
@@ -68,6 +76,9 @@ history.
 \toprule
 \textbf{Version} & \textbf{Kind} & \textbf{Change} \\
 \midrule
+10 & additive & \code{device-not-in-account} joins, split out of
+    \code{configuration-contradicted}: the account pronounced the configured device id absent
+    (smart-me's \code{404}), and the device ends with a DDEATH. Latches, like every refusal. \\
 9 & additive & \code{feed-not-advancing} joins: the cloud handed back the same \code{Date}
     header twice, so the response was not rebuilt and neither number in it is new. Judged on the
     whole reading rather than per metric, because neither value is new.

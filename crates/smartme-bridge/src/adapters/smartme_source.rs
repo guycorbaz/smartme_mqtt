@@ -254,9 +254,15 @@ fn map_error(e: SmartMeError) -> SourceError {
         // id is unknown to smart-me"* — had no live producer at all.
         let refusal = match e {
             SmartMeError::AuthRejected { .. } => Refusal::Credential,
-            SmartMeError::NotHttps { .. }
-            | SmartMeError::Misconfigured { .. }
-            | SmartMeError::UnknownDevice { .. } => Refusal::Configuration,
+            // Split out of `Configuration` by story 3.5, the way 2.6 split the
+            // refusals out of `source-refused`: the account itself pronounced
+            // this id absent, which is the one refusal that is evidence about
+            // the DEVICE — the row or the account is the repair site, and the
+            // fleet topology answers it with a certificate (ADR 0034).
+            SmartMeError::UnknownDevice { .. } => Refusal::DeviceNotInAccount,
+            SmartMeError::NotHttps { .. } | SmartMeError::Misconfigured { .. } => {
+                Refusal::Configuration
+            }
             // Unreachable: `is_fatal` gates this branch and names exactly the four
             // variants above. The wildcard remains because the compiler cannot see
             // that, and it is the finding story 2.6's review left open — a future
@@ -758,8 +764,11 @@ mod tests {
                 SmartMeError::UnknownDevice {
                     device_id: "9202685".to_string(),
                 },
-                Refusal::Configuration,
-                "the device id in the configuration",
+                // Story 3.5's split: its own refusal, because it is the one
+                // that is evidence about the DEVICE — and the topology answers
+                // it with a certificate where its siblings say nothing.
+                Refusal::DeviceNotInAccount,
+                "the meter row, or the account that no longer has the device",
             ),
             (
                 SmartMeError::Misconfigured {
@@ -816,7 +825,12 @@ mod tests {
         let SourceError::Fatal { refusal, reason } = e else {
             panic!("an id smart-me refuses must latch");
         };
-        assert_eq!(refusal, Refusal::Configuration);
+        assert_eq!(
+            refusal,
+            Refusal::DeviceNotInAccount,
+            "story 3.5's split: the account pronounced this id absent, and the \
+             refusal names that fact rather than the configuration's plumbing"
+        );
         assert!(
             reason.contains("9202685"),
             "the operator must be told WHICH id was refused: {reason}"

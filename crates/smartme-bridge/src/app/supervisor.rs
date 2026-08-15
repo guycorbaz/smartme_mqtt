@@ -361,7 +361,7 @@ pub async fn run_with_control(
     let handle: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(config.clone()));
     with_control(Control {
         config: Arc::clone(&handle),
-        devices: device_tx,
+        devices: device_tx.clone(),
         heartbeats: heartbeats.clone(),
         clock: Arc::clone(&clock),
     });
@@ -426,6 +426,7 @@ pub async fn run_with_control(
                     .parent()
                     .unwrap_or(std::path::Path::new("."))
                     .to_path_buf(),
+                device_tx.clone(),
             ))
         })
         .collect();

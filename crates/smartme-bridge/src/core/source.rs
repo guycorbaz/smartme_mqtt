@@ -133,10 +133,24 @@ pub enum Refusal {
     /// the credential.**
     Credential,
     /// The source contradicts the configuration, or the configuration contradicts
-    /// itself: a device id smart-me does not know, a base URL refused at
-    /// construction, a source wired for one meter and asked for another. **Go and
-    /// look at the configuration.**
+    /// itself: a base URL refused at construction, a source wired for one meter
+    /// and asked for another. **Go and look at the configuration.**
+    ///
+    /// A device id the account does not have moved OUT of here in story 3.5 —
+    /// see [`Refusal::DeviceNotInAccount`]: the repair site differs (the row or
+    /// the account, not the file's plumbing), and the fleet topology responds
+    /// differently (that device gets a certificate; this refusal's subjects
+    /// keep their devices, because nothing here is evidence about a device).
     Configuration,
+    /// The account itself says it has no such device: story 2.6's `404`,
+    /// pronounced by smart-me about the id the configuration names. **Go and
+    /// look at the meter row — the id is mistyped, or the device was removed
+    /// from the account**; the bridge cannot tell those two apart and does not
+    /// pretend to (one `404` covers both, and inventing a discrimination would
+    /// claim a diagnosis nobody has). **Latches**, like every refusal — and it
+    /// is the one refusal that is EVIDENCE ABOUT THE DEVICE, which is why story
+    /// 3.5 ends it with a DDEATH where its siblings end with nothing.
+    DeviceNotInAccount,
     /// The device answered and it is not the one declared ([ADR 0029]). **Go and
     /// look at which physical meter is which** — the credential is fine and the
     /// configuration is internally consistent; it simply names the wrong device.
@@ -153,6 +167,7 @@ impl Refusal {
             Refusal::Credential => Cause::CredentialRejected,
             Refusal::Configuration => Cause::ConfigurationContradicted,
             Refusal::Identity => Cause::IdentityMismatch,
+            Refusal::DeviceNotInAccount => Cause::DeviceNotInAccount,
         }
     }
 }

@@ -124,6 +124,7 @@ The last complete run was 2026-08-03, contract v3. Three versions have shipped s
 | **v7** | additive — four causes name what `value-unusable` used to say at once, and a field the bridge could not read degrades that field alone | a more precise `Cause` string, and only on the field at fault |
 | **v8** | additive — `source-refused` splits into three refusals an operator repairs in different places, and a `429` gets its own cause | a degraded meter says whether the fault is a credential, the configuration, the wrong meter, or a rate limit |
 | **v9** | additive — `feed-not-advancing`: the cloud handed back the same `Date` header twice | a meter can now be refused because the CLOUD stopped answering afresh, not because the meter went quiet — the two send an operator to different places |
+| **v10** | additive — `device-not-in-account` splits out of `configuration-contradicted`, and a device the account no longer has ends with a DDEATH | the tag browser shows the device DEAD (stale, last values kept) instead of an endlessly refreshed `Bad`, and the cause names the row or the account rather than the file |
 
 ### What this run attests
 

@@ -123,7 +123,7 @@ use crate::domain::{Measurement, Serial, UtcMillis};
 /// vocabulary changed size (11 live, 10 in the v4 golden) without
 /// CONTRACT_VERSION moving"* — which is the first time that test caught a real
 /// change rather than a mutation written to try it.
-pub const CONTRACT_VERSION: i64 = 9;
+pub const CONTRACT_VERSION: i64 = 10;
 
 /// The quality code this bridge publishes for `quality`.
 ///

@@ -1,6 +1,6 @@
 # Story 3.5: A known meter that disappears — the topology says absence
 
-Status: ready-for-dev
+Status: review — implemented 2026-08-15, the day it was written; awaiting the independent pass
 
 ## Story
 
@@ -118,19 +118,38 @@ changes; `./scripts/ci-local.sh` full run; `gh run list`.** [#65] closes with th
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — The disabled meter goes quiet toward smart-me** (AC1): the poll task reads
-      `enabled` (hot, via the config handle) and skips fetch+publish+warn while keeping the
-      task and its heartbeat alive (a disabled meter must not read as a WEDGED one — decide
-      how the heartbeat represents "idle on purpose" and record it)
-- [ ] **Task 2 — The surfaces follow `enabled`** (AC2): `Phase::failed_sources` and the page
-      filter on it; the one-line retirement log; re-enable resumes from `State::initial()`
-- [ ] **Task 3 — The certificate on the account's refusal** (AC3): the gone-latch reaches the
-      publisher as a device retirement; one DDEATH; DDATA stops; surfaces keep the alarm
-- [ ] **Task 4 — The three endings differ on the wire** (AC4)
-- [ ] **Task 5 — ADR 0034 + manual** (AC7)
-- [ ] **Task 6 — Verification sweep** (AC5)
-- [ ] **Task 7 — Falsify** (AC6)
-- [ ] **Task 8 — `./scripts/ci-local.sh` full run**, then `gh run list`
+- [x] **Task 1 — The disabled meter goes quiet toward smart-me** (AC1) — 2026-08-15. The loop
+      reads `enabled` from the config handle every tick; a MISSING row reads as enabled (the
+      operator's "stop" is `enabled: false` on a row that exists — removal is a
+      ProcessRestart, and harnesses abbreviate). "Idle on purpose" decided: the heartbeat
+      keeps beating (the loop IS alive), so the wedge detector needs no special case
+- [x] **Task 2 — The surfaces follow the retirement** (AC2) — 2026-08-15, and more cheaply
+      than drafted: `Heartbeats::retire` clears the meter's recorded OPINION, and a cleared
+      cell already reads as "no opinion yet" to `failed()`/`degraded()` — no surface grew a
+      filter, which means no third caller can forget one. One info line at the transition;
+      re-enable resets to `State::initial()` (memory kept: the yardstick must survive a
+      disable, FR15)
+- [x] **Task 3 — The certificate on the account's refusal** (AC3) — 2026-08-15: contract
+      9 → 10 (additive): `device-not-in-account` splits out of `configuration-contradicted`
+      exactly as 2.6 split the refusals (`Refusal::DeviceNotInAccount`, latching, Bad); the
+      loop certifies ONCE on that cause and then goes silent toward both the API and the
+      wire, the cell keeping its `Failed` so the alarm stays
+- [x] **Task 4 — The three endings differ on the wire** (AC4) — 2026-08-15: the certificate
+      pinned here (`DeviceCommand::Death` after the gone-latch, and NONE on disable — the
+      disable DDEATH is `classify_meters`', pinned by `chaos_device_certificates`); the
+      bridge-death ending is the will's (story 4.17's QoS-1 tests). Each ending pinned where
+      it is produced, cited in the test's module doc
+- [x] **Task 5 — ADR 0034 + manual** (AC7) — 2026-08-15: ADR written; manual ch5 v10 row +
+      prose; runbook v10 row; golden v10 (its own copy, v9 kept as the record it is)
+- [x] **Task 6 — Verification sweep** (AC5) — 2026-08-15: the 2.6 latch and its naming
+      verified as the detection (tests updated for the split, not rebuilt); the disable
+      DDEATH verified as existing (`classify_meters`, chaos) and deliberately NOT resent by
+      the poll task (two senders for one ending would race — asserted)
+- [x] **Task 7 — Falsify** (AC6) — 2026-08-15, six mutations, table in the notes, every one
+      run before its note
+- [x] **Task 8 — `./scripts/ci-local.sh` full run** — 2026-08-15, EXIT=0 end to end
+      (chaos and image included, `chaos_device_certificates` among them — the disable
+      DDEATH verified against a real broker), then `gh run list`
 
 ## Dev Notes
 
@@ -180,8 +199,63 @@ changes; `./scripts/ci-local.sh` full run; `gh run list`.** [#65] closes with th
 
 ### Agent Model Used
 
+claude-fable-5 (same session as 3.4; C1–C5 binding).
+
 ### Debug Log References
 
 ### Completion Notes List
 
+**2026-08-15 — the whole story, one sitting; four drafting decisions held, one discovery.**
+
+- **The discovery**: a latched meter keeps FETCHING today — for every latch. 2.6's "latches
+  instead of being polled for ever" latched the VERDICT; the loop still asks the API a
+  question whose answer cannot change an absorbing state, every period, including with a
+  rejected credential (the exact hammering 2.6's own doc warns about). This story stops it
+  for the GONE latch (the certificate ends the asking); the credential/identity latches keep
+  today's behaviour, recorded as an adjacent issue rather than absorbed — ADR 0027 requires
+  their verdicts to keep publishing, so stopping their fetch needs a publish-without-fetch
+  path this story has no criterion for.
+- **`retire` clears the opinion, not the meter**: `last_tick` stays (idling is not wedging),
+  and a cleared cell reads exactly like "no tick yet", which `failed()`/`degraded()` already
+  treat as absent — the AC2 surface change cost zero filter edits, so no third caller can
+  forget one.
+- **The missing-row rule**: a served meter without a configuration row reads as ENABLED. The
+  operator's stop is an explicit `enabled: false`; absence is a harness's abbreviation or a
+  future hot-removal, and reading it as "stop" would silently idle a task the classifier
+  promised to restart. (Found the hard way: the first rule idled every nfr2 harness meter.)
+- **First-tick fatal publishes nothing on the outbox** (story 3.2 AC4: never answered →
+  nothing to republish) — the latch is attested on the snapshot, where the surfaces read it.
+  The integration test learned this before the implementation did anything wrong.
+- **`run` gained its eighth parameter** (the device channel) with an `#[allow]` and a written
+  revisit trigger, not a bundling struct: these are wiring concerns threaded once, not values
+  that travel together (the 2.7 bundling precedent is about the latter).
+
+### Falsification — six mutations, each RUN before its note (2026-08-15)
+
+| mutation | result |
+|---|---|
+| the `enabled` flag ignored | RED — the queued Good readings surface while disabled: *"a disabled meter publishes nothing — and the Good readings queued in the script prove no fetch happened either"* |
+| `pulse.retire` skipped | RED — *"the alarm the operator aimed at is retired with the meter ([#65] item 3)"* |
+| the latch carried across a disable (`state` not reset) | RED — *"left: Bad, right: Good"*: a carried `Failed` makes the post-re-enable Good impossible by construction |
+| the post-certificate `continue` removed | RED — *"after the certificate, silence IS the publication (ADR 0027 §3)"* |
+| every latch certified (`published.latches()` instead of the one cause) | RED at test 1's premise — *"the first tick publishes: Elapsed"* — and that premise failure IS the harm surfacing: a credential-latched meter went silent after one tick, the ADR 0027 violation this guard exists to prevent. Recorded as observed rather than re-staged onto the named assertion (the phase.rs "mutation B" lesson, inverted: here the precondition failure is the property) |
+| the heartbeat untouched while disabled | RED — *"idling on purpose is not wedging"* |
+
 ### File List
+
+- `crates/smartme-bridge/src/core/source.rs` — `Refusal::DeviceNotInAccount` (AC3)
+- `crates/smartme-bridge/src/core/oracle.rs` — `Cause::DeviceNotInAccount`: ALL, successor,
+  string, quality, latch (AC3)
+- `crates/smartme-bridge/src/adapters/smartme_source.rs` — `map_error` split; tests updated
+- `crates/smartme-bridge/src/adapters/sparkplug_publisher.rs` — `CONTRACT_VERSION` 10
+- `crates/smartme-bridge/src/app/poll_publish.rs` — the enabled read, `Heartbeats::retire`,
+  the certification and its silence, the device channel parameter (AC1–AC3)
+- `crates/smartme-bridge/src/app/supervisor.rs` — `device_tx` threaded to the poll tasks
+- `crates/smartme-bridge/tests/a_meter_that_leaves_the_fleet.rs` — the loop-level proofs
+  (AC1–AC4)
+- `crates/smartme-bridge/tests/contract_golden.rs` — golden v10
+- `crates/smartme-bridge/tests/nfr2_staleness_latency.rs` — call-site update
+- `docs/adr/0034-a-device-the-account-refuses-ends-with-a-certificate.md` — the decision
+- `docs/manual/chapters/05-mqtt-sparkplug-contract.tex`, `docs/ignition-contract-runbook.md`
+  — v10 rows
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — status trail
