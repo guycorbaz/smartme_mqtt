@@ -737,6 +737,19 @@ pub async fn step_once<S: Source + Send>(
     // therefore requires the positive evidence (a `Date` the oracle saw and did
     // not refuse), while ordinary adoption keeps requiring only the absence of
     // refusal — a merely headerless reading should not lose its republication.
+    //
+    // Two limits of the voucher, named by the review of the repair rather than
+    // discovered later: a genuine meter replacement behind a permanently
+    // Date-stripping path stays `Bad(counter-went-backwards)` — surviving
+    // restarts, since the reference is persisted — until one headered response
+    // arrives (such a feed is already loudly `Stale(no-freshness-proof)` on
+    // every tick, so the state is visible, and the accepted trade is that FR15's
+    // yardstick never re-baselines on evidence the feed oracle could not see).
+    // And on the first tick after a restart the vouch is only "carries a Date"
+    // — `last_http_date` is not persisted, so the oracle has nothing to compare
+    // and a replayed older answer WITH its header can still rewind the restored
+    // reference in that one window ([#80]; pre-existing, not opened by this
+    // repair).
     let feed_vouches = !feed_refused && matches!(&tick, Ok(reading) if reading.http_date.is_some());
     let energy_verdict = published.for_metric(Measured::Energy);
     let reference_adoptable = match energy_verdict.quality() {
@@ -753,24 +766,41 @@ pub async fn step_once<S: Source + Send>(
     // one unreadable field was kept out of `last` entirely, so the next silent
     // cloud republished an OLDER reading than the most recent one whose other
     // metric was sound.
-    // AND THE BUFFER NEVER GOES BACK IN TIME — from the same review finding.
-    // `last` is by definition the NEWEST accepted measurement, so a candidate
-    // whose `value_date` precedes the held one contradicts the definition
-    // whatever produced it: the feed gate catches the headered replay, and this
-    // clause catches the header-stripped one the oracle cannot see.
+    // AND THE BUFFER NEVER GOES BACK IN TIME — UNLESS THE CANDIDATE IS PROVEN.
+    // From the same review finding, then corrected by the review of the repair
+    // itself. `last` is by definition the NEWEST accepted measurement, so a
+    // candidate whose `value_date` precedes the held one contradicts the
+    // definition — the feed gate catches the headered replay, and this clause
+    // catches the header-stripped one the oracle cannot see.
+    //
+    // The first version applied the clause to EVERY candidate, and the repair's
+    // own review ran the case that breaks it: a meter whose clock was FAST left
+    // a future `value_date` in the buffer, and once the clock was corrected,
+    // every genuine reading — published `Good` on the wire — was refused
+    // adoption until real time caught up with the mis-dated one. The clause was
+    // trusting the exact meter-supplied timestamp the `timestamps-disagree`
+    // oracle had just distrusted. A composed-`Good` reading is proven current
+    // by the cloud's own clock (age within the allowance, feed advancing), so
+    // it always becomes `last`; the no-going-back rule binds only candidates
+    // whose freshness could NOT be proven, which is exactly the population a
+    // header-stripped replay hides in.
     let last_adoptable = !feed_refused
         && match &tick {
             Ok(reading) => {
-                Measured::ALL.iter().all(|metric| {
+                let no_refused_value = Measured::ALL.iter().all(|metric| {
                     let refused = published.for_metric(*metric).quality() == Quality::Bad;
                     let carries_a_number = match metric {
                         Measured::Power => reading.value.power.is_some(),
                         Measured::Energy => reading.value.energy.is_some(),
                     };
                     !(refused && carries_a_number)
-                }) && last
-                    .as_ref()
-                    .is_none_or(|held| reading.value.value_date >= held.value_date)
+                });
+                let proven_current = published.meter().quality() == Quality::Good;
+                no_refused_value
+                    && (proven_current
+                        || last
+                            .as_ref()
+                            .is_none_or(|held| reading.value.value_date >= held.value_date))
             }
             Err(_) => false,
         };
@@ -2086,6 +2116,114 @@ mod tests {
             "`last` holds the NEWEST accepted measurement by definition; \
              adopting one that is older contradicts it whatever stripped the \
              header"
+        );
+    }
+
+    /// **The review of the repair found the repair wrong, and this is its probe
+    /// made permanent.** The first no-going-back clause bound EVERY candidate,
+    /// so a meter whose clock had been FAST — one adopted reading with a future
+    /// `value_date` — starved the buffer of every genuine reading after the
+    /// clock was corrected, until real time caught up with the mis-dated stamp.
+    /// A reading published `Good` on the wire was barred from `last` while a
+    /// `timestamps-disagree` one was served in its place. The clause was
+    /// trusting the exact meter-supplied timestamp the oracle had just
+    /// distrusted; a composed-`Good` candidate is proven current by the cloud's
+    /// own clock and now always adopts.
+    ///
+    /// FALSIFIED 2026-08-15, mutation RUN before this note: removing the
+    /// `proven_current` bypass goes RED here — *"left: Some(Kwh(900000.0))"*,
+    /// the mis-dated reading republished in place of the corrected Good one —
+    /// which is byte-for-byte the review probe's failure, now standing guard.
+    #[tokio::test]
+    async fn a_corrected_clock_does_not_starve_the_buffer() {
+        // The meter's clock is an hour FAST: negative age, timestamps-disagree,
+        // adopted into `last` (Stale holds its values) with a future value_date.
+        let mut fast = reading_with_energy(Quality::Good, 950, 900_000.0);
+        fast.value.value_date = UtcMillis(BASE + 3_600_000);
+        fast.http_date = Some(UtcMillis(BASE + 950));
+        // The operator fixes the clock: a genuine, Fresh, Good reading whose
+        // value_date is honest again — and therefore EARLIER than the held one.
+        let mut corrected = reading_with_energy(Quality::Good, 950, 900_010.0);
+        corrected.value.value_date = UtcMillis(BASE + 30_000);
+        corrected.http_date = Some(UtcMillis(BASE + 30_950));
+
+        let (_, sent) = drive_sequence(
+            FakeSource::new()
+                .then(Ok(fast))
+                .then(Ok(corrected))
+                .then(Err(SourceError::Timeout)),
+        )
+        .await;
+        assert_eq!(sent.len(), 3, "every tick publishes a verdict (ADR 0027)");
+        assert_eq!(
+            sent[0].verdict().cause(),
+            Some(Cause::TimestampsDisagree),
+            "the premise: the fast clock is caught, and its reading is held"
+        );
+        assert_eq!(
+            sent[1].published(),
+            Quality::Good,
+            "the premise: the corrected reading is proven current on the wire"
+        );
+        assert_eq!(
+            sent[2].measurement.energy,
+            Some(Kwh(900_010.0)),
+            "a reading the bridge published as Good must be what a silent cloud \
+             republishes; barring it while serving the mis-dated one inverts \
+             the buffer's own rule that `last` holds publishable measurements"
+        );
+        assert_eq!(
+            sent[2].measurement.value_date,
+            UtcMillis(BASE + 30_000),
+            "and the republish carries the corrected stamp, not the future one"
+        );
+    }
+
+    /// **The feed gate's own witness on the buffer, restored.** The
+    /// no-going-back clause silently covered the equal-index replay in
+    /// `a_replayed_response_rewinds_neither_memory` (its value_date is older),
+    /// so deleting the feed gate from `last_adoptable` left the whole suite
+    /// green — a witness lost to a repair, found by reviewing the repair. The
+    /// case where the gate alone is load-bearing: a response whose `Date` went
+    /// BACKWARDS (a replayed window, an out-of-order delivery) while its
+    /// `value_date` is NEWER than the held one — the no-going-back clause
+    /// passes it, its values are held (Stale, not Bad), and only the feed
+    /// refusal keeps it out of `last`.
+    ///
+    /// FALSIFIED 2026-08-15, mutation RUN before this note: deleting
+    /// `!feed_refused` from `last_adoptable` goes RED here — the out-of-order
+    /// response's energy republished by the silent cloud — while the rest of
+    /// the suite stays green, which is exactly the witness this test restores.
+    #[tokio::test]
+    async fn an_out_of_order_response_is_kept_out_of_the_buffer_by_the_feed_gate_alone() {
+        let genuine = reading_with_energy(Quality::Good, 950, 900_000.0);
+        // Date stepped BACK relative to the PREVIOUS response (feed refused)
+        // while staying consistent with its own value_date (age 700 ms, so the
+        // freshness oracle has no objection); value_date stepped FORWARD (the
+        // no-going-back clause has none either); values intact (nothing Bad).
+        let mut out_of_order = reading_with_energy(Quality::Good, 950, 900_020.0);
+        out_of_order.value.value_date = UtcMillis(BASE + 200);
+        out_of_order.http_date = Some(UtcMillis(BASE + 900));
+
+        let (_, sent) = drive_sequence(
+            FakeSource::new()
+                .then(Ok(genuine))
+                .then(Ok(out_of_order))
+                .then(Err(SourceError::Timeout)),
+        )
+        .await;
+        assert_eq!(sent.len(), 3, "every tick publishes a verdict (ADR 0027)");
+        assert_eq!(
+            sent[1].verdict().cause(),
+            Some(Cause::FeedNotAdvancing),
+            "the premise: only the feed oracle objects to this response"
+        );
+        assert_eq!(
+            sent[2].measurement.energy,
+            Some(Kwh(900_000.0)),
+            "a response the feed refused adopts nothing (story 2.7 AC5), and \
+             with the no-going-back clause blind to it — its value_date is \
+             newer — the feed gate is the only thing keeping it out of `last`"
         );
     }
 

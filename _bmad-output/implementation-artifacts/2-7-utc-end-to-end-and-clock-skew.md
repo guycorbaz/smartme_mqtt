@@ -374,6 +374,39 @@ silently.
    retry-within-tick. The residual trigger (a server clock stepping back) is the fault the
    oracle exists to report. Kept here so the next reader does not re-derive it.
 
+### The review of the repair (2026-08-15, same day) — the repair was wrong twice, and the pattern held
+
+Per story 2.3's rule, the repair commit got its own pass by an agent that did not produce it.
+Seven findings; the two that were defects in the REPAIR are the ones that justify the rule:
+
+1. **CONFIRMED (by a probe, run red) — a corrected meter clock starved the buffer.** The first
+   no-going-back clause bound every candidate, so one adopted fast-clock reading (future
+   `value_date`) barred every genuine `Good` reading from `last` until real time caught up — a
+   Good-published reading refused while a `timestamps-disagree` one was served. The clause
+   trusted the exact meter-supplied stamp the oracle had just distrusted. Fixed: a
+   composed-`Good` candidate always adopts (proven current by the cloud's own clock); the rule
+   binds only candidates whose freshness could not be proven — the population a stripped replay
+   hides in. The probe is now the permanent test `a_corrected_clock_does_not_starve_the_buffer`.
+2. **CONFIRMED (mutation run green) — the repair silently killed a sister witness.** The
+   no-going-back clause also covers the equal-index replay, so deleting the feed gate from
+   `last_adoptable` left all 233 tests green while `a_replayed_response_rewinds_neither_memory`'s
+   doc still claimed each gate had its own witness. Restored with
+   `an_out_of_order_response_is_kept_out_of_the_buffer_by_the_feed_gate_alone` — a `Date`
+   stepping back over a genuinely newer `value_date`, the one shape only the gate refuses.
+3. **CONFIRMED, pre-existing — [#80]**: `last_http_date` is not persisted, so the first tick
+   after a restart vouches on "carries a Date" alone; a replayed older answer in that window can
+   still rewind the persisted reference. Not opened by the repair; issue filed, limits
+   documented beside `feed_vouches`.
+4. **PLAUSIBLE, documented**: a meter replacement behind a permanently Date-stripping path stays
+   `Bad` across restarts until one headered response arrives (the feed is already loudly
+   `no-freshness-proof` throughout); and `last_value_date` remains rewindable by a stripped
+   replay — consequence confined to [#79]'s cause choice, recorded there.
+
+Both new clauses falsified again after the fix, mutations run first: removing the
+`proven_current` bypass reproduces the probe's exact failure; removing the feed gate reddens
+only the restored witness. Two review rounds, each finding less than the one before — the
+convergence evidence this repository accepts.
+
 ### Falsification — AC1, both mutations RUN before this note
 
 | mutation | result |
