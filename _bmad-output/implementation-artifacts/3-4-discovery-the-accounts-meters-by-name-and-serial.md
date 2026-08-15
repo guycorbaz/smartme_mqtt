@@ -1,7 +1,9 @@
 # Story 3.4: Discovery — the account's meters, by name and serial
 
-Status: review — implemented 2026-08-15, the day it was written; all ACs met, seven mutations
-run before their notes; awaiting the independent pass
+Status: done (2026-08-15) — written, implemented, reviewed (three angles, six repairs) and the
+repair reviewed in its own right (four more, one caught by GitHub's AC6 word-scan after the
+repair skipped the full gate — the process lapse is named in `b538835`). Two rounds, the second
+smaller than the first; all three workflows green on the final push
 
 ## Story
 

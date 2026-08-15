@@ -1177,8 +1177,16 @@ development_status:
   # the pick can fix a half-mistyped row), and the first-run fault wall. Every
   # repair falsified, mutations run first. The AC6 token scan now covers every
   # discovery outcome, so the next wording violation dies at the desk.
-  3-4-discovery-the-accounts-meters-by-name-and-serial: review  # awaiting the final gate + close
-  3-5-a-known-meter-that-disappears-from-discovery: backlog
+  3-4-discovery-the-accounts-meters-by-name-and-serial: done  # closed 2026-08-15; [#64] closed with it
+  # STORY FILE WRITTEN 2026-08-15, four decisions at drafting: NO listing-comparison
+  # loop (every parameter would be an assumption about API behaviour nobody observed —
+  # detection rides on the per-device 404 the account itself pronounces); no pretend
+  # mistyped-vs-removed discrimination (one 404, one behaviour, honestly worded);
+  # absence ends in ONE DDEATH then silence (ADR 0027 §3's own licence — ADR 0034 to
+  # write), with the asymmetry that matters: DISABLE quietens the operator's surfaces
+  # ([#65]'s three never-decided consequences, all taken), DISAPPEARANCE keeps the
+  # alarm — only the wire's device retires. [#65] closes with this story.
+  3-5-a-known-meter-that-disappears-from-discovery: ready-for-dev
   3-6-orphan-retained-purge-on-a-mapping-change: backlog
   # NOT owed yet: Epic 3 is at 3/6 stories (3.4, 3.5, 3.6 remain). `required`
   # means it must run BEFORE the epic closes, not that it is late.
