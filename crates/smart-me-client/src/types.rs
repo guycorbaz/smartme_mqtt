@@ -36,6 +36,39 @@ pub struct Device {
     pub value_date: String,
 }
 
+/// One device as it appears in the ACCOUNT LISTING (`GET /Devices`) — story 3.4.
+///
+/// # Deliberately not [`Device`], and the reason is [#74]
+///
+/// `Device` requires all eight fields it consumes, and the API's own description
+/// declares six of them nullable — so deserializing the listing through it would
+/// silently eject any real meter whose momentary reading carries a null, which
+/// is a meter the operator cannot pick for a reason nobody is told. Guy's
+/// fourth meter (`exterieur`, unplugged for months) is exactly that shape, and
+/// it is a meter the operator must be able to SEE to decide about.
+///
+/// Discovery needs three facts and takes only those. Per the description:
+/// `Id` is a non-nullable uuid, `Serial` a non-nullable int64, and `Name` is
+/// NULLABLE — so it is an `Option` here, and a device without a name is shown
+/// by its serial rather than given an invented one.
+///
+/// [#74]: https://github.com/guycorbaz/smartme_mqtt/issues/74
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct DeviceListing {
+    /// smart-me device UUID — what `meters[].device_id` must hold.
+    pub id: String,
+    /// Human-assigned device name; the API declares it nullable and an absent
+    /// JSON field is treated the same way (a listing is not a measurement, so
+    /// the fail-closed rule of [`Device`] does not apply to a field whose only
+    /// use is display).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Physical device serial — what `meters[].serial` must hold, and what
+    /// ADR 0029 verifies against every response.
+    pub serial: i64,
+}
+
 /// Parses a smart-me `ValueDate` (ISO-8601, mandatory `Z`, optional fraction) to
 /// UTC epoch-milliseconds. `None` on anything malformed — the caller decides the
 /// conservative consequence; no substituted timestamp is ever produced here.

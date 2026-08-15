@@ -19,7 +19,7 @@ use std::fmt;
 use serde::Deserialize;
 
 use crate::http_date::parse_imf_fixdate;
-use crate::types::Device;
+use crate::types::{Device, DeviceListing};
 
 /// Errors of this crate only — no leaked transport types (the bridge classifies
 /// transient vs fatal via [`SmartMeError::is_fatal`], and reqwest must not bleed
@@ -498,6 +498,53 @@ impl SmartMeClient {
             http_date_ms,
         })
     }
+
+    /// `GET {base}/Devices` — the account listing (story 3.4, FR2).
+    ///
+    /// Same auth path as [`Self::get_device`]; no `Date` capture, because a
+    /// listing feeds a configuration screen and no freshness oracle. The
+    /// description declares only `200` for this path, as it does everywhere —
+    /// failure behaviour is learned from the wire, never from it.
+    ///
+    /// # A `404` here is not [`SmartMeError::UnknownDevice`], decided
+    ///
+    /// [`classify_device_status`] maps `404` to a fatal unknown-DEVICE refusal
+    /// naming the id an operator should fix — a diagnosis with no subject on
+    /// the collection, which names no id and has never been observed to `404`.
+    /// If it ever does, the API surface itself moved, and the honest report is
+    /// the visible, transient [`SmartMeError::HttpStatus`] — the arm for a
+    /// status that names no repair — not a latching instruction to fix a
+    /// configuration row that does not exist.
+    pub async fn get_devices(
+        &self,
+        token: Option<&TokenState>,
+    ) -> Result<DeviceList, SmartMeError> {
+        let req = self.http.get(format!("{}/Devices", self.base));
+        let req = match (token, &self.credentials) {
+            (Some(t), _) => req.bearer_auth(&t.access_token),
+            (None, Credentials::Basic { user, password }) => req.basic_auth(user, Some(password)),
+            (None, Credentials::ClientCredentials { .. }) => {
+                return Err(SmartMeError::Misconfigured {
+                    reason: "client-credentials mode needs a token (call fetch_token)".to_string(),
+                });
+            }
+        };
+        let resp = req.send().await.map_err(SmartMeError::from_reqwest)?;
+        let status = resp.status().as_u16();
+        if status == 404 {
+            return Err(SmartMeError::HttpStatus { status });
+        }
+        let retry_after = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        if let Some(e) = classify_device_status(status, retry_after.as_deref(), "the collection") {
+            return Err(e);
+        }
+        let body = resp.bytes().await.map_err(SmartMeError::from_reqwest)?;
+        decode_devices(&body)
+    }
 }
 
 /// Parses a response body into a [`Device`], keeping serde's message when it fails.
@@ -510,6 +557,48 @@ fn decode_device(body: &[u8]) -> Result<Device, SmartMeError> {
     serde_json::from_slice(body).map_err(|e| SmartMeError::Decode {
         reason: e.to_string(),
     })
+}
+
+/// The account listing as decoded: what parsed, and what was DROPPED with its
+/// reason — never silently (story 3.4 AC1).
+///
+/// A listing takes the opposite trade from a measurement. Measurements are
+/// fail-closed — a payload the bridge cannot read yields no reading at all —
+/// because a substituted number is a lie on the wire. A LISTING that failed as
+/// a whole over one malformed element would be the silent failure instead: an
+/// empty screen, and every pickable meter gone for a reason nobody is told. So
+/// one bad element costs that element, counted and named, and the caller is
+/// obliged by this type to know about it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceList {
+    /// The devices that parsed, in the order the API sent them.
+    pub devices: Vec<DeviceListing>,
+    /// serde's reason for each element that did not, kept verbatim — the
+    /// field-naming discipline of story 2.6 AC5 applies to a device an
+    /// operator cannot see just as it does to a reading they cannot use.
+    pub dropped: Vec<String>,
+}
+
+/// Parses a `GET /Devices` body: tolerant PER ELEMENT, fail-closed as a whole.
+///
+/// Pure, beside [`decode_device`], for the same reason (story 3.4 AC1, and
+/// Epic 2's action C1): the property lives in the parse, and it must be
+/// assertable without an HTTP harness. A body that is not a JSON array at all
+/// is a response we cannot account for and fails whole, serde's reason kept.
+fn decode_devices(body: &[u8]) -> Result<DeviceList, SmartMeError> {
+    let elements: Vec<serde_json::Value> =
+        serde_json::from_slice(body).map_err(|e| SmartMeError::Decode {
+            reason: e.to_string(),
+        })?;
+    let mut devices = Vec::new();
+    let mut dropped = Vec::new();
+    for element in elements {
+        match serde_json::from_value::<DeviceListing>(element) {
+            Ok(device) => devices.push(device),
+            Err(reason) => dropped.push(reason.to_string()),
+        }
+    }
+    Ok(DeviceList { devices, dropped })
 }
 
 /// What a `GET /Devices/{id}` response status means, or `None` when it succeeded.
@@ -563,6 +652,68 @@ mod tests {
             client_id: "id".to_string(),
             client_secret: "sekret-material".to_string(),
         }
+    }
+
+    /// **Story 3.4 AC1 — one bad element costs that element, counted and
+    /// named, and the rest of the account stays pickable.**
+    ///
+    /// The trade is the OPPOSITE of a measurement's fail-closed rule, on
+    /// purpose: a listing that failed whole over one malformed element would be
+    /// an empty screen with every meter gone for a reason nobody is told —
+    /// which is the silent failure, in a story whose whole point is that
+    /// absence gets said.
+    #[test]
+    fn a_malformed_element_costs_itself_and_not_the_list() {
+        let body = br#"[
+            {"Id":"aaa-1","Name":"appart-est","Serial":9202685,"ActivePower":0.7},
+            {"Id":"bbb-2","Name":"broken"},
+            {"Id":"ccc-3","Name":null,"Serial":6387488},
+            {"Id":"ddd-4","Serial":6387987}
+        ]"#;
+        let list = decode_devices(body).expect("three of four elements are well-formed");
+        assert_eq!(
+            list.devices.len(),
+            3,
+            "the well-formed devices survive their neighbour"
+        );
+        assert_eq!(list.devices[0].serial, 9202685);
+        assert_eq!(
+            list.devices[0].name.as_deref(),
+            Some("appart-est"),
+            "unknown fields are ignored, as everywhere (the API may widen)"
+        );
+        assert_eq!(
+            list.devices[1].name, None,
+            "a NULL name stays absent — nothing invents a name for a meter"
+        );
+        assert_eq!(
+            list.devices[2].name, None,
+            "and an OMITTED name reads the same as a null one: a listing is not \
+             a measurement, so absence of a display field is not a refusal"
+        );
+        assert_eq!(list.dropped.len(), 1, "the drop is COUNTED");
+        assert!(
+            list.dropped[0].contains("Serial"),
+            "and NAMED, with serde's own reason — the story 2.6 AC5 discipline; \
+             a silently vanished meter is a drop-down lying by omission: {}",
+            list.dropped[0]
+        );
+    }
+
+    /// The two boundary shapes of AC1: an empty account is a LISTING (a state,
+    /// not a fault), and a body that is not an array at all is a response we
+    /// cannot account for and fails whole, serde's reason kept.
+    #[test]
+    fn an_empty_account_lists_and_a_non_array_refuses_whole() {
+        let empty = decode_devices(b"[]").expect("an empty account is not an error");
+        assert!(empty.devices.is_empty() && empty.dropped.is_empty());
+
+        let refused = decode_devices(br#"{"Error":"maintenance"}"#)
+            .expect_err("an object where an array was owed is not a listing");
+        assert!(
+            matches!(&refused, SmartMeError::Decode { reason } if reason.contains("sequence")),
+            "the refusal keeps serde's reason rather than summarising it: {refused:?}"
+        );
     }
 
     #[test]

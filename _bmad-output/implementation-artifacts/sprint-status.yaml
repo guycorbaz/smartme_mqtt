@@ -1149,7 +1149,24 @@ development_status:
   # lesson story 3.1's cadence test paid for.
   # CLOSED 2026-08-10 — see the closure block at the top of this file.
   3-3-per-meter-staleness-isolation-and-its-latency-bound: done
-  3-4-discovery-the-accounts-meters-by-name-and-serial: backlog
+  # STORY FILE WRITTEN 2026-08-15, five decisions at drafting: the listing type is NOT
+  # `Device` (the [#74] nulls would eject real meters from the list); discovery is ON
+  # DEMAND (the loop is 3.5's subject); reading smart-me is not publishing (the 5.3
+  # boundary, drawn); a partial list says its omission; and [#64] settles here by
+  # exhaustive destructure BEFORE any field is added. AC6 pins honesty-first: the
+  # pick-list softens no refusal.
+  # IMPLEMENTED 2026-08-15, the same day it was written, all eight ACs; seven
+  # mutations run before their notes (one of them a BUILD-STOP: a field planted on
+  # StoredMeter dies at the projection's exhaustive destructure with E0027, which is
+  # [#64]'s "answer before it compiles" mechanism, delivered and closed).
+  # The pick-list fills the PAIR (device id + serial together, ADR 0029's bound
+  # identity as one gesture); the listing type is NOT `Device`, so [#74]'s nulls
+  # cannot eject a real meter from the list; discovery is on demand, stateless,
+  # confirmation-independent (reading smart-me is not publishing — the 5.3 boundary
+  # drawn); and the refusal stays anchored against the "it came from the list"
+  # excuse. AC5's guard means the NEXT field anyone adds to the config must be
+  # classified mapping/not-mapping before the tree compiles.
+  3-4-discovery-the-accounts-meters-by-name-and-serial: review
   3-5-a-known-meter-that-disappears-from-discovery: backlog
   3-6-orphan-retained-purge-on-a-mapping-change: backlog
   # NOT owed yet: Epic 3 is at 3/6 stories (3.4, 3.5, 3.6 remain). `required`

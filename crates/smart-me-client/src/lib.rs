@@ -14,6 +14,6 @@ pub mod client;
 pub mod http_date;
 pub mod types;
 
-pub use client::{Credentials, DeviceCapture, SmartMeClient, SmartMeError, TokenState};
+pub use client::{Credentials, DeviceCapture, DeviceList, SmartMeClient, SmartMeError, TokenState};
 pub use http_date::parse_imf_fixdate;
-pub use types::{Device, parse_value_date};
+pub use types::{Device, DeviceListing, parse_value_date};

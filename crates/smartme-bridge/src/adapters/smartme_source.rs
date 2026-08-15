@@ -793,6 +793,13 @@ mod tests {
     /// so the bridge polled a device that does not exist for ever and told the
     /// operator the network was unwell.
     ///
+    /// **Story 3.4 AC6 anchors here**: the configuration screen now offers a
+    /// pick-list of the account's meters, and *"the id came from the list"* must
+    /// never become an excuse to soften this — the list was one instant, the
+    /// file is editable by hand, and a picked device can be gone by the next
+    /// fetch. Honesty first (decided 2026-08-13): prevention makes this fault
+    /// rare; this test is what keeps it loud.
+    ///
     /// FALSIFIED — the same two mutations as above, RUN: dropping `UnknownDevice`
     /// from `is_fatal` gives RED *"a device that is not there does not come back on
     /// its own: Transient { … }"*, and classifying it `Credential` gives RED

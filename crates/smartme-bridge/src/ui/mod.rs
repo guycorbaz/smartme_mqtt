@@ -35,7 +35,7 @@ use axum::Router;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse};
-use axum::routing::get;
+use axum::routing::{get, post};
 
 use crate::app::supervisor::Control;
 
@@ -450,6 +450,10 @@ pub fn router(state: UiState) -> Router {
             "/config",
             get(screens::config_form).post(screens::save_config),
         )
+        // Discovery is its OWN route and its own submission (story 3.4): the
+        // main form reaches it through `formaction`, so the operator's unsaved
+        // edits ride along and nothing is saved by asking the account.
+        .route("/config/discover", post(screens::discover))
         // Confirming is its OWN route and its OWN submission (AC3). A
         // confirmation folded into the save would be a click the operator makes
         // for a different reason, which is how a guard becomes a formality.

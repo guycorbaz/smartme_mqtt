@@ -439,16 +439,122 @@ impl From<&BridgeConfig> for StoredConfig {
 /// disagreed for a month because nothing could compare them. See
 /// `ui::screens::tests::the_withdrawal_rule_and_the_fingerprint_answer_the_same_question`.
 pub(crate) fn same_mapping(a: &StoredConfig, b: &StoredConfig) -> bool {
-    if a.group_id != b.group_id || a.node_id != b.node_id {
-        return false;
+    mapping_projection(a) == mapping_projection(b)
+}
+
+/// THE MAPPING, projected — the one answer to *"what did a human vouch for?"*
+/// (story 3.4 AC5, [#64]).
+///
+/// Two readers ask that question: [`same_mapping`] (must this save withdraw the
+/// confirmation?) and `ui::screens::mapping_fingerprint` (does this click
+/// confirm what was shown?). They diverged once for a month over the node
+/// identity, and [#64] recorded the mechanism by which they would diverge
+/// again: one read a meter as a whole value (a new field counts automatically),
+/// the other formatted four fields by name (a new field is invisible). Story
+/// 3.4 — the next story to touch `StoredMeter` — was its deadline.
+///
+/// The remedy is `reconfigure::classify`'s: an **exhaustive destructure**, so a
+/// field added to either struct stops the build here until somebody classifies
+/// it. A `#[derive]` folding in every field was rejected in the issue for good
+/// reason: it would withdraw confirmations on changes that have nothing to do
+/// with the mapping, the same defect wearing the fix.
+///
+/// # The classification, field by field
+///
+/// **MAPPING** (a change re-attributes what lands where, or under which name —
+/// the confirmation must be withdrawn and re-given):
+/// - `group_id`, `node_id` — both appear in every topic the bridge publishes;
+///   changing one changes where every device lands (the 2026-08-06 repair).
+/// - `meters[].meter_id` — the name in the Sparkplug metric path.
+/// - `meters[].device_id` — which cloud device feeds the row.
+/// - `meters[].serial` — the device level of the topic, and the identity
+///   ADR 0029 binds every response to.
+/// - `meters[].enabled` — whether the row reaches the wire at all; and editing
+///   a DISABLED meter still deserves a fresh look, so disabled rows project
+///   like any other (the position [`same_mapping`]'s doc has always held).
+///
+/// **NOT MAPPING** (the wire's meter→topic attribution is untouched):
+/// - `schema_version` — how the file is written, not what is published.
+/// - `broker_host`, `broker_port` — where the wire goes, not what lands on it;
+///   moving brokers is `reconfigure::classify`'s business (a new session), and
+///   a human vouches for the mapping, not for the transport.
+/// - `publish_period_secs` — cadence, not identity.
+/// - `api_base` — where readings are fetched from; identity is bound per
+///   response by ADR 0029's serial check, not by origin.
+/// - `log_dir`, `log_keep`, `ui_port` — operational comfort.
+/// - `mapping_confirmed` — definitionally: the vouch cannot be part of what is
+///   vouched for.
+/// - The ORDER of meter rows — reordering changes nothing about what reaches
+///   the wire; rows are sorted here, which is also what makes two projections
+///   comparable as multisets.
+pub(crate) fn mapping_projection(stored: &StoredConfig) -> MappingProjection {
+    let StoredConfig {
+        schema_version: _,
+        group_id,
+        node_id,
+        broker_host: _,
+        broker_port: _,
+        publish_period_secs: _,
+        api_base: _,
+        log_dir: _,
+        log_keep: _,
+        mapping_confirmed: _,
+        ui_port: _,
+        meters,
+    } = stored;
+    let mut rows: Vec<(String, String, String, bool)> = meters
+        .iter()
+        .map(|m| {
+            let StoredMeter {
+                meter_id,
+                device_id,
+                serial,
+                enabled,
+            } = m;
+            (
+                meter_id.clone(),
+                device_id.clone(),
+                serial.clone(),
+                *enabled,
+            )
+        })
+        .collect();
+    rows.sort();
+    MappingProjection {
+        node: (group_id.clone(), node_id.clone()),
+        rows,
     }
-    let (a, b) = (&a.meters, &b.meters);
-    if a.len() != b.len() {
-        return false;
+}
+
+/// What [`mapping_projection`] yields: comparable exactly (that is
+/// [`same_mapping`]), and serialisable canonically (that is the fingerprint).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct MappingProjection {
+    node: (String, String),
+    rows: Vec<(String, String, String, bool)>,
+}
+
+impl MappingProjection {
+    /// The canonical byte form the fingerprint hashes. Unit separators between
+    /// a row's fields, record separators between rows — the shape the
+    /// fingerprint has always used. Safe to evolve: the fingerprint is never
+    /// stored, so its byte form only ever lives between one rendered page and
+    /// its submission.
+    pub(crate) fn canonical(&self) -> String {
+        let rows: Vec<String> = self
+            .rows
+            .iter()
+            .map(|(meter_id, device_id, serial, enabled)| {
+                format!("{meter_id}\u{1f}{device_id}\u{1f}{serial}\u{1f}{enabled}")
+            })
+            .collect();
+        format!(
+            "{}\u{1e}{}\u{1e}{}",
+            self.node.0,
+            self.node.1,
+            rows.join("\u{1e}")
+        )
     }
-    // Multiset equality by counting, which needs no `Ord` on `StoredMeter`.
-    a.iter()
-        .all(|m| a.iter().filter(|x| *x == m).count() == b.iter().filter(|x| *x == m).count())
 }
 
 /// What a caller stands to destroy by overwriting the stored configuration.
@@ -637,6 +743,97 @@ mod tests {
         Credential {
             client_id: Some("id".into()),
             client_secret: Some(SECRET.into()),
+        }
+    }
+
+    /// **Story 3.4 AC5, [#64] — membership in the mapping is decided in one
+    /// place, and this test walks the decision field by field.**
+    ///
+    /// Both halves matter equally. A NOT-MAPPING field moving the projection
+    /// would withdraw confirmations on changes that have nothing to do with the
+    /// mapping — the "different defect wearing the same fix" the issue warned
+    /// a mechanical derive would produce. A MAPPING field failing to move it is
+    /// [#64]'s original hazard: a save that keeps a confirmation no human gave
+    /// to the new mapping.
+    #[test]
+    fn the_projection_decides_membership_for_every_field() {
+        let base = {
+            let mut c = sound();
+            // Two rows, so reordering has something to reorder.
+            c.meters.push(StoredMeter {
+                meter_id: "meter-b".into(),
+                device_id: "dev-b".into(),
+                serial: "6387987".into(),
+                enabled: false,
+            });
+            c
+        };
+
+        type Edit = fn(&mut StoredConfig);
+        let not_mapping: [(&str, Edit); 9] = [
+            ("schema_version", |c| c.schema_version += 1),
+            ("broker_host", |c| c.broker_host = "elsewhere".into()),
+            ("broker_port", |c| c.broker_port = 8883),
+            ("publish_period_secs", |c| c.publish_period_secs = 60),
+            ("api_base", |c| {
+                c.api_base = Some("https://mirror.example".into());
+            }),
+            ("log_dir", |c| c.log_dir = Some("/logs".into())),
+            ("log_keep", |c| c.log_keep = Some(3)),
+            ("mapping_confirmed", |c| c.mapping_confirmed = false),
+            ("ui_port", |c| c.ui_port = Some(9090)),
+        ];
+        for (field, mutate) in not_mapping {
+            let mut edited = base.clone();
+            mutate(&mut edited);
+            assert!(
+                same_mapping(&base, &edited),
+                "{field} is not part of the mapping: changing it must not \
+                 withdraw a confirmation given for an unchanged meter→topic \
+                 attribution"
+            );
+        }
+        // Row order is not membership either — both readers sort.
+        let mut reordered = base.clone();
+        reordered.meters.reverse();
+        assert!(
+            same_mapping(&base, &reordered),
+            "reordering rows changes nothing about what reaches the wire"
+        );
+
+        let mapping: [(&str, Edit); 8] = [
+            ("group_id", |c| c.group_id = "Other".into()),
+            ("node_id", |c| c.node_id = "other-node".into()),
+            ("meters[].meter_id", |c| {
+                c.meters[0].meter_id = "renamed".into();
+            }),
+            ("meters[].device_id", |c| {
+                c.meters[0].device_id = "dev-z".into();
+            }),
+            ("meters[].serial", |c| c.meters[0].serial = "1111111".into()),
+            // The DISABLED row: editing it changes nothing on the wire today
+            // and still deserves a fresh look — the position `same_mapping`
+            // has always held.
+            ("a disabled meter's field", |c| {
+                c.meters[1].serial = "2222222".into();
+            }),
+            ("meters[].enabled", |c| c.meters[1].enabled = true),
+            ("a row added", |c| c.meters.push(c.meters[0].clone())),
+        ];
+        for (field, mutate) in mapping {
+            let mut edited = base.clone();
+            mutate(&mut edited);
+            assert!(
+                !same_mapping(&base, &edited),
+                "{field} IS the mapping: a human vouched for something this \
+                 change replaced, and the confirmation must be withdrawn"
+            );
+            assert_ne!(
+                mapping_projection(&base).canonical(),
+                mapping_projection(&edited).canonical(),
+                "{field}: and the fingerprint's bytes must move with it — one \
+                 projection, two readers, one answer"
+            );
         }
     }
 

@@ -28,6 +28,8 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 
+use smart_me_client::{Credentials, DeviceListing, SmartMeClient, SmartMeError};
+
 use crate::app::config::{self, ConfigErrors, Fault, RawConfig, RawMeter, Source};
 use crate::app::reconfigure::Cost;
 use crate::app::store::{self, Credential, StoredConfig, StoredMeter};
@@ -298,10 +300,129 @@ fn text_input(name: &str, label: &str, value: &str, errors: Option<&ConfigErrors
     )
 }
 
+/// What one round of discovery produced, for the screen (story 3.4).
+///
+/// This is a value, not a process: the handler fetches (or picks) and the pure
+/// [`discovery_section`] renders — the property lives in the mapping from
+/// outcome to what the operator reads, which is where the tests sit. There is
+/// deliberately no state between requests: the loop that watches the account
+/// over time is story 3.5's subject, and a cached list is exactly the "one
+/// instant" hazard the epic warns about.
+#[derive(Debug, PartialEq)]
+enum Discovery {
+    /// The account answered. `dropped` carries serde's reason for every element
+    /// that did not parse — rendered, never swallowed (AC1's caveat: a meter
+    /// missing from a pick-list with nobody told is a drop-down lying by
+    /// omission).
+    Listed {
+        devices: Vec<DeviceListing>,
+        dropped: Vec<String>,
+    },
+    /// The account answered and has no meters. A state, not a fault.
+    Empty,
+    /// The account could not be asked, in the error taxonomy's own words —
+    /// [`SmartMeError`]'s `Display` already names each repair (story 2.6 AC5),
+    /// and this module has no opinion of its own about what went wrong.
+    Failed { what: String },
+    /// No credential in the environment. Named like every environment fault:
+    /// by its variables, never as a box the operator could type into
+    /// (ADR 0019/0023 — there is no credential field, so there is nothing to
+    /// render but the instruction).
+    NoCredential,
+    /// A device was picked from the previous round's listing: its pair is now
+    /// in the row below, waiting for a name and a deliberate Save.
+    Picked { serial: String },
+}
+
+/// The discovery section of the form, rendered from the outcome alone.
+fn discovery_section(discovery: Option<&Discovery>) -> String {
+    let mut out = String::from(
+        "<fieldset><legend>The account&#39;s meters (smart-me)</legend>\
+         <p>Load the meters your smart-me account has, then pick one: picking \
+         fills the device id AND the serial together, the pair the bridge \
+         verifies on every fetch.</p>\
+         <button type=submit formaction=/config/discover formmethod=post>\
+         Load the account&#39;s meters</button>",
+    );
+    match discovery {
+        None => {}
+        Some(Discovery::Listed { devices, dropped }) => {
+            let rows: String = devices
+                .iter()
+                .map(|d| {
+                    format!(
+                        "<tr><td>{name}</td><td>{serial}</td><td><code>{id}</code></td>\
+                         <td><button type=submit formaction=/config/discover \
+                         formmethod=post name=pick value=\"{serial}|{id}\">\
+                         Use this meter</button></td></tr>",
+                        // A null name shows the serial; nothing invents a name.
+                        name = match &d.name {
+                            Some(name) => escape(name),
+                            None => format!("(unnamed — serial {})", d.serial),
+                        },
+                        serial = d.serial,
+                        id = escape(&d.id),
+                    )
+                })
+                .collect();
+            out.push_str(&format!(
+                "<table><tr><th>Name</th><th>Serial</th><th>Device id</th><th></th></tr>\
+                 {rows}</table>\
+                 <p>This list is the account at one instant. Picking from it does \
+                 not soften anything: a device that has gone by the next fetch is \
+                 still refused, loudly.</p>"
+            ));
+            for reason in dropped {
+                out.push_str(&format!(
+                    "<p class=fault>One device could not be read from the account \
+                     listing and is NOT shown above: {}</p>",
+                    escape(reason)
+                ));
+            }
+        }
+        Some(Discovery::Empty) => {
+            out.push_str(
+                "<p>The account answered: it has no meters. Nothing is wrong with \
+                 the bridge or the credential — there is simply nothing to pick.</p>",
+            );
+        }
+        Some(Discovery::Failed { what }) => {
+            out.push_str(&format!(
+                "<p class=fault>The account could not be asked: {}</p>\
+                 <p>Typed entry below still works — discovery being down locks \
+                 nothing.</p>",
+                escape(what)
+            ));
+        }
+        Some(Discovery::NoCredential) => {
+            out.push_str(
+                "<p class=fault>No smart-me credential in the environment \
+                 (SMARTME_CLIENT_ID / SMARTME_CLIENT_SECRET), so the account \
+                 cannot be asked. The credential is never entered here — set it \
+                 in the environment and reload.</p>",
+            );
+        }
+        Some(Discovery::Picked { serial }) => {
+            out.push_str(&format!(
+                "<p>Meter with serial <strong>{}</strong> added below with its \
+                 device id and serial filled in. Give it a name, tick Published \
+                 when you mean it, then Save.</p>",
+                escape(serial)
+            ));
+        }
+    }
+    out.push_str("</fieldset>");
+    out
+}
+
 /// Render the whole form. `values` is what to show in the boxes — the
 /// submission when there was one, the file otherwise, so a refused save never
 /// makes the operator retype what they had entered.
-fn form(values: &StoredConfig, errors: Option<&ConfigErrors>) -> String {
+fn form(
+    values: &StoredConfig,
+    errors: Option<&ConfigErrors>,
+    discovery: Option<&Discovery>,
+) -> String {
     let meter_rows: String = values
         .meters
         .iter()
@@ -367,7 +488,7 @@ fn form(values: &StoredConfig, errors: Option<&ConfigErrors>) -> String {
          <label for=db>smart-me device id</label><input type=text id=db name=\"meter.{blank}.device_id\" value=\"\">\
          <label for=sb>Serial</label><input type=text id=sb name=\"meter.{blank}.serial\" value=\"\">\
          <label><input type=checkbox name=\"meter.{blank}.enabled\" value=1> Published</label>\
-         </fieldset></fieldset>\
+         </fieldset>{discover}</fieldset>\
          <fieldset><legend>Optional</legend>{api}{logdir}{logkeep}{uiport}</fieldset>\
          <button type=submit>Save</button></form>",
         orphans = orphan_faults(errors, &named),
@@ -415,6 +536,7 @@ fn form(values: &StoredConfig, errors: Option<&ConfigErrors>) -> String {
             &values.ui_port.map(|p| p.to_string()).unwrap_or_default(),
             errors
         ),
+        discover = discovery_section(discovery),
     )
 }
 
@@ -470,9 +592,126 @@ pub(super) async fn config_form(State(state): State<Arc<UiState>>) -> Response {
     };
     page(
         "Configuration — smartme_mqtt",
-        &form(&values, errors.as_ref()),
+        &form(&values, errors.as_ref(), None),
     )
     .into_response()
+}
+
+/// How long one interactive discovery fetch may take. Deliberately shorter than
+/// the bridge's own `http_timeout`: an operator is waiting on this page, and a
+/// timeout that RENDERS as "the account could not be asked" beats a browser
+/// spinner — the taxonomy message is the feature.
+const DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// `POST /config/discover` — the account's meters, on demand (story 3.4).
+///
+/// Reading smart-me is NOT publishing (the story's decision 3, drawing the 5.3
+/// boundary): this handler runs in every phase, confirmed or not, and by
+/// construction it publishes nothing, adopts nothing, and writes no
+/// configuration — it fetches (or picks) and renders. The submitted form
+/// values ride along and come back in the boxes, so pressing the button does
+/// not cost the operator their unsaved edits.
+///
+/// A PICK does not refetch: the pair travelled in the button's value from the
+/// listing the operator was just shown, and asking the account again would
+/// confirm nothing more — the pair is verified where it has always been,
+/// against every response, by ADR 0029.
+pub(super) async fn discover(
+    State(state): State<Arc<UiState>>,
+    headers: HeaderMap,
+    Form(fields): Form<Fields>,
+) -> Response {
+    if let Some(refusal) = super::origin::refusal(&headers) {
+        return refusal;
+    }
+    let raw = posted(&fields, state.state_dir());
+    let mut values = as_typed(&fields, &raw);
+
+    let outcome = if let Some(pick) = field(&fields, "pick") {
+        match pick.split_once('|') {
+            Some((serial, device_id)) if !serial.is_empty() && !device_id.is_empty() => {
+                values.meters.push(StoredMeter {
+                    // The operator names the row; discovery does not
+                    // (a smart-me display name is not a Sparkplug topic level,
+                    // and nothing invents a name).
+                    meter_id: String::new(),
+                    device_id: device_id.to_string(),
+                    serial: serial.to_string(),
+                    // Published stays a deliberate tick, never a side effect
+                    // of picking: an unconfirmed mapping must gain nothing
+                    // publishable from this screen's convenience.
+                    enabled: false,
+                });
+                Discovery::Picked {
+                    serial: serial.to_string(),
+                }
+            }
+            _ => Discovery::Failed {
+                what: "the pick did not carry a serial|device-id pair; use the \
+                       buttons in the listing"
+                    .to_string(),
+            },
+        }
+    } else {
+        fetch_listing(raw.api_base.as_deref()).await
+    };
+
+    page(
+        "Configuration — smartme_mqtt",
+        &form(&values, None, Some(&outcome)),
+    )
+    .into_response()
+}
+
+/// One fetch of the account listing, mapped to what the screen renders.
+///
+/// The credential comes from the environment exactly as `posted` reads it —
+/// never from the form, which has no field for it (ADR 0023). The base is the
+/// submitted `api_base` when there is one, the default otherwise, so discovery
+/// asks the same account the bridge would poll.
+async fn fetch_listing(api_base: Option<&str>) -> Discovery {
+    let client_id = std::env::var("SMARTME_CLIENT_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let client_secret = std::env::var("SMARTME_CLIENT_SECRET")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let (Some(client_id), Some(client_secret)) = (client_id, client_secret) else {
+        return Discovery::NoCredential;
+    };
+    let client = match SmartMeClient::new(
+        api_base.unwrap_or(SmartMeClient::DEFAULT_BASE),
+        Credentials::ClientCredentials {
+            client_id,
+            client_secret,
+        },
+        DISCOVERY_TIMEOUT,
+    ) {
+        Ok(client) => client,
+        Err(refused) => return failed(&refused),
+    };
+    let token = match client.fetch_token().await {
+        Ok(token) => token,
+        Err(error) => return failed(&error),
+    };
+    match client.get_devices(Some(&token)).await {
+        // Empty means EMPTY: no devices and nothing dropped. A listing whose
+        // only devices failed to parse must render its caveats, not a shrug.
+        Ok(list) if list.devices.is_empty() && list.dropped.is_empty() => Discovery::Empty,
+        Ok(list) => Discovery::Listed {
+            devices: list.devices,
+            dropped: list.dropped,
+        },
+        Err(error) => failed(&error),
+    }
+}
+
+/// The taxonomy wording is [`SmartMeError`]'s own (story 2.6 AC5 wrote each
+/// repair into `Display`); this module adds no opinion of its own.
+fn failed(error: &SmartMeError) -> Discovery {
+    Discovery::Failed {
+        what: error.to_string(),
+    }
 }
 
 pub(super) async fn save_config(
@@ -494,7 +733,7 @@ pub(super) async fn save_config(
                 StatusCode::BAD_REQUEST,
                 page(
                     "Configuration — smartme_mqtt",
-                    &form(&as_typed(&fields, &raw), Some(&errors)),
+                    &form(&as_typed(&fields, &raw), Some(&errors), None),
                 ),
             )
                 .into_response();
@@ -767,25 +1006,13 @@ pub(super) async fn confirm_form(State(state): State<Arc<UiState>>) -> Response 
 /// bring-up that does exactly that. This one is never stored — it lives only
 /// between a rendered page and its submission.
 fn mapping_fingerprint(stored: &StoredConfig) -> String {
-    let mut rows: Vec<String> = stored
-        .meters
-        .iter()
-        .map(|m| {
-            format!(
-                "{}\u{1f}{}\u{1f}{}\u{1f}{}",
-                m.meter_id, m.device_id, m.serial, m.enabled
-            )
-        })
-        .collect();
-    // Order is not part of the mapping — reordering rows changes nothing about
-    // what reaches the wire, and `store::save` takes the same view.
-    rows.sort();
-    let joined = format!(
-        "{}\u{1e}{}\u{1e}{}",
-        stored.group_id,
-        stored.node_id,
-        rows.join("\u{1e}")
-    );
+    // ONE reader of ONE projection since story 3.4 (AC5, [#64]). This function
+    // used to format four meter fields by name, so a field added to
+    // `StoredMeter` was invisible to it while `store::same_mapping`'s derived
+    // `==` counted it automatically — two answers to "is this the mapping a
+    // human looked at". Both now read `store::mapping_projection`, whose
+    // exhaustive destructure stops the build until a new field is classified.
+    let joined = store::mapping_projection(stored).canonical();
     // FNV-1a, 64-bit. Not a security boundary — it guards against an accidental
     // interleaved write, not against somebody who can already post to this UI.
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -879,6 +1106,129 @@ mod tests {
     /// repair is for `posted` to take a [`Credential`] instead of reading the
     /// process environment — a production change, deliberately not made here.
     static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// **Story 3.4 AC2/AC3 — the discovery section speaks every outcome, and the
+    /// assertions are on the rendered bytes** (story 3.2's lesson: a status code
+    /// proves nothing about what an operator reads).
+    #[test]
+    fn the_discovery_section_speaks_every_outcome() {
+        // No outcome yet: the affordance alone, wired to its own action.
+        let idle = discovery_section(None);
+        assert!(
+            idle.contains("formaction=/config/discover"),
+            "the button must reach the discovery route from inside the main \
+             form, so unsaved edits ride along: {idle}"
+        );
+
+        // A listing: names shown, a NULL name falls back to the serial, the
+        // pick button carries the PAIR, and a dropped element is SAID.
+        let listed = discovery_section(Some(&Discovery::Listed {
+            devices: vec![
+                DeviceListing {
+                    id: "aaa-1".into(),
+                    name: Some("appart-est".into()),
+                    serial: 9_202_685,
+                },
+                DeviceListing {
+                    id: "bbb-2".into(),
+                    name: None,
+                    serial: 6_387_488,
+                },
+            ],
+            dropped: vec!["missing field `Serial`".into()],
+        }));
+        assert!(listed.contains("appart-est"));
+        assert!(
+            listed.contains("(unnamed — serial 6387488)"),
+            "a null name shows the serial; nothing invents a name: {listed}"
+        );
+        assert!(
+            listed.contains("value=\"9202685|aaa-1\""),
+            "the pick carries device id AND serial together — the pair ADR 0029 \
+             verifies — so choosing is one gesture, not two transcriptions: {listed}"
+        );
+        assert!(
+            listed.contains("could not be read from the account listing")
+                && listed.contains("missing field `Serial`"),
+            "a dropped element is a meter the operator cannot pick, and the \
+             screen must say so with serde's reason: {listed}"
+        );
+
+        // The taxonomy states (AC3), each in words the operator can act on.
+        let empty = discovery_section(Some(&Discovery::Empty));
+        assert!(
+            empty.contains("has no meters") && !empty.contains("class=fault"),
+            "an empty account is a state, not a fault: {empty}"
+        );
+        let failed = discovery_section(Some(&Discovery::Failed {
+            what: "the smart-me API rejected the credentials (HTTP 401)".into(),
+        }));
+        assert!(
+            failed.contains("class=fault") && failed.contains("401"),
+            "a failure renders in the taxonomy's own words: {failed}"
+        );
+        assert!(
+            failed.contains("Typed entry below still works"),
+            "discovery being down must not read as the form being down: {failed}"
+        );
+        let no_credential = discovery_section(Some(&Discovery::NoCredential));
+        assert!(
+            no_credential.contains("SMARTME_CLIENT_ID")
+                && no_credential.contains("SMARTME_CLIENT_SECRET"),
+            "the environment fault names its variables and is never a box to \
+             type into (ADR 0023): {no_credential}"
+        );
+    }
+
+    /// **Story 3.4 AC2 + AC4 — a pick fills the pair, and discovery saves and
+    /// publishes NOTHING**, in the unconfirmed state where it matters most.
+    ///
+    /// The handler is driven directly, with the headers a non-browser client
+    /// sends (no Origin — the same-origin guard's pass-through case). The state
+    /// dir is a scratch directory with NO stored configuration: an unconfigured,
+    /// unconfirmed bridge, which is exactly when an operator needs discovery.
+    #[tokio::test]
+    async fn a_pick_fills_the_pair_and_neither_saves_nor_publishes() {
+        let dir =
+            std::env::temp_dir().join(format!("smartme_discover_pick_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let state = Arc::new(UiState::new(
+            crate::ui::Phase::silent(crate::ui::Lifecycle::Unconfigured).into_handle(),
+            dir.clone(),
+            Arc::new(tokio::sync::Notify::new()),
+        ));
+        // The operator had typed half a form; those values must survive the trip.
+        let fields: Fields = vec![
+            ("group_id".into(), "Home".into()),
+            ("meter.0.meter_id".into(), "garage".into()),
+            ("meter.0.device_id".into(), "dev-0".into()),
+            ("meter.0.serial".into(), "1112222".into()),
+            ("pick".into(), "9202685|aaa-1".into()),
+        ];
+        let response = discover(State(Arc::clone(&state)), HeaderMap::new(), Form(fields)).await;
+
+        let page = crate::ui::rendered_body(response).await;
+        assert!(
+            page.contains("value=\"aaa-1\"") && page.contains("value=\"9202685\""),
+            "the picked PAIR must be in the form's boxes, together: {page}"
+        );
+        assert!(
+            page.contains("value=\"garage\"") && page.contains("value=\"Home\""),
+            "the unsaved edits rode along — the discover round trip must not \
+             cost the operator what they had typed: {page}"
+        );
+        assert!(
+            !page.contains("name=\"meter.1.enabled\" value=1 checked"),
+            "Published stays a deliberate tick, never a side effect of picking: {page}"
+        );
+        assert!(
+            !store::exists(&dir),
+            "discovery writes no configuration — reading smart-me is not \
+             publishing, and picking is not saving (the 5.3 boundary)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn markup_in_a_meter_name_cannot_escape_the_attribute_it_is_rendered_into() {
