@@ -763,6 +763,15 @@ mod tests {
             None,
             "the date form must not be read as a number of seconds"
         );
+        // Added with [#76]: the sign and the decimal point are the two near-miss
+        // shapes a `u64` parse could conceivably be loosened to accept later.
+        for near_miss in ["-5", "12.5", ""] {
+            assert_eq!(
+                secs(Some(near_miss)),
+                None,
+                "{near_miss:?} is not a delay in whole seconds and must not become one"
+            );
+        }
     }
 
     /// **Story 2.6 AC5 — the field the API changed reaches the operator.**

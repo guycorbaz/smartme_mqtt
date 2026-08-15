@@ -816,6 +816,44 @@ mod tests {
         );
     }
 
+    /// **[#76] — the cap caps.** `RETRY_AFTER_CAP` carries a long written
+    /// argument (a server may ask for an hour; honouring that literally takes a
+    /// meter off the wire for an hour on the strength of one header we cannot
+    /// verify, while ADR 0027 requires every cycle to publish a verdict) — and
+    /// until this test, nothing held it: the 2026-08-13 review ran
+    /// `.min → .max` and the suite stayed green.
+    ///
+    /// FALSIFIED 2026-08-15, the same mutation RUN before this note: `.min` →
+    /// `.max` goes RED here with *"left: Some(3600s), right: Some(300s)"* — the
+    /// hour-long wait the cap exists to refuse, delivered.
+    #[test]
+    fn a_retry_after_beyond_the_cap_is_capped_and_below_it_is_honoured() {
+        let wait = |secs: Option<u64>| match map_error(SmartMeError::RateLimited {
+            retry_after_secs: secs,
+        }) {
+            SourceError::RateLimited { retry_after } => retry_after,
+            other => panic!("a rate limit must stay a rate limit, got {other:?}"),
+        };
+        assert_eq!(
+            wait(Some(3_600)),
+            Some(std::time::Duration::from_secs(300)),
+            "an hour-long demand is capped at five minutes: one unverifiable \
+             header must not take a meter off the wire for an hour"
+        );
+        assert_eq!(
+            wait(Some(60)),
+            Some(std::time::Duration::from_secs(60)),
+            "a plausible delay is honoured as asked — the cap is a ceiling, \
+             not a rewrite"
+        );
+        assert_eq!(
+            wait(Some(300)),
+            Some(std::time::Duration::from_secs(300)),
+            "the boundary itself passes untouched"
+        );
+        assert_eq!(wait(None), None, "no delay given, none invented");
+    }
+
     #[test]
     fn error_mapping_follows_the_client_classification() {
         assert!(matches!(

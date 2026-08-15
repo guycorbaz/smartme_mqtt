@@ -1420,6 +1420,75 @@ mod tests {
         assert_eq!(published, 3, "three cycles, three verdicts (ADR 0027)");
     }
 
+    /// **[#76] — the wait ENDS.** The test above pins that the wait is honoured
+    /// and never advances the clock past the deadline, so it never asks whether
+    /// the wait is RELEASED — and the 2026-08-13 review ran the mutation that
+    /// matters (`rate_limited_until.is_some()`, a wait that never expires) and
+    /// the suite stayed green. Under that mutation a single 429 with any
+    /// `Retry-After` takes the meter off the wire until the process restarts,
+    /// publishing `source-rate-limited` for ever.
+    ///
+    /// FALSIFIED 2026-08-15, the review's own mutation RUN before this note:
+    /// `rate_limited_until.is_some()` goes RED here — *"the deadline passed and
+    /// the source was not asked again: the wait never ends, and one rate limit
+    /// costs the meter its process lifetime"*.
+    #[tokio::test]
+    async fn the_honoured_wait_ends_when_the_deadline_passes() {
+        let clock = FakeClock::new(UtcMillis(SANE_NOW));
+        let mut source = FakeSource::new()
+            .then(Err(SourceError::RateLimited {
+                retry_after: Some(Duration::from_secs(60)),
+            }))
+            .then(Ok(later(reading(Quality::Good, 950), 1)));
+        let (tx, _rx) = mpsc::channel(8);
+        let meter = MeterId::new("garage");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let heartbeat = beats.of(&meter).expect("served");
+        let ctx = Context {
+            meter: &meter,
+            clock: &clock,
+            policy: policy(),
+            config: config(),
+            heartbeat: &heartbeat,
+            outbox: &tx,
+        };
+        let mut mem = MeterMemory::default();
+
+        let (state, first) = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
+        assert_eq!(first.cause(), Some(Cause::SourceRateLimited), "the premise");
+
+        // 59 s into a 60 s wait is still the wait — the boundary matters,
+        // because a release that fires early is the interval ignoring the server.
+        clock.advance_ms(59_000);
+        let fetches = source.calls.len();
+        let (state, second) = step_once(&ctx, &mut source, state, &mut mem).await;
+        assert_eq!(
+            source.calls.len(),
+            fetches,
+            "one second before the instant the source named is before it"
+        );
+        assert_eq!(second.cause(), Some(Cause::SourceRateLimited));
+
+        // And past it, the wait is OVER. A wait that never ends turns one 429
+        // into a meter that is off the wire until somebody restarts the process.
+        clock.advance_ms(2_000);
+        let (_, third) = step_once(&ctx, &mut source, state, &mut mem).await;
+        assert!(
+            source.calls.len() > fetches,
+            "the deadline passed and the source was not asked again: the wait \
+             never ends, and one rate limit costs the meter its process lifetime"
+        );
+        assert_eq!(
+            third.quality(),
+            Quality::Good,
+            "one 429 with a delay costs exactly the delay, then the meter is back"
+        );
+        assert!(
+            mem.rate_limited_until.is_none(),
+            "a served wait is disarmed, not left to be compared against for ever"
+        );
+    }
+
     /// A reading with a chosen energy index, for the monotonicity tests.
     fn reading_with_energy(quality: Quality, age_ms: i64, energy: f64) -> Reading {
         let mut r = reading(quality, age_ms);
