@@ -1010,7 +1010,10 @@ development_status:
   # PERFORMED 2026-08-15, in the retrospective: FR9 met above its letter (Fatal
   # latch, not merely Bad), NFR7 met above its letter (every fetch, enforced by a
   # type), deviation direction fail-safe. See epic-2-retro-2026-08-15.md.
-  epic-2-retrospective: done  # epic-2-retro-2026-08-15.md — Guy's reading invited on the [Guy] sections
+  # READ AND VALIDATED BY GUY the same day (« je valide ») : C1-C5 adopted and binding
+  # from the next story; [#67] ACCEPTED as documented limitation and closed; the four
+  # remaining arbitrations confirmed as framed, open with their owners named.
+  epic-2-retrospective: done  # epic-2-retro-2026-08-15.md — validated by Guy 2026-08-15
 
   # OPENED 2026-08-06, on Guy's instruction, and it is the next epic per ADR 0025's
   # forward order (6 -> 3 -> 2 -> 7 -> 8).
