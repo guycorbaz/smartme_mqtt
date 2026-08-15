@@ -289,6 +289,44 @@ default); `errors` silenced (RED, `8O80` vanishes from the page entirely — the
 shows it); the dedup removed (RED, a third row appears); the length prefix removed (RED, the
 two canonicals byte-identical in the output).
 
+### The review of the repair (2026-08-15, same day) — the pattern held a fourth time
+
+The repair commit got its own pass, per story 2.3's rule, and it was wrong four ways:
+
+1. **CONFIRMED, and GitHub caught it first — the repair broke CI.** The new on-screen sentence
+   used the word "credential", which the first-run browser test forbids on `GET /config`
+   (ADR 0019's mechanical form: `client_secret`, `client_id`, `credential`, `password`). The
+   repair had been pushed on lib tests and clippy alone — the full gate ran for the story
+   commit and was skipped for its repair, and the process lapse is named in the fix commit.
+   Three wordings corrected to the screen's convention ("client id" with spaces, "sign-in"
+   for the act), the THIRD found by the new guard, not by reading: the render test now scans
+   every discovery outcome for the four tokens, so the next violation fails at the desk.
+2. **CONFIRMED — `discovery_base` failed OPEN on an unreadable file**: `.ok()` fell back to
+   the default base, sending the sign-in to api.smart-me.com while the operator's saved
+   mirror sat unread and the screen claimed the SAVED base was asked. Fail-closed now:
+   absence is not invalidity (no file → default), but a file that cannot be read means
+   nothing may be asked at all. The residual (an un-Origined client that can POST `/config`
+   can save-discover-restore) is stated in the doc as what it is — the UI's no-auth posture,
+   not this function's.
+3. **CONFIRMED — the dedup's OR made `AlreadyMapped` a lie and blocked the pick's one repair
+   use.** Four truthful cases now: exact pair → nothing added, said; ONE row holding half →
+   that row's pair is CORRECTED (the account is the authority on which id goes with which
+   serial — the transcription repair the pick-list exists for); two rows holding halves →
+   nothing moves, the refusal names the rows; no overlap → append. The old lie is in the
+   falsification's copied render, verbatim.
+4. **PLAUSIBLE, repaired — a pristine first run rendered a page of refusals** for a save
+   nobody attempted, while `GET /config` deliberately renders zero faults on the same state.
+   The faults now render exactly when the rewrite hazard exists: when something was typed.
+5. Also from that pass: the injectivity test gained the ROW-boundary case the original
+   finding named and the first test skipped; `canonical()` itself was verified genuinely
+   injective (uniquely decodable left-to-right; the unprefixed bool is position-pinned).
+   The hidden submit button and the env trimming were checked and cleared.
+
+All four repairs falsified, mutations run first, outputs in hand (the fail-open fallback, the
+OR-refuse — whose copied render shows the lie on screen — the unconditional faults, the
+dropped length prefixes). Two rounds; the second found different, smaller things than the
+first, and the full local gate ran before THIS push.
+
 ## Dev Agent Record
 
 ### Agent Model Used

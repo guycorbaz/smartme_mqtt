@@ -1166,7 +1166,18 @@ development_status:
   # drawn); and the refusal stays anchored against the "it came from the list"
   # excuse. AC5's guard means the NEXT field anyone adds to the config must be
   # classified mapping/not-mapping before the tree compiles.
-  3-4-discovery-the-accounts-meters-by-name-and-serial: review
+  # REVIEWED 2026-08-15, three finder angles, then the repair reviewed in its own
+  # right (story 2.3's rule, fourth application, still paying). Round one: six
+  # repairs — the gravest was THE FORM CHOOSING WHERE THE SIGN-IN GOES (the
+  # submitted api_base reached fetch_token; repaired by ADR 0023's own letter: the
+  # base comes from the FILE). Round two, on the repair: GitHub caught the repair
+  # breaking the AC6 word-scan because it was pushed on lib tests alone — THE
+  # PROCESS LAPSE IS NAMED (a repair takes the same gate as the work) — plus the
+  # fail-open base fallback, the lying dedup message (now a CORRECTION mechanism:
+  # the pick can fix a half-mistyped row), and the first-run fault wall. Every
+  # repair falsified, mutations run first. The AC6 token scan now covers every
+  # discovery outcome, so the next wording violation dies at the desk.
+  3-4-discovery-the-accounts-meters-by-name-and-serial: review  # awaiting the final gate + close
   3-5-a-known-meter-that-disappears-from-discovery: backlog
   3-6-orphan-retained-purge-on-a-mapping-change: backlog
   # NOT owed yet: Epic 3 is at 3/6 stories (3.4, 3.5, 3.6 remain). `required`

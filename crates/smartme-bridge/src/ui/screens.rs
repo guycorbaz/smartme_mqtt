@@ -334,8 +334,13 @@ enum Discovery {
     Picked { serial: String },
     /// The picked device is already among the rows — a second click adds
     /// nothing, said rather than silently duplicated (the duplicate would be
-    /// refused at save by a rule the screen never names).
+    /// refused at save by a rule the screen never names). Emitted only on an
+    /// EXACT pair match, so the sentence is never false.
     AlreadyMapped { serial: String },
+    /// One existing row held half of the picked pair; its pair was corrected
+    /// to the account's — the transcription repair the pick-list exists for.
+    /// `row` is 1-based, as the fieldset legends number them.
+    Corrected { row: usize, serial: String },
 }
 
 /// The discovery section of the form, rendered from the outcome alone.
@@ -418,6 +423,14 @@ fn discovery_section(discovery: Option<&Discovery>) -> String {
             out.push_str(&format!(
                 "<p>The meter with serial <strong>{}</strong> is already among \
                  the rows below — nothing was added.</p>",
+                escape(serial)
+            ));
+        }
+        Some(Discovery::Corrected { row, serial }) => {
+            out.push_str(&format!(
+                "<p>Meter {row} below held half of this pair; its device id and \
+                 serial were corrected to the account&#39;s (serial \
+                 <strong>{}</strong>). Check the row, then Save.</p>",
                 escape(serial)
             ));
         }
@@ -668,39 +681,105 @@ pub(super) async fn discover(
     // trip the one door through which a value could be rewritten WITHOUT a word
     // — the exact `publish_period_secs = 0` incident `as_typed`'s own doc
     // memorialises, reopened. Same helper, same faults, both paths.
-    let errors = config::validate(raw.clone()).err();
+    //
+    // ONLY WHEN SOMETHING WAS TYPED, though — the review of the repair caught
+    // the unconditional version rendering a page of refusals on a pristine
+    // first run for a save nobody attempted, while `GET /config` deliberately
+    // renders zero faults on the same state ("a file that is absent is not a
+    // fault"). The rewrite hazard exists exactly when a value was entered, so
+    // that is exactly when the faults render.
+    let anything_typed = [
+        &raw.group_id,
+        &raw.node_id,
+        &raw.broker_host,
+        &raw.broker_port,
+        &raw.publish_period_secs,
+        &raw.api_base,
+        &raw.log_dir,
+        &raw.log_keep,
+        &raw.ui_port,
+    ]
+    .iter()
+    .any(|v| v.is_some())
+        || !raw.meters.is_empty();
+    let errors = anything_typed
+        .then(|| config::validate(raw.clone()).err())
+        .flatten();
 
     let outcome = if let Some(pick) = field(&fields, "pick") {
         match pick.split_once('|') {
             Some((serial, device_id)) if !serial.is_empty() && !device_id.is_empty() => {
-                // A SECOND CLICK ADDS NOTHING — from the same review. The
-                // listing disappears on the way back, so "did that register?"
-                // ends in Back-and-click-again, and two identical rows are
-                // refused at save by the duplicate-serial rule with no repair
-                // the screen ever names. Idempotence is the honest answer.
-                if values
+                // FOUR CASES, and each says the truth about itself — the review
+                // of the repair caught the first dedup LYING: a plain OR refused
+                // any half-match with "already among the rows", which is false
+                // when no row carries that serial, and it blocked the pick's one
+                // repair use — correcting a row whose other half was mistyped.
+                //
+                //  - the EXACT pair is already a row: a second click adds
+                //    nothing (the listing vanishes on the way back, so "did
+                //    that register?" ends in Back-and-click-again, and a
+                //    duplicate is refused at save by a rule the screen never
+                //    names);
+                //  - exactly ONE row holds half of the pair: that row's pair is
+                //    corrected — the account is the authority on which id goes
+                //    with which serial, and this is precisely the transcription
+                //    repair the pick-list exists for;
+                //  - two DIFFERENT rows each hold a half: correcting either
+                //    would silently merge two meters; said, and left to the
+                //    human;
+                //  - no overlap: a new row, pair filled. The operator names it
+                //    (a smart-me display name is not a Sparkplug topic level)
+                //    and Published stays a deliberate tick — an unconfirmed
+                //    mapping must gain nothing publishable from convenience.
+                let exact = values
                     .meters
                     .iter()
-                    .any(|m| m.device_id == device_id || m.serial == serial)
-                {
+                    .any(|m| m.device_id == device_id && m.serial == serial);
+                let halves: Vec<usize> = values
+                    .meters
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| m.device_id == device_id || m.serial == serial)
+                    .map(|(i, _)| i)
+                    .collect();
+                if exact {
                     Discovery::AlreadyMapped {
                         serial: serial.to_string(),
                     }
                 } else {
-                    values.meters.push(StoredMeter {
-                        // The operator names the row; discovery does not
-                        // (a smart-me display name is not a Sparkplug topic
-                        // level, and nothing invents a name).
-                        meter_id: String::new(),
-                        device_id: device_id.to_string(),
-                        serial: serial.to_string(),
-                        // Published stays a deliberate tick, never a side
-                        // effect of picking: an unconfirmed mapping must gain
-                        // nothing publishable from this screen's convenience.
-                        enabled: false,
-                    });
-                    Discovery::Picked {
-                        serial: serial.to_string(),
+                    match halves.as_slice() {
+                        [] => {
+                            values.meters.push(StoredMeter {
+                                meter_id: String::new(),
+                                device_id: device_id.to_string(),
+                                serial: serial.to_string(),
+                                enabled: false,
+                            });
+                            Discovery::Picked {
+                                serial: serial.to_string(),
+                            }
+                        }
+                        [row] => {
+                            values.meters[*row].device_id = device_id.to_string();
+                            values.meters[*row].serial = serial.to_string();
+                            Discovery::Corrected {
+                                row: *row + 1,
+                                serial: serial.to_string(),
+                            }
+                        }
+                        _ => Discovery::Failed {
+                            what: format!(
+                                "two different rows below each hold half of this \
+                                 pair (rows {}), so a correction would merge two \
+                                 meters; nothing was changed — fix the rows by \
+                                 hand",
+                                halves
+                                    .iter()
+                                    .map(|i| (i + 1).to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(" and ")
+                            ),
+                        },
                     }
                 }
             }
@@ -733,11 +812,29 @@ pub(super) async fn discover(
 /// restores the pre-story invariant: a request-supplied base reaches the
 /// credential only by being validated AND written to disk first, where the
 /// operator can see it.
-fn discovery_base(state_dir: &std::path::Path) -> String {
-    store::read(state_dir)
-        .ok()
-        .and_then(|stored| stored.api_base)
-        .unwrap_or_else(|| SmartMeClient::DEFAULT_BASE.to_string())
+/// FAIL-CLOSED on an unreadable file — the review of the repair caught the
+/// first version failing OPEN: `store::read(..).ok()` silently fell back to
+/// the default base, so a schema bump or a permissions regression would have
+/// sent the sign-in to api.smart-me.com while the operator's saved mirror sat
+/// unread and the screen claimed the SAVED base was asked. Absence is not
+/// invalidity (ADR 0023 §5): no file means the default is right; a file that
+/// cannot be read means nothing may be asked at all.
+///
+/// One residual, stated rather than hidden: an un-Origined client that can
+/// POST `/config` can still SAVE a hostile base, discover, and restore — the
+/// window rides with the UI's no-authentication posture (ADR 0019, [#56]'s
+/// world), not with this function; what this function guarantees is only that
+/// the base always comes from the file the operator can inspect.
+fn discovery_base(state_dir: &std::path::Path) -> Result<String, String> {
+    if !store::exists(state_dir) {
+        return Ok(SmartMeClient::DEFAULT_BASE.to_string());
+    }
+    match store::read(state_dir) {
+        Ok(stored) => Ok(stored
+            .api_base
+            .unwrap_or_else(|| SmartMeClient::DEFAULT_BASE.to_string())),
+        Err(errors) => Err(errors.to_string()),
+    }
 }
 
 /// One fetch of the account listing, mapped to what the screen renders.
@@ -762,8 +859,19 @@ async fn fetch_listing(state_dir: &std::path::Path) -> Discovery {
     let (Some(client_id), Some(client_secret)) = (client_id, client_secret) else {
         return Discovery::NoCredential;
     };
+    let base = match discovery_base(state_dir) {
+        Ok(base) => base,
+        Err(why) => {
+            return Discovery::Failed {
+                what: format!(
+                    "the saved configuration could not be read, so the saved API \
+                     base is unknown and nothing was asked: {why}"
+                ),
+            };
+        }
+    };
     let client = match SmartMeClient::new(
-        discovery_base(state_dir),
+        base,
         Credentials::ClientCredentials {
             client_id,
             client_secret,
@@ -1384,7 +1492,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("scratch dir");
 
         assert_eq!(
-            discovery_base(&dir),
+            discovery_base(&dir).expect("absence is not invalidity"),
             SmartMeClient::DEFAULT_BASE,
             "no file: the default base, not whatever a request carried"
         );
@@ -1393,15 +1501,110 @@ mod tests {
         stored.api_base = Some("https://mirror.example".into());
         store::save(&dir, &stored).expect("save");
         assert_eq!(
-            discovery_base(&dir),
+            discovery_base(&dir).expect("a sound file reads"),
             "https://mirror.example",
             "a SAVED base is the operator's committed, visible choice — that \
              one is honoured"
+        );
+
+        // FAIL-CLOSED on an unreadable file — the review of the repair caught
+        // the `.ok()` version failing OPEN to the default base, sending the
+        // sign-in to a host the operator's (unreadable) file does not name
+        // while the screen claimed the SAVED base was asked.
+        std::fs::write(store::config_path(&dir), "this is not toml {{{")
+            .expect("plant the corrupt file");
+        assert!(
+            discovery_base(&dir).is_err(),
+            "a file that cannot be read means nothing may be asked at all — \
+             falling back to the default would ask a host the saved (and now \
+             unreadable) configuration may well not name"
         );
         // And by signature: `discovery_base` and `fetch_listing` take the state
         // dir alone. The submitted `api_base` cannot reach the client without
         // this test's subject changing shape.
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Review-of-the-repair repair — a half-matched pick CORRECTS, one lie
+    /// removed and one use restored.** The first dedup refused any half-match
+    /// with "already among the rows" — false when no row carries that serial —
+    /// and blocked the pick's one repair use: fixing a row whose other half
+    /// was mistyped. The account is the authority on which id goes with which
+    /// serial.
+    #[tokio::test]
+    async fn a_half_matched_pick_corrects_the_row_and_says_so() {
+        let state = Arc::new(UiState::new(
+            crate::ui::Phase::silent(crate::ui::Lifecycle::Unconfigured).into_handle(),
+            std::path::PathBuf::from("/nonexistent"),
+            Arc::new(tokio::sync::Notify::new()),
+        ));
+        // The device id is right, the serial was mistyped by hand.
+        let fields: Fields = vec![
+            ("meter.0.meter_id".into(), "garage".into()),
+            ("meter.0.device_id".into(), "aaa-1".into()),
+            ("meter.0.serial".into(), "1112222".into()),
+            ("pick".into(), "9202685|aaa-1".into()),
+        ];
+        let response = discover(State(Arc::clone(&state)), HeaderMap::new(), Form(fields)).await;
+        let page = crate::ui::rendered_body(response).await;
+        assert!(
+            page.contains("value=\"9202685\"") && !page.contains("1112222"),
+            "the row's pair is corrected to the account's — the mistyped serial \
+             is gone from the boxes: {page}"
+        );
+        assert!(
+            !page.contains("meter.2."),
+            "corrected IN PLACE, not appended beside the wrong row: {page}"
+        );
+        assert!(
+            page.contains("corrected to the account"),
+            "and the screen says what happened to which row: {page}"
+        );
+
+        // THE AMBIGUOUS CASE: two rows each hold a half — correcting either
+        // would merge two meters, so nothing moves and the refusal names the
+        // rows.
+        let fields: Fields = vec![
+            ("meter.0.meter_id".into(), "garage".into()),
+            ("meter.0.device_id".into(), "aaa-1".into()),
+            ("meter.0.serial".into(), "1112222".into()),
+            ("meter.1.meter_id".into(), "cellar".into()),
+            ("meter.1.device_id".into(), "bbb-2".into()),
+            ("meter.1.serial".into(), "9202685".into()),
+            ("pick".into(), "9202685|aaa-1".into()),
+        ];
+        let response = discover(State(Arc::clone(&state)), HeaderMap::new(), Form(fields)).await;
+        let page = crate::ui::rendered_body(response).await;
+        assert!(
+            page.contains("rows 1 and 2") && page.contains("nothing was changed"),
+            "two half-matches must move nothing and say which rows collide: {page}"
+        );
+        assert!(
+            page.contains("value=\"1112222\"") && page.contains("value=\"bbb-2\""),
+            "both rows are untouched: {page}"
+        );
+    }
+
+    /// **Review-of-the-repair repair — a pristine first run stays fault-free.**
+    /// The unconditional fault rendering put a page of refusals on a blank
+    /// first run for a save nobody attempted, while `GET /config` deliberately
+    /// renders zero faults on the same state. The faults exist for the rewrite
+    /// hazard, and the hazard exists exactly when a value was typed.
+    #[tokio::test]
+    async fn a_blank_first_run_discover_renders_no_faults() {
+        let state = Arc::new(UiState::new(
+            crate::ui::Phase::silent(crate::ui::Lifecycle::Unconfigured).into_handle(),
+            std::path::PathBuf::from("/nonexistent"),
+            Arc::new(tokio::sync::Notify::new()),
+        ));
+        let fields: Fields = vec![("pick".into(), "9202685|aaa-1".into())];
+        let response = discover(State(Arc::clone(&state)), HeaderMap::new(), Form(fields)).await;
+        let page = crate::ui::rendered_body(response).await;
+        assert!(
+            !page.contains("is missing or empty"),
+            "nothing was typed, so nothing may be refused — a first run is not \
+             a fault (the GET /config rule, honoured on this path too): {page}"
+        );
     }
 
     /// **Review repair — a mistyped number survives the discover round trip in

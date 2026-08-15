@@ -902,6 +902,28 @@ mod tests {
             mapping_projection(&right).canonical(),
             "a group id must not be able to impersonate a node boundary"
         );
+
+        // The ROW boundary — the case the original finding named and the first
+        // version of this test skipped (found by the review of the repair): a
+        // field carrying `\u{1e}` must not read as one row ending and another
+        // beginning.
+        let mut left = sound();
+        left.meters[0].meter_id =
+            format!("m\u{1f}d\u{1f}s\u{1f}true\u{1e}{}", left.meters[0].meter_id);
+        let mut right = sound();
+        right.meters.push(StoredMeter {
+            meter_id: "m".into(),
+            device_id: "d".into(),
+            serial: "s".into(),
+            enabled: true,
+        });
+        assert!(!same_mapping(&left, &right), "the premise: they differ");
+        assert_ne!(
+            mapping_projection(&left).canonical(),
+            mapping_projection(&right).canonical(),
+            "a meter field must not be able to impersonate a row boundary — a \
+             future refactor dropping one length prefix would fail here"
+        );
     }
 
     #[test]
