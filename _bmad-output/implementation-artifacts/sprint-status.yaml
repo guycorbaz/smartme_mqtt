@@ -124,6 +124,11 @@ development_status:
   # the port (verified by its session cookie in the failing test's response), so
   # the two unconfigured-bridge tests were verified on GitHub instead. Not a
   # regression.
+  # AND IT IS LIFTED, same day, end of afternoon: the occupant was a leftover
+  # mybibli E2E COMPOSE STACK (`e2e-mybibli-1`, up 15 h, publishing 8080). Once
+  # it was gone the two tests passed locally (5/5, 6/6) and `./scripts/ci-local.sh`
+  # completed green END TO END — chaos and image included — for the first time
+  # since 2026-08-13. If the impediment recurs, look for that stack by name.
   #
   # ==========================================================================
   # END OF 2026-08-13 — read this first tomorrow.
