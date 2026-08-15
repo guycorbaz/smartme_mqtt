@@ -70,7 +70,46 @@ story_location: _bmad-output/implementation-artifacts
 
 development_status:
   # ==========================================================================
-  # END OF 2026-08-15 — read this first tomorrow.
+  # END OF 2026-08-15, EVENING — read this first tomorrow. The morning block
+  # below (Epic 2's closure) is the same day; this one supersedes its "what
+  # to read first".
+  # ==========================================================================
+  #
+  # EPIC 3 IS CLOSED TOO — two epics in one day, and the second cost no code
+  # at its end. Stories 3.4 and 3.5 were written, implemented, reviewed and
+  # closed earlier today; 3.6 ended in the arbitration it was DRAFTED to end
+  # in: Guy chose « Reformuler au manuel » the same day. ADR 0035, [#84] —
+  # FR21 keeps its intent (no ghost values) and changes actor: the bridge's
+  # half is verified by construction (nothing retained, every row clause-
+  # pinned since 4.17), the operator's half is the manual's new ghost-value
+  # troubleshooting section (detect with `mosquitto_sub --retained-only`,
+  # clear with `mosquitto_pub -r -n`). PRD, epics and manual moved together
+  # with the ADR, per the repository's rule. NO PURGE MACHINERY WAS BUILT,
+  # and that is the deliverable — the third refusal in one day of a mechanism
+  # resting on unobserved behaviour (3.4, 3.5, 3.6).
+  #
+  # THE RETROSPECTIVE IS WRITTEN AT CLOSE (epic-3-retro-2026-08-15.md), as B3
+  # requires. Its sentence: Epic 2 taught this repository how to test ORACLES;
+  # Epic 3 taught it how to test REPAIRS. Four action items, the two sharp
+  # ones being D1 (the full gate becomes a pre-push hook — the day's one CI
+  # break was exactly the rule it mechanises) and D2 (a review repair ships
+  # with its pin: revert it and watch the suite redden, BEFORE the note).
+  # D1 IS NOT YET IMPLEMENTED — it is the first mechanism to build tomorrow.
+  #
+  # WHAT I WOULD READ FIRST TOMORROW:
+  #  1. The two retrospectives' "[Guy]" sections — Epic 2's five arbitrations
+  #     ([#67] [#68] [#74] [#75]+[#79] [#77]) and Epic 3's table: [#63]
+  #     (recommendation: Epic 4's chaos stories), [#81] [#82] [#83].
+  #  2. THE STANDING DECISION IS NOW DUE, not merely standing: per ADR 0030
+  #     the next epic is 4, and EPIC 4 HAS NO PATH TO COMPLETION (ADR 0025
+  #     defers eight of its nine remaining stories). It cannot be started
+  #     honestly before Guy either finishes it or withdraws the deferred
+  #     stories from its scope.
+  #  3. The Tier-3 gap is now v3 attested against v10 shipped, additive end
+  #     to end, and it widens with every version. That pass is Guy's to run.
+  #
+  # ==========================================================================
+  # MORNING OF 2026-08-15 — Epic 2's closure. History; superseded above.
   # ==========================================================================
   #
   # EPIC 2 IS CLOSED, on Guy's instruction. Story 2.7's three remaining criteria
@@ -1055,7 +1094,15 @@ development_status:
   # here. The ~15 items parked on "Epic 3" in deferred-work.md must be swept into
   # these stories as they are written; `Policy::max_age_ms` validation and the
   # command path are the two named ones.
-  epic-3: in-progress
+  # CLOSED 2026-08-15: six of six stories settled (3.6 by Guy's same-day
+  # arbitration — FR21 reshaped, ADR 0035, no machinery built), FR2/FR6/FR12
+  # delivered, FR21 reshaped, NFR2 measured, AR6 met, contract v9 -> v10.
+  # The retrospective is written at close (epic-3-retro-2026-08-15.md); its
+  # [Guy] sections await his reading, as Epic 2's did. [#63] is carried out
+  # with its issue (recommendation: Epic 4's chaos stories). Actions D1-D4,
+  # the sharpest being D1 (the full gate becomes a pre-push hook) and D2 (a
+  # review repair ships with its pin — revert it and watch the suite).
+  epic-3: done
   # 2026-08-07, IMPLEMENTED, all six ACs. `RUNTIME_METER_LIMIT` gone, one poll task
   # and one heartbeat per meter, wedge verdict = the worst meter against its OWN
   # allowance. Three falsification lessons, and the second is the one to carry:
@@ -1214,10 +1261,13 @@ development_status:
   # only guess. Three options are written in the story (withdraw, the FR14 pattern;
   # reshape into a manual section — the draft's recommendation; build the purge
   # anyway), and the choice is Guy's, per the repository's rule on requirements.
-  3-6-orphan-retained-purge-on-a-mapping-change: blocked  # awaiting Guy's arbitration on FR21
-  # NOT owed yet: Epic 3 is at 3/6 stories (3.4, 3.5, 3.6 remain). `required`
-  # means it must run BEFORE the epic closes, not that it is late.
-  epic-3-retrospective: required
+  # ARBITRATED BY GUY 2026-08-15, the same day: « Reformuler au manuel » — ADR 0035,
+  # [#84]. FR21 keeps its intent and changes actor: the bridge's half is verified by
+  # construction (nothing retained, clause-pinned since 4.17), the operator's half is
+  # the manual's new ghost-value troubleshooting section. PRD, epics and manual moved
+  # together. No machinery built — that IS the deliverable.
+  3-6-orphan-retained-purge-on-a-mapping-change: done  # closed 2026-08-15 on ADR 0035
+  epic-3-retrospective: done  # epic-3-retro-2026-08-15.md — Guy's reading invited on the [Guy] sections
   # Epic 4 runs BEFORE Epic 2 — decided at the Epic 1 retrospective (2026-07-26).
   #
   # AMENDED 2026-08-05 (ADR 0025, [#55]). This comment said the execution order was

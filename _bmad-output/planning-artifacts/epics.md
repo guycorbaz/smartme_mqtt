@@ -47,7 +47,7 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 - FR18: The SCADA can auto-discover the meters and their engineering units from the bridge's published metadata.
 - FR19: The bridge can respond to a SCADA-initiated rebirth request by re-announcing its metrics.
 - FR20: The bridge never over-claims delivery: a value is reported as published only once it has been accepted for transmission, and a value it could not hand over yields a per-device traced drop rather than silence. *(Amended 2026-07-26 — ADR 0010.)*
-- FR21: The bridge can purge orphan retained messages on old topics when a mapping changes (no ghost values).
+- FR21: *(reshaped 2026-08-15, ADR 0035)* The bridge publishes nothing retained, verified by clause-cited tests; the manual documents how an operator detects and clears a foreign retained ghost (the intent kept, the actor changed).
 - FR22: The bridge can apply a defined policy to readings acquired during a broker outage — bounded buffer preserving the source timestamp, or a traced drop; never a re-timestamped replay.
 
 **Configuration**
@@ -184,7 +184,7 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 - FR18: Epic 1 — SCADA auto-discovers units from self-describing BIRTH
 - FR19: Epic 4 — respond to SCADA-initiated rebirth (NCMD)
 - FR20: Epic 1 — never over-claim delivery; traced drop, never silence (amended, ADR 0010)
-- FR21: Epic 3 — purge orphan retained messages on mapping change *(moved from Epic 4, 2026-07-26)*
+- FR21: Epic 3 — reshaped by ADR 0035 (2026-08-15): the bridge's half is verified-by-construction, the operator's half is the manual's § ghost-value section *(moved from Epic 4, 2026-07-26)*
 - FR22: Epic 4 — broker-outage policy (traced-drop, exhaustive)
 - FR23: Epic 5 — credentials + broker details via `.env`
 - FR24: Epic 5 — meter→topic/tag mapping with defaults

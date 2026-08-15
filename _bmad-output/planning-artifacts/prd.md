@@ -291,7 +291,7 @@ Must-have capabilities (without any one, the product fails its "never lies" purp
 - **FR18:** The SCADA can auto-discover the meters and their engineering units from the bridge's published metadata.
 - **FR19:** The bridge can respond to a SCADA-initiated rebirth request by re-announcing its metrics.
 - **FR20:** The bridge never over-claims delivery: a value is reported as published only once it has been accepted for transmission, and a value it could not hand over yields a per-device traced drop rather than silence. *(Amended 2026-07-26 — see ADR 0010: the original wording required a broker ACK, which the Sparkplug-mandated QoS 0 makes impossible by protocol.)*
-- **FR21:** The bridge can purge orphan retained messages on old topics when a mapping changes (no ghost values).
+- **FR21:** *(reshaped 2026-08-15, [ADR 0035](../../docs/adr/0035-fr21-is-reshaped-the-ghost-purge-belongs-to-the-manual.md))* The bridge publishes nothing retained — mandated or chosen for every message type, verified by clause-cited tests — and the manual documents how an operator detects and clears a foreign retained message under the bridge's namespace (no ghost values; the actor changed, the intent did not). The original text asked the bridge to purge orphans it cannot produce, on topics left by tools that are not it.
 - **FR22:** The bridge can apply a defined policy to readings acquired during a broker outage — bounded buffer preserving the source timestamp, or a traced drop; never a re-timestamped replay.
 
 ### Configuration

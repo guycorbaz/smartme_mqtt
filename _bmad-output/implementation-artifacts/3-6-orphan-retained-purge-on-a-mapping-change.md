@@ -1,8 +1,12 @@
 # Story 3.6: Orphan retained messages — a requirement whose subject the bridge cannot produce
 
-Status: drafted 2026-08-15 — **BLOCKED ON AN ARBITRATION that is Guy's**, deliberately: the
-honest draft ends in a decision about the requirement, not in code, and the repository's rule
-is that a requirement change is Guy's to make (the FR14 precedent, ADR 0033).
+Status: done (2026-08-15) — **Guy arbitrated the same day: option 2, « Reformuler au
+manuel »** (ADR 0035, [#84]). The bridge's half stays verified-by-construction (nothing
+retained, clause-pinned); the operator's half is the manual's new troubleshooting section
+(« A ghost value on a topic nothing publishes »: detect with `mosquitto_sub --retained-only`,
+clear with `mosquitto_pub -r -n`, clean the host's persisted tag). PRD, epics and manual
+amended together with the ADR, per the repository's rule. No purge machinery was built, and
+that is the deliverable: a requirement re-aimed at the actor who can honour it.
 
 ## Story (as the epic states it)
 

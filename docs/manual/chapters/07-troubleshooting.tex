@@ -4,6 +4,41 @@
 Each failure mode is presented as \emph{Symptom $\rightarrow$ Cause $\rightarrow$ Action
 $\rightarrow$ Confirmation}.
 
+\section{A ghost value on a topic nothing publishes}
+\label{sec:trouble-retained-ghost}
+
+\emph{This section is FR21's operator half (ADR 0035): the bridge itself publishes
+nothing retained --- mandated for five of the seven Sparkplug message types
+(\code{tck-id-payloads-nbirth-retain}, \code{-dbirth-retain}, \code{-ndata-retain},
+\code{-ddata-retain}) and chosen for the rest, every row pinned by a clause-citing test ---
+so a retained message under the bridge's namespace was left there by something that is not
+this bridge.}
+
+\paragraph{Symptom.} The SCADA host, or a plain MQTT client, shows a value on a topic under
+\code{spBv1.0/GROUP/\ldots} that no current meter maps to --- typically after a
+mapping change, and the value never updates. A Sparkplug host persists what it discovers, so
+the ghost outlives whatever published it.
+
+\paragraph{Cause.} A \emph{retained} message left by another tool: a prior integration, a
+manual \code{mosquitto\_pub -r}, a test client. Not this bridge: it cannot produce one, and
+the tests that pin that are part of every build.
+
+\paragraph{Action.} First see exactly what is retained under the namespace:
+\begin{verbatim}
+mosquitto_sub -h BROKER -v --retained-only -W 3 -t 'spBv1.0/GROUP/#'
+\end{verbatim}
+Every line printed is a retained message; note its exact topic. Then clear each one by
+publishing a zero-byte retained message on that exact topic:
+\begin{verbatim}
+mosquitto_pub -h BROKER -r -n -t 'spBv1.0/GROUP/DDATA/NODE/SERIAL'
+\end{verbatim}
+Clear the topic in the SCADA host's tag tree as well if it has already persisted the ghost
+--- the broker-side clear stops the ghost being re-delivered, it does not un-discover it.
+
+\paragraph{Confirmation.} Re-run the \code{--retained-only} subscription: it prints nothing.
+The host's tag either disappears with the folder clean-up or stops being re-created after a
+host restart.
+
 \stub{at least eight failure modes — meter silent, auth 401, rate-limit 429, broker
 unreachable, single-meter vs global, priority-Kamstrup partial, stale-but-alive,
 clock/DST, Docker restart/retain — authored as the corresponding behaviour is implemented.}
