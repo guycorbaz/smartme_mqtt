@@ -70,6 +70,53 @@ story_location: _bmad-output/implementation-artifacts
 
 development_status:
   # ==========================================================================
+  # END OF 2026-08-15 — read this first tomorrow.
+  # ==========================================================================
+  #
+  # EPIC 2 IS CLOSED, on Guy's instruction. Story 2.7's three remaining criteria
+  # landed (AC2 skew-vs-staleness with no threshold; AC3 UTC verified with one
+  # lockfile finding; AC5 closing [#69] — story 2.3 AC3 finally MET), [#76]'s two
+  # hoped-for invariants became tested ones, the FR9/NFR7 verification was
+  # performed, the retrospective is written (epic-2-retro-2026-08-15.md), and the
+  # Epic 2 items in deferred-work.md were swept item by item. Contract stays at 9.
+  # All pushes green on all three workflows.
+  #
+  # THE INDEPENDENT REVIEW OF 2.7 EARNED ITS KEEP, again: of four verified
+  # findings, the confirmed one that mattered was A REPLAY WITH ITS DATE HEADER
+  # STRIPPED walking through the very gate AC5 had just built — the feed oracle
+  # answers good() on a missing header, so "not refused" was true of it and the
+  # meter-replacement exemption rewound the reference through the unwatched door.
+  # The exemption now requires the feed to VOUCH (a Date seen and not refused),
+  # and `last` refuses any candidate older than what it holds. Both falsified.
+  # THE SENTENCE TO CARRY: an exemption is the most trusting line in a function,
+  # and it must demand positive evidence, not absence of objection.
+  #
+  # AND A FALSIFICATION CAME BACK GREEN before that, on the same day: the `last`
+  # gate's first mutation changed nothing because the scenario was already
+  # refused by monotonicity — the test grew an equal-index replay and a
+  # value_date witness BEFORE its note was written. AC6's ordering rule, working.
+  #
+  # TWO NEW ISSUES: [#78] (the ULP unit-switch hazard, given its own number at
+  # the B4 sweep) and [#79] (the over-age cause flaps with the polling phase
+  # when the meter's cadence is slower than the poll period — CONFIRMED, the
+  # realistic regime, sibling of [#75], left to the same arbitration).
+  #
+  # WHAT I WOULD READ FIRST TOMORROW:
+  #  1. The retrospective's "[Guy]" section — five arbitrations, none taken here:
+  #     [#67] (recommendation written: accept as documented limitation), [#68]
+  #     (the DBIRTH measurement is possible and not done), [#74] (the null
+  #     design, the largest exposure), [#75]+[#79] (one arbitration, two faces),
+  #     [#77]. Plus the standing decision: EPIC 4 STILL HAS NO PATH TO
+  #     COMPLETION, and per ADR 0030 the next epic is 3 (stories 3.4-3.6).
+  #  2. The Tier-3 gate attests v3; the code speaks v9. That pass is what makes
+  #     a final 0.4.0 defensible, and it is Guy's to run.
+  #
+  # THE PORT-8080 IMPEDIMENT RECURRED as predicted on 2026-08-13: mybibli holds
+  # the port (verified by its session cookie in the failing test's response), so
+  # the two unconfigured-bridge tests were verified on GitHub instead. Not a
+  # regression.
+  #
+  # ==========================================================================
   # END OF 2026-08-13 — read this first tomorrow.
   # ==========================================================================
   #
@@ -574,7 +621,14 @@ development_status:
   # This is a risk that is not covered, NOT a defect that was observed: on
   # 2026-08-10 the freshness state machine did its work exactly and the failure was
   # in the surfaces ([#62]).
-  epic-2: in-progress
+  # CLOSED 2026-08-15, on Guy's instruction ("je veux maintenant terminer l'epic 2"):
+  # six of seven stories done, 2.4 withdrawn with its requirement (ADR 0033), the
+  # FR9/NFR7 verification performed, the retrospective written at close as B3 requires,
+  # and every deferred-work item this epic owned swept item by item (B4). What the
+  # epic leaves open is listed in the retrospective's "[Guy]" section: [#67] (its
+  # recommendation is written), [#68], [#74], [#75]+[#79], [#77], and the Tier-3 pass
+  # against the current contract.
+  epic-2: done
   # STORIES LISTED 2026-08-10, découpage validé par Guy. Written just-in-time, as
   # epics 3, 5 and 6 were — only the story being worked is detailed.
   #
@@ -927,12 +981,22 @@ development_status:
   # Nine mutations run before their notes; one of them (the `last` gate) came back GREEN and
   # forced the test to grow the witness it lacked — AC6's ordering rule catching a
   # falsification that would otherwise have been recorded without ever running.
-  2-7-utc-end-to-end-and-clock-skew: review  # all ACs done 2026-08-15; awaiting the independent pass
+  # REVIEWED 2026-08-15, independent pass, fresh context, adversarial verification per
+  # finding: three CONFIRMED (the headerless-replay door through AC5's gate — REPAIRED,
+  # both new clauses falsified; the slow-cadence cause flap — ARBITRATION [#79], sibling
+  # of [#75]; the docs claiming "clock" where ingestion lag is indistinguishable —
+  # REWORDED, mechanism untouched) and one REFUTED (the same-second Date block is not
+  # constructible; kept in the story so nobody re-derives it). The repair itself was
+  # given its own pass per story 2.3's rule.
+  2-7-utc-end-to-end-and-clock-skew: done  # closed 2026-08-15; residual arbitration [#79]
 
   # NOT A STORY: FR9 and NFR7 (serial-identity binding and its verification) were
   # delivered by ADR 0029 on 2026-08-09, and more strongly than the FR asked. They
   # are owed a VERIFICATION at epic close, not fresh work.
-  epic-2-retrospective: required
+  # PERFORMED 2026-08-15, in the retrospective: FR9 met above its letter (Fatal
+  # latch, not merely Bad), NFR7 met above its letter (every fetch, enforced by a
+  # type), deviation direction fail-safe. See epic-2-retro-2026-08-15.md.
+  epic-2-retrospective: done  # epic-2-retro-2026-08-15.md — Guy's reading invited on the [Guy] sections
 
   # OPENED 2026-08-06, on Guy's instruction, and it is the next epic per ADR 0025's
   # forward order (6 -> 3 -> 2 -> 7 -> 8).
