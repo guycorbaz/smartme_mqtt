@@ -105,10 +105,17 @@ pub enum Cause {
     /// The source's own clock is implausible: a stamp from before 2020 cannot be a
     /// live reading, however self-consistent the pair is.
     SourceClockImplausible,
-    /// `http_date` precedes `value_date`: the two clock domains disagree, and a
-    /// negative age is not a fresher reading.
+    /// The meter's clock and the cloud's disagree — in either direction. A
+    /// negative age (`http_date` precedes `value_date`) is not a fresher
+    /// reading; and since story 2.7 AC2, an age beyond the allowance on a meter
+    /// whose `value_date` is still ADVANCING is this too, not old data: the
+    /// meter is measuring, its clock is wrong. One cause for both signs, on the
+    /// 2.6 rule — no second cause for a distinction that changes no repair, and
+    /// both send the operator to a clock.
     TimestampsDisagree,
-    /// The reading is older than the allowance. The ordinary staleness case.
+    /// The reading is older than the allowance and the meter has stopped
+    /// producing (its `value_date` is not advancing). The ordinary staleness
+    /// case — the data really is old.
     ReadingTooOld,
     /// The values themselves are unusable — an unknown unit or a non-finite
     /// number — so the timestamps prove only that we were promptly given

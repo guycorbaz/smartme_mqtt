@@ -405,6 +405,18 @@ pub struct MeterMemory {
     /// inside. Refusing to record a header because the reading was stale would make
     /// a stale meter look like a frozen cloud on the following tick.
     pub last_http_date: Option<crate::domain::UtcMillis>,
+    /// The `value_date` of the last successful fetch, for the over-age guard's
+    /// wrong-clock/old-data discrimination (story 2.7 AC2,
+    /// [`Policy::step_remembering`]).
+    ///
+    /// Same family as `last_http_date` and the same non-adoption rationale: it
+    /// answers *"is the meter still producing new measurements?"*, which is a
+    /// fact about the feed rather than about whether we trusted the numbers. One
+    /// guard at the recording site: story 1.7 pins an unparseable `ValueDate` to
+    /// the epoch, and a sentinel is not a measurement time — recording it would
+    /// make the next real reading look like production resuming. Anything below
+    /// the plausibility floor therefore never enters this memory.
+    pub last_value_date: Option<crate::domain::UtcMillis>,
 }
 
 /// Runs one iteration: heartbeat, fetch (bounded), judge, forward.
@@ -422,6 +434,7 @@ pub async fn step_once<S: Source + Send>(
         energy_reference,
         rate_limited_until,
         last_http_date,
+        last_value_date,
     } = memory;
     let Context {
         meter,
@@ -505,7 +518,11 @@ pub async fn step_once<S: Source + Send>(
         *rate_limited_until = None;
     }
 
-    let (freshness_state, freshness) = policy.step(previous, &tick, clock.wall());
+    // Judged WITH the previous reading's `value_date` (story 2.7 AC2): the
+    // over-age guard is the one row of the table that can tell a wrong clock
+    // from old data, and only when it knows whether the meter produced since.
+    let (freshness_state, freshness) =
+        policy.step_remembering(previous, &tick, clock.wall(), *last_value_date);
 
     // The monotonicity oracle (Story 2.2). It judges a RELATION between two
     // readings, so it has nothing to say when the fetch failed — there is no new
@@ -550,6 +567,16 @@ pub async fn step_once<S: Source + Send>(
         && let Some(http_date) = reading.http_date
     {
         *last_http_date = Some(http_date);
+    }
+    // AND THE METER'S OWN CLOCK, for the wrong-clock/old-data discrimination —
+    // recorded AFTER judging, so this tick was judged against the previous one.
+    // The floor guard keeps story 1.7's epoch sentinel out: an unparseable
+    // `ValueDate` is pinned to 0, and a sentinel entering this memory would make
+    // the next real reading look like production resuming.
+    if let Ok(reading) = &tick
+        && reading.value_date() >= crate::core::state_machine::PLAUSIBILITY_FLOOR
+    {
+        *last_value_date = Some(reading.value_date());
     }
 
     let judgements = [
@@ -679,11 +706,32 @@ pub async fn step_once<S: Source + Send>(
     // judged against a frozen one and published `Good` — FR15 defeated by the
     // oracle's own bookkeeping, which is exactly the failure story 2.3's review
     // named for the replay case.
+    // A REFUSED FEED ADOPTS NOTHING, and this is where [#69] closes (story 2.7
+    // AC5). A replayed response proves nothing new — its numbers are copies of
+    // an earlier answer — yet the SOURCE marks it `Good`, which is exactly the
+    // disagreement story 2.3 AC3's adoption rule has been waiting to observe.
+    // Two leaks without this gate, both reachable:
+    //
+    //  - the YARDSTICK: a replayed OLDER response carries a lower index, the
+    //    monotonicity oracle duly says `counter-went-backwards`, and the
+    //    meter-replacement exemption below would adopt it — the reference
+    //    rewound by a replay, so the next genuine reading is judged against an
+    //    index from the past and a real reset can pass as `Good`. FR15 defeated
+    //    by the exemption that exists to serve it.
+    //  - the BUFFER: a replay is `Stale`, not `Bad`, so `last` would adopt it
+    //    and the next silent cloud republishes an OLD reading in place of the
+    //    newest accepted one.
+    //
+    // The old guard (`reading.value.quality != Quality::Bad`) admits both,
+    // because it asks the SOURCE whether the reading is trustworthy — the very
+    // question the oracle layer exists to answer instead.
+    let feed_refused = feed.quality() != Quality::Good;
     let energy_verdict = published.for_metric(Measured::Energy);
-    let reference_adoptable = match energy_verdict.quality() {
-        Quality::Bad => energy_verdict.cause() == Some(Cause::CounterWentBackwards),
-        _ => true,
-    };
+    let reference_adoptable = !feed_refused
+        && match energy_verdict.quality() {
+            Quality::Bad => energy_verdict.cause() == Some(Cause::CounterWentBackwards),
+            _ => true,
+        };
     // THE REPUBLICATION BUFFER guards against one thing: a number the bridge
     // REFUSED being handed over later, when the verdict that refused it is gone.
     // So what disqualifies a reading is a metric that was refused **while holding
@@ -694,17 +742,18 @@ pub async fn step_once<S: Source + Send>(
     // one unreadable field was kept out of `last` entirely, so the next silent
     // cloud republished an OLDER reading than the most recent one whose other
     // metric was sound.
-    let last_adoptable = match &tick {
-        Ok(reading) => Measured::ALL.iter().all(|metric| {
-            let refused = published.for_metric(*metric).quality() == Quality::Bad;
-            let carries_a_number = match metric {
-                Measured::Power => reading.value.power.is_some(),
-                Measured::Energy => reading.value.energy.is_some(),
-            };
-            !(refused && carries_a_number)
-        }),
-        Err(_) => false,
-    };
+    let last_adoptable = !feed_refused
+        && match &tick {
+            Ok(reading) => Measured::ALL.iter().all(|metric| {
+                let refused = published.for_metric(*metric).quality() == Quality::Bad;
+                let carries_a_number = match metric {
+                    Measured::Power => reading.value.power.is_some(),
+                    Measured::Energy => reading.value.energy.is_some(),
+                };
+                !(refused && carries_a_number)
+            }),
+            Err(_) => false,
+        };
 
     if let Ok(reading) = &tick
         && reference_adoptable
@@ -1760,6 +1809,177 @@ mod tests {
             Some(Cause::FeedNotAdvancing),
             "the FEED advanced; it is the METER that went quiet, and the two send \
              an operator to different places"
+        );
+    }
+
+    /// **Story 2.7 AC5 — a replayed response rewinds nothing, and [#69] closes
+    /// on this test.**
+    ///
+    /// The disagreement story 2.3 AC3 waited for since FR14's withdrawal: a
+    /// reading the SOURCE marks `Good` (asserted on the fixture below) that the
+    /// composed verdict refuses (`feed-not-advancing`). The OLD adoption guard —
+    /// `reading.value.quality != Quality::Bad` — asks the source, so it adopts
+    /// the replay into both memories; the rule that replaced it must not. Until
+    /// this story the set of causes producing that disagreement was empty, which
+    /// is why swapping the rules turned nothing red.
+    ///
+    /// Both leaks are asserted where a consumer would meet them:
+    ///  - tick 3 (a GENUINE reading below the true reference) must be `Bad`
+    ///    `counter-went-backwards`. Under the old guard the replayed 850 000
+    ///    became the reference via the meter-replacement exemption, so this
+    ///    genuine backwards reading passed as `Good` — FR15 defeated by a replay.
+    ///  - tick 5 (a silent cloud) must republish the newest ACCEPTED reading —
+    ///    same values, its own `value_date` — not the replayed old one `last`
+    ///    would have adopted. The two replays differ on purpose: the
+    ///    EQUAL-index replay is the one only the feed oracle refuses (`Stale`,
+    ///    so the pre-gate buffer rule adopted it), and the LOWER-index replay
+    ///    is the one the meter-replacement exemption adopted as a reference.
+    ///    Each gate has its own witness, so each mutation fails its own
+    ///    assertion.
+    #[tokio::test]
+    async fn a_replayed_response_rewinds_neither_memory() {
+        // The newest accepted state of the meter: index 900 000, measured at BASE.
+        let genuine = reading_with_energy(Quality::Good, 950, 900_000.0);
+        // A replay of a MINUTE-OLD answer with the same index: nothing about it
+        // is wrong except that it is not new, so only the feed oracle refuses it
+        // — and the source's own opinion of it is `Good`, which is the whole
+        // disagreement.
+        let mut replay_equal = reading_with_energy(Quality::Good, 950, 900_000.0);
+        replay_equal.value.value_date = UtcMillis(BASE - 60_000);
+        replay_equal.http_date = Some(UtcMillis(BASE - 59_050));
+        assert_eq!(
+            replay_equal.value.quality,
+            Quality::Good,
+            "the premise: the SOURCE calls the replay good; only the feed \
+             oracle disagrees"
+        );
+        // A replay of an OLDER answer with a LOWER index: the monotonicity
+        // oracle also refuses this one (`counter-went-backwards`), and the
+        // meter-replacement exemption would adopt it as the new reference.
+        let mut replay_older = reading_with_energy(Quality::Good, 950, 850_000.0);
+        replay_older.value.value_date = UtcMillis(BASE - 120_000);
+        replay_older.http_date = Some(UtcMillis(BASE - 119_050));
+        // A genuine LATER reading whose index is below the true reference but
+        // above the replayed one: the only input that can tell the two
+        // reference rules apart.
+        let backwards = later(reading_with_energy(Quality::Good, 950, 860_000.0), 1);
+
+        let (_, sent) = drive_sequence(
+            FakeSource::new()
+                .then(Ok(genuine))
+                .then(Ok(replay_equal))
+                .then(Ok(replay_older))
+                .then(Ok(backwards))
+                .then(Err(SourceError::Timeout)),
+        )
+        .await;
+        assert_eq!(sent.len(), 5, "every tick publishes a verdict (ADR 0027)");
+        assert_eq!(
+            sent[0].published(),
+            Quality::Good,
+            "the premise reached the wire"
+        );
+
+        // Both replays are refused on the wire; the equal one only by the feed.
+        assert_eq!(
+            sent[1].published_for(Measured::Energy),
+            Quality::Stale,
+            "a replayed number is not a current one, even when it is the same \
+             number"
+        );
+        assert_eq!(
+            sent[1].verdicts.for_metric(Measured::Energy).cause(),
+            Some(Cause::FeedNotAdvancing)
+        );
+
+        // THE YARDSTICK HALF: the genuine backwards reading is judged against
+        // the reference the replays tried to rewind.
+        assert_eq!(
+            sent[3].published_for(Measured::Energy),
+            Quality::Bad,
+            "the reference must still be 900 000: under the source-quality guard \
+             the replayed 850 000 became the reference and this genuine \
+             backwards reading passed as Good — the negative delta FR15 exists \
+             to prevent, delivered by a replay"
+        );
+        assert_eq!(
+            sent[3].verdicts.for_metric(Measured::Energy).cause(),
+            Some(Cause::CounterWentBackwards)
+        );
+
+        // THE BUFFER HALF: the silent cloud republishes the newest ACCEPTED
+        // reading — tick 1's, with tick 1's own `value_date`. Adopting the
+        // equal-index replay leaves the same numbers behind a value_date from a
+        // minute earlier: the wire would say the reading was true at a moment
+        // the bridge never proved.
+        assert_eq!(
+            sent[4].measurement.energy,
+            Some(Kwh(900_000.0)),
+            "the republished index is the newest accepted one"
+        );
+        assert_eq!(
+            sent[4].measurement.value_date,
+            UtcMillis(BASE),
+            "`last` must not have adopted the replay: its value_date is the \
+             replayed answer's, and republishing it re-dates the reading to a \
+             moment the bridge never accepted"
+        );
+    }
+
+    /// **Story 2.7 AC2, through the pipeline rather than against the function.**
+    ///
+    /// The unit tests in `core::state_machine` prove the discrimination
+    /// discriminates. This proves the memory is actually THREADED — that
+    /// `step_once` hands `Policy::step_remembering` the previous reading's
+    /// `value_date` and records this one's after judging. Epic 2's recurring
+    /// review finding is a property tested one layer above where it lives; this
+    /// is the layer where a forgotten wire would hide.
+    #[tokio::test]
+    async fn a_meter_with_a_wrong_clock_is_told_apart_from_a_stopped_one() {
+        // THE WRONG CLOCK: the meter keeps producing (`value_date` advances every
+        // tick) but its clock runs 150 s behind the cloud's, so every age is far
+        // beyond the 90 s allowance and perfectly stable.
+        let behind = reading(Quality::Good, 150_000);
+        let (_, sent) = drive_sequence(
+            FakeSource::new()
+                .then(Ok(behind.clone()))
+                .then(Ok(later(behind, 1))),
+        )
+        .await;
+        assert_eq!(sent.len(), 2, "every tick publishes a verdict (ADR 0027)");
+        assert_eq!(
+            sent[0].verdict().cause(),
+            Some(Cause::ReadingTooOld),
+            "first contact: no previous reading, so nobody can tell yet — the \
+             pre-2.7 answer is the honest one"
+        );
+        assert_eq!(
+            sent[1].verdict().cause(),
+            Some(Cause::TimestampsDisagree),
+            "the meter produced a NEW measurement and the age did not shrink: \
+             that is a clock to fix, and `reading-too-old` would send the \
+             operator to a meter that never stopped"
+        );
+        assert_eq!(
+            sent[1].published(),
+            Quality::Stale,
+            "only the cause moves; a reading the clocks disagree about is still \
+             unproven"
+        );
+
+        // THE STOPPED METER: `value_date` freezes while the cloud's `Date`
+        // advances past the allowance. The data is genuinely old and must keep
+        // saying so.
+        let first = reading(Quality::Good, 950);
+        let frozen_meter = reading(Quality::Good, 150_000); // same value_date, later Date
+        let (_, sent) =
+            drive_sequence(FakeSource::new().then(Ok(first)).then(Ok(frozen_meter))).await;
+        assert_eq!(
+            sent[1].verdict().cause(),
+            Some(Cause::ReadingTooOld),
+            "no new measurement since the previous tick: this is a meter that \
+             stopped, and calling it a clock fault would send the operator away \
+             from it"
         );
     }
 

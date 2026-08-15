@@ -1,6 +1,7 @@
 # Story 2.3: The oracle layer finished — a verdict per metric, and ties that do not depend on order
 
-Status: done (2026-08-12) — **AC3 recorded UNMET**, [#69](https://github.com/guycorbaz/smartme_mqtt/issues/69)
+Status: done (2026-08-12) — AC3 was recorded UNMET with [#69](https://github.com/guycorbaz/smartme_mqtt/issues/69);
+**MET since 2026-08-15**, when story 2.7 AC5 supplied the subject (see the amendment at the bottom)
 
 ## Story
 
@@ -349,7 +350,7 @@ exists for, and all three are fixed in `47e2d49`.
 |---|---|
 | AC1 | met — asserted on the published `Metric`s, three recorded mutations |
 | AC2 | met on the composition; its latch clause is a **net, not a mechanism**, and ADR 0032 now says so |
-| AC3 | **UNMET, [#69]** — the rule is in the code and no input can distinguish it from the one it replaced |
+| AC3 | **UNMET at closure, [#69]; MET 2026-08-15** — story 2.7's replayed feed is the first input that tells the two rules apart, and swapping them back now turns a test red twice |
 | AC4 | met, after the two-flag split the fix commit's review of itself required |
 | AC5 | met — persisted per meter, restored through `run` rather than through a helper, with the owner written inside the file |
 | AC6 | met on the two surfaces that exist; the third is not built (see above) |
@@ -380,6 +381,15 @@ an unfalsifiable rule is counted as protection while protecting nothing, which i
 `Verdict::latches()` was until this story's own review proved its branch could not change an
 answer. The treatment is the same: keep the mechanism, stop claiming it works. [#69] stays open as
 the standing record; it closes the day an oracle first refuses a reading the source called good.
+
+**AMENDED 2026-08-15 — that day came, and AC3 is MET.** Story 2.7's stalled-feed oracle refuses a
+replayed response the SOURCE marks `Good` — the exact disagreement this criterion waited for — and
+`a_replayed_response_rewinds_neither_memory` (in `poll_publish`) drives it on the wire: with the
+old source-quality guard restored, the test goes red twice, once per memory. The rule kept on
+construction now also has its falsification. [#69] closed the same day. One nuance belongs to the
+record: the adoption rule needed one addition to meet the criterion's spirit — a verdict-level
+check alone would still have adopted the replay through the `CounterWentBackwards` exemption and
+(for `last`) through `Stale` not being `Bad`; story 2.7 AC5's feed gate is what closed both doors.
 
 [ADR 0033]: ../../docs/adr/0033-fr14-is-withdrawn-physical-plausibility-is-not-the-bridge-s-to-judge.md
 [#72]: https://github.com/guycorbaz/smartme_mqtt/issues/72

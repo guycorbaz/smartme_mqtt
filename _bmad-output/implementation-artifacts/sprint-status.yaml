@@ -62,7 +62,7 @@
 #   Ignition contract test (human action required — stays backlog until Guy runs it).
 
 generated: 2026-07-25
-last_updated: 2026-08-13
+last_updated: 2026-08-15
 project: smartme_mqtt
 project_key: NOKEY
 tracking_system: file-system
@@ -720,7 +720,10 @@ development_status:
   # layer exists to answer instead. So AC3 is unmet by ACCEPTANCE, not pending
   # anything, and nothing may describe it as met. [#69] stays open as the record;
   # it closes the day an oracle first refuses a reading the source called good.
-  2-3-the-oracle-layer-finished: done  # closed 2026-08-12; AC3 recorded UNMET [#69]
+  # AC3'S SUBJECT ARRIVED 2026-08-15: story 2.7's replayed feed is the first reading
+  # the SOURCE calls Good that the composed verdict refuses, and swapping the adoption
+  # rule back for the old one now turns a test red twice. AC3 is MET, [#69] closed.
+  2-3-the-oracle-layer-finished: done  # closed 2026-08-12 with AC3 UNMET [#69]; AC3 met 2026-08-15
   # FR14 — does not exist at all today.
   # BLOCKED BY 2.3: physical bounds is a PER-METRIC oracle, and until 2.3 a verdict
   # belongs to a READING. Written first, this story has to be rewritten and the wire
@@ -907,7 +910,24 @@ development_status:
   # compared two responses instead of one.
   # AC2 (skew told from staleness, no threshold), AC3 (verify UTC end-to-end) and AC5 ([#69])
   # remain.
-  2-7-utc-end-to-end-and-clock-skew: in-progress
+  # 2026-08-15, THE THREE REMAINING CRITERIA LANDED:
+  #  - AC2: `Policy::step_remembering` — the over-age guard, given the previous reading's
+  #    `value_date`, tells a wrong clock (`timestamps-disagree`, REUSED: same repair as the
+  #    negative age, so the contract does not move) from old data (`reading-too-old`). The
+  #    discrimination is structural — is `value_date` advancing? — no threshold, per the
+  #    epic's twice-made refusal.
+  #  - AC3: verified rather than rebuilt. Two why-tests at the parsers, one mechanical guard
+  #    (`utc_is_the_only_time_domain`) across all three crates' sources and manifests. The
+  #    finding: `chrono` sits in Cargo.lock via testcontainers→serde_with's feature union and
+  #    is compiled into NOTHING (`cargo tree -i chrono` is empty).
+  #  - AC5: [#69] CLOSED. The feed gate — a refused feed adopts nothing — closes the two doors
+  #    a verdict-level rule left open: the CounterWentBackwards exemption (a replayed older
+  #    index rewound the reference) and Stale-not-Bad (`last` adopted an equal-index replay and
+  #    re-dated the republish). Story 2.3 AC3 marked MET.
+  # Nine mutations run before their notes; one of them (the `last` gate) came back GREEN and
+  # forced the test to grow the witness it lacked — AC6's ordering rule catching a
+  # falsification that would otherwise have been recorded without ever running.
+  2-7-utc-end-to-end-and-clock-skew: review  # all ACs done 2026-08-15; awaiting the independent pass
 
   # NOT A STORY: FR9 and NFR7 (serial-identity binding and its verification) were
   # delivered by ADR 0029 on 2026-08-09, and more strongly than the FR asked. They

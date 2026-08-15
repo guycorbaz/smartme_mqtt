@@ -149,6 +149,78 @@ fn raw_time_sources_and_fakes_are_confined_to_their_home_modules() {
     );
 }
 
+/// Story 2.7 AC3 — UTC is the only time domain, asserted mechanically.
+///
+/// FR10 asks that all timestamps be treated as UTC end-to-end. The two parsers
+/// enforce it at the boundary — each refuses a timestamp that does not
+/// explicitly declare UTC, and their own tests say why. This test enforces the
+/// rest of the path: no crate of ours may declare a calendar/timezone library or
+/// name a zoned time type, so there is no code that COULD move a timestamp into
+/// a local zone between the parse and the wire. `UtcMillis` stays the only time
+/// type, and the raw wall clock stays confined to `core/clock.rs` (the test
+/// above this one).
+///
+/// The scan covers all three crates, not only this one: the timestamps are born
+/// in `smart-me-client` and reach the wire through `sparkplug-b`.
+///
+/// One finding recorded rather than asserted: `Cargo.lock` DOES list `chrono`.
+/// It arrives through `testcontainers` (a dev-dependency of this crate) via
+/// `serde_with`'s feature union, and `cargo tree -i chrono` prints nothing — the
+/// lockfile is the union of everything that COULD be built for any target or
+/// feature set, not what is. What we control is what our manifests request and
+/// what our sources name, and that is what this test pins.
+#[test]
+fn utc_is_the_only_time_domain() {
+    // Distinctive tokens only — `chrono` as a bare substring would flag the word
+    // "synchronous", so the crate is matched the way it must be written to be
+    // used. Comment lines are skipped, as everywhere in this file.
+    const BANNED_TOKENS: &[&str] = &[
+        "use chrono",     // the calendar crate, however aliased afterwards
+        "chrono::",       // or path-qualified without a use
+        "OffsetDateTime", // the `time` crate's zoned type
+        "PrimitiveDateTime",
+        "FixedOffset",   // chrono's offset type
+        "with_timezone", // chrono's zone conversion
+        "Local::now",    // a local-zone "now" from any crate
+        "localtime",
+    ];
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates/ exists")
+        .to_path_buf();
+    let mut violations = Vec::new();
+    for krate in ["smartme-bridge", "smart-me-client", "sparkplug-b"] {
+        for file in rs_files(&workspace.join(krate).join("src")) {
+            let text = fs::read_to_string(&file).unwrap();
+            for line in text.lines() {
+                let t = line.trim();
+                if t.starts_with("//") {
+                    continue;
+                }
+                for banned in BANNED_TOKENS {
+                    if t.contains(banned) {
+                        violations.push(format!("{}: {}", file.display(), t));
+                    }
+                }
+            }
+        }
+        // And the manifest: a dependency nobody imports yet is still a door.
+        let manifest = fs::read_to_string(workspace.join(krate).join("Cargo.toml")).unwrap();
+        for line in manifest.lines() {
+            let t = line.trim();
+            if t.starts_with("chrono") || t.starts_with("time =") || t.starts_with("time.") {
+                violations.push(format!("{krate}/Cargo.toml declares a time-zone door: {t}"));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "a local-time capability reached the workspace; every timestamp here is \
+         UTC epoch-millis and a zoned type is how one silently stops being:\n{}",
+        violations.join("\n")
+    );
+}
+
 #[test]
 fn measurement_to_sparkplug_mapping_is_confined_to_the_publisher() {
     let mut violations = Vec::new();

@@ -131,10 +131,17 @@ impl Policy {
     /// | `Ok`, `http_date = None`          | Stale   | Stale   |
     /// | `Ok`, `http_date < FLOOR`         | Stale   | Stale   |
     /// | `Ok`, `age < 0`                   | Stale   | Stale   |
-    /// | `Ok`, `age > max_age_ms`          | Stale   | Stale   |
+    /// | `Ok`, `age > max_age_ms`          | Stale   | Stale¹  |
     /// | `Ok`, in-bounds, value `Bad`      | Stale   | Bad     |
     /// | `Ok`, in-bounds, value `Stale`    | Stale   | Stale   |
     /// | `Ok`, in-bounds, value `Good`     | Fresh   | Good    |
+    ///
+    /// ¹ The quality is the same either way; the CAUSE is not. Since story 2.7
+    /// AC2 the over-age row tells a wrong clock from old data when it is given
+    /// the previous reading's `value_date` — see [`Policy::step_remembering`].
+    /// This three-argument form has no memory to consult, so it keeps the
+    /// pre-2.7 answer (`reading-too-old`), which is also what the first tick
+    /// after a restart honestly deserves: on one reading, nobody can tell.
     ///
     /// `Failed` is ABSORBING: a fatal error (auth rejected, config wrong) means
     /// retrying with the same config would lie, and config is restart-only — so
@@ -145,11 +152,46 @@ impl Policy {
     /// Otherwise `prev` never softens a verdict: a previously-Fresh meter with a
     /// doubtful tick goes Stale immediately (when in doubt, publish STALE).
     ///
-    /// Known accepted limitation (deferred oracle, see deferred-work.md): a
-    /// byte-identical replayed response — `http_date` frozen WITH `value_date` —
-    /// keeps a plausible age and stays Fresh; detecting it needs cross-tick state
-    /// (`http_date` monotonicity), an additive Epic 2 oracle.
+    /// A byte-identical replayed response — `http_date` frozen WITH `value_date` —
+    /// keeps a plausible age and stays Fresh HERE, deliberately: every guard in
+    /// this function compares two timestamps inside one reading, and a replay's
+    /// are impeccable. The oracle that catches it lives one layer up, where the
+    /// cross-tick memory is (`core::oracle::feed_is_advancing`, story 2.7 AC1) —
+    /// this note replaced the "deferred oracle" limitation that sat here from
+    /// Epic 1 until that story.
     pub fn step(&self, prev: State, tick: &Tick, now: UtcMillis) -> (State, Verdict) {
+        self.step_remembering(prev, tick, now, None)
+    }
+
+    /// [`Policy::step`], given the one memory the over-age guard can use: the
+    /// `value_date` of the meter's PREVIOUS reading (story 2.7 AC2).
+    ///
+    /// # What the memory buys, and why it is a parameter rather than a field
+    ///
+    /// `age = http_date − value_date` cannot tell a WRONG CLOCK from OLD DATA: a
+    /// meter whose clock runs behind the cloud's by a constant produces a large,
+    /// stable age for ever, and reporting that as `reading-too-old` sends an
+    /// operator to a meter that stopped — when the meter is measuring fine and
+    /// what needs fixing is its clock. The discrimination is structural, not a
+    /// threshold: **is `value_date` still advancing?** A meter that keeps
+    /// producing new measurements is not silent, so a large age against it is a
+    /// disagreement between clocks (`timestamps-disagree` — the same repair as a
+    /// negative age, which is the same fault with the opposite sign). A meter
+    /// whose `value_date` stands still has genuinely stopped: `reading-too-old`
+    /// stays, because the data IS old.
+    ///
+    /// The memory arrives as a parameter so `Policy` stays a pure function of
+    /// its inputs — the same reason `now` does. Who remembers is the caller
+    /// (`MeterMemory::last_value_date`), and `None` — no previous reading, or
+    /// none with a plausible timestamp — falls back to `reading-too-old`, the
+    /// pre-2.7 answer and the honest one when there is nothing to compare.
+    pub fn step_remembering(
+        &self,
+        prev: State,
+        tick: &Tick,
+        now: UtcMillis,
+        previous_value_date: Option<UtcMillis>,
+    ) -> (State, Verdict) {
         // Failed latches until restart; a fatal tick latches it. Both are
         // clock-independent, so they are judged BEFORE the boot-sanity guard —
         // an unsynced RTC must not soften an auth failure into Stale.
@@ -182,11 +224,15 @@ impl Policy {
             Err(SourceError::Timeout) | Err(SourceError::Transient { .. }) => {
                 (State::Stale, Verdict::stale(Cause::SourceUnreachable))
             }
-            Ok(reading) => self.judge_reading(reading),
+            Ok(reading) => self.judge_reading(reading, previous_value_date),
         }
     }
 
-    fn judge_reading(&self, reading: &Reading) -> (State, Verdict) {
+    fn judge_reading(
+        &self,
+        reading: &Reading,
+        previous_value_date: Option<UtcMillis>,
+    ) -> (State, Verdict) {
         if reading.value.quality == Quality::Bad {
             // Bad is judged BEFORE the timestamp guards: "do not use this value"
             // must never be relabeled as the milder "old value" — a Bad reading
@@ -214,13 +260,24 @@ impl Policy {
         }
         let age_ms = http_date - reading.value_date();
         if age_ms < 0 || age_ms > self.max_age_ms {
-            // Negative age = clock domains disagree; huge age = old data. (The
-            // 1-second Date truncation can make a genuinely fresh reading read
-            // sub-zero — spurious STALE is the accepted fail-safe direction;
-            // tolerance tuning is deferred to Epic 2.)
+            // Negative age = clock domains disagree. (The 1-second Date
+            // truncation can make a genuinely fresh reading read sub-zero —
+            // spurious STALE is the accepted fail-safe direction.)
+            //
+            // Over-age is TWO faults wearing one number (story 2.7 AC2), and the
+            // memory is what tells them apart: a `value_date` that ADVANCED since
+            // the previous reading means the meter is still measuring, so the
+            // large age is its clock disagreeing with the cloud's — the negative
+            // case with the opposite sign, published under the same cause. A
+            // `value_date` standing still means the data is genuinely old. No
+            // magnitude threshold: what separates the two is whether the meter is
+            // still producing, which is a fact rather than a number nobody
+            // measured (story 2.2 AC4, ADR 0033).
+            let meter_still_measuring =
+                previous_value_date.is_some_and(|previous| reading.value_date() > previous);
             return (
                 State::Stale,
-                if age_ms < 0 {
+                if age_ms < 0 || meter_still_measuring {
                     Verdict::stale(Cause::TimestampsDisagree)
                 } else {
                     Verdict::stale(Cause::ReadingTooOld)
@@ -426,6 +483,110 @@ mod tests {
             POLICY.step_quality(State::Fresh, &tick, SANE_NOW),
             (State::Stale, Quality::Stale)
         );
+    }
+
+    /// **Story 2.7 AC2 — a wrong clock is not called old data.**
+    ///
+    /// A meter whose clock runs behind the cloud's by a constant produces a
+    /// large, stable age on every reading, for ever. Before this story every one
+    /// of them was published `reading-too-old`, which sends an operator to a
+    /// meter that stopped — when the meter is measuring fine and what needs
+    /// fixing is its clock. The discrimination is structural, no threshold: the
+    /// `value_date` ADVANCED, so the meter is still producing, so the age is a
+    /// clock disagreement.
+    #[test]
+    fn a_clock_running_behind_is_not_called_old_data() {
+        let behind_by = POLICY.max_age_ms() + 60_000;
+        // FIRST CONTACT: no previous reading, so no discrimination is possible
+        // and the honest answer is the old one.
+        let first = Ok(reading(Quality::Good, BASE, Some(BASE + behind_by)));
+        let (state, verdict) = POLICY.step_remembering(State::initial(), &first, SANE_NOW, None);
+        assert_eq!(state, State::Stale);
+        assert_eq!(
+            verdict,
+            Verdict::stale(Cause::ReadingTooOld),
+            "on one reading nobody can tell a wrong clock from old data, and \
+             claiming the discrimination without the memory would be inventing it"
+        );
+        // SECOND READING: `value_date` advanced — the meter measured again — and
+        // the age did not shrink. That is a clock, not a silence.
+        let second = Ok(reading(
+            Quality::Good,
+            BASE + 30_000,
+            Some(BASE + 30_000 + behind_by),
+        ));
+        let (state, verdict) =
+            POLICY.step_remembering(State::Stale, &second, SANE_NOW, Some(UtcMillis(BASE)));
+        assert_eq!(
+            verdict,
+            Verdict::stale(Cause::TimestampsDisagree),
+            "the meter is still producing new measurements, so the large age is \
+             the two clocks disagreeing — the operator must be sent to a clock, \
+             not to a meter that never stopped"
+        );
+        assert_eq!(
+            state,
+            State::Stale,
+            "the quality half does not move: a reading the clocks disagree about \
+             is still unproven, whatever its cause"
+        );
+    }
+
+    /// The other half of AC2, and the one that protects the pre-2.7 verdict: a
+    /// meter that genuinely stopped keeps `reading-too-old`. Its `value_date`
+    /// stands still (or goes backwards, which is not production either) while the
+    /// cloud's `Date` advances — the data IS old.
+    #[test]
+    fn a_meter_that_stopped_measuring_keeps_reading_too_old() {
+        let over_age = POLICY.max_age_ms() + 60_000;
+        let frozen = Ok(reading(Quality::Good, BASE, Some(BASE + over_age)));
+        for previous in [
+            // The previous reading carried the same `value_date`: nothing new.
+            Some(UtcMillis(BASE)),
+            // Or a LATER one — a value_date going backwards is not production.
+            Some(UtcMillis(BASE + 1)),
+        ] {
+            let (state, verdict) =
+                POLICY.step_remembering(State::Stale, &frozen, SANE_NOW, previous);
+            assert_eq!(state, State::Stale);
+            assert_eq!(
+                verdict,
+                Verdict::stale(Cause::ReadingTooOld),
+                "the meter has not produced a new measurement (previous \
+                 {previous:?}); this data is genuinely old, and relabelling it a \
+                 clock fault would send the operator away from the meter that \
+                 stopped"
+            );
+        }
+    }
+
+    /// The memory must not touch any reading inside the allowance: AC8 promises
+    /// that no verdict correct today changes apart from the ones AC2 names, and
+    /// the over-age guard is the only row allowed to consult it.
+    #[test]
+    fn the_memory_never_touches_a_reading_inside_the_allowance() {
+        let in_bounds = Ok(reading(Quality::Good, BASE + 30_000, Some(BASE + 30_950)));
+        for previous in [None, Some(UtcMillis(BASE)), Some(UtcMillis(BASE + 30_000))] {
+            assert_eq!(
+                POLICY.step_remembering(State::Stale, &in_bounds, SANE_NOW, previous),
+                (State::Fresh, Verdict::good()),
+                "a reading whose age is inside the allowance is judged on its own \
+                 timestamps; the memory (here {previous:?}) has no say"
+            );
+        }
+        // And a NEGATIVE age keeps its cause whatever the memory says: it is
+        // already a clock disagreement, memory or none.
+        let negative = Ok(reading(Quality::Good, BASE + 2_000, Some(BASE + 1_000)));
+        for previous in [None, Some(UtcMillis(BASE))] {
+            assert_eq!(
+                POLICY
+                    .step_remembering(State::Fresh, &negative, SANE_NOW, previous)
+                    .1,
+                Verdict::stale(Cause::TimestampsDisagree),
+                "a negative age was `timestamps-disagree` before the memory \
+                 existed and must stay so with it (previous {previous:?})"
+            );
+        }
     }
 
     #[test]

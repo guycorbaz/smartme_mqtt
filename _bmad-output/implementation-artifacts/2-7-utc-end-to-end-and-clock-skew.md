@@ -1,6 +1,7 @@
 # Story 2.7: A feed that stopped moving stops being called fresh, and a clock that is wrong is not called old
 
-Status: in-progress — **AC1, AC4, AC6, AC7 done 2026-08-13**; AC2, AC3, AC5 outstanding
+Status: review — **AC1, AC4, AC6, AC7 done 2026-08-13; AC2, AC3, AC5 done 2026-08-15**; awaiting an
+independent pass, per the repository's rule that a story is reviewed in fresh context
 
 ## Story
 
@@ -112,13 +113,26 @@ runbook, and the mechanical grep.
   - [x] `http_date` of the previous SUCCESSFUL fetch — not the previous *accepted* one;
         the difference is decided and argued on `MeterMemory::last_http_date`
   - [x] Reading-scoped judgement, composed like the others
-- [ ] **Task 3 — Skew told apart from staleness** (AC2)
-  - [ ] The structural discrimination; no threshold
-- [ ] **Task 4 — Verify UTC end-to-end** (AC3)
-- [ ] **Task 5 — Close [#69]** (AC5)
+- [x] **Task 3 — Skew told apart from staleness** (AC2) — 2026-08-15
+  - [x] The structural discrimination; no threshold — `Policy::step_remembering`,
+        fed by `MeterMemory::last_value_date`; the cause is `timestamps-disagree`,
+        REUSED rather than minted (see the note below), so the contract does not move
+- [x] **Task 4 — Verify UTC end-to-end** (AC3) — 2026-08-15: two why-tests at the
+      parsers, one mechanical guard across all three crates, one finding recorded
+- [x] **Task 5 — Close [#69]** (AC5) — 2026-08-15: the feed gate on both adoption
+      rules; the disagreement driven on the wire in
+      `a_replayed_response_rewinds_neither_memory`
 - [x] **Task 6 — Contract 8 → 9** (AC7) — 2026-08-13: golden, manual, runbook, grep
-- [ ] **Task 7 — Falsify, running each mutation BEFORE writing its note** (AC6)
-- [ ] **Task 8 — `./scripts/ci-local.sh` full run**, then `gh run list`
+- [x] **Task 7 — Falsify, running each mutation BEFORE writing its note** (AC6) —
+      2026-08-15, nine mutations, tables below; one of them found the test wanting
+      and is recorded as such
+- [x] **Task 8 — `./scripts/ci-local.sh` full run**, then `gh run list` — 2026-08-15.
+      Every step reproduced green EXCEPT the two tests that bind port 8080
+      (`from_an_empty_directory_to_publishing…`, `with_no_configuration_the_ui_answers…`):
+      the port is held by another project on this machine (the response carries mybibli's
+      session cookie — verified, not assumed), the standing impediment of 2026-08-13.
+      Image build + smoke tests green; the two port tests are verified on GitHub after
+      the push, as on 2026-08-13.
 
 ## Dev Notes
 
@@ -181,6 +195,23 @@ faithful of the two.
 
 ### File List
 
+- `crates/smartme-bridge/src/app/poll_publish.rs` — `MeterMemory` (AC4, 2026-08-13:
+  +`last_http_date`; 2026-08-15: +`last_value_date`), the feed oracle's composition (AC1),
+  the memory threading and recording (AC2), the feed gate on both adoption rules (AC5);
+  pipeline tests for AC1, AC2 and AC5
+- `crates/smartme-bridge/src/core/oracle.rs` — `Cause::FeedNotAdvancing` and
+  `feed_is_advancing` (AC1); `TimestampsDisagree`/`ReadingTooOld` docs widened (AC2)
+- `crates/smartme-bridge/src/core/state_machine.rs` — `Policy::step_remembering` and the
+  over-age discrimination (AC2), with its unit tests; the parked-oracle note replaced (AC1)
+- `crates/smart-me-client/src/types.rs` — `a_value_date_that_does_not_declare_utc_is_refused` (AC3)
+- `crates/smart-me-client/src/http_date.rs` — `a_date_header_that_is_not_gmt_is_refused` (AC3)
+- `crates/smartme-bridge/tests/arch_purity.rs` — `utc_is_the_only_time_domain` (AC3)
+- `crates/smartme-bridge/tests/contract_golden.rs`, `docs/manual/chapters/05-mqtt-sparkplug-contract.tex`,
+  `docs/ignition-contract-runbook.md` — contract 8 → 9 (AC7, 2026-08-13)
+- `_bmad-output/implementation-artifacts/2-3-the-oracle-layer-finished.md` — AC3 marked met
+  the day its subject arrived (AC5)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — status trail
+
 **2026-08-13 — AC1, the oracle parked since Epic 1.**
 
 `Cause::FeedNotAdvancing`, `feed_is_advancing` in the pure core, composed in `step_once` as a
@@ -227,6 +258,83 @@ mechanism that fits: the fetch's 2 s deadline elapsing before the fake source wa
 the tick a `Timeout` that never carried the decode failure. Unconfirmed. The test now asserts
 against that line explicitly and says so, so the next occurrence explains itself instead of looking
 like the property failing — the repository's rule about a flake that impersonates a real bug.
+
+**2026-08-15 — AC2, the discrimination that needs no threshold.**
+
+`Policy::step_remembering(prev, tick, now, previous_value_date)` — the memory arrives as a
+parameter so `Policy` stays a pure function of its inputs, the same reason `now` does. The
+three-argument `step` remains and delegates with `None`, so every assertion kept verbatim since
+story 2.1 still calls exactly what it always called, and the no-memory path IS the pre-2.7
+behaviour — which is also what the first tick after a restart honestly deserves: on one reading,
+nobody can tell a wrong clock from old data.
+
+**The cause is `timestamps-disagree`, reused rather than minted, and that is a decision.** A
+negative age is the meter's clock ahead of the cloud's; a large age over an advancing
+`value_date` is the same clock behind it. Same disagreement, same repair — the operator goes to a
+clock either way — and story 2.6 set the rule: no second cause for a distinction that changes no
+repair. What it buys concretely: the cause vocabulary does not change, so `CONTRACT_VERSION`
+stays at 9 and the golden agrees mechanically. What it costs: a consumer cannot tell ahead from
+behind by the token alone — it can by the sign of `age`, which the wire carries in the two
+timestamps themselves.
+
+**The memory records only plausible timestamps.** Story 1.7 pins an unparseable `ValueDate` to
+the epoch, and a sentinel entering `last_value_date` would make the next real reading look like
+production resuming. The floor guard sits at the recording site in `step_once`, beside the same
+rule `last_http_date` already follows (recorded on every successful fetch, adoption rules
+deliberately not consulted — both memories are yardsticks for the FEED, not for the values).
+
+**2026-08-15 — AC3, verified rather than rebuilt, and the finding.**
+
+The two parsers already refused everything that does not declare UTC — the grammar tests said
+*that*, and AC3's ask was the *why*. Two new tests carry it: `a_value_date_that_does_not_declare_utc_is_refused`
+(no marker, explicit offsets, lowercase `z`) and `a_date_header_that_is_not_gmt_is_refused`
+(`UTC`, `UT`, `gmt`, a named zone, offsets, no zone). Both say the same why: the freshness
+formula subtracts two stamps, and timezone arithmetic on a guess shifts the age by whole hours
+against a 90-second allowance.
+
+The mechanical half is `utc_is_the_only_time_domain` in `arch_purity`: no source line in any of
+the three crates may name a zoned time capability (`use chrono`, `chrono::`, `OffsetDateTime`,
+`FixedOffset`, `with_timezone`, `Local::now`, `localtime` — tokens, not substrings, because
+"synchronous" contains "chrono"), and no manifest may declare `chrono` or `time`.
+
+**THE FINDING, recorded as AC3 asks: no gap in the code, one surprise in the lockfile.**
+`Cargo.lock` DOES list `chrono` 0.4.45. It arrives through `testcontainers` (a dev-dependency of
+the chaos tests) via `serde_with`'s feature union, and `cargo tree -i chrono` prints nothing —
+the lockfile is the union of everything that COULD be built, not what is. No crate of ours
+requests it, no source names it, and the guard now keeps both true.
+
+**2026-08-15 — AC5, [#69] closes, and the exemption was the door.**
+
+The gate is one line read twice: `feed_refused = feed.quality() != Quality::Good`, required by
+both `reference_adoptable` and `last_adoptable`. What it closes is not hypothetical:
+
+- **the yardstick**: a replayed OLDER response carries a lower index, the monotonicity oracle
+  duly says `counter-went-backwards` — and the METER-REPLACEMENT EXEMPTION adopted it. The
+  reference rewound by a replay, so the next genuine backwards reading was judged against an
+  index from the past and passed as `Good`. FR15 defeated by the exemption that exists to serve
+  it, one oracle later.
+- **the buffer**: a replayed EQUAL response is refused only by the feed (`Stale`, not `Bad`), so
+  `last` adopted it — same numbers, minute-old `value_date` — and the next silent cloud
+  republished a reading re-dated to a moment the bridge never accepted.
+
+The disagreement [#69] waited for is now on the wire: the fixture is asserted `Quality::Good` —
+the SOURCE's opinion — and the composed verdict refuses it. Swapping the gate away (the old
+source-quality rule's answer) turns the test red twice, once per memory. Story 2.3 AC3 is
+therefore MET, its rule observable at last; recorded there and on the issue.
+
+### Falsification — AC2/AC3/AC5, every mutation RUN before its note (2026-08-15)
+
+| mutation | result |
+|---|---|
+| AC5: `!feed_refused` dropped from `reference_adoptable` | RED on the tick-3 assertion — *"under the source-quality guard the replayed 850 000 became the reference and this genuine backwards reading passed as Good"*, `left: Good` |
+| AC5: `!feed_refused` dropped from `last_adoptable` | **GREEN on the first run, and that is the instructive one.** The original scenario's replay carried a lower index, so monotonicity already refused it `Bad`-with-value and `last` never adopted it — the gate was unwitnessed. The test gained an EQUAL-index replay (refused by the feed alone) and a `value_date` assertion on the republish; re-run: RED — *"republishing it re-dates the reading to a moment the bridge never accepted"*, `left: UtcMillis(…640000)`. AC6's ordering rule caught a test that would have recorded a falsification it never ran |
+| AC2: discrimination neutered (`meter_still_measuring = false`) | RED on BOTH layers — the unit test and the pipeline test — while every AC1 feed test stayed green, which is the mutation-independence the story demanded of its two oracles |
+| AC2: `>` loosened to `>=` | RED on `a_meter_that_stopped_measuring_keeps_reading_too_old` and the pipeline's stopped-meter half — a frozen `value_date` counted as production |
+| AC2: memory unthreaded in `step_once` (`None` passed) | RED on the PIPELINE test only, every unit test green — the layer-above test earning its place, against exactly the Epic 2 failure shape |
+| AC3: the `Z` made optional (`strip_suffix('Z').unwrap_or(s)`) | RED — *"does not explicitly declare UTC and must be refused"* (and the older grammar test too) |
+| AC3: any zone token accepted (`"GMT"` → `_zone`) | RED — *"is not the literal GMT and must be refused"* |
+| AC3: `"with_timezone"` planted on a non-comment source line | RED naming the file and the line |
+| AC3: `chrono = "…"` planted in a manifest (`[package.metadata]`) | RED naming the manifest — the scan reads the file, not cargo's opinion of it |
 
 ### Falsification — AC1, both mutations RUN before this note
 

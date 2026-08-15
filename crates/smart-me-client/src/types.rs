@@ -153,6 +153,43 @@ mod tests {
         }
     }
 
+    /// **Story 2.7 AC3 — a `ValueDate` that does not declare UTC is refused,
+    /// and this is why refusing is right.**
+    ///
+    /// The bridge's freshness formula is `age = http_date − value_date`, two
+    /// stamps subtracted as UTC epoch-milliseconds. A timestamp without its `Z`
+    /// COULD be local time, and guessing a timezone for it would shift every
+    /// reading by whole hours against a 90-second allowance — either every
+    /// reading is Stale for no fault of the meter's, or an hours-old reading is
+    /// published Fresh, which is the lie this project exists to prevent. An
+    /// explicit offset is refused for the same reason seen from the other side:
+    /// smart-me has only ever sent `Z` (the captured contract-of-record), so an
+    /// offset appearing would mean the API's contract moved, and absorbing a
+    /// contract change silently is what [`Cause::UnitNotRecognised`]'s exact
+    /// matching already refuses for units.
+    ///
+    /// The rejects-malformed test above covers the no-`Z` case as grammar; this
+    /// one exists because AC3 asks the assertion to say WHY, and to pin the
+    /// shapes that specifically claim (or omit) a time zone.
+    #[test]
+    fn a_value_date_that_does_not_declare_utc_is_refused() {
+        for undeclared in [
+            "2026-07-25T13:06:32",       // no zone marker: could be local time
+            "2026-07-25T13:06:32+00:00", // an offset, even the zero one
+            "2026-07-25T13:06:32+02:00", // a real offset
+            "2026-07-25T13:06:32-05:00",
+            "2026-07-25T13:06:32z", // lowercase z is not the ISO-8601 UTC designator
+        ] {
+            assert_eq!(
+                parse_value_date(undeclared),
+                None,
+                "{undeclared:?} does not explicitly declare UTC and must be \
+                 refused: a guessed timezone shifts the age by whole hours \
+                 against a 90-second allowance, silently"
+            );
+        }
+    }
+
     /// **Story 2.5 AC5 — completeness is fail-closed, and this test is what says
     /// so rather than the code being trusted to.**
     ///

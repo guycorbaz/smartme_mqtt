@@ -113,6 +113,43 @@ mod tests {
         assert_eq!(huge - valid, 365 * 86_400_000, "huge_skew is 1 y later");
     }
 
+    /// **Story 2.7 AC3 — a `Date` header that is not literally `GMT` is refused,
+    /// and this is why refusing is right.**
+    ///
+    /// This header is the cloud half of the freshness formula
+    /// (`age = http_date − value_date`), and RFC 9110's IMF-fixdate carries
+    /// exactly one legal zone token: `GMT`, meaning UTC. Anything else — a named
+    /// zone, an offset, a casing drift — is either a proxy rewriting the header
+    /// or a server that is not speaking the grammar, and INTERPRETING it would
+    /// mean doing timezone arithmetic on a guess. A wrongly-guessed zone shifts
+    /// the age by whole hours against a 90-second allowance; the refusal costs
+    /// one reading its freshness proof (`no-freshness-proof`, the fail-safe
+    /// direction), which is the cheaper mistake by construction.
+    ///
+    /// The near-misses test below covers `UTC` as grammar; this one exists
+    /// because AC3 asks the assertion to say WHY, and to pin the shapes that
+    /// specifically claim a different zone.
+    #[test]
+    fn a_date_header_that_is_not_gmt_is_refused() {
+        for not_gmt in [
+            "Sat, 25 Jul 2026 13:06:33 UTC", // the right zone, the wrong token
+            "Sat, 25 Jul 2026 13:06:33 UT",  // RFC 850's alternative
+            "Sat, 25 Jul 2026 13:06:33 gmt", // casing drift is a contract change
+            "Sat, 25 Jul 2026 13:06:33 CET", // a named local zone
+            "Sat, 25 Jul 2026 13:06:33 GMT+02:00", // an offset bolted onto GMT
+            "Sat, 25 Jul 2026 13:06:33 +0000", // a bare offset
+            "Sat, 25 Jul 2026 13:06:33",     // no zone at all: could be local
+        ] {
+            assert_eq!(
+                parse_imf_fixdate(not_gmt),
+                None,
+                "{not_gmt:?} is not the literal GMT and must be refused: timezone \
+                 arithmetic on a guessed zone shifts the age by whole hours \
+                 against a 90-second allowance"
+            );
+        }
+    }
+
     #[test]
     fn strict_grammar_rejects_near_misses() {
         for bad in [
