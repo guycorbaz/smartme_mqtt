@@ -113,6 +113,20 @@ development_status:
   #  3. The Tier-3 gap is now v3 attested against v10 shipped, additive end
   #     to end, and it widens with every version. That pass is Guy's to run.
   #
+  # UPDATE, LATER THE SAME EVENING — the reading happened, in conversation,
+  # and most of item 1 is now DECIDED (Epic 2 retro's second-reading
+  # addendum; comments on each issue):
+  #   [#74] design 1 (serde_path_to_error), design 2 declined with its
+  #         residual named — a durable null is the SCADA level's decision;
+  #   [#75]+[#79]+[#77] one position — the cause follows the FAULT, not the
+  #         last tick: refusal carried in State::Failed, sticky
+  #         discrimination, the 429 arm on the token path. ONE small repair
+  #         story + one ADR, scheduled once Epic 4's fate is decided;
+  #   [#68] deferred to the next Ignition sitting, same screen as Tier-3.
+  # STILL AWAITING GUY: Epic 3's own table items 1-3 ([#63] [#81] [#82]/
+  # [#83]), the Epic 4 decision (unchanged, still the gate to any new code),
+  # and the Tier-3 sitting itself.
+  #
   # ==========================================================================
   # MORNING OF 2026-08-15 — Epic 2's closure. History; superseded above.
   # ==========================================================================
