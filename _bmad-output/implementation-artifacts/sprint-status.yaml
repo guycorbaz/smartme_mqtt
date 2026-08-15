@@ -94,7 +94,12 @@ development_status:
   # ones being D1 (the full gate becomes a pre-push hook — the day's one CI
   # break was exactly the rule it mechanises) and D2 (a review repair ships
   # with its pin: revert it and watch the suite redden, BEFORE the note).
-  # D1 IS NOT YET IMPLEMENTED — it is the first mechanism to build tomorrow.
+  # D1 IS IMPLEMENTED, same evening: `scripts/hooks/pre-push` runs the full
+  # gate (no fast mode — the day's break came from a push that took a smaller
+  # gate than the work), activated per clone by
+  # `git config core.hooksPath scripts/hooks`, documented in CLAUDE.md.
+  # Falsified before its note: a dirtied Cargo.lock blocked the push at the
+  # gate's first step; cleaned, the same push ran the gate green end to end.
   #
   # WHAT I WOULD READ FIRST TOMORROW:
   #  1. The two retrospectives' "[Guy]" sections — Epic 2's five arbitrations

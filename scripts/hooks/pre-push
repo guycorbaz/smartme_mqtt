@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# pre-push — the full gate, mechanically. Action D1 of the Epic 3 retrospective
+# (2026-08-15).
+#
+# This hook exists because the rule "run ./scripts/ci-local.sh before pushing"
+# was remembered for a story and forgotten for its repair: on 2026-08-15 a
+# repair was pushed on lib tests and clippy alone, and GitHub's AC6 word-scan
+# was the first thing to read the page (the lapse is named in b538835). A rule
+# that lives in memory fails exactly when attention is elsewhere — which is
+# what a repair is.
+#
+# One-time setup per clone (the hook is committed; the config cannot be):
+#
+#     git config core.hooksPath scripts/hooks
+#
+# The only escape is `git push --no-verify`, and it is deliberately loud:
+# using it is the claim "this push needs no gate", made out loud, on the
+# record. There is no fast mode here — the day this hook was written, the
+# break came from a push that took a smaller gate than the work.
+
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+exec ./scripts/ci-local.sh

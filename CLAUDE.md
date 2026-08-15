@@ -69,10 +69,18 @@ so the decision simply sat unmade.
 
 ## Before pushing
 
-Run `./scripts/ci-local.sh` (`--fast` skips the Docker-dependent chaos tests). It reproduces both
-GitHub workflows verbatim and checks that `Cargo.lock` is committed. After pushing, check
-`gh run list` — "tested locally" is not the claim "CI passes". The isolated workflow builds with
-`--locked` and stayed red for six commits while local runs were green.
+The full gate is a **pre-push hook** since 2026-08-15 (Epic 3 retrospective, D1): once per
+clone, run `git config core.hooksPath scripts/hooks`, and every `git push` runs
+`./scripts/ci-local.sh` whether you remembered it or not. The rule became a mechanism because
+it was remembered for a story and forgotten for its repair — the one CI break of 2026-08-15.
+`git push --no-verify` is the only escape, and using it is the on-record claim "this push
+needs no gate".
+
+`./scripts/ci-local.sh` (`--fast` skips the Docker-dependent chaos tests; the hook takes no
+fast mode) reproduces the GitHub workflows verbatim and checks that `Cargo.lock` is committed.
+After pushing, check `gh run list` — "tested locally" is not the claim "CI passes". The
+isolated workflow builds with `--locked` and stayed red for six commits while local runs were
+green.
 
 Never `git add <directory>` after a dependency change: root-level files (`Cargo.lock`,
 `Cargo.toml`, `deny.toml`) are missed that way.
