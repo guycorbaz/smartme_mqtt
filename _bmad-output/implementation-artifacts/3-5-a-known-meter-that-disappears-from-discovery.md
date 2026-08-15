@@ -1,6 +1,9 @@
 # Story 3.5: A known meter that disappears — the topology says absence
 
-Status: review — implemented 2026-08-15, the day it was written; awaiting the independent pass
+Status: done (2026-08-15) — written, implemented, reviewed (five finder angles, six repairs)
+and the repair reviewed in its own right (mechanics sound, three missing pins written and
+falsified by their reverts). Three rounds, each smaller than the last; all workflows green on
+the final push. [#65] closed; [#81] [#82] [#83] carry what was discovered and not absorbed
 
 ## Story
 

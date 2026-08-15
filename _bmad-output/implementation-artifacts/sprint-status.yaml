@@ -1197,7 +1197,15 @@ development_status:
   # run before their notes; loop-level integration tests drive `run` itself under
   # virtual time. DISCOVERED ADJACENT, issue to file: every OTHER latch still
   # fetches each period although the answer cannot change an absorbing verdict.
-  3-5-a-known-meter-that-disappears-from-discovery: review
+  # REVIEWED 2026-08-15: five finders (the richest haul of the epic), six repairs
+  # — the wedge-on-idle three angles converged on, the desired-vs-in-force serial
+  # (PolledMeter carries the spawn-time one), the ordered ending (one tick of
+  # separation, certified only on a successful send). Then the repair's own pass:
+  # mechanics SOUND, but the three largest repairs were pinned by nothing — each
+  # revert left the suite green. The pins exist now, each falsified by its revert.
+  # ADR 0034 gained its tck-id citations after a reviewer verified them against
+  # the committed spec. [#81] [#82] [#83] carry the discovered-not-absorbed.
+  3-5-a-known-meter-that-disappears-from-discovery: done  # closed 2026-08-15; [#65] closed with it
   # DRAFTED 2026-08-15, and the draft ends in an ARBITRATION rather than code, on
   # purpose: FR21's premise is a retained message on the bridge's old topics, and
   # the bridge CANNOT produce one — retain=false is mandated or chosen for all
