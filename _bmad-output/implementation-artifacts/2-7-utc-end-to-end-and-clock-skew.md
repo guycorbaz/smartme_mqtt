@@ -1,7 +1,8 @@
 # Story 2.7: A feed that stopped moving stops being called fresh, and a clock that is wrong is not called old
 
-Status: review — **AC1, AC4, AC6, AC7 done 2026-08-13; AC2, AC3, AC5 done 2026-08-15**; awaiting an
-independent pass, per the repository's rule that a story is reviewed in fresh context
+Status: done (2026-08-15) — all ACs met; independently reviewed the same day (three findings
+confirmed and triaged — one repaired and falsified, one reworded, one to arbitration [#79] —
+and one refuted; see Review Findings)
 
 ## Story
 
@@ -335,6 +336,43 @@ therefore MET, its rule observable at last; recorded there and on the issue.
 | AC3: any zone token accepted (`"GMT"` → `_zone`) | RED — *"is not the literal GMT and must be refused"* |
 | AC3: `"with_timezone"` planted on a non-comment source line | RED naming the file and the line |
 | AC3: `chrono = "…"` planted in a manifest (`[package.metadata]`) | RED naming the manifest — the scan reads the file, not cargo's opinion of it |
+
+## Review Findings (2026-08-15, independent pass, fresh context)
+
+Four candidate findings, each adversarially verified by its own agent; three CONFIRMED, one
+REFUTED. Triaged the way this repository triages: repair, reword, arbitrate — nothing dismissed
+silently.
+
+1. **CONFIRMED, REPAIRED — a replay with its `Date` header stripped walked through AC5's gate.**
+   The feed oracle answers `good()` on a missing header (right for judging: no header, no
+   question), so `!feed_refused` was true of a headerless replay and the meter-replacement
+   exemption rewound the reference through the door the gate had just closed for headered ones.
+   Repaired with two rules, each falsified (mutations run first, outputs in the test doc):
+   the exemption now requires the feed to VOUCH — a `Date` seen and not refused — because
+   re-baselining FR15's yardstick is the single most trusting act in the loop and deserves
+   positive evidence, not absence of objection; and `last` refuses any candidate older than
+   what it holds, closing the header-stripped door for the buffer by the buffer's own
+   definition. Ordinary adoption still needs only non-refusal: a merely headerless reading
+   keeps its republication.
+2. **CONFIRMED, ARBITRATION [#79] — the over-age cause flaps with the polling phase** when the
+   meter's cadence is slower than the poll period (the realistic regime: ~60 s cadences
+   observed, 30 s default poll). A wrong-clock meter alternates `timestamps-disagree` /
+   `reading-too-old` as the same measurement is re-served. Three candidate designs, each
+   touching the epic's threshold-refusals; sibling of [#75] (the cause depends on the last
+   tick), left to the same arbitration rather than half-decided here. The quality half never
+   moves — both causes publish `Stale` — so the wire stays fail-safe throughout.
+3. **CONFIRMED, REWORDED — the docs claimed a culprit the bridge cannot assert.** A wrong meter
+   clock and a cloud ingesting late produce the same signature (`value_date` advancing, age
+   large), and the doc comments said "its clock is wrong / the operator goes to a clock". The
+   cause's documentation now asserts the DISAGREEMENT and names the two-stop repair path
+   (clock, then ingestion latency); the mechanism is untouched — the verifier's own conclusion
+   was that the discrimination is right and only the narrative overclaimed.
+4. **REFUTED — the same-second `Date` block.** Two fetches inside one second would read equal
+   truncated `Date`s and be refused as a replay — but the scenario is not constructible:
+   `PERIOD_MIN` is 5 s and refused (not clamped) below, the period field cannot even express
+   sub-seconds, the hot-reconfigure first tick is explicitly consumed, and there is no
+   retry-within-tick. The residual trigger (a server clock stepping back) is the fault the
+   oracle exists to report. Kept here so the next reader does not re-derive it.
 
 ### Falsification — AC1, both mutations RUN before this note
 

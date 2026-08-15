@@ -726,12 +726,23 @@ pub async fn step_once<S: Source + Send>(
     // because it asks the SOURCE whether the reading is trustworthy — the very
     // question the oracle layer exists to answer instead.
     let feed_refused = feed.quality() != Quality::Good;
+    // THE EXEMPTION NEEDS THE FEED TO VOUCH, NOT MERELY TO NOT OBJECT — the
+    // review of this story's own gate found the difference reachable. A response
+    // with NO `Date` header leaves the feed oracle silent (`None => good()`
+    // above: no header, no question), so `!feed_refused` is true of it — and a
+    // replayed older response with its header stripped walked through the
+    // meter-replacement exemption and rewound the reference by the door the gate
+    // had just closed for headered replays. The exemption re-baselines FR15's
+    // yardstick, which is the single most trusting thing this function does; it
+    // therefore requires the positive evidence (a `Date` the oracle saw and did
+    // not refuse), while ordinary adoption keeps requiring only the absence of
+    // refusal — a merely headerless reading should not lose its republication.
+    let feed_vouches = !feed_refused && matches!(&tick, Ok(reading) if reading.http_date.is_some());
     let energy_verdict = published.for_metric(Measured::Energy);
-    let reference_adoptable = !feed_refused
-        && match energy_verdict.quality() {
-            Quality::Bad => energy_verdict.cause() == Some(Cause::CounterWentBackwards),
-            _ => true,
-        };
+    let reference_adoptable = match energy_verdict.quality() {
+        Quality::Bad => feed_vouches && energy_verdict.cause() == Some(Cause::CounterWentBackwards),
+        _ => !feed_refused,
+    };
     // THE REPUBLICATION BUFFER guards against one thing: a number the bridge
     // REFUSED being handed over later, when the verdict that refused it is gone.
     // So what disqualifies a reading is a metric that was refused **while holding
@@ -742,16 +753,25 @@ pub async fn step_once<S: Source + Send>(
     // one unreadable field was kept out of `last` entirely, so the next silent
     // cloud republished an OLDER reading than the most recent one whose other
     // metric was sound.
+    // AND THE BUFFER NEVER GOES BACK IN TIME — from the same review finding.
+    // `last` is by definition the NEWEST accepted measurement, so a candidate
+    // whose `value_date` precedes the held one contradicts the definition
+    // whatever produced it: the feed gate catches the headered replay, and this
+    // clause catches the header-stripped one the oracle cannot see.
     let last_adoptable = !feed_refused
         && match &tick {
-            Ok(reading) => Measured::ALL.iter().all(|metric| {
-                let refused = published.for_metric(*metric).quality() == Quality::Bad;
-                let carries_a_number = match metric {
-                    Measured::Power => reading.value.power.is_some(),
-                    Measured::Energy => reading.value.energy.is_some(),
-                };
-                !(refused && carries_a_number)
-            }),
+            Ok(reading) => {
+                Measured::ALL.iter().all(|metric| {
+                    let refused = published.for_metric(*metric).quality() == Quality::Bad;
+                    let carries_a_number = match metric {
+                        Measured::Power => reading.value.power.is_some(),
+                        Measured::Energy => reading.value.energy.is_some(),
+                    };
+                    !(refused && carries_a_number)
+                }) && last
+                    .as_ref()
+                    .is_none_or(|held| reading.value.value_date >= held.value_date)
+            }
             Err(_) => false,
         };
 
@@ -1995,6 +2015,80 @@ mod tests {
         );
     }
 
+    /// **The review's finding on AC5's own gate: a replay with its `Date` header
+    /// STRIPPED walked through it.** The feed oracle answers `good()` when there
+    /// is no header (no header, no question — right for judging), so
+    /// `!feed_refused` was true of a header-less replay and the
+    /// meter-replacement exemption rewound the reference through the door the
+    /// gate had just closed for headered ones. Two rules close it: the exemption
+    /// now needs the feed to VOUCH (a `Date` seen and not refused), and `last`
+    /// refuses any candidate older than what it holds, whatever produced it.
+    ///
+    /// FALSIFIED 2026-08-15, both mutations RUN before this note: reverting the
+    /// exemption to `!feed_refused` goes RED on the tick-4 assertion
+    /// (*"left: Good, right: Bad"* — the rewind, through the headerless door);
+    /// removing the no-going-back clause goes RED on the tick-5 `value_date`
+    /// (*"left: UtcMillis(…640000)"* — the republish re-dated a minute back).
+    #[tokio::test]
+    async fn a_replay_with_its_date_header_stripped_rewinds_neither_memory() {
+        let genuine = reading_with_energy(Quality::Good, 950, 900_000.0);
+        // The header-stripped EQUAL replay: only its age is unprovable
+        // (`no-freshness-proof`), so nothing refuses its values — the buffer
+        // clause is the only thing between it and `last`.
+        let mut stripped_equal = reading_with_energy(Quality::Good, 950, 900_000.0);
+        stripped_equal.value.value_date = UtcMillis(BASE - 60_000);
+        stripped_equal.http_date = None;
+        // The header-stripped OLDER replay: its lower index earns
+        // `counter-went-backwards`, and the exemption would adopt it as a
+        // meter replacement unless the feed vouches — which, headerless, it
+        // cannot.
+        let mut stripped_older = reading_with_energy(Quality::Good, 950, 850_000.0);
+        stripped_older.value.value_date = UtcMillis(BASE - 120_000);
+        stripped_older.http_date = None;
+        let backwards = later(reading_with_energy(Quality::Good, 950, 860_000.0), 1);
+
+        let (_, sent) = drive_sequence(
+            FakeSource::new()
+                .then(Ok(genuine))
+                .then(Ok(stripped_equal))
+                .then(Ok(stripped_older))
+                .then(Ok(backwards))
+                .then(Err(SourceError::Timeout)),
+        )
+        .await;
+        assert_eq!(sent.len(), 5, "every tick publishes a verdict (ADR 0027)");
+        assert_eq!(
+            sent[1].verdict().cause(),
+            Some(Cause::NoFreshnessProof),
+            "the premise: a headerless replay is refused for its missing proof \
+             only — the feed oracle has no header to compare, so nothing here \
+             says 'replay'"
+        );
+
+        // THE YARDSTICK: still 900 000, or the genuine backwards reading passes.
+        assert_eq!(
+            sent[3].published_for(Measured::Energy),
+            Quality::Bad,
+            "the reference must not have been rewound through the headerless \
+             door: the exemption re-baselines FR15's yardstick and may only act \
+             on a response the feed oracle actually saw advance"
+        );
+        assert_eq!(
+            sent[3].verdicts.for_metric(Measured::Energy).cause(),
+            Some(Cause::CounterWentBackwards)
+        );
+
+        // THE BUFFER: the republish carries tick 1, not the minute-old replay.
+        assert_eq!(sent[4].measurement.energy, Some(Kwh(900_000.0)));
+        assert_eq!(
+            sent[4].measurement.value_date,
+            UtcMillis(BASE),
+            "`last` holds the NEWEST accepted measurement by definition; \
+             adopting one that is older contradicts it whatever stripped the \
+             header"
+        );
+    }
+
     /// **Story 2.7 AC2, through the pipeline rather than against the function.**
     ///
     /// The unit tests in `core::state_machine` prove the discrimination
@@ -2026,8 +2120,8 @@ mod tests {
             sent[1].verdict().cause(),
             Some(Cause::TimestampsDisagree),
             "the meter produced a NEW measurement and the age did not shrink: \
-             that is a clock to fix, and `reading-too-old` would send the \
-             operator to a meter that never stopped"
+             a wrong clock or a late-ingesting cloud, and `reading-too-old` \
+             would send the operator to a meter that never stopped"
         );
         assert_eq!(
             sent[1].published(),

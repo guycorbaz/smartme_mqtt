@@ -171,14 +171,16 @@ impl Policy {
     /// `age = http_date − value_date` cannot tell a WRONG CLOCK from OLD DATA: a
     /// meter whose clock runs behind the cloud's by a constant produces a large,
     /// stable age for ever, and reporting that as `reading-too-old` sends an
-    /// operator to a meter that stopped — when the meter is measuring fine and
-    /// what needs fixing is its clock. The discrimination is structural, not a
-    /// threshold: **is `value_date` still advancing?** A meter that keeps
-    /// producing new measurements is not silent, so a large age against it is a
-    /// disagreement between clocks (`timestamps-disagree` — the same repair as a
-    /// negative age, which is the same fault with the opposite sign). A meter
-    /// whose `value_date` stands still has genuinely stopped: `reading-too-old`
-    /// stays, because the data IS old.
+    /// operator to a meter that stopped — when the meter is measuring fine. The
+    /// discrimination is structural, not a threshold: **is `value_date` still
+    /// advancing?** A meter that keeps producing new measurements is not
+    /// silent, so a large age against it is a timestamp disagreement
+    /// (`timestamps-disagree` — the same repair path as a negative age). What
+    /// that cause asserts is the DISAGREEMENT, not its culprit: a wrong meter
+    /// clock and a cloud ingesting late look identical from here, and the
+    /// cause's own documentation says so. A meter whose `value_date` stands
+    /// still has genuinely stopped: `reading-too-old` stays, because the data
+    /// IS old.
     ///
     /// The memory arrives as a parameter so `Policy` stays a pure function of
     /// its inputs — the same reason `now` does. Who remembers is the caller
@@ -521,8 +523,8 @@ mod tests {
             verdict,
             Verdict::stale(Cause::TimestampsDisagree),
             "the meter is still producing new measurements, so the large age is \
-             the two clocks disagreeing — the operator must be sent to a clock, \
-             not to a meter that never stopped"
+             a timestamp disagreement (a wrong clock or a late-ingesting cloud) \
+             — the operator must not be sent to a meter that never stopped"
         );
         assert_eq!(
             state,

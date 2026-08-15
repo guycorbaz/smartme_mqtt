@@ -105,13 +105,18 @@ pub enum Cause {
     /// The source's own clock is implausible: a stamp from before 2020 cannot be a
     /// live reading, however self-consistent the pair is.
     SourceClockImplausible,
-    /// The meter's clock and the cloud's disagree — in either direction. A
+    /// The meter's timestamps and the cloud's disagree — in either direction. A
     /// negative age (`http_date` precedes `value_date`) is not a fresher
     /// reading; and since story 2.7 AC2, an age beyond the allowance on a meter
     /// whose `value_date` is still ADVANCING is this too, not old data: the
-    /// meter is measuring, its clock is wrong. One cause for both signs, on the
-    /// 2.6 rule — no second cause for a distinction that changes no repair, and
-    /// both send the operator to a clock.
+    /// meter is measuring, and the gap is in the clocks or in the pipeline
+    /// between them. **What the bridge can assert is the disagreement, not its
+    /// culprit** (the review of that story pinned this): a wrong meter clock and
+    /// a cloud serving its readings late produce the same signature, so the
+    /// repair path is *check the meter's clock, then the ingestion latency* —
+    /// two stops, neither of which is the stopped-meter place `reading-too-old`
+    /// names. One cause for both signs, on the 2.6 rule — no second cause for a
+    /// distinction that changes no repair.
     TimestampsDisagree,
     /// The reading is older than the allowance and the meter has stopped
     /// producing (its `value_date` is not advancing). The ordinary staleness
