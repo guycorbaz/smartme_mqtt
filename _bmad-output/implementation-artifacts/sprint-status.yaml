@@ -91,6 +91,15 @@ development_status:
   # THE SENTENCE TO CARRY: an exemption is the most trusting line in a function,
   # and it must demand positive evidence, not absence of objection.
   #
+  # AND THE REVIEW OF THE REPAIR FOUND THE REPAIR WRONG TWICE — the 2.3/2.6
+  # pattern, third occurrence, still paying. My no-going-back clause starved the
+  # buffer after a CORRECTED clock (a Good-published reading barred while a
+  # mis-dated one was served — the reviewing agent's probe ran it red before I
+  # believed it), and it had silently killed the sister test's feed-gate witness
+  # (deleting the gate left all 233 tests green). Both are fixed and both faults
+  # are now permanent witnesses. [#80] filed for the pre-existing restart window
+  # it also surfaced. Two rounds, each finding less than the one before.
+  #
   # AND A FALSIFICATION CAME BACK GREEN before that, on the same day: the `last`
   # gate's first mutation changed nothing because the scenario was already
   # refused by monotonicity — the test grew an equal-index replay and a
