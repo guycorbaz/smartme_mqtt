@@ -387,7 +387,7 @@ fn discovery_section(discovery: Option<&Discovery>) -> String {
         Some(Discovery::Empty) => {
             out.push_str(
                 "<p>The account answered: it has no meters. Nothing is wrong with \
-                 the bridge or the credential — there is simply nothing to pick.</p>",
+                 the bridge or its sign-in — there is simply nothing to pick.</p>",
             );
         }
         Some(Discovery::Failed { what }) => {
@@ -400,9 +400,9 @@ fn discovery_section(discovery: Option<&Discovery>) -> String {
         }
         Some(Discovery::NoCredential) => {
             out.push_str(
-                "<p class=fault>No smart-me credential in the environment \
-                 (SMARTME_CLIENT_ID / SMARTME_CLIENT_SECRET), so the account \
-                 cannot be asked. The credential is never entered here — set it \
+                "<p class=fault>The environment holds no smart-me client id and \
+                 secret (SMARTME_CLIENT_ID / SMARTME_CLIENT_SECRET), so the \
+                 account cannot be asked. They are never entered here — set them \
                  in the environment and reload.</p>",
             );
         }
@@ -422,11 +422,17 @@ fn discovery_section(discovery: Option<&Discovery>) -> String {
             ));
         }
     }
+    // WORDING CONSTRAINT, load-bearing: the first-run browser test scans this
+    // page for the tokens `client_secret`, `client_id`, `credential` and
+    // `password` — the mechanical form of ADR 0019's "no such field, not even
+    // evoked". The established convention is "client id" with spaces and the
+    // uppercase environment names; GitHub caught the first draft of the
+    // sentence below using the forbidden word while every local suite was green.
     out.push_str(
         "<p>The account is asked at the SAVED API base. A base typed above but \
          not yet saved is not used — the file is the configuration, and this \
-         button must not be a way to send the credential anywhere the file \
-         does not say.</p></fieldset>",
+         button must not be a way to point the bridge&#39;s smart-me sign-in \
+         at a host the file does not name.</p></fieldset>",
     );
     out
 }
@@ -1255,6 +1261,38 @@ mod tests {
             "the environment fault names its variables and is never a box to \
              type into (ADR 0023): {no_credential}"
         );
+
+        // AND NO OUTCOME MAY SPEAK THE FORBIDDEN TOKENS — the first-run browser
+        // test scans GET /config for these four as the mechanical form of
+        // ADR 0019's rule, and GitHub caught this section's first draft using
+        // one while every local suite was green. Extending the scan to every
+        // outcome is what lets the next violation fail HERE, before a push.
+        for outcome in [
+            None,
+            Some(Discovery::Empty),
+            Some(Discovery::NoCredential),
+            Some(Discovery::Failed { what: "x".into() }),
+            Some(Discovery::Picked { serial: "1".into() }),
+            Some(Discovery::AlreadyMapped { serial: "1".into() }),
+            Some(Discovery::Listed {
+                devices: vec![DeviceListing {
+                    id: "a".into(),
+                    name: None,
+                    serial: 1,
+                }],
+                dropped: vec!["r".into()],
+            }),
+        ] {
+            let rendered = discovery_section(outcome.as_ref());
+            for forbidden in ["client_secret", "client_id", "credential", "password"] {
+                assert!(
+                    !rendered.contains(forbidden),
+                    "{forbidden:?} must not appear on any discovery surface — \
+                     say 'client id' with spaces and the uppercase environment \
+                     names, as the rest of the screen does: {rendered}"
+                );
+            }
+        }
     }
 
     /// **Story 3.4 AC2 + AC4 — a pick fills the pair, and discovery saves and
