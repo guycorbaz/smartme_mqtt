@@ -1870,7 +1870,7 @@ development_status:
   # and `cargo test` compiles without that gate.
   4-10-own-the-reconnect-loop-bdseq-per-connect: done
   4-11-broker-outage-traced-drop-exhaustive: done  # closed 2026-08-18 after a three-layer review; AC1 UNMET in the tests [#86], ADR 0036 [#89]
-  4-12-anti-replay-at-the-down-up-instant: ready-for-dev  # story written 2026-08-18; a VERIFICATION story — the property is already implemented
+  4-12-anti-replay-at-the-down-up-instant: review  # implemented 2026-08-18; nbirth-timestamp earned out of gap, chapter-6 tally 38.4.8.59 -> 39.4.7.59
   4-13-chaos-broker-recovery: backlog
   4-14-chaos-poller-wedge: backlog
   4-15-ac-leak-01-resource-stability: backlog

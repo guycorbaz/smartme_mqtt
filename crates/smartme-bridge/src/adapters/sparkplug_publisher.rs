@@ -386,9 +386,22 @@ impl SparkplugPublisher {
             };
             // The payload timestamp follows the data: a re-declared reading is
             // stamped with when it was TRUE, not with now.
+            //
+            // ROUTED THROUGH THE TABLE since story 4.12, so the table is a
+            // MECHANISM and not a second statement of the truth. Flip
+            // `DeviceBirthRedeclaring`'s row and this line changes what it emits —
+            // which is what makes `the_timestamp_table_says_which_clock_each_message_speaks`
+            // able to fail.
             let payload_ts = match &known {
-                Some(update) => millis(update.measurement.value_date),
-                None => timestamp,
+                Some(update) => match timestamp_source_for(Emission::DeviceBirthRedeclaring) {
+                    TimestampSource::ReadingValueDate => millis(update.measurement.value_date),
+                    TimestampSource::PublicationInstant => timestamp,
+                },
+                None => match timestamp_source_for(Emission::DeviceBirthColdStart) {
+                    TimestampSource::PublicationInstant => timestamp,
+                    // A device with no reading has no acquisition time to carry.
+                    TimestampSource::ReadingValueDate => timestamp,
+                },
             };
             let payload = live.device_birth(payload_ts, metrics);
             sink.emit(Outbound {
@@ -518,6 +531,16 @@ impl SparkplugPublisher {
         let topic = self
             .node
             .device_topic(MessageType::DData, serial.as_str())?;
+        // NOT ROUTED THROUGH THE TABLE, and the reason is stronger than the
+        // table: `publish` is handed no clock at all. `PublicationInstant` is
+        // unrepresentable here — there is nothing to read it from — so
+        // `Emission::DeviceData`'s row is enforced by this function's SIGNATURE
+        // rather than by a branch. Adding a clock parameter to make the table
+        // reachable would be adding a capability in order to satisfy a test, and
+        // the capability is exactly the one ADR 0013 refuses.
+        //
+        // (Epic 3's action D3: an "unreachable" cites its enforcer or is not
+        // written. The enforcer is the signature, one line above.)
         let timestamp = millis(update.measurement.value_date);
         let payload =
             live.device_data(timestamp, metrics_for(&update.measurement, update.verdicts));
@@ -722,6 +745,105 @@ fn degrade(verdict: Verdict) -> Verdict {
     match verdict.quality() {
         Quality::Good => Verdict::stale(Cause::NotRevalidated),
         _ => verdict,
+    }
+}
+
+/// Which clock a payload timestamp speaks, per thing this bridge publishes
+/// (story 4.12 AC3).
+///
+/// # Why this table exists at all
+///
+/// The invariant — *a stale reading must read as old even to a consumer that
+/// ignores the quality flag* — lives in two call sites and nothing stops a third
+/// reaching for the wrong clock. This is [`qos_for`]'s pattern applied to time:
+/// a table, pinned by a test, with the clause or the ADR named per row, so that
+/// moving a row means saying so.
+///
+/// [`qos_for`]: crate::app::mqtt_driver
+///
+/// # The specification's own split, read rather than remembered
+///
+/// The norm puts acquisition time in the **metric** timestamp — *"the time at
+/// which the value of a metric was captured"*
+/// (`tck-id-payloads-metric-timestamp-in-UTC`, `Sparkplug_6:479`) — and requires
+/// the **payload** timestamp to denote *"the time at which the message was
+/// published"*, in identical words for NBIRTH, DBIRTH, NDATA, DDATA and DDEATH.
+///
+/// **This bridge deviates on two of those, deliberately, and [ADR 0013] is why.**
+/// Stamping `now` on a re-declared 45-minute-old reading would hand a consumer
+/// that reads the payload timestamp and ignores `Quality` a stale value wearing a
+/// fresh one — the precise silent lie this project exists to prevent, and it
+/// would be *conformant*. That consumer is not hypothetical: contract v1 shipped
+/// quality codes a live Ignition displayed as `Good(500)` (ADR 0012).
+///
+/// [ADR 0013]: ../../../docs/adr/0013-payload-timestamp-is-acquisition-time.md
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimestampSource {
+    /// The reading's own `ValueDate` — when the values were TRUE.
+    ///
+    /// A recorded deviation from the norm wherever it is used. See [ADR 0013].
+    ///
+    /// [ADR 0013]: ../../../docs/adr/0013-payload-timestamp-is-acquisition-time.md
+    ReadingValueDate,
+    /// The instant the message was built — what the norm asks for.
+    PublicationInstant,
+}
+
+/// Everything this bridge publishes. **Six, and NDATA is not among them.**
+///
+/// The delivery table in `mqtt_driver` carries an NDATA row because the norm
+/// binds one; this enum carries what the publisher actually emits, and it emits
+/// no node-level data at all. Listing a seventh here would describe a message
+/// nobody sends — the shape of the four Epic 1 tests this repository threw away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Emission {
+    /// NBIRTH — the first birth of a session, and every rebirth.
+    NodeBirth,
+    /// NDEATH — the will registered at CONNECT, and the death published on the
+    /// way out.
+    NodeDeath,
+    /// DBIRTH for a device with **no reading yet**: nothing to declare but its
+    /// existence.
+    DeviceBirthColdStart,
+    /// DBIRTH **re-declaring a reading already known** — a rebirth, or a device
+    /// re-announced mid-session.
+    DeviceBirthRedeclaring,
+    /// DDATA — one judged reading.
+    DeviceData,
+    /// DDEATH — a device that has ended.
+    DeviceDeath,
+}
+
+/// The clock each emission's PAYLOAD timestamp speaks (story 4.12 AC3).
+///
+/// Metric timestamps are not this function's subject: they always carry the
+/// reading's `ValueDate`, which is what the norm asks of them.
+pub fn timestamp_source_for(emission: Emission) -> TimestampSource {
+    match emission {
+        // CONFORMANT. A node birth announces a SESSION; there is no reading whose
+        // time it could carry, and `tck-id-payloads-nbirth-timestamp`
+        // (`Sparkplug_6:1064`) asks for the publication instant.
+        Emission::NodeBirth => TimestampSource::PublicationInstant,
+        // OURS TO CHOOSE, and worth knowing: there is **no**
+        // `tck-id-payloads-ndeath-timestamp` in the norm — NDEATH's clauses
+        // govern `seq`, `bdSeq` and the will, and none of them the payload
+        // timestamp. DDEATH has one; NDEATH does not. We publish the instant for
+        // the same reason the norm gives everywhere else.
+        Emission::NodeDeath => TimestampSource::PublicationInstant,
+        // CONFORMANT, and it costs nothing: a device with no reading has no
+        // acquisition time to carry (`tck-id-payloads-dbirth-timestamp`,
+        // `Sparkplug_6:1176`).
+        Emission::DeviceBirthColdStart => TimestampSource::PublicationInstant,
+        // DEVIATION, recorded — `tck-id-payloads-dbirth-timestamp`, ADR 0013.
+        // This is the reconnection case: the rebirth that follows a 45-minute
+        // outage re-declares history, and history stamped `now` is a lie.
+        Emission::DeviceBirthRedeclaring => TimestampSource::ReadingValueDate,
+        // DEVIATION, recorded — `tck-id-payloads-ddata-timestamp`
+        // (`Sparkplug_6:1302` is NDATA's; DDATA's is `:1359`), ADR 0013.
+        Emission::DeviceData => TimestampSource::ReadingValueDate,
+        // CONFORMANT. A death is an event, not a measurement
+        // (`tck-id-payloads-ddeath-timestamp`, `Sparkplug_6:1582`).
+        Emission::DeviceDeath => TimestampSource::PublicationInstant,
     }
 }
 
@@ -1008,6 +1130,20 @@ mod tests {
             .iter()
             .find(|m| m.name.as_deref() == Some(name))
             .expect("metric present")
+    }
+
+    /// The `Cause` property a metric carries, or `None` when it carries none.
+    ///
+    /// Added by story 4.12: the rebirth tests need to tell "stale because it was
+    /// not re-judged" from "bad because the counter went backwards", and a
+    /// quality code alone cannot.
+    fn cause_of(m: &payload::Metric) -> Option<String> {
+        let props = m.properties.as_ref()?;
+        let idx = props.keys.iter().position(|k| k == METRIC_PROPERTY_CAUSE)?;
+        match &props.values[idx].value {
+            Some(payload::property_value::Value::StringValue(v)) => Some(v.clone()),
+            _ => None,
+        }
     }
 
     fn quality_of(m: &payload::Metric) -> u32 {
@@ -1588,6 +1724,223 @@ mod tests {
             seqs,
             vec![Some(0), Some(1), Some(2), Some(3)],
             "NBIRTH then DBIRTH then DDATA share one edge-node sequence"
+        );
+    }
+
+    // ================================================================
+    // Story 4.12 — anti-replay at the down→up instant (FR22, AR7)
+    // ================================================================
+
+    /// **AC3 — which clock each message speaks, per row, with its clause.**
+    ///
+    /// The invariant lives in two call sites and nothing stopped a third reaching
+    /// for the wrong clock. This is `qos_for`'s pattern applied to time: story
+    /// 4.17 showed what a table like this is worth — it turned a QoS violation
+    /// that had shipped, with a unit test locking it in, from invisible into red.
+    ///
+    /// **Two of the six rows are deviations, and they are the point.** They are
+    /// separated from the conformant ones deliberately: a single list would let a
+    /// future edit move a MUST while looking like a preference, which is exactly
+    /// what happened to `the_delivery_table_matches_the_specification_clause_by_clause`
+    /// on the day it was written.
+    ///
+    /// FALSIFIED 2026-08-18 — mutation RUN, output copied: answering
+    /// `ReadingValueDate` for `NodeBirth` goes red with `NodeBirth is fixed by the
+    /// SPECIFICATION, not by us … left: ReadingValueDate, right: PublicationInstant`.
+    #[test]
+    fn the_timestamp_table_says_which_clock_each_message_speaks() {
+        // CONFORMANT. Each row names the clause that fixes it; changing one means
+        // the norm changed, and the norm is pinned at `docs/spec/sparkplug-b-3.0.0/`.
+        let conformant = [
+            // `tck-id-payloads-nbirth-timestamp` (`Sparkplug_6:1064`) — "a payload
+            // timestamp that denotes the time at which the message was published".
+            Emission::NodeBirth,
+            // `tck-id-payloads-dbirth-timestamp` (`Sparkplug_6:1176`), same words.
+            Emission::DeviceBirthColdStart,
+            // `tck-id-payloads-ddeath-timestamp` (`Sparkplug_6:1582`), same words.
+            Emission::DeviceDeath,
+        ];
+        for emission in conformant {
+            assert_eq!(
+                timestamp_source_for(emission),
+                TimestampSource::PublicationInstant,
+                "{emission:?} is fixed by the SPECIFICATION, not by us"
+            );
+        }
+
+        // OURS, BECAUSE THE NORM IS SILENT. There is no
+        // `tck-id-payloads-ndeath-timestamp` anywhere in chapter 6 — NDEATH's
+        // clauses govern `seq`, `bdSeq` and the will, and none of them the payload
+        // timestamp. DDEATH has one; NDEATH does not. Asserted separately so the
+        // asymmetry is on the record rather than discovered again.
+        assert_eq!(
+            timestamp_source_for(Emission::NodeDeath),
+            TimestampSource::PublicationInstant,
+            "NDEATH's payload timestamp is unconstrained by the norm and we chose \
+             the publication instant"
+        );
+
+        // DEVIATIONS, RECORDED — ADR 0013, and both are MUST violations we know
+        // about. Stamping `now` here would hand a consumer that reads the payload
+        // timestamp and ignores `Quality` a 45-minute-old value wearing a fresh
+        // one: conformant, and the exact silent lie this project exists to
+        // prevent.
+        for emission in [Emission::DeviceData, Emission::DeviceBirthRedeclaring] {
+            assert_eq!(
+                timestamp_source_for(emission),
+                TimestampSource::ReadingValueDate,
+                "{emission:?} DEVIATES from the norm on purpose (ADR 0013); moving \
+                 this row silently un-decides that ADR"
+            );
+        }
+
+        // AND THE TWO COLUMNS ARE DISJOINT. Without this, a table answering
+        // `ReadingValueDate` for everything would satisfy every deviation
+        // assertion above, and a table answering `PublicationInstant` for
+        // everything would satisfy every conformant one.
+        assert_ne!(
+            timestamp_source_for(Emission::DeviceData),
+            timestamp_source_for(Emission::NodeBirth),
+            "a table with one answer for every row decides nothing"
+        );
+    }
+
+    /// **AC1 + AC2 — an hour passes, and the rebirth still tells the truth.**
+    ///
+    /// # The clock advance IS the test
+    ///
+    /// With a clock that does not move, a publisher stamping `now` and one
+    /// stamping `value_date` are indistinguishable — that is the fake clock that
+    /// never advanced, one of the four Epic 1 tests this repository had to throw
+    /// away. Here the wall clock jumps an hour between the reading and the
+    /// rebirth, which is what a broker outage looks like, and the assertion is
+    /// that the re-declared payload did NOT follow it.
+    ///
+    /// The existing `a_rebirth_redeclares_what_is_known_instead_of_blanking_it`
+    /// asserts the VALUES survive; nothing asserted their TIME until this story.
+    ///
+    /// FALSIFIED 2026-08-18 — three mutations RUN, output copied.
+    ///
+    /// **The first proves the table is a MECHANISM and not a comment**: moving
+    /// `DeviceBirthRedeclaring` to `PublicationInstant` changes what is EMITTED —
+    /// `left: Some(1784988392050), right: Some(1784984792050)`, exactly one hour
+    /// apart, which is the outage this test simulates.
+    ///
+    /// Dropping `.map(degrade)` from the rebirth metrics goes red with `a reading
+    /// not re-judged against now is published stale … left: 192, right:
+    /// 2147484164` — 192 being Ignition's `Good`, which is the lie.
+    ///
+    /// Stamping the DDATA with a fixed instant instead of the reading's time goes
+    /// red with `the DDATA payload timestamp IS the source ValueDate (ADR 0013) …
+    /// left: Some(9000000000000), right: Some(1784984792050)`.
+    #[test]
+    fn an_hour_of_outage_does_not_move_the_re_declared_reading_forward() {
+        const READING_AT: i64 = 1_784_984_792_050;
+        const AN_HOUR_LATER: i64 = READING_AT + 3_600_000;
+
+        let (mut p, mut sink) = born();
+        assert_eq!(
+            p.publish(&update(Quality::Good), &mut sink).unwrap(),
+            Published::Emitted
+        );
+        // The premise: the DDATA itself carries the reading's own time.
+        let ddata = decode(&sink.emitted[0]);
+        assert_eq!(
+            ddata.timestamp,
+            Some(READING_AT as u64),
+            "the DDATA payload timestamp IS the source ValueDate (ADR 0013)"
+        );
+        sink.emitted.clear();
+
+        // The outage. The broker returns an hour later and the session re-births.
+        p.new_session();
+        p.birth(UtcMillis(AN_HOUR_LATER), &[Serial::new(SERIAL)], &mut sink)
+            .expect("valid topics");
+
+        // The NBIRTH speaks NOW — it announces a session, not a measurement.
+        let nbirth = decode(&sink.emitted[0]);
+        assert_eq!(
+            nbirth.timestamp,
+            Some(AN_HOUR_LATER as u64),
+            "the node birth is an event and carries the instant it happened"
+        );
+
+        // And the DBIRTH re-declaring the reading does NOT.
+        let dbirth = decode(&sink.emitted[1]);
+        assert_eq!(
+            dbirth.timestamp,
+            Some(READING_AT as u64),
+            "a reading re-declared after an hour of outage must still say WHEN IT \
+             WAS TRUE. Stamping the reconnection instant turns a 45-minute-old \
+             value into a fresh-looking one for any consumer reading the payload \
+             timestamp — conformant, and the precise lie ADR 0013 refuses"
+        );
+        assert_ne!(
+            dbirth.timestamp, nbirth.timestamp,
+            "if the two agree, the re-declared reading followed the clock"
+        );
+
+        // AC2's other half: re-declared, never re-asserted as good.
+        let power = metric(&dbirth, METRIC_POWER);
+        assert_eq!(
+            quality_of(power),
+            ignition_quality_code(Quality::Stale),
+            "a reading not re-judged against now is published stale"
+        );
+        assert_eq!(
+            cause_of(power).as_deref(),
+            Some("not-revalidated"),
+            "and it says WHY it is stale, rather than leaving the host to guess"
+        );
+        assert_eq!(
+            power.timestamp,
+            Some(READING_AT as u64),
+            "the METRIC timestamp is the acquisition time too — which is the one \
+             place the norm actually asks for it"
+        );
+    }
+
+    /// **AC2 — a reading already refused keeps its own cause across the rebirth.**
+    ///
+    /// `degrade` touches `Good` and nothing else. Without this, a rebirth would
+    /// flatten a `Bad` counter-went-backwards into a generic `Stale`, and an
+    /// operator whose meter is lying would be told only that it is old — the
+    /// distinction story 2.3 exists for, undone by the reconnection.
+    ///
+    /// FALSIFIED 2026-08-18 — mutation RUN, output copied: widening `degrade` to
+    /// map every quality to `Stale(NotRevalidated)` goes red with `a refused
+    /// reading stays refused across a reconnect … left: 2147484164, right:
+    /// 2147484160` — the bridge's `Stale` code standing where its `Bad` belongs.
+    /// (The note first predicted `500` and `0`; the run said otherwise, and the
+    /// run is what is written here.)
+    #[test]
+    fn a_rebirth_does_not_flatten_a_refusal_into_mere_staleness() {
+        let (mut p, mut sink) = born();
+        let mut refused = update(Quality::Good);
+        refused.verdicts = Verdicts::uniform(Verdict::bad(Cause::CounterWentBackwards));
+        assert_eq!(p.publish(&refused, &mut sink).unwrap(), Published::Emitted);
+        sink.emitted.clear();
+
+        p.new_session();
+        p.birth(
+            UtcMillis(9_000_000_000_000),
+            &[Serial::new(SERIAL)],
+            &mut sink,
+        )
+        .expect("valid topics");
+        let dbirth = decode(&sink.emitted[1]);
+        let power = metric(&dbirth, METRIC_POWER);
+
+        assert_eq!(
+            quality_of(power),
+            ignition_quality_code(Quality::Bad),
+            "a refused reading stays refused across a reconnect: degrading it to \
+             Stale would tell an operator their meter is merely old"
+        );
+        assert_eq!(
+            cause_of(power).as_deref(),
+            Some("counter-went-backwards"),
+            "and it keeps the cause that refused it"
         );
     }
 }
