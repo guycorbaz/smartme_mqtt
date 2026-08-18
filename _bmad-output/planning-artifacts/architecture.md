@@ -76,7 +76,7 @@ Shared per-meter `Fresh|Stale|Failed` state via a **`watch` snapshot** (UI reads
 
 ### Broker-down data policy — RESOLVED v1 = traced-drop, no buffer
 
-Unanimous. `try_publish` (non-blocking) so the cloud poller never suffers broker back-pressure; on full/broker-down → **per-device traced drop** (`readings_dropped_total{meter,reason}` + WARN with source timestamp). Sparkplug NBIRTH-on-reconnect + next fresh NDATA self-heals the cumulative counter. **No persistent buffer** (avoids Ignition's out-of-order rejection *and* the unbounded-growth trap). Anti-replay invariant: **every published Sparkplug timestamp == its source `ValueDate`, never the flush/`now` time.** Retention/drop logic lives **above the injectable sink** → unit-testable without a broker.
+Unanimous. `try_publish` (non-blocking) so the cloud poller never suffers broker back-pressure; on full/broker-down → **per-device traced drop**: counted per meter and per reason, WARN with source timestamp, and readable by an operator without reading the log ([ADR 0036] — `/healthz`'s `dropped_readings` today; the Prometheus spelling this line carried until 2026-08-18 named a consumer that does not exist). Sparkplug NBIRTH-on-reconnect + next fresh NDATA self-heals the cumulative counter. **No persistent buffer** (avoids Ignition's out-of-order rejection *and* the unbounded-growth trap). Anti-replay invariant: **every published Sparkplug timestamp == its source `ValueDate`, never the flush/`now` time.** Retention/drop logic lives **above the injectable sink** → unit-testable without a broker.
 
 Chaos matrix completed with the **broker DOWN→RECOVERY / cloud-fresh** transition: on broker return, republish current state (rebirth) with `published-ts == source-ValueDate`, no replay of old values (anti-replay verified at the reconnection instant — the down→up transition, not just static-down).
 
@@ -283,7 +283,7 @@ _Environment forks confirmed by Guy; ops/data decisions reviewed and endorsed in
 
 - **Time:** never call `SystemTime::now()`/`Instant::now()` directly in logic — always the injected `Clock`. Freshness age = monotonic `Instant`; payload timestamp = `Date-header − ValueDate` wall-clock. Hard rule (the clock is a test seam and a correctness dependency).
 - **State propagation:** the `watch<[MeterState; N]>` snapshot is the **single source of truth** read by the UI and publisher; nothing recomputes meter state independently. The state machine is a **pure function** `(prev, tick, now) → next` — no I/O inside it.
-- **Publish:** `try_publish` only (never blocking `.await` on the publish path); a drop is a **traced** drop (`readings_dropped_total{meter, reason}` + WARN), never silent.
+- **Publish:** `try_publish` only (never blocking `.await` on the publish path); a drop is a **traced** drop — counted per meter and per reason, WARN, never silent, and readable without the log ([ADR 0036]).
 
 ### Process Patterns
 
@@ -490,3 +490,5 @@ The three tree-level build blockers (bin-only tests, missing `tests/common/`, ho
 **AI Agent Guidelines:** follow the documented decisions exactly; use the patterns consistently; respect the crate/task/secret boundaries; treat this document as the architectural source of truth.
 
 **First Implementation Priority:** the Cargo workspace scaffolding (Starter section command), immediately followed by the `smart-me-client` + `ValueDate`/`Date`-header audit spike that unblocks the freshness formula.
+
+[ADR 0036]: ../../docs/adr/0036-ar7-names-the-property-not-the-exporter.md

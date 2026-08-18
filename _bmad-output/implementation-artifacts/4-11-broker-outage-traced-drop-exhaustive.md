@@ -1,6 +1,6 @@
 # Story 4.11: Broker-outage policy — the traced drop, exhaustively (FR22, AR7)
 
-Status: review
+Status: done
 
 ## Story
 
@@ -392,8 +392,49 @@ message was added, the mutation re-run, and the note copied from that run.
 commit, for the reasons given above. If it appears in 4.11's commit, this list is wrong and the
 commit is.
 
+### Review Findings (2026-08-18, three adversarial layers)
+
+Blind Hunter (diff only), Edge Case Hunter (diff + repository), Acceptance Auditor (diff + spec
++ `CLAUDE.md`). **The sharpest finding came from the layer with no project access**, and the
+two layers that had it dismissed three of the blind layer's criticals as false positives —
+which is the argument for running all three.
+
+- [x] [Review][Patch] `a_thousand_losses_cost_what_one_costs` could not fail — `.len()` on a fixed-size array is a compile-time constant, and it was scored as AC2's discharge. Rewritten and renamed; the cardinality argument moved to a `const` block.
+- [x] [Review][Patch] The saturation test could not tell saturation from a no-op — positive control added.
+- [x] [Review][Patch] `mqtt-task-gone` had no test while its subtask was ticked — `a_closed_outbox_is_a_dead_transport_task_and_says_so` added and falsified.
+- [x] [Review][Patch] A doc comment claimed an assertion that does not exist (*"is asserted at the call site's own arm"*) — removed, and [#86] carries the gap.
+- [x] [Review][Patch] `run`'s doc said "three of the six"; it is four.
+- [x] [Review][Patch] An `Unpublishable` reading was logged twice, and the `error!` fired before the counter moved — folded into the one line that carries `meter`, `reason` and `value_date`.
+- [x] [Review][Patch] `DropReason`'s exhaustiveness claim was over the journey; it is over the hand-over. Qualified, with [#85] [#87] [#88] named in the doc and a warning box in the manual.
+- [x] [Review][Patch] The manual mis-attributed two slugs: `outbox-full` also fires for driver-side bursts, and a burst of `before-birth` is normal after every reconnection rather than a birth that is not completing.
+- [x] [Review][Patch] `supervisor.rs`'s `mpsc::channel(64)` is now a loss threshold and carried no comment.
+- [x] [Review][Patch] AC5 said the compiler closes the *paths*; it closes the *outcomes*.
+- [x] [Review][Patch] "All six ACs met" — AC1 is met in the code and under-pinned in the tests, and is now recorded that way.
+- [x] [Review][Patch] AC2's file-descriptor half was claimed and argued nowhere — the drop path opens none, now stated.
+- [x] [Review][Patch] Record errors: "SEVEN crates" was six, "eight tests" was nine, and Task 7's manual subtask was ticked against an anchor (`degraded_meters`) that appears nowhere in the manual.
+- [x] [Review][Patch] `epics.md` was not amended alongside the story's four added ACs.
+- [x] [Review][Defer] AR7's Prometheus metric substituted with no ADR — **taken, not deferred**: [ADR 0036], [#89].
+- [x] [Review][Defer] The driver's four counting call sites are untested; deleting them leaves the suite green — [#86], owner Story 4.13.
+- [x] [Review][Defer] `try_publish` answers `Ok` on queueing, not on sending — [#85].
+- [x] [Review][Defer] The inbox is dropped unread at shutdown: a seventh path — [#87].
+- [x] [Review][Defer] A refused DBIRTH leaves the device declared, so every later reading looks published — [#88].
+- [x] [Review][Defer] Disabling a meter no longer quietens its drop rows, unlike its verdict (story 3.5) — [#90], a decision rather than a patch.
+- [x] [Review][Defer] The counts carry no recency, so one reading cannot tell a running outage from a healed one — [#91].
+- [x] [Review][Defer] A dropped DDATA leaves a Sparkplug sequence hole, and republications are counted as distinct losses — [#92].
+
+**Dismissed as false positives, each contradicted by a layer with repository access and verified
+by hand:** `publish_all`'s polarity (it returns the number *dropped*), a certificate riding in
+the same queue as a reading (`publish` emits exactly one DDATA), and `dropped_readings: []`
+being dishonest when `fleet` is `None` (no fleet means no counters ever existed).
+
 ### Change Log
 
 - **2026-08-18** — Story 4.11 implemented. Six drop reasons closed and counted per meter;
   the poll task's hand-over stops blocking; `/healthz` reports what never reached the wire;
   the manual gains its section. Nine mutations run before their notes. No wire change.
+- **2026-08-18, review** — three adversarial layers, 14 patches applied, 8 issues opened
+  ([#85]–[#92]), [ADR 0036] written for AR7. Three tests repaired, one added, four mutations
+  added (13 in total). Story closed `done` with **AC1 recorded as met-in-code and
+  under-pinned-in-tests** ([#86]), on the precedent of stories 2.1 and 2.3.
+
+[ADR 0036]: ../../docs/adr/0036-ar7-names-the-property-not-the-exporter.md
