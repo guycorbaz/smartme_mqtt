@@ -144,6 +144,44 @@ development_status:
   #    lockfile churn with nothing to do with FR22. Cargo.lock is STAGED, not
   #    committed, and BELONGS IN ITS OWN COMMIT rather than in 4.11's.
   #
+  # STORY 4.11 CLOSED `done` 2026-08-18 after a three-layer adversarial review
+  # (blind / edge-case / acceptance). 14 patches applied, 8 issues opened
+  # ([#85]-[#92]), ADR 0036 written for [#89]. THREE CRITICALS WERE DISMISSED AS
+  # FALSE POSITIVES, each raised by the layer with NO repository access and each
+  # contradicted by the two that had it — which is the argument for running all
+  # three rather than the cheapest one.
+  #
+  # THE SHARPEST FINDING CAME FROM THE BLIND LAYER, and repository access would
+  # not have helped: `a_thousand_losses_cost_what_one_costs` asserted
+  # `dropped.len() == dropped.len()` on a FIXED-SIZE ARRAY — `6 == 6` for every
+  # value of every program — and it was scored as the discharge of AC2. Fourth
+  # hollow assertion in this repository. The cardinality argument moved to a
+  # `const` block, where the compiler carries it. AC1 is recorded UNMET IN THE
+  # TESTS ([#86]): six reasons ship, two are pinned end to end, and deleting the
+  # driver's four `lost(...)` calls leaves the whole suite green. Owner: story
+  # 4.13's broker harness.
+  #
+  # STORY 4.12 WRITTEN 2026-08-18, and it is A VERIFICATION STORY, not an
+  # implementation one. Both properties it is named after ALREADY HOLD — the
+  # DDATA stamp since 1.9, the rebirth's degrade-and-keep-its-ValueDate since 4.7
+  # — with the argument written in the code. What does not exist is any proof:
+  # NOT ONE TEST IN THIS REPOSITORY ASSERTS A PUBLISHED SPARKPLUG TIMESTAMP, and
+  # `chaos_sigterm_no_lie` says so in its own words. Three decisions at drafting:
+  # an AC3 pinning a per-message-type timestamp table (story 4.17's pattern, the
+  # one that turned a QoS violation from invisible to red); the fake clock MUST
+  # advance an hour, or a publisher stamping `now` and one stamping `value_date`
+  # are indistinguishable; and the 4.12/4.13 boundary is written down — 4.12
+  # forces the reconnect by CLIENT-ID TAKEOVER, 4.13 by STOPPING THE CONTAINER,
+  # two code paths, neither citable as the other's evidence.
+  #
+  # CI INCIDENT, recorded because it cost an hour and will recur: both `test` and
+  # `fmt + clippy` sat 46+ minutes on step 3, "Install build tools (protoc, mold,
+  # clang)", and the previous commit's `sparkplug-b isolated` sat 1h00 on the same
+  # step before cancelling. Nothing to do with the tree — `cargo-deny`, the one
+  # job that touches the dependency change, passed. A cancel-and-rerun cleared it
+  # and all three jobs are green on c1e08c7. If it recurs, the fix is caching or
+  # pinning that step, not diagnosing the code.
+  #
   # STILL AWAITING GUY, unchanged: Epic 3 retro table items 1-3 ([#63] [#81]
   # [#82]/[#83]), the NFR10 sitting (4.16 + 4.18), and the Tier-3 pass — now
   # v3 attested against v10 shipped.
@@ -1806,7 +1844,7 @@ development_status:
   # and `cargo test` compiles without that gate.
   4-10-own-the-reconnect-loop-bdseq-per-connect: done
   4-11-broker-outage-traced-drop-exhaustive: done  # closed 2026-08-18 after a three-layer review; AC1 UNMET in the tests [#86], ADR 0036 [#89]
-  4-12-anti-replay-at-the-down-up-instant: backlog
+  4-12-anti-replay-at-the-down-up-instant: ready-for-dev  # story written 2026-08-18; a VERIFICATION story — the property is already implemented
   4-13-chaos-broker-recovery: backlog
   4-14-chaos-poller-wedge: backlog
   4-15-ac-leak-01-resource-stability: backlog
