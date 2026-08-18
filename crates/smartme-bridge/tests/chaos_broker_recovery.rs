@@ -260,6 +260,28 @@ async fn a_broker_that_comes_back_gets_a_new_session_and_the_old_timestamps() {
     // will never reach CONNACK, and drains these with the publisher back in
     // `Session::Pending` — so each one returns `DroppedBeforeBirth` and reaches
     // `lost(...)`. That is what AC3 counts.
+    //
+    // **HOW AC3 COULD GO RED WITHOUT A DEFECT IN THE BRIDGE**, because arguing a
+    // mechanism's robustness without naming its window is the habit this
+    // repository keeps having to break. A reading that reaches the inbox arm
+    // BEFORE the driver has noticed the transport is gone is still published into
+    // a live-looking session: `try_publish` answers `Ok` on entering `rumqttc`'s
+    // request channel, the message never leaves the socket, and it is discarded
+    // with the event loop `pump.abort()` kills — **uncounted**, because
+    // `reason_for` said `None` and `publish_all` reported no failure. That is
+    // [#85], already open and already recorded at the call site
+    // (`mqtt_driver.rs`, `reason_for`'s doc comment). If all three readings
+    // landed in that window, no counter would move and the AC3 assertion below
+    // would fail against a bridge doing exactly what it is documented to do.
+    //
+    // It is left as it is rather than papered over with a retry, and the reason
+    // is that the failure is the SAFE one: [#85] can only make this test red,
+    // never green, so no property is silently unproven. The window is also very
+    // narrow — `stop_with_timeout` returns once the container is actually
+    // stopped, so the socket is already dead when these are sent. Measured
+    // `("garage", "before-birth", 3)` on every run so far. **If this assertion
+    // ever fails on a green-looking bridge, read [#85] before reading anything
+    // else.**
     for n in 1..=3 {
         tx.send(a_reading_at(READING_AT + n * 1_000))
             .await

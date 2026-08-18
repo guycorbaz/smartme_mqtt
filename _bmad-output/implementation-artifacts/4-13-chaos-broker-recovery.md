@@ -175,7 +175,8 @@ Claude Opus 5 (1M context) — `claude-opus-5[1m]`, 2026-08-18.
 
 ### Debug Log References
 
-`chaos_broker_recovery` prints four `AC2 MEASUREMENT` / `AC3 MEASUREMENT` lines under
+`chaos_broker_recovery` prints five measurement lines — four `AC2 MEASUREMENT` and one
+`AC3 MEASUREMENT` — under
 `--nocapture`; they are the story's measurements, not diagnostics, and they stay.
 
 ### Completion Notes List
@@ -246,6 +247,27 @@ no death at all.
 was amended: the Story 4.10 note claiming *"no NDEATH reaches a subscriber on the reconnect path at
 all"* is now qualified by 4.13's measurement, with the SIGKILL contrast stated so the correction
 cannot be read wider than it goes.
+
+**Adversarial code review, 2026-08-18, run on a different model (Sonnet) than the one that wrote
+the code.** Verdict: sound with reservations. It re-ran all four mutations and confirmed their
+exact messages, re-ran `--lib` under the counter mutation (`258 passed`), checked the issue states
+on GitHub, and confirmed no conformance row moved. Two findings, both accepted and both fixed:
+
+1. **The AC3 comment argued a mechanism's robustness without naming its window.** A reading
+   reaching the inbox arm before the driver notices the transport is gone is published into a
+   live-looking session and discarded with the aborted event loop, uncounted — so all three
+   readings landing in that window would turn AC3 red against a correct bridge. The reviewer
+   established this by reading and presented it as new; it is in fact [#85], already open and
+   already recorded at the call site in `reason_for`'s doc comment. The behaviour is known and
+   tracked; **the omission in this test's comment was real**, and the comment now names the
+   window, says the failure is the safe one, and points at [#85] first.
+2. **A false count in the Debug Log References** — "four measurement lines" where there are five.
+   Corrected. Exactly the kind of claim `CLAUDE.md` says gets audited, in the notes rather than
+   the code.
+
+**A limit the review named and this record should keep:** the run tallies cited above ("2 runs of
+37", "30 consecutive passes") live in a comment and in these notes, with no committed artefact
+behind them. They are reproducible but not verifiable after the fact.
 
 ### File List
 
