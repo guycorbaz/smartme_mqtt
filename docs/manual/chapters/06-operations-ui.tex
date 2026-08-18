@@ -4,7 +4,9 @@
 \section{Reaching it}
 \label{sec:screens}
 
-The bridge serves a web interface on port \code{8080} \emph{inside} the container. It
+The bridge serves a web interface on port \code{8080} \emph{inside} the container --- or on
+\code{SMARTME\_UI\_PORT} when that is set \emph{and} no \code{config.toml} exists yet, which is a
+development convenience rather than a deployment setting (ADR~0037). It
 publishes no host port: the reverse proxy reaches it over a shared Docker network and is the
 only thing that can. There is \textbf{no login} --- the trust boundary is the proxy, not this
 process.

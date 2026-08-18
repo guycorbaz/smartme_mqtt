@@ -411,6 +411,11 @@ async fn chaos_ncmd_subscribed_before_the_birth_and_every_command_ignored() {
         .env("SMARTME_CLIENT_ID", "id")
         .env("SMARTME_CLIENT_SECRET", "secret")
         .env("SMARTME_STATE_DIR", state_dir.0.display().to_string())
+        // The UI port for a run with no `ui_port` in its file ([ADR 0037]).
+        // NOT 8080: that is a deployment contract, and it is shared with other
+        // projects on this machine. Nothing here tests the UI; the variable
+        // exists so no test binary reaches for a port it does not own.
+        .env("SMARTME_UI_PORT", "18103")
         // NO `RUST_LOG`, deliberately, and it is removed from the inherited
         // environment so an ambient one cannot leak in (Story 4.7).
         //

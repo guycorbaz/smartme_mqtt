@@ -67,6 +67,11 @@ fn run_briefly(dir: &std::path::Path) -> (String, bool) {
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("SMARTME_STATE_DIR", dir)
+        // The UI port for a run with no `ui_port` in its file ([ADR 0037]).
+        // NOT 8080: that is a deployment contract, and it is shared with other
+        // projects on this machine. Nothing here tests the UI; the variable
+        // exists so no test binary reaches for a port it does not own.
+        .env("SMARTME_UI_PORT", "18100")
         // The credential is present and irrelevant: with no configuration there
         // is nothing for it to authenticate against. Supplying it rules out
         // "it stayed up because it was waiting for a credential".

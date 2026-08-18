@@ -104,11 +104,28 @@ fn state_dir(name: &str) -> std::path::PathBuf {
     path
 }
 
+/// The port a first run listens on in the tests ([ADR 0037]).
+///
+/// **NOT `ui::DEFAULT_PORT`, and that is the point.** 8080 is a deployment
+/// contract — the Traefik label, the image smoke test and four manual passages
+/// name it — so it cannot be moved. But this machine shares it with other
+/// projects, and a container holding it blocked the full gate twice in four
+/// days, which is a failure that looks exactly like the defect these tests exist
+/// to catch. The bridge reads `SMARTME_UI_PORT` when, and only when, there is no
+/// configuration file to read a port from.
+///
+/// The IMAGE never sets it, so what ships is unaffected: `image smoke tests`
+/// still asserts the UI answers on 8080.
+///
+/// [ADR 0037]: ../../../docs/adr/0037-the-first-run-port-is-bootstrap-not-configuration.md
+const FIRST_RUN_PORT: u16 = 18090;
+
 fn spawn(dir: &std::path::Path) -> Child {
     Command::new(env!("CARGO_BIN_EXE_smartme-bridge"))
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("SMARTME_STATE_DIR", dir)
+        .env("SMARTME_UI_PORT", FIRST_RUN_PORT.to_string())
         .env("SMARTME_CLIENT_ID", "client-id")
         .env("SMARTME_CLIENT_SECRET", SECRET)
         .stdout(Stdio::null())
@@ -215,15 +232,15 @@ fn fingerprint(page: &str) -> Option<String> {
 /// in between.
 #[test]
 fn from_an_empty_directory_to_publishing_without_touching_a_terminal() {
-    let _lock = port_lock::PortLock::acquire(smartme_bridge::ui::DEFAULT_PORT);
-    let port = smartme_bridge::ui::DEFAULT_PORT;
+    let _lock = port_lock::PortLock::acquire(FIRST_RUN_PORT);
+    let port = FIRST_RUN_PORT;
     let dir = state_dir("journey");
     let mut child = spawn(&dir);
 
     let outcome = (|| -> Result<(), String> {
         // ---- The first run: no file at all.
         let home = wait_for_ui(port, &mut child)
-            .ok_or("the UI must answer on the default port with no configuration")?;
+            .ok_or("the UI must answer on the first-run port with no configuration")?;
         if !home.contains("Not configured yet") {
             return Err(format!("expected the unconfigured state:\n{home}"));
         }

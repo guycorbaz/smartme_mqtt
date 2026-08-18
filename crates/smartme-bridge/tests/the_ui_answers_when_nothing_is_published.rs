@@ -77,6 +77,7 @@ fn spawn(dir: &std::path::Path) -> Child {
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("SMARTME_STATE_DIR", dir)
+        .env("SMARTME_UI_PORT", UNCONFIGURED_PORT.to_string())
         .env("SMARTME_CLIENT_ID", "x")
         .env("SMARTME_CLIENT_SECRET", "x")
         .stdout(Stdio::null())
@@ -89,11 +90,27 @@ fn spawn(dir: &std::path::Path) -> Child {
 ///
 /// Separate rather than piping in `spawn` itself: an unread pipe fills and blocks
 /// the child, and every other test here kills its bridge without reading a word.
+/// The port an UNCONFIGURED run listens on in the tests ([ADR 0037]).
+///
+/// **NOT `ui::DEFAULT_PORT`.** 8080 is a deployment contract and cannot be
+/// moved, but it is shared with other projects on this machine and a container
+/// holding it blocked the full gate twice in four days — a failure that reads
+/// exactly like the defect this test exists to catch. `SMARTME_UI_PORT` is read
+/// only when there is no configuration file, which is this test's whole premise.
+/// The image never sets it.
+///
+/// Deliberately outside `port_for`'s block (`18080 + case`) so the two cannot
+/// collide as cases are added.
+///
+/// [ADR 0037]: ../../../docs/adr/0037-the-first-run-port-is-bootstrap-not-configuration.md
+const UNCONFIGURED_PORT: u16 = 18091;
+
 fn spawn_listening(dir: &std::path::Path) -> Child {
     Command::new(env!("CARGO_BIN_EXE_smartme-bridge"))
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("SMARTME_STATE_DIR", dir)
+        .env("SMARTME_UI_PORT", "18092")
         .env("SMARTME_CLIENT_ID", "x")
         .env("SMARTME_CLIENT_SECRET", "x")
         // The subscriber's fmt layer writes to STDOUT, so that is where the
@@ -136,22 +153,25 @@ fn write_config(dir: &std::path::Path, port: u16, confirmed: bool) {
 fn with_no_configuration_the_ui_answers_and_says_so() {
     // The lock exists for this port and this test did not take it.
     //
-    // At least four other test binaries spawn an unconfigured bridge, which also
-    // binds `DEFAULT_PORT`. Without the lock, the loser's bridge logs "the web UI
+    // Other test binaries also spawn an unconfigured bridge. Since [ADR 0037] each
+    // takes its own port through `SMARTME_UI_PORT`, so they no longer collide with
+    // one another OR with 8080 — but the lock stays, because two runs of THIS
+    // binary still would. Without it, the loser's bridge logs "the web UI
     // could NOT start" — the exact AC1 failure — and this test is then answered by
     // the OTHER bridge, sees "Not configured yet", and reports green. A test for
     // "the server exists" passing while the server under test did not start.
-    let _lock = port_lock::PortLock::acquire(smartme_bridge::ui::DEFAULT_PORT);
+    let _lock = port_lock::PortLock::acquire(UNCONFIGURED_PORT);
     let dir = state_dir("unconfigured");
-    // No config.toml at all, so the port must come from the default.
+    // No config.toml at all, so the port comes from the environment ([ADR 0037]):
+    // there is no file to read one from, which is this test's whole premise.
     let mut child = spawn(&dir);
-    let answer = wait_for_ui(smartme_bridge::ui::DEFAULT_PORT, &mut child);
+    let answer = wait_for_ui(UNCONFIGURED_PORT, &mut child);
     let _ = child.kill();
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&dir);
 
     let answer = answer.expect(
-        "the UI must answer on the DEFAULT port when there is no configuration — \
+        "the UI must answer on the first-run port when there is no configuration — \
          that run has no file to read a port from, and it is the run that needs \
          the screen most",
     );

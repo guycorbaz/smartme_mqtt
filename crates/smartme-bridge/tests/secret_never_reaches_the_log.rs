@@ -87,6 +87,11 @@ fn everything_it_said() -> String {
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("SMARTME_STATE_DIR", &dir)
+        // The UI port for a run with no `ui_port` in its file ([ADR 0037]).
+        // NOT 8080: that is a deployment contract, and it is shared with other
+        // projects on this machine. Nothing here tests the UI; the variable
+        // exists so no test binary reaches for a port it does not own.
+        .env("SMARTME_UI_PORT", "18101")
         .env("SMARTME_CLIENT_ID", "client-id-not-secret")
         .env("SMARTME_CLIENT_SECRET", SECRET)
         // TRACE, deliberately: a leak that only shows at a level nobody runs is

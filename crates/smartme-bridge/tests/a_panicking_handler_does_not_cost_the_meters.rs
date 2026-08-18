@@ -140,6 +140,11 @@ fn a_panicking_handler_costs_the_page_and_nothing_else() {
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("SMARTME_STATE_DIR", &dir)
+        // The UI port for a run with no `ui_port` in its file ([ADR 0037]).
+        // NOT 8080: that is a deployment contract, and it is shared with other
+        // projects on this machine. Nothing here tests the UI; the variable
+        // exists so no test binary reaches for a port it does not own.
+        .env("SMARTME_UI_PORT", "18104")
         .env("SMARTME_CLIENT_ID", "x")
         .env("SMARTME_CLIENT_SECRET", "x")
         // The subscriber's fmt layer writes to stdout; the panic hook writes to

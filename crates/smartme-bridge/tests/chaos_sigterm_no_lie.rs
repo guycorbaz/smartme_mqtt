@@ -303,6 +303,11 @@ async fn run_case(broker_host: &str, port: u16, group: &str) {
         .env("SMARTME_CLIENT_ID", "id")
         .env("SMARTME_CLIENT_SECRET", "secret")
         .env("SMARTME_STATE_DIR", state_dir.0.display().to_string())
+        // The UI port for a run with no `ui_port` in its file ([ADR 0037]).
+        // NOT 8080: that is a deployment contract, and it is shared with other
+        // projects on this machine. Nothing here tests the UI; the variable
+        // exists so no test binary reaches for a port it does not own.
+        .env("SMARTME_UI_PORT", "18102")
         // reqwest honours the proxy environment by default. Inherited from a
         // developer's shell or a corporate runner, a proxy would route the
         // request to a host that ANSWERS, quietly falsifying the premise that

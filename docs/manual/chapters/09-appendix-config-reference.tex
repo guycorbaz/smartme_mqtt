@@ -22,6 +22,7 @@ SMARTME\_CLIENT\_SECRET & yes & smart-me OAuth client-credentials secret. Missin
 SMARTME\_STATE\_DIR     & no  & Where \code{config.toml} and \code{bdseq.toml} live. Default \code{/data}. \\
 \addlinespace
 RUST\_LOG               & no  & \code{tracing} filter, console and file alike. Default \code{info}. Stays in the environment deliberately: raising the level is what one does to diagnose a configuration that will not load, so it must be readable before the configuration is. \\
+SMARTME\_UI\_PORT       & no  & \textbf{Only consulted when there is no \code{config.toml}}, and ignored the moment one exists --- \code{ui\_port} in the file always wins. It exists because a first run has nowhere to read a port from and must therefore take the default, and \code{8080} is a deployment contract (the Traefik label names it, and so does the image's own smoke test), so it cannot simply be moved. Set it when something else on the machine already holds \code{8080}. A value below \code{1024}, or one that is not a number, \textbf{refuses the start} rather than falling back --- a silent fallback would put the screen somewhere you did not ask for, and you would look for it where you did. \textbf{The image never sets it.} See ADR~0037. \\
 \addlinespace
 SMARTME\_BASIC\_USER    & --- & HTTP Basic fallback user. \textbf{Not read by \prog}\textsuperscript{*}. \\
 SMARTME\_BASIC\_PASSWORD& --- & HTTP Basic fallback password. \textbf{Not read by \prog}\textsuperscript{*}. \\

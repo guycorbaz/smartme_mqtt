@@ -343,6 +343,49 @@ async fn lifecycle(state_dir: PathBuf, ui_port: u16) -> Result<(), Box<dyn std::
     }
 }
 
+/// The UI port for a run that has **no configuration file** ([ADR 0037]).
+///
+/// # Why the environment may speak here, and only here
+///
+/// [ADR 0023] says the file is the configuration, and this does not weaken it:
+/// this function is reached ONLY when there is no file, and the moment one
+/// exists its `ui_port` wins. The variable is in the same family as
+/// `SMARTME_STATE_DIR` — it says where to listen while nothing has been
+/// configured, not what the operator chose.
+///
+/// It exists because the default is a **deployment contract**: 8080 is the port
+/// inside the container, named by the Traefik label, the image smoke test and
+/// four passages of the manual, so it cannot be moved. On a development machine
+/// shared with other projects it is regularly taken, and that blocked the full
+/// gate twice in four days.
+///
+/// # A value that cannot be honoured refuses the start
+///
+/// Falling back to 8080 would put the UI somewhere the operator did not ask for,
+/// and they would go looking for it where they did. The refused range is the one
+/// `config::validate` already applies to `ui_port` from the file: `0`, and
+/// anything privileged, which this bridge could never bind running unprivileged.
+///
+/// [ADR 0023]: ../../docs/adr/0023-the-file-is-the-configuration.md
+/// [ADR 0037]: ../../docs/adr/0037-the-first-run-port-is-bootstrap-not-configuration.md
+fn first_run_port() -> u16 {
+    let Ok(raw) = std::env::var("SMARTME_UI_PORT") else {
+        return ui::DEFAULT_PORT;
+    };
+    match raw.trim().parse::<u16>() {
+        Ok(port) if port >= 1024 => port,
+        // Written to stderr rather than traced: this runs in phase 2, BEFORE the
+        // subscriber is installed, so a `tracing` call here would reach nobody.
+        _ => {
+            eprintln!(
+                "SMARTME_UI_PORT is {raw:?}, which is not a port this bridge could                  listen on (it must be a number of 1024 or more — the process runs                  unprivileged). Refusing to start rather than falling back to                  {}, which would put the web UI somewhere you did not ask for.",
+                ui::DEFAULT_PORT
+            );
+            std::process::exit(2);
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // INFO by default, and NOT `fmt::init()`.
     //
@@ -390,7 +433,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_ref()
         .and_then(|r| r.as_ref().ok())
         .and_then(|c| c.ui_port)
-        .unwrap_or(ui::DEFAULT_PORT);
+        .unwrap_or_else(first_run_port);
 
     let (file_layer, file_log) = file_log_layer(stored.as_ref().and_then(|r| r.as_ref().ok()));
     tracing_subscriber::registry()
