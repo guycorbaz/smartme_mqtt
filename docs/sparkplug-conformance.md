@@ -503,6 +503,20 @@ the evidence above rather than open the row as a fresh gap.
 the *reconnect* path at all, so the will's new number is observed only on the SIGTERM path. See
 [#43](https://github.com/guycorbaz/smartme_mqtt/issues/43).
 
+**Story 4.13 answered half of that, by measurement, on 2026-08-18 — and the half it answered is the
+opposite of what was expected.** `chaos_broker_recovery` stops the broker container and records
+everything an independent subscriber receives: **exactly one NDEATH arrives, on every run measured,
+carrying the ended session's own `bdSeq`.** The will is `(QoS 1, retain false)`, so this is not a
+retained message surviving the restart — mosquitto's SIGTERM path publishes the wills of the sessions
+it tears down, and gets them out to subscribers before closing their sockets. So the will's number
+**is** observable off the reconnect path, on a broker that is stopped.
+
+**No row moves on that**, and the limit is the point. It is a measurement of mosquitto's shutdown
+behaviour, not of this bridge's conformance: the same test run with `docker kill --signal SIGKILL`
+observes **nothing at all**, because there is no shutdown path to run. A broker that crashes, loses
+power, or is killed still delivers no death, which is the residue of [#43] and stays open. What 4.13
+closes is the *unqualified* form of the sentence above — "at all" was too strong — not the clause.
+
 **The five Primary-Host clauses are `gap`, not `n/a`, and that is the single most reversible
 judgement in this chapter.** Every one is conditional — *"If the Edge Node is configured to wait for
 a Primary Host Application…"* — and the bridge has no such configuration, so a reflexive reading

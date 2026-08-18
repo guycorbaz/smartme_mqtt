@@ -84,6 +84,112 @@ pub async fn start_broker() -> (ContainerAsync<GenericImage>, u16) {
     (container, port)
 }
 
+/// As [`start_broker`], but on a host port that **survives a restart of the
+/// container** — the one property story 4.13 cannot do without.
+///
+/// [`start_broker`] lets Docker pick the host port. Stop that container and
+/// start it again and the mapping is redrawn: the broker comes back on a
+/// *different* host port, while the bridge under test still holds the old one.
+/// It then reconnects forever against nothing, and the test does not fail — it
+/// **hangs to its timeout**, which is the shape this repository keeps having to
+/// tell apart from a real defect. `with_mapped_port` pins the host side into the
+/// container's own configuration, so `stop` + `start` reopens the same door.
+///
+/// **The port is chosen, not hardcoded.** ADR 0037 exists because a fixed 8080
+/// blocked the full gate twice on this machine — *"d'autres développements sont
+/// en cours dans d'autres fenêtres"* is the normal state here, not an accident.
+/// [`an_unused_host_port`] asks the kernel for one instead.
+///
+/// Kept BESIDE [`start_broker`] rather than replacing it: every other chaos test
+/// wants the ephemeral mapping, which cannot collide with anything, and a fixed
+/// mapping — however well chosen — carries a race no ephemeral one has.
+pub async fn start_broker_on_fixed_port() -> (ContainerAsync<GenericImage>, u16) {
+    let port = an_unused_host_port();
+    let container = GenericImage::new("eclipse-mosquitto", "2")
+        .with_wait_for(WaitFor::message_on_stderr("mosquitto version 2"))
+        .with_cmd(vec!["mosquitto", "-c", "/mosquitto-no-auth.conf"])
+        .with_mapped_port(port, 1883.tcp())
+        .start()
+        .await
+        .expect("broker container starts on the requested host port");
+    (container, port)
+}
+
+/// A host port nothing holds *at this instant*, obtained by binding port 0 and
+/// letting the kernel answer.
+///
+/// There is a window between the release here and Docker's bind, and it cannot
+/// be closed — a mapping must be named before the container exists. It is
+/// narrow, and the alternative is a constant, which ADR 0037 measured the cost
+/// of twice. Losing the race produces a container that refuses to start with
+/// `address already in use`, which is loud; holding a constant produces a
+/// container that refuses to start for the same reason *every* time another
+/// project is running, which is what actually happened.
+fn an_unused_host_port() -> u16 {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("the kernel has a port");
+    listener
+        .local_addr()
+        .expect("a bound listener has an address")
+        .port()
+}
+
+/// Blocks until the broker on `port` completes an MQTT **CONNACK**, or the
+/// deadline passes.
+///
+/// **`ContainerAsync::start` does not re-apply the image's `WaitFor`** — it
+/// issues the Docker start and returns. A test that published straight after it
+/// would be racing mosquitto's own boot, and losing that race looks exactly like
+/// a bridge that failed to reconnect.
+///
+/// # It waits for CONNACK, and a TCP handshake was NOT enough
+///
+/// The first version of this returned as soon as `TcpStream::connect` succeeded,
+/// and that made this test fail roughly once in six with `no NBIRTH arrived
+/// within 60 s`. **`docker-proxy` binds the host port before mosquitto is
+/// accepting**, so the TCP handshake is answered by Docker on the broker's
+/// behalf while the broker is still starting. In that window the test declares
+/// the outage over, and any reconnect attempt the bridge makes inside it spends
+/// `rumqttc`'s five-second connection timeout and then **doubles the backoff** —
+/// straight to the 30 s ceiling, plus up to 50 % jitter. The bridge was behaving
+/// correctly the whole time; the harness had simply lied about when the broker
+/// came back.
+///
+/// Returns whether the broker answered, so a caller can say so in its own words
+/// rather than inheriting a panic from here.
+pub async fn wait_for_broker(port: u16, timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut attempt = 0u32;
+    while tokio::time::Instant::now() < deadline {
+        attempt += 1;
+        // A fresh client id per attempt: a half-started broker may accept and
+        // then drop, and reusing one id would have each attempt evict the
+        // session the previous one left behind.
+        let mut options = MqttOptions::new(
+            format!("broker-readiness-probe-{attempt}"),
+            "127.0.0.1",
+            port,
+        );
+        options.set_keep_alive(Duration::from_secs(5));
+        let (_client, mut eventloop) = AsyncClient::new(options, 4);
+        let connacked = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                match eventloop.poll().await {
+                    Ok(Event::Incoming(Packet::ConnAck(_))) => return true,
+                    Ok(_) => {}
+                    Err(_) => return false,
+                }
+            }
+        })
+        .await
+        .unwrap_or(false);
+        if connacked {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    false
+}
+
 /// As [`start_broker`], but with `mosquitto -v`, so the broker records every
 /// control packet it receives.
 ///
