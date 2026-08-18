@@ -636,3 +636,36 @@ in the three story files.
   tick. The strict `<` with no tolerance band (`oracle.rs:317-322`) is a decided position and is
   NOT being reopened — the unhandled input is the unit switch itself, a comparison made across
   two conversion paths without noticing they were different.
+
+## Deferred from: code review of story 4.11 (2026-08-18)
+
+- **AR7's `readings_dropped_total{meter,reason}` is not implemented.** `architecture.md` and
+  AR7 name a Prometheus-shaped metric; story 4.11 ships the counts as `dropped_readings` on
+  `/healthz` instead, because there is no metrics registry, no exporter and no such dependency
+  here — introducing one is Epic 6/7 work. **The decision is defensible and the record was not
+  made**: `CLAUDE.md` requires an ADR and an issue for anything changing an architectural
+  position, and ADR 0027 is the direct precedent (it was written for a smaller version of this
+  same question). **Owner: [#89]**, which is to decide whether AR7 is amended or the exporter
+  is deferred to Epic 6/7. Filed by the review; not decided by it.
+
+- **The driver's four drop-counting call sites are untested.** Deleting every `lost(...)` call
+  from `mqtt_driver`'s inbox arm leaves the whole suite green. The site is inside a `select!`
+  needing a live broker. **Owner: Story 4.13** (`chaos_broker_recovery`), which is the harness
+  that makes it reachable. Tracked at [#86].
+
+- **Three ways a reading fails to ARRIVE that no counter can see**, each filed: the transport
+  client answers `Ok` on queueing rather than on sending ([#85]); the inbox is dropped
+  unread at shutdown ([#87]); a refused DBIRTH leaves the device declared so every later
+  reading looks published ([#88]). The manual now states that the counts are a floor on what
+  was lost, never a ceiling. **No owner yet** — [#85] and [#88] are measurement questions
+  before they are code ones.
+
+- **Two operator-surface decisions, filed rather than taken**: whether disabling a meter should
+  clear its drop counters, as story 3.5 did for its verdict ([#90]); and whether
+  `dropped_readings` needs a recency field, without which one reading of `/healthz` cannot tell
+  a running outage from a healed one ([#91]). [#91] carries the related observation that
+  `mqtt-task-gone` is the one reason of the six a restart would clear and nothing escalates it.
+
+- **A dropped DDATA leaves a Sparkplug sequence hole and is still what a rebirth re-declares as
+  last published** ([#92]). Pre-existing ordering in `SparkplugPublisher::publish`; story 4.11
+  is what makes the disagreement visible. The same issue carries the republication over-count.

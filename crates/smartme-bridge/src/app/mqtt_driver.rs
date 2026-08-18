@@ -111,6 +111,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::adapters::sparkplug_publisher::{Outbound, Published, Sink, SparkplugPublisher};
+use crate::app::poll_publish::DropReason;
 use crate::core::channel::MeterUpdate;
 use crate::core::clock::Clock;
 use crate::domain::Serial;
@@ -1072,11 +1073,22 @@ fn trace_command_outcome(topic: &str, inbound: &Inbound) {
 }
 
 /// Runs the driver until the inbox closes or shutdown is signalled.
+///
+/// `pulse` is the SAME fleet state the poll tasks write, not a second one: FOUR
+/// of the six ways a reading can be lost happen on this side of the channel
+/// (story 4.11), and a count kept separately here would give `/healthz` two
+/// numbers to reconcile for one question.
+#[allow(clippy::too_many_arguments)]
+// Eight parameters, and the revisit trigger is the ninth — the same rule
+// `poll_publish::run` records, for the same reason: these do not travel together,
+// so bundling them would add ceremony at the one call site without removing a
+// decision.
 pub async fn run(
     config: MqttConfig,
     node: sparkplug_b::EdgeNode,
     mut meters: Vec<Serial>,
     clock: std::sync::Arc<dyn Clock + Send + Sync>,
+    pulse: crate::app::poll_publish::Heartbeats,
     mut inbox: mpsc::Receiver<MeterUpdate>,
     mut devices: mpsc::Receiver<DeviceCommand>,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
@@ -1359,27 +1371,44 @@ pub async fn run(
                         break SessionEnd::InboxClosed;
                     };
                     let mut queue = Queue::default();
-                    match publisher.publish(&update, &mut queue) {
-                        Ok(Published::Emitted) => {
-                            for message in queue.pending.drain(..) {
-                                publish(&client, message);
+                    // EVERY ARM BELOW EITHER PUBLISHES OR COUNTS, and story 4.11
+                    // is the requirement that there is no third possibility. The
+                    // reason slug and the source timestamp travel with each, so a
+                    // reading lost here is identified by WHEN IT WAS TRUE — the
+                    // only handle an operator has for lining a gap up against the
+                    // source.
+                    let lost = |reason, fault: Option<String>| {
+                        pulse.dropped(&update.meter, reason);
+                        tracing::warn!(
+                            meter = %update.meter,
+                            serial = %update.measurement.serial,
+                            reason = crate::app::poll_publish::DropReason::as_str(reason),
+                            value_date = update.measurement.value_date.0,
+                            fault = fault.as_deref().unwrap_or("-"),
+                            "the judged reading never reached the wire; dropped, never buffered"
+                        );
+                    };
+                    let outcome = publisher.publish(&update, &mut queue);
+                    // ONE LOSS, ONE RECORD. This emitted an `error!` here AND the
+                    // `warn!` below for the same unpublishable reading until the
+                    // 2026-08-18 review — so a log-based tally double-counted, and
+                    // the `error!` fired BEFORE the counter moved, leaving a window
+                    // where a scrape saw a logged loss with no count. The error is
+                    // now a field on the one line that carries `meter`, `reason`
+                    // and `value_date`.
+                    let fault = outcome.as_ref().err().map(|e| e.to_string());
+                    match reason_for(&outcome) {
+                        // The publisher emitted; the transport may still refuse.
+                        // COUNTED ONCE PER READING, not per message: one reading
+                        // is one DDATA today, and should that ever become two, a
+                        // reading half-published is still ONE reading the host did
+                        // not receive.
+                        None => {
+                            if publish_all(&client, &mut queue) > 0 {
+                                lost(DropReason::TransportQueueFull, None);
                             }
                         }
-                        Ok(outcome) => {
-                            // A traced drop, never silence.
-                            tracing::warn!(
-                                serial = %update.measurement.serial,
-                                ?outcome,
-                                "reading dropped"
-                            );
-                        }
-                        Err(error) => {
-                            tracing::error!(
-                                serial = %update.measurement.serial,
-                                %error,
-                                "unpublishable reading dropped"
-                            );
-                        }
+                        Some(reason) => lost(reason, fault),
                     }
                 }
                 _ = &mut shutdown => {
@@ -1685,6 +1714,39 @@ fn subscribe_to_commands(client: &AsyncClient, topic: &str) {
             "could not queue the command subscription; the bridge births anyway \
              but can receive no command this session"
         );
+    }
+}
+
+/// How the publisher's answer maps onto a [`DropReason`] (story 4.11 AC5).
+///
+/// # Pure, and extracted for that reason
+///
+/// The mapping is the only place a lost reading can be filed under the wrong
+/// name, and inside the `select!` arm it would be reachable only through a live
+/// broker — the shape the Epic 2 retrospective's action C1 exists to stop (*"a
+/// property behind an `async fn` is extracted pure before the story closes"*).
+/// Here it is a total function over the publisher's result, and
+/// `every_publisher_outcome_is_classified` enumerates it.
+///
+/// `None` means the publisher emitted. It does **not** mean the reading reached
+/// the wire, and there are TWO reasons for that, one of which nothing here can
+/// close:
+///
+/// - the transport can refuse the queued message, which is the other axis and is
+///   decided by [`publish_all`]'s count at the call site;
+/// - and `AsyncClient::try_publish` answers `Ok` when the message enters
+///   `rumqttc`'s request channel, **not** when it leaves the socket. Whatever is
+///   still in that channel when the connection drops is discarded with the event
+///   loop, uncounted. See [#85] — the undercount is largest in the first seconds
+///   of an outage, which is exactly when FR22 is being asked its question.
+///
+/// [#85]: https://github.com/guycorbaz/smartme_mqtt/issues/85
+fn reason_for(outcome: &Result<Published, sparkplug_b::TopicError>) -> Option<DropReason> {
+    match outcome {
+        Ok(Published::Emitted) => None,
+        Ok(Published::DroppedBeforeBirth) => Some(DropReason::BeforeBirth),
+        Ok(Published::DroppedUndeclaredDevice { .. }) => Some(DropReason::UndeclaredDevice),
+        Err(_) => Some(DropReason::Unpublishable),
     }
 }
 
@@ -2994,5 +3056,73 @@ mod tests {
         std::fs::write(&path, "this is not toml {{{").expect("write");
         assert_eq!(load_bd_seq(&path), BdSeq::before_first());
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// **Story 4.11 AC5 — every publisher outcome is classified, and none twice.**
+    ///
+    /// The driver owns four of the six ways a reading can be lost, and this is the
+    /// only place their names are decided. A wrong arm here does not fail
+    /// loudly — it reports a real loss under the wrong reason, which sends an
+    /// operator to the wrong fault with a number that looks authoritative.
+    ///
+    /// `Emitted` maps to `None` and that is NOT "it reached the wire": the
+    /// transport can still refuse the queued message.
+    ///
+    /// **THAT AXIS IS NOT ASSERTED ANYWHERE, and this doc claimed it was** until
+    /// the 2026-08-18 review — *"is asserted at the call site's own arm"*, of an
+    /// assertion that did not exist. The call site is inside a `select!` in a
+    /// function that needs a live broker, so deleting its `lost(...)` calls would
+    /// leave the whole suite green. Recorded as [#86] rather than papered over;
+    /// story 4.13's `chaos_broker_recovery` is where it becomes reachable.
+    ///
+    /// FALSIFIED 2026-08-18 — mutation RUN, output copied: filing
+    /// `DroppedBeforeBirth` under `Unpublishable` goes red with `assertion `left
+    /// == right` failed […] left: Some(Unpublishable), right: Some(BeforeBirth)`.
+    /// The distinctness assertion is what makes that mutation reachable at all:
+    /// without it, one variant for every arm would still satisfy each `assert_eq`
+    /// that is not `None`.
+    #[test]
+    fn every_publisher_outcome_is_classified() {
+        use crate::domain::Serial;
+
+        assert_eq!(reason_for(&Ok(Published::Emitted)), None);
+        assert_eq!(
+            reason_for(&Ok(Published::DroppedBeforeBirth)),
+            Some(DropReason::BeforeBirth)
+        );
+        assert_eq!(
+            reason_for(&Ok(Published::DroppedUndeclaredDevice {
+                serial: Serial::new("30000001")
+            })),
+            Some(DropReason::UndeclaredDevice)
+        );
+        assert_eq!(
+            reason_for(&Err(sparkplug_b::EdgeNode::new("g", "n")
+                .expect("a valid node")
+                .device_topic(MessageType::DData, "a/b")
+                .expect_err("a wildcard-bearing serial is not a topic level"))),
+            Some(DropReason::Unpublishable)
+        );
+
+        // AND NO TWO OUTCOMES SHARE A REASON. Without this, mapping every arm to
+        // one variant would satisfy every assertion above that is not `None`.
+        let named = [
+            reason_for(&Ok(Published::DroppedBeforeBirth)),
+            reason_for(&Ok(Published::DroppedUndeclaredDevice {
+                serial: Serial::new("30000001"),
+            })),
+            reason_for(&Err(sparkplug_b::EdgeNode::new("g", "n")
+                .expect("a valid node")
+                .device_topic(MessageType::DData, "a/b")
+                .expect_err("a wildcard-bearing serial is not a topic level"))),
+        ];
+        let mut distinct = named.to_vec();
+        distinct.sort_by_key(|r| r.map(DropReason::index));
+        distinct.dedup();
+        assert_eq!(
+            distinct.len(),
+            named.len(),
+            "two publisher outcomes filed under one reason: {named:?}"
+        );
     }
 }

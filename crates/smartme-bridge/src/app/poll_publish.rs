@@ -31,6 +31,119 @@ pub struct PollConfig {
     pub fetch_timeout: Duration,
 }
 
+/// Why a judged reading never reached the wire (story 4.11, FR22, AR7).
+///
+/// # A CLOSED set, and why that is the property rather than the tidiness
+///
+/// FR22 says a reading lost to a broker outage must read as *loss*, never as
+/// silence. That is only true if EVERY path on which a reading can fail to reach
+/// the wire lands in this enum — a seventh path that quietly went nowhere would
+/// be the exact failure the requirement exists to prevent, and it would look like
+/// a healthy fleet.
+///
+/// **THE SET IS CLOSED OVER THE HAND-OVER, NOT OVER THE JOURNEY, and the 2026-08-18
+/// review found three places where the difference bites.** They are recorded as
+/// issues rather than described as covered:
+///
+/// - **[#85]** — `try_publish` answers `Ok` on entering `rumqttc`'s request
+///   channel, not on leaving the socket. What is still queued when the connection
+///   drops is discarded with the event loop, counted by nothing.
+/// - **[#87]** — whatever sits in the 64-slot inbox when the session ends is
+///   dropped with the receiver at shutdown. No arm fires; it is a seventh path.
+/// - **[#88]** — a DBIRTH refused by the transport leaves the device in
+///   `declared`, so every later reading is `Emitted` here while the host discards
+///   it as undeclared. The one path where a reading provably fails to reach the
+///   SCADA is the one [`Self::UndeclaredDevice`] structurally cannot see.
+///
+/// With that stated, the six are exhaustive over the hand-over paths that exist:
+///
+/// | Variant | Where it fires |
+/// |---|---|
+/// | [`Self::OutboxFull`] | `step_once` — the driver is not draining the channel (it is reconnecting) |
+/// | [`Self::MqttTaskGone`] | `step_once` — the receiver is dropped |
+/// | [`Self::TransportQueueFull`] | `mqtt_driver` — `AsyncClient::try_publish` refused |
+/// | [`Self::BeforeBirth`] | `mqtt_driver` — [`Published::DroppedBeforeBirth`] |
+/// | [`Self::UndeclaredDevice`] | `mqtt_driver` — [`Published::DroppedUndeclaredDevice`] |
+/// | [`Self::Unpublishable`] | `mqtt_driver` — the reading could not be encoded or addressed |
+///
+/// [`Published::DroppedBeforeBirth`]: crate::adapters::sparkplug_publisher::Published::DroppedBeforeBirth
+/// [`Published::DroppedUndeclaredDevice`]: crate::adapters::sparkplug_publisher::Published::DroppedUndeclaredDevice
+/// [#85]: https://github.com/guycorbaz/smartme_mqtt/issues/85
+/// [#87]: https://github.com/guycorbaz/smartme_mqtt/issues/87
+/// [#88]: https://github.com/guycorbaz/smartme_mqtt/issues/88
+///
+/// **Certificates are not readings and are not counted.** A DBIRTH or DDEATH that
+/// the outbound queue refuses has its own `error!` at the `DeviceCommand` arm and
+/// belongs to story 3.5's contract; folding it in here would make a count named
+/// after readings answer a different question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropReason {
+    /// The channel to the driver was full: the driver is alive but not draining
+    /// it, which is what a reconnect backoff looks like from this side.
+    OutboxFull,
+    /// The driver task is gone. The reading is lost and so is every later one.
+    MqttTaskGone,
+    /// The transport's own outbound queue refused the message.
+    TransportQueueFull,
+    /// The node has not published its BIRTH, so a DATA now would carry sequence 0
+    /// and read as a BIRTH on the wire.
+    BeforeBirth,
+    /// The device was never declared in a BIRTH, so a consumer would discard it.
+    UndeclaredDevice,
+    /// The reading could not be encoded or addressed at all.
+    Unpublishable,
+}
+
+impl DropReason {
+    /// Every reason, in the order the counters are indexed.
+    ///
+    /// The array is the single source of both the count and the index, so a
+    /// seventh variant cannot be added without the counter widening with it.
+    pub const ALL: [DropReason; 6] = [
+        DropReason::OutboxFull,
+        DropReason::MqttTaskGone,
+        DropReason::TransportQueueFull,
+        DropReason::BeforeBirth,
+        DropReason::UndeclaredDevice,
+        DropReason::Unpublishable,
+    ];
+
+    /// How many reasons there are — the width of every per-meter counter.
+    pub const COUNT: usize = Self::ALL.len();
+
+    /// This reason's cell in a counter array.
+    ///
+    /// Spelled as an exhaustive `match` rather than `ALL.iter().position(…)`:
+    /// the compiler then refuses a new variant that nobody indexed, which a
+    /// runtime search would answer with `None` at the call site instead.
+    /// `the_index_and_the_list_agree` pins the two together.
+    pub fn index(self) -> usize {
+        match self {
+            DropReason::OutboxFull => 0,
+            DropReason::MqttTaskGone => 1,
+            DropReason::TransportQueueFull => 2,
+            DropReason::BeforeBirth => 3,
+            DropReason::UndeclaredDevice => 4,
+            DropReason::Unpublishable => 5,
+        }
+    }
+
+    /// The slug an operator reads — in the log line and on `/healthz`.
+    ///
+    /// Kebab-case, matching `Cause::as_str`'s vocabulary, so the two families of
+    /// reason read as one language on a screen that shows both.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DropReason::OutboxFull => "outbox-full",
+            DropReason::MqttTaskGone => "mqtt-task-gone",
+            DropReason::TransportQueueFull => "transport-queue-full",
+            DropReason::BeforeBirth => "before-birth",
+            DropReason::UndeclaredDevice => "undeclared-device",
+            DropReason::Unpublishable => "unpublishable",
+        }
+    }
+}
+
 /// One meter, as the fleet stood at one instant.
 ///
 /// AR6's `MeterState`, which the architecture has named since Epic 0 and which
@@ -88,6 +201,26 @@ pub struct MeterState {
     ///
     /// `None` before the first completed tick, for the reason above.
     pub published: Option<Verdict>,
+    /// How many judged readings never reached the wire, per [`DropReason`]
+    /// (story 4.11, FR22, AR7).
+    ///
+    /// # Why a fixed array, and why that IS the bounded-memory argument
+    ///
+    /// AR7 forbids a buffer, and the criterion this discharges is *"the drop path
+    /// allocates nothing that survives it"*. A fixed `[u64; COUNT]` per meter
+    /// makes that true by construction rather than by discipline: the cardinality
+    /// is `served meters × DropReason::COUNT`, both closed sets fixed at start-up,
+    /// so a million drops cost the same bytes as one. A map keyed by reason — or
+    /// worse, by reason and timestamp — would have been a buffer wearing a
+    /// counter's name.
+    ///
+    /// **Cumulative for the process lifetime, and saturating.** Not per session:
+    /// an outage that spans three reconnects is one outage to the operator
+    /// reading the number, and a counter reset by the reconnect would report the
+    /// smallest figure exactly when the fault was largest. Saturating because a
+    /// count that wraps to zero is a surface that lies, which is the one thing
+    /// this bridge is built not to do.
+    pub dropped: [u64; DropReason::COUNT],
 }
 
 /// The whole fleet at one instant (AR6).
@@ -169,6 +302,27 @@ impl FleetState {
             .map(|(m, _)| m)
             .collect()
     }
+
+    /// Every reading this fleet lost, by meter and reason — zero cells omitted
+    /// (story 4.11 AC4).
+    ///
+    /// The omission is here rather than at each surface for the reason
+    /// [`Self::degraded`]'s exclusion is: there are already two operator surfaces
+    /// and a rule applied at the caller is a rule the third caller will not know
+    /// about. A fleet that has lost nothing renders as an empty list, which is
+    /// the honest shape — not six zeros per meter, which is noise an operator
+    /// learns to scroll past.
+    pub fn dropped(&self) -> Vec<(&MeterId, DropReason, u64)> {
+        self.meters
+            .iter()
+            .flat_map(|m| {
+                DropReason::ALL
+                    .into_iter()
+                    .map(move |reason| (&m.meter, reason, m.dropped[reason.index()]))
+            })
+            .filter(|(_, _, count)| *count > 0)
+            .collect()
+    }
 }
 
 /// The fleet's live state, written by the poll tasks and read as a snapshot
@@ -233,6 +387,7 @@ impl Heartbeats {
                 period_ms: 0,
                 verdict: None,
                 published: None,
+                dropped: [0; DropReason::COUNT],
             })
             .collect();
         Self(Arc::new(tokio::sync::watch::Sender::new(FleetState {
@@ -305,6 +460,25 @@ impl Heartbeats {
         });
     }
 
+    /// Counts one lost reading against a meter named at run time (story 4.11 AC1).
+    ///
+    /// The driver's counterpart to [`MeterPulse::dropped`]. It holds no per-meter
+    /// handle — one task serves the whole fleet, and which meter a lost reading
+    /// belonged to is only known when the reading is in hand — so this one looks
+    /// the entry up. A meter that is not served is silently absent rather than a
+    /// panic: `retire` and `record` already take that position, and a reading for
+    /// an unserved meter is a reconfiguration race, not a bug worth killing the
+    /// transport for.
+    pub fn dropped(&self, meter: &MeterId, reason: DropReason) {
+        self.0.send_modify(|fleet| {
+            if let Some(entry) = fleet.meters.iter_mut().find(|m| &m.meter == meter) {
+                let cell = &mut entry.dropped[reason.index()];
+                *cell = cell.saturating_add(1);
+                fleet.generation += 1;
+            }
+        });
+    }
+
     /// The meters the runtime is **actually serving** — one entry per spawned
     /// poll task, because that is how this collection is built
     /// (`supervisor::run_with_control`).
@@ -359,6 +533,21 @@ impl MeterPulse {
             let entry = &mut fleet.meters[self.index];
             entry.last_tick = Some(now);
             entry.period_ms = period_ms;
+            fleet.generation += 1;
+        });
+    }
+
+    /// Counts one reading this meter lost before the wire (story 4.11 AC1).
+    ///
+    /// `generation` advances with it, in the SAME modification, for the reason
+    /// [`FleetState::generation`] gives: a write that skips it hands a reader a
+    /// state no instant ever had, and the snapshot property AR6 rests on becomes
+    /// untestable.
+    pub fn dropped(&self, reason: DropReason) {
+        self.fleet.send_modify(|fleet| {
+            let entry = &mut fleet.meters[self.index];
+            let cell = &mut entry.dropped[reason.index()];
+            *cell = cell.saturating_add(1);
             fleet.generation += 1;
         });
     }
@@ -877,10 +1066,33 @@ pub async fn step_once<S: Source + Send>(
     match to_publish {
         Some(measurement) => {
             let update = MeterUpdate::new((*meter).clone(), measurement, published);
-            if outbox.send(update).await.is_err() {
+            // TRY, NEVER AWAIT (story 4.11 AC3). This was `send(update).await`
+            // until 2026-08-18, and a blocking send here is not merely a lost
+            // reading — it is a lost LOOP. The driver drains this channel inside
+            // its `select!`, but NOT while it sleeps between reconnect attempts
+            // (up to `RECONNECT_CEILING`, 30 s). Under a long enough outage the
+            // 64 slots fill, every poll task parks inside `send`, `last_tick`
+            // stops advancing, and `/healthz` answers `wedged: true` — which
+            // Epic 7 wires to a CONTAINER RESTART. A broker being down would
+            // therefore restart the bridge and kill the Sparkplug session for
+            // every meter, on account of a fault entirely outside this process.
+            //
+            // The reading is dropped instead, counted, and traced with its
+            // SOURCE timestamp — never buffered, never re-timestamped (AR7).
+            if let Err(error) = outbox.try_send(update) {
+                let (reason, update) = match error {
+                    mpsc::error::TrySendError::Full(update) => (DropReason::OutboxFull, update),
+                    mpsc::error::TrySendError::Closed(update) => (DropReason::MqttTaskGone, update),
+                };
+                heartbeat.dropped(reason);
                 tracing::warn!(
                     meter = %meter,
-                    "mqtt task is gone; dropping the judged reading"
+                    reason = reason.as_str(),
+                    // The reading's OWN timestamp, not `now`: what was lost is
+                    // identified by when it was true, which is the only thing that
+                    // lets an operator line the gap up against the source.
+                    value_date = update.measurement.value_date.0,
+                    "the judged reading never reached the transport; dropped, never buffered"
                 );
             }
         }
@@ -3582,5 +3794,450 @@ mod tests {
         drop(tx);
         let u = rx.recv().await.expect("the good reading was forwarded");
         assert_eq!(u.published(), Quality::Good);
+    }
+
+    // ================================================================
+    // Story 4.11 — the traced drop, exhaustively (FR22, AR7)
+    // ================================================================
+
+    /// **AC5 — the index and the list are ONE list.**
+    ///
+    /// `DropReason::index` is written as an exhaustive `match` and
+    /// `DropReason::ALL` as an array, and nothing but this test stops the two
+    /// drifting. They must not: `ALL` is what `FleetState::dropped` walks and
+    /// `index` is where the counter was written, so a disagreement reports one
+    /// reason's losses under another's name — a surface lying quietly, which is
+    /// worse than one that says nothing.
+    ///
+    /// FALSIFIED 2026-08-18 — mutation RUN, output copied: swapping the
+    /// `BeforeBirth` and `UndeclaredDevice` arms of `index` goes red with
+    /// `assertion `left == right` failed: DropReason::ALL[3] is BeforeBirth but
+    /// it indexes cell 4 […] left: 4, right: 3`.
+    #[test]
+    fn the_index_and_the_list_agree() {
+        for (cell, reason) in DropReason::ALL.into_iter().enumerate() {
+            assert_eq!(
+                reason.index(),
+                cell,
+                "DropReason::ALL[{cell}] is {reason:?} but it indexes cell {}; \
+                 the list and the index must not drift, or one reason's losses \
+                 are counted under another's name",
+                reason.index()
+            );
+        }
+        assert_eq!(DropReason::COUNT, DropReason::ALL.len());
+
+        // And the slugs are distinct, because they are the operator's whole
+        // vocabulary: two reasons sharing a slug is two faults reading as one.
+        let mut slugs: Vec<_> = DropReason::ALL.iter().map(|r| r.as_str()).collect();
+        slugs.sort_unstable();
+        slugs.dedup();
+        assert_eq!(
+            slugs.len(),
+            DropReason::COUNT,
+            "every reason needs its own slug: {slugs:?}"
+        );
+    }
+
+    /// **AC1 + AC3 — a full outbox costs the READING, never the LOOP.**
+    ///
+    /// This is the story's sharpest property and it is not about bookkeeping.
+    /// Until 2026-08-18 the hand-over was `outbox.send(update).await`, and the
+    /// driver does NOT drain that channel while it sleeps between reconnect
+    /// attempts. So a long enough broker outage parked every poll task inside
+    /// `send`, `last_tick` stopped advancing, and `/healthz` answered
+    /// `wedged: true` — which Epic 7 wires to a container restart. The bridge
+    /// would have been restarted, killing the Sparkplug session for every meter,
+    /// because a broker somewhere else was down.
+    ///
+    /// The timeout is the assertion. A blocking send does not fail this test by
+    /// returning something wrong; it fails by never returning at all.
+    ///
+    /// FALSIFIED 2026-08-18 — mutation RUN, output copied: restoring
+    /// `outbox.send(update).await` goes red with `a full outbox must not park the
+    /// poll loop: the driver does not drain this channel while it reconnects, and
+    /// a parked loop reads as `wedged` to a health check that restarts the
+    /// container: Elapsed(())`.
+    #[tokio::test]
+    async fn a_full_outbox_costs_the_reading_and_not_the_loop() {
+        let clock = FakeClock::new(UtcMillis(SANE_NOW));
+        let mut source = FakeSource::new().then(Ok(reading(Quality::Good, 950)));
+        // ONE slot, filled before the tick and never drained — `_rx` is held so
+        // the channel is FULL rather than CLOSED, which is the other reason and
+        // a different arm.
+        let (tx, _rx) = mpsc::channel(1);
+        let meter = MeterId::new("garage");
+        tx.try_send(MeterUpdate::uniform(
+            meter.clone(),
+            reading(Quality::Good, 950).value,
+            Verdict::good(),
+        ))
+        .expect("the one slot is free before the tick");
+
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let heartbeat = beats.of(&meter).expect("served");
+        let ctx = Context {
+            meter: &meter,
+            clock: &clock,
+            policy: policy(),
+            config: config(),
+            heartbeat: &heartbeat,
+            outbox: &tx,
+        };
+        let mut mem = MeterMemory::default();
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            step_once(&ctx, &mut source, State::initial(), &mut mem),
+        )
+        .await
+        .expect(
+            "a full outbox must not park the poll loop: the driver does not drain \
+             this channel while it reconnects, and a parked loop reads as `wedged` \
+             to a health check that restarts the container",
+        );
+
+        // And the loss is on the record, per meter and per reason.
+        let fleet = beats.snapshot();
+        let lost = fleet.dropped();
+        assert_eq!(lost.len(), 1, "one reading was lost, once: {lost:?}");
+        assert_eq!(lost[0].0, &meter);
+        assert_eq!(lost[0].1, DropReason::OutboxFull);
+        assert_eq!(lost[0].2, 1);
+    }
+
+    /// **AC1 — a dead transport task is its own reason, not a full queue.**
+    ///
+    /// `MqttTaskGone` had NO test until the 2026-08-18 review, while Task 3's
+    /// subtask was ticked. The two arms of `TrySendError` are the only place the
+    /// distinction is drawn, and they are one word apart: filing a closed channel
+    /// under `outbox-full` would tell an operator to look at the broker when the
+    /// bridge's own transport task is dead — the one reason in the six that a
+    /// container restart WOULD clear.
+    ///
+    /// FALSIFIED 2026-08-18 — mutation RUN, output copied: mapping
+    /// `TrySendError::Closed` to `DropReason::OutboxFull` goes red with `a closed
+    /// channel is a DEAD TRANSPORT TASK … left: OutboxFull, right: MqttTaskGone`.
+    #[tokio::test]
+    async fn a_closed_outbox_is_a_dead_transport_task_and_says_so() {
+        let clock = FakeClock::new(UtcMillis(SANE_NOW));
+        let mut source = FakeSource::new().then(Ok(reading(Quality::Good, 950)));
+        let (tx, rx) = mpsc::channel(8);
+        // The receiver is DROPPED: room in the channel, nobody at the other end.
+        // That is `Closed`, and it must not read as `Full`.
+        drop(rx);
+        let meter = MeterId::new("garage");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let heartbeat = beats.of(&meter).expect("served");
+        let ctx = Context {
+            meter: &meter,
+            clock: &clock,
+            policy: policy(),
+            config: config(),
+            heartbeat: &heartbeat,
+            outbox: &tx,
+        };
+        let mut mem = MeterMemory::default();
+
+        let _ = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
+
+        let fleet = beats.snapshot();
+        let lost = fleet.dropped();
+        assert_eq!(lost.len(), 1, "one reading, one reason: {lost:?}");
+        assert_eq!(
+            lost[0].1,
+            DropReason::MqttTaskGone,
+            "a closed channel is a DEAD TRANSPORT TASK, not a busy one — and it is \
+             the one reason of the six that a container restart would clear, so \
+             filing it as `outbox-full` sends the operator to the broker"
+        );
+    }
+
+    /// **AC1 — the WARN names the meter, the reason and WHEN THE READING WAS TRUE.**
+    ///
+    /// `value_date`, not `now`. A gap an operator has to line up against the
+    /// source is identified by the instant the reading described, and the
+    /// publication instant is the one number that cannot do it.
+    ///
+    /// FALSIFIED 2026-08-18 — mutation RUN, output copied: replacing
+    /// `value_date = update.measurement.value_date.0` with
+    /// `value_date = clock.wall().0` goes red with `the line must carry the
+    /// READING's own timestamp […] value_date=1784984793000`, the publication
+    /// instant standing where `1784984700000` belongs.
+    #[tokio::test]
+    async fn a_lost_reading_is_traced_with_its_own_timestamp() {
+        let sink = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(sink.clone())
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .finish();
+        let clock = FakeClock::new(UtcMillis(SANE_NOW));
+        let mut source = FakeSource::new().then(Ok(reading(Quality::Good, 950)));
+        let (tx, _rx) = mpsc::channel(1);
+        let meter = MeterId::new("garage");
+        tx.try_send(MeterUpdate::uniform(
+            meter.clone(),
+            reading(Quality::Good, 950).value,
+            Verdict::good(),
+        ))
+        .expect("the one slot is free before the tick");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let heartbeat = beats.of(&meter).expect("served");
+        let ctx = Context {
+            meter: &meter,
+            clock: &clock,
+            policy: policy(),
+            config: config(),
+            heartbeat: &heartbeat,
+            outbox: &tx,
+        };
+        let mut mem = MeterMemory::default();
+
+        let guard = tracing::subscriber::set_default(subscriber);
+        let _ = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
+        drop(guard);
+        let logged = sink.text();
+
+        assert!(
+            logged.contains("reason=\"outbox-full\""),
+            "the line must name WHICH of the six ways the reading was lost: {logged:?}"
+        );
+        assert!(
+            logged.contains(&format!("value_date={BASE}")),
+            "the line must carry the READING's own timestamp, not the instant it \
+             was dropped — the publication instant cannot be lined up against the \
+             source: {logged:?}"
+        );
+        assert!(
+            logged.contains("meter=garage"),
+            "an operator with four meters must be told which one lost a reading: \
+             {logged:?}"
+        );
+    }
+
+    /// **AC1 — a drop is a DELIVERY fact and must not touch the VERDICT.**
+    ///
+    /// The oracle layer judges the reading before it reaches the outbox. If a
+    /// full channel could change what the reading was judged to be, the wire
+    /// would depend on the transport — and the next tick's republished value,
+    /// which is read from `MeterMemory::last`, would carry a quality that
+    /// describes a queue rather than a measurement.
+    ///
+    /// The two runs are identical in every input, so the assertion is exact
+    /// equality rather than a property.
+    ///
+    /// FALSIFIED 2026-08-18 — mutation RUN, output copied: letting the drop path
+    /// choose its own outcome (`return (State::Stale, published.meter());` after
+    /// the WARN) goes red with `a drop is a delivery fact; letting it move the
+    /// verdict makes the wire depend on the transport […] left: (Stale, Verdict {
+    /// quality: Good, cause: None }), right: (Fresh, Verdict { quality: Good,
+    /// cause: None })`.
+    #[tokio::test]
+    async fn a_drop_does_not_change_what_the_reading_was_judged_to_be() {
+        let meter = MeterId::new("garage");
+        let clock = FakeClock::new(UtcMillis(SANE_NOW));
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let heartbeat = beats.of(&meter).expect("served");
+
+        // Delivered: a channel with room.
+        let (open, mut rx) = mpsc::channel(8);
+        let mut source = FakeSource::new().then(Ok(reading(Quality::Good, 950)));
+        let mut mem = MeterMemory::default();
+        let delivered = step_once(
+            &Context {
+                meter: &meter,
+                clock: &clock,
+                policy: policy(),
+                config: config(),
+                heartbeat: &heartbeat,
+                outbox: &open,
+            },
+            &mut source,
+            State::initial(),
+            &mut mem,
+        )
+        .await;
+        assert!(rx.try_recv().is_ok(), "the premise: this one WAS delivered");
+
+        // Dropped: the same reading, the same instant, a channel with none.
+        let (full, _rx) = mpsc::channel(1);
+        full.try_send(MeterUpdate::uniform(
+            meter.clone(),
+            reading(Quality::Good, 950).value,
+            Verdict::good(),
+        ))
+        .expect("the one slot is free before the tick");
+        let mut source = FakeSource::new().then(Ok(reading(Quality::Good, 950)));
+        let mut mem = MeterMemory::default();
+        let dropped = step_once(
+            &Context {
+                meter: &meter,
+                clock: &clock,
+                policy: policy(),
+                config: config(),
+                heartbeat: &heartbeat,
+                outbox: &full,
+            },
+            &mut source,
+            State::initial(),
+            &mut mem,
+        )
+        .await;
+
+        assert_eq!(
+            dropped, delivered,
+            "a drop is a delivery fact; letting it move the verdict makes the wire \
+             depend on the transport, and the republished value would then carry a \
+             quality describing a queue rather than a measurement"
+        );
+    }
+
+    /// **AC2 — a thousand losses touch one cell and advance the generation.**
+    ///
+    /// # What this test does NOT prove, and why it is named accordingly
+    ///
+    /// It was called `a_thousand_losses_cost_what_one_costs` and asserted
+    /// `after.dropped.len() == before.dropped.len()`, which is `6 == 6` for every
+    /// value of every program — `dropped` is `[u64; DropReason::COUNT]` and
+    /// `.len()` on a fixed-size array is a compile-time constant. **No possible
+    /// implementation could turn it red**, and it was scored as the discharge of
+    /// AC2. Found by the 2026-08-18 review; it is the hollow-assertion class this
+    /// repository has now met four times.
+    ///
+    /// **The cardinality argument is carried by the TYPE, not by a test.** The
+    /// `const` block below is the real pin: change `dropped` to a `HashMap` or a
+    /// `Vec` — the shapes that would make the drop path allocate — and the crate
+    /// stops compiling. That is a stronger guarantee than any assertion, and it is
+    /// why nothing here tries to measure it at run time.
+    ///
+    /// What this test pins is what a test can pin: one loss touches ONE cell,
+    /// leaves the other five alone, and advances `generation` exactly once.
+    ///
+    /// FALSIFIED 2026-08-18 — mutation RUN, output copied: dropping
+    /// `fleet.generation += 1` from `MeterPulse::dropped` goes red with `every
+    /// write advances the generation … left: 0, right: 1000`. A second mutation,
+    /// indexing `[0]` instead of `[reason.index()]`, goes red on the neighbouring
+    /// cell with `the losses must land in the cell of the reason they were filed
+    /// under … left: 0, right: 1000`.
+    #[test]
+    fn a_thousand_losses_touch_one_cell_and_advance_the_generation() {
+        // THE CARDINALITY PIN, and it is a compile-time one. A `dropped` that
+        // stopped being a fixed-size array — the only way the drop path could
+        // begin allocating — would not compile past this line.
+        const _: () = {
+            let _: fn(&MeterState) -> &[u64; DropReason::COUNT] = |m| &m.dropped;
+        };
+
+        let meter = MeterId::new("cellar");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let pulse = beats.of(&meter).expect("served");
+        let before = beats.snapshot();
+
+        for _ in 0..1000 {
+            pulse.dropped(DropReason::MqttTaskGone);
+        }
+        let after = beats.snapshot();
+
+        assert_eq!(
+            after.generation - before.generation,
+            1000,
+            "every write advances the generation, in the same modification, or the \
+             snapshot invariant AR6 rests on is untestable"
+        );
+        assert_eq!(
+            after.meters[0].dropped[DropReason::MqttTaskGone.index()],
+            1000,
+            "the losses must land in the cell of the reason they were filed under"
+        );
+        for reason in DropReason::ALL {
+            if reason == DropReason::MqttTaskGone {
+                continue;
+            }
+            assert_eq!(
+                after.meters[0].dropped[reason.index()],
+                0,
+                "a loss must touch its OWN cell and no other, or one reason's \
+                 losses are reported under another's name ({reason:?})"
+            );
+        }
+
+        let lost = after.dropped();
+        assert_eq!(lost.len(), 1, "one reason, one row: {lost:?}");
+        assert_eq!((lost[0].1, lost[0].2), (DropReason::MqttTaskGone, 1000));
+    }
+
+    /// **AC2 — the count saturates rather than wrapping.**
+    ///
+    /// A counter that returns to zero reports the smallest figure at the moment
+    /// the fault is largest. Saturating is the only honest end of the range.
+    ///
+    /// # The positive control is half the test
+    ///
+    /// It started at `u64::MAX` and incremented once, so a `Heartbeats::dropped`
+    /// that silently did NOTHING left the cell at `MAX` and the test was green —
+    /// it could not tell saturation from a no-op, which is the neighbouring
+    /// failure mode. Found by the 2026-08-18 review. Starting at `MAX - 1` and
+    /// incrementing twice fixes it: the first increment proves the path runs, the
+    /// second proves it saturates.
+    ///
+    /// FALSIFIED 2026-08-18 — two mutations RUN, output copied. `*cell += 1` in
+    /// place of `saturating_add` goes red in debug with `attempt to add with
+    /// overflow`. Making `Heartbeats::dropped` a no-op (an early `return`) goes
+    /// red on the FIRST assertion with `the increment path must actually run …
+    /// left: 18446744073709551614, right: 18446744073709551615`.
+    #[test]
+    fn the_count_saturates_and_never_returns_to_zero() {
+        let meter = MeterId::new("cellar");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let cell = DropReason::OutboxFull.index();
+        beats.0.send_modify(|fleet| {
+            fleet.meters[0].dropped[cell] = u64::MAX - 1;
+        });
+
+        // POSITIVE CONTROL: the path runs at all.
+        beats.dropped(&meter, DropReason::OutboxFull);
+        assert_eq!(
+            beats.snapshot().meters[0].dropped[cell],
+            u64::MAX,
+            "the increment path must actually run, or the saturation assertion \
+             below cannot tell saturation from a counter that never moved"
+        );
+
+        // AND NOW the property.
+        beats.dropped(&meter, DropReason::OutboxFull);
+        assert_eq!(
+            beats.snapshot().meters[0].dropped[cell],
+            u64::MAX,
+            "a count that wraps to 0 reports the smallest figure exactly when the \
+             fault is largest"
+        );
+    }
+
+    /// **AC4 — a fleet that has lost nothing renders as nothing.**
+    ///
+    /// Six zero rows per meter is noise an operator learns to scroll past, and
+    /// the rule belongs here rather than at each surface — there are already two,
+    /// and a third would not know about a rule applied at the caller.
+    ///
+    /// FALSIFIED 2026-08-18 — mutation RUN, output copied: removing the
+    /// `.filter(|(_, _, count)| *count > 0)` from `FleetState::dropped` goes red
+    /// at `poll_publish.rs:4111` with `a clean fleet reports an empty list, not
+    /// six zeros per meter`.
+    #[test]
+    fn a_clean_fleet_reports_no_losses_at_all() {
+        let beats = Heartbeats::for_meters([MeterId::new("a"), MeterId::new("b")]);
+        assert!(
+            beats.snapshot().dropped().is_empty(),
+            "a clean fleet reports an empty list, not six zeros per meter"
+        );
+
+        // And one loss on one meter surfaces exactly one row.
+        beats.dropped(&MeterId::new("b"), DropReason::BeforeBirth);
+        let fleet = beats.snapshot();
+        let lost = fleet.dropped();
+        assert_eq!(lost.len(), 1, "{lost:?}");
+        assert_eq!(lost[0].0, &MeterId::new("b"));
+        assert_eq!(lost[0].1, DropReason::BeforeBirth);
     }
 }

@@ -192,6 +192,77 @@ that has stopped looping --- is what \code{503} is reserved for.
 Until 2026-08-07 the page said the bridge was ``polling the meters and publishing what it
 reads'' whatever the meters were doing, because it had no way to see them.
 
+\subsection{A reading that never reached the broker is counted}
+\label{sec:droppedreadings}
+
+A meter can be read perfectly and still lose readings, because the loss happens \emph{after}
+the reading is judged: the broker is unreachable, or its outbound queue is full. Nothing on
+the wire can report this --- what is being reported is precisely what never reached the wire
+--- so \code{/healthz} is the only place it appears, under \code{dropped\_readings}. It is an
+empty list when nothing has been lost.
+
+Each entry names the meter, the reason and how many:
+
+\begin{verbatim}
+"dropped_readings":[{"meter":"appart-est","reason":"outbox-full","count":2}]
+\end{verbatim}
+
+The counts are cumulative for as long as the process runs --- an outage spanning three
+reconnections is one outage --- and they are not cleared by a reconnection. A restart clears
+them, because they describe this run. \textbf{They carry no time}, so one reading of
+\code{/healthz} cannot tell an outage that is still running from one that healed hours ago;
+that takes two readings, a minute apart, and a count that moved between them.
+
+There are six reasons. Between them they cover every way a reading can fail to be
+\emph{handed over} --- which is not quite the same as every way it can fail to arrive, and the
+difference is stated at the end of this section:
+
+\begin{itemize}
+  \item \code{outbox-full} --- the queue \emph{between} the polling tasks and the transport
+        task is full: the transport task is alive but is not emptying it. \textbf{Usually a
+        broker outage}, because the transport does not empty that queue while it waits between
+        reconnection attempts --- but a host sending a burst of Rebirth Requests, or a large
+        configuration change, produces it too, since the transport answers those before
+        returning to the queue. The log says which.
+  \item \code{transport-queue-full} --- the MQTT client's own outbound queue refused the
+        message. Same cause, one layer further out.
+  \item \code{mqtt-task-gone} --- the transport task has stopped. Every later reading is lost
+        too; this one needs the log.
+  \item \code{before-birth} --- a reading arrived before the node had announced itself.
+        \textbf{A burst of these is normal after every reconnection}, and after every start:
+        the readings that accumulated while the broker was away are ready immediately, and the
+        new session's announcement takes a network round trip. A burst therefore means the
+        connection dropped, not that anything is wrong with the birth. Only a \emph{continuous}
+        stream of them, with no reconnection in the log, points at a birth that is not
+        completing.
+  \item \code{undeclared-device} --- a reading for a device the last birth did not declare,
+        typically a serial that changed underneath a running bridge.
+  \item \code{unpublishable} --- the reading could not be encoded or addressed at all. This
+        one is a defect, not a weather report; the log carries the reason.
+\end{itemize}
+
+\textbf{\prog buffers nothing and replays nothing.} A reading lost to an outage is gone, and
+the bridge does not re-send it with a new timestamp when the broker returns --- an outage must
+read as a gap, never as a burst of fresh data. What comes back is the next reading, with its
+own timestamp.
+
+\begin{warning}
+\textbf{The count is of readings \prog could not hand over, not of readings the SCADA did not
+receive.} The MQTT client accepts a message into its own send queue before it reaches the
+network, so a reading counted as delivered here can still be lost with the connection --- and
+a reading refused by the SCADA because it never saw the device's announcement is not counted
+at all. \textbf{A gap in the historian with \code{dropped\_readings} empty is therefore
+possible, and it is not a contradiction.} The counts are a floor on what was lost, never a
+ceiling.
+\end{warning}
+
+Each loss is also traced at \code{WARN} with the reading's own \code{ValueDate}, so a gap in
+the historian can be lined up against the log line for the reading that should have filled
+it.
+
+The status code stays \code{200}. A restart cannot reach a broker that is down; it would
+loop, and destroy the surface naming the fault.
+
 \subsection{How soon a silent meter is marked stale}
 \label{sec:stalenesslatency}
 

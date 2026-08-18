@@ -351,6 +351,16 @@ pub async fn run_with_control(
     )?;
 
     // The channel first: the seam exists before either end does.
+    //
+    // **SINCE STORY 4.11 THIS BOUND IS A LOSS THRESHOLD**, and it carried no
+    // comment at all until the review said so. The driver does not drain this
+    // inbox while it sleeps between reconnect attempts, so 64 is how many readings
+    // an outage may accumulate before `try_send` starts refusing them and counting
+    // `DropReason::OutboxFull` — about ten minutes at three meters on a 30 s
+    // period, and it shrinks as meters × rate grows. Raising it does not save a
+    // reading: AR7 forbids a buffer, and a larger number is a buffer with a
+    // different name. It is stated here so the next reader knows what the figure
+    // decides.
     let (tx, rx) = mpsc::channel(64);
     let heartbeats = Heartbeats::for_meters(served.iter().map(|m| m.meter.clone()));
     let (death_tx, death_rx) = oneshot::channel();
@@ -379,6 +389,7 @@ pub async fn run_with_control(
         node,
         served.iter().map(|m| m.serial.clone()).collect(),
         Arc::clone(&clock),
+        heartbeats.clone(),
         rx,
         device_rx,
         death_rx,

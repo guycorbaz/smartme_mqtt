@@ -1147,6 +1147,10 @@ So that a broker outage reads as loss, never as silence.
 **When** readings are dropped throughout
 **Then** memory and file descriptors stay bounded — the drop path allocates nothing that survives it.
 
+*Four criteria were added at drafting on 2026-08-18 and are recorded here rather than only in the story, because two of them change what an operator sees. **AC3** — a full outbox drops the reading and the loop ticks on, so `last_loop_tick` keeps advancing and `/healthz` does not report `wedged`; the hand-over was a blocking `send().await`, which would have made a long outage read as a wedged poller and, once Epic 7 wires the healthcheck, restart the container over a fault outside the process. **AC4** — the counts are readable, on `/healthz` under `dropped_readings`, cumulative for the process. **AC5** — the six reasons are a closed enum. **AC6** — every new assertion is falsified before it is trusted.*
+
+*Two things this story does NOT do, stated so they are not read into it. **AR7's `readings_dropped_total{meter,reason}` is not implemented** — there is no metrics registry in this repository and introducing one is Epic 6/7 work; the substitution wants an ADR ([#89]). And **AC2's file-descriptor half is discharged by construction, not by measurement**: the drop path opens no descriptor. The sustained-load RSS/FD run is Story 4.15's (`AC-LEAK-01`) and is not claimed here.*
+
 ### Story 4.12: Anti-replay at the down→up instant
 
 As the SCADA,

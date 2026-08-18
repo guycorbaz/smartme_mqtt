@@ -298,6 +298,12 @@ async fn ignition_contract_gate() {
         node,
         vec![Serial::new(SERIAL)],
         Arc::clone(&clock),
+        // Story 4.11's drop counters. EMPTY ON PURPOSE: this test asserts nothing
+        // about lost readings, and `Heartbeats::dropped` skips a meter it does not
+        // serve rather than panicking — so an empty fleet here counts nothing and
+        // changes nothing. A test that wants the counts must build one for its own
+        // meters.
+        smartme_bridge::app::poll_publish::Heartbeats::default(),
         rx,
         // AC4's reconfiguration channel. These tests never send on it; the
         // sender is kept alive so the driver's branch stays armed rather than

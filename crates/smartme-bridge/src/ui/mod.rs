@@ -892,9 +892,37 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
             .collect::<Vec<_>>()
             .join(",")
     );
+    // AND A LOST READING IS NEITHER (story 4.11 AC4, FR22). A meter can be
+    // healthy, fresh and publishing, and still have had readings thrown away
+    // because the broker was unreachable — `failed_sources` does not see it,
+    // `degraded_meters` does not see it, and the wire cannot say it, because what
+    // is being reported is precisely what never reached the wire.
+    //
+    // From the SAME snapshot as everything above: `fleet` is read once at the top
+    // of this handler, for the reason its comment gives.
+    //
+    // The status code does NOT move for this. Epic 7 wires it to a container
+    // restart, and a restart provably cannot reach a broker that is down — it
+    // would loop, destroying the surface that names the fault (ADR 0027 §2).
+    let dropped_json = format!(
+        "[{}]",
+        fleet
+            .as_ref()
+            .map(|f| f.dropped())
+            .unwrap_or_default()
+            .iter()
+            .map(|(meter, reason, count)| format!(
+                "{{\"meter\":{},\"reason\":{},\"count\":{}}}",
+                json_string(&meter.to_string()),
+                json_string(reason.as_str()),
+                count,
+            ))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
     let body = format!(
         "{{\"status\":\"{}\",\"intends_to_publish\":{},\"wedged\":{},\
-          \"failed_sources\":{},\"degraded_meters\":{},\
+          \"failed_sources\":{},\"degraded_meters\":{},\"dropped_readings\":{},\
           \"loop_age_ms\":{},\"loop_age_allowed_ms\":{},\
           \"version\":\"{}\",\"contract\":{}}}",
         phase.lifecycle.slug(),
@@ -902,6 +930,7 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
         wedged,
         failed_json,
         degraded_json,
+        dropped_json,
         age,
         allowed,
         // Compile-time, so it describes the BINARY and not the tag it wears —
@@ -1687,5 +1716,90 @@ mod tests {
                 assert_ne!(a.2, b.2, "two states share a machine-facing slug");
             }
         }
+    }
+
+    /// **Story 4.11 AC4 — a reading the broker never received is on the screen too.**
+    ///
+    /// The third kind of fault this endpoint has had to learn to say. A meter can
+    /// be polling (`wedged: false`), unrefused (`failed_sources: []`) and
+    /// publishing something the oracles are happy with (`degraded_meters: []`),
+    /// and still have had readings thrown away because the broker was
+    /// unreachable. The wire cannot report it — what is being reported is
+    /// precisely what never reached the wire — so this endpoint is the only place
+    /// it can appear.
+    ///
+    /// **The clean case is asserted first**, because every assertion below would
+    /// also hold for an endpoint that reported losses unconditionally.
+    ///
+    /// **And the status code must not move.** Epic 7 wires it to a container
+    /// restart, and a restart provably cannot reach a broker that is down: it
+    /// would loop, destroying the surface that names the fault (ADR 0027 §2).
+    ///
+    /// FALSIFIED 2026-08-18 — mutation RUN, output copied: making the endpoint
+    /// report no losses (`.map(|f| f.dropped().into_iter().take(0).collect::<Vec<
+    /// _>>())`) goes red with the whole body printed, and it is worth reading —
+    /// `{"status":"running","intends_to_publish":true,"wedged":false,
+    /// "failed_sources":[],"degraded_meters":[],"dropped_readings":[],…}`. That
+    /// is a bridge losing readings while every field on this endpoint says it is
+    /// well, which is the state this test exists to make impossible.
+    #[tokio::test]
+    async fn a_lost_reading_is_named_in_healthz_and_moves_no_status_code() {
+        use crate::app::poll_publish::DropReason;
+        use crate::core::clock::FakeClock;
+        use crate::domain::{MeterId, UtcMillis};
+        use std::sync::Arc;
+
+        let meter = MeterId::new("appart-est");
+        let clock = Arc::new(FakeClock::new(UtcMillis(1_784_984_793_000)));
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let state = ui(publishing(
+            beats.clone(),
+            clock.clone(),
+            Arc::clone(&config),
+        ));
+
+        // CLEAN FIRST, or the assertions below prove nothing.
+        let health = body(healthz(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            health.contains("\"dropped_readings\":[]"),
+            "a fleet that has lost nothing must SAY so with an empty list, not by \
+             omission — and not with six zero rows per meter:\n{health}"
+        );
+
+        // Two readings lost to a full outbox, one to a DATA that would have
+        // preceded its BIRTH. Two reasons, one meter: the count is per PAIR.
+        beats.dropped(&meter, DropReason::OutboxFull);
+        beats.dropped(&meter, DropReason::OutboxFull);
+        beats.dropped(&meter, DropReason::BeforeBirth);
+
+        let response = healthz(State(Arc::clone(&state))).await.into_response();
+        let status = response.status();
+        let health = body(response).await;
+
+        assert!(
+            health.contains("{\"meter\":\"appart-est\",\"reason\":\"outbox-full\",\"count\":2}"),
+            "the loss must name the meter, the reason and how many — an operator \
+             told only that something was dropped cannot tell a full queue from an \
+             unpublishable payload:\n{health}"
+        );
+        assert!(
+            health.contains("\"reason\":\"before-birth\",\"count\":1"),
+            "two reasons on one meter are two rows; collapsing them loses the \
+             distinction the count exists for:\n{health}"
+        );
+        assert!(
+            health.contains("\"failed_sources\":[]") && health.contains("\"degraded_meters\":[]"),
+            "a lost reading is NEITHER a failed source nor a degraded meter, and \
+             an endpoint that confused them would report a fault about a meter \
+             reading perfectly well:\n{health}"
+        );
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "a broker that is down must not answer 503: Epic 7 restarts the \
+             container on that, and a restart cannot reach a broker — it would \
+             loop, destroying the surface that names the fault"
+        );
     }
 }

@@ -62,13 +62,92 @@
 #   Ignition contract test (human action required — stays backlog until Guy runs it).
 
 generated: 2026-07-25
-last_updated: 2026-08-15
+last_updated: 2026-08-18
 project: smartme_mqtt
 project_key: NOKEY
 tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts
 
 development_status:
+  # ==========================================================================
+  # 2026-08-18 — EPIC 4 IS REOPENED, and one thing recorded here on 2026-08-15
+  # was WRONG. Read this before the evening block below.
+  # ==========================================================================
+  #
+  # THE 08-15 EVENING BLOCK SAYS "EPIC 4 HAS NO PATH TO COMPLETION (ADR 0025
+  # defers eight of its nine remaining stories)". That is a stale reading of
+  # the record. **ADR 0030 amends ADR 0025's decisions 2 AND 3** — it says so
+  # in its own header — and decision 3 is exactly the deferral. ADR 0030's
+  # context names "eight of Epic 4's nine remaining stories, deferred by
+  # ADR 0025's own decision 3" as one of the two blocks that had sat outside
+  # the sequence, and its decision 1 puts Epic 4 third in `2 -> 3 -> 4 -> 6 ->
+  # 7 -> 8`. The deferral was lifted on 2026-08-10. Epics 2 and 3 closed on
+  # 2026-08-15, so Epic 4 is now the head of the queue, legitimately.
+  #
+  # WHAT REMAINS TRUE, and ADR 0030 decision 4 names it: **4.16 is blocked on
+  # AMENDING NFR10, not on work** — read-to-broker-ACK latency against a QoS 0
+  # with no ACK (ADR 0010). Its measurable analogue must be AGREED. It pairs
+  # with 4.18. Both are a specification sitting, and "an epic cannot close
+  # while a story in it is undecided" (ADR 0030, decision 4), so that sitting
+  # is owed BEFORE the epic closes — not before it starts. It is the sixth of
+  # the eight, and it does not gate 4.11.
+  #
+  # STORY 4.11 WRITTEN 2026-08-18 (FR22, AR7 — the traced drop, exhaustively).
+  # Three decisions taken at drafting rather than deferred:
+  #  1. THE SIX DROP REASONS ARE A CLOSED ENUM, decided in the story: outbox-
+  #     full, mqtt-task-gone, transport-queue-full, before-birth,
+  #     undeclared-device, unpublishable. Five of the six are traced today and
+  #     NONE is counted; the first does not exist at all.
+  #  2. THE COUNTERS LIVE IN `MeterState`, inside the existing Heartbeats/watch
+  #     seam, and are served on /healthz. There is no metrics facility in this
+  #     repository and introducing one is Epic 6/7 work. A bare counter with no
+  #     surface was REJECTED — that is [#62]'s shape exactly, a fault the bridge
+  #     knows and no surface reports.
+  #  3. AC2 (bounded memory/FD) is discharged by a bounded-CARDINALITY argument
+  #     plus its unit pin — meters x 6 fixed cells, nothing allocated per drop —
+  #     NOT by a soak run. The soak is story 4.15's (AC-LEAK-01) and the story
+  #     says so rather than implying a measurement nobody made.
+  #
+  # AND THE STORY FOUND A LATENT DEFECT THE EPIC HAD NOT NAMED. `poll_publish
+  # .rs:880` is a BLOCKING `outbox.send().await` on a 64-slot channel, and the
+  # driver does not drain that inbox while it sleeps between reconnect attempts
+  # (up to RECONNECT_CEILING, 30 s). Under a long enough outage the poll tasks
+  # park inside `send`, `last_tick` stops advancing, and /healthz reports
+  # `wedged: true` — which Epic 7 wires to a CONTAINER RESTART. A broker outage
+  # would therefore restart the bridge, killing the Sparkplug session for every
+  # meter, on account of a fault entirely outside the process. Latent rather
+  # than observed at three meters on 30 s (64 slots ~= ten minutes of outage),
+  # and it is a function of meters x poll rate, both of which grow. AC3.
+  #
+  # THE FULL GATE IS GREEN, 2026-08-18: ci-local.sh (no --fast) exits 0, 38 test
+  # binaries, 0 failures, chaos and image smoke tests included. Two impediments
+  # were cleared to get there, NEITHER belonging to story 4.11:
+  #
+  # 1. THE PORT-8080 COLLISION, THE SAME OCCUPANT AS ON 2026-08-15 (374f90d).
+  #    `e2e-mybibli-1`, another project's leftover e2e stack, held the port two
+  #    tests must bind (`ui::DEFAULT_PORT` — a first run has no config.toml to
+  #    read a port from). Verified PRE-EXISTING by stashing 4.11 and watching the
+  #    same test fail on the clean tree. Guy stopped the containers. `PortLock`
+  #    cannot cover this: it serialises this repo's own test binaries, not
+  #    containers. TWICE IN FOUR DAYS is a pattern rather than an accident, and
+  #    the durable answer — if one is wanted — is a port this bridge does not
+  #    share, which is a decision about DEFAULT_PORT, not about the tests.
+  #
+  # 2. A NEW ADVISORY: RUSTSEC-2026-0258, h2 unbounded empty DATA frames, LOW
+  #    severity, h2 0.4.15 reached through both axum and reqwest. `deny.toml` has
+  #    no ignore list, so nothing was ever suppressed here — this one is new.
+  #    `cargo update -p h2` (to 0.4.16) is the advisory's own prescription and
+  #    clears it. NOT SURGICAL: even with --precise, re-resolution also moves
+  #    SIX crates from windows-sys 0.61.2 to 0.52.0 (the figure read SEVEN until
+  #    the review counted the diff). Inert for this project
+  #    (every workflow is ubuntu-latest, the image is Linux) but eight lines of
+  #    lockfile churn with nothing to do with FR22. Cargo.lock is STAGED, not
+  #    committed, and BELONGS IN ITS OWN COMMIT rather than in 4.11's.
+  #
+  # STILL AWAITING GUY, unchanged: Epic 3 retro table items 1-3 ([#63] [#81]
+  # [#82]/[#83]), the NFR10 sitting (4.16 + 4.18), and the Tier-3 pass — now
+  # v3 attested against v10 shipped.
+  #
   # ==========================================================================
   # END OF 2026-08-15, EVENING — read this first tomorrow. The morning block
   # below (Epic 2's closure) is the same day; this one supersedes its "what
@@ -1306,7 +1385,7 @@ development_status:
   # four runtime oracles do not exist, so "never lies" rests on the freshness state
   # machine alone, and ~15 items in deferred-work.md are parked on epics that have
   # themselves been deferred.
-  epic-4: in-progress  # 4.1-4.10 done; 4.11-4.19 backlog; 4.16 BLOCKED, not deferred
+  epic-4: in-progress  # REOPENED 2026-08-18; 4.1-4.10 + 4.17 done; 4.11 ready-for-dev; 4.16 BLOCKED on NFR10, not deferred
   4-1-conformance-matrix-namespace-and-topics: done
   # 4.2 was worked before it had a story file: the chapter-6 quality rows landed
   # with the quality-code fix (d28bb02), which is why it read 'in-progress' with
@@ -1726,7 +1805,7 @@ development_status:
   # warnings failed the first full run -- I had linted BEFORE the final rewrite of the test,
   # and `cargo test` compiles without that gate.
   4-10-own-the-reconnect-loop-bdseq-per-connect: done
-  4-11-broker-outage-traced-drop-exhaustive: backlog
+  4-11-broker-outage-traced-drop-exhaustive: review  # written AND implemented 2026-08-18; full gate green
   4-12-anti-replay-at-the-down-up-instant: backlog
   4-13-chaos-broker-recovery: backlog
   4-14-chaos-poller-wedge: backlog
