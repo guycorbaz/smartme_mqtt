@@ -1449,7 +1449,7 @@ development_status:
   # four runtime oracles do not exist, so "never lies" rests on the freshness state
   # machine alone, and ~15 items in deferred-work.md are parked on epics that have
   # themselves been deferred.
-  epic-4: in-progress  # REOPENED 2026-08-18; 4.1-4.13 + 4.17 done as of 2026-08-19; 4.14, 4.15, 4.18, 4.19 backlog; 4.16 BLOCKED on NFR10, not deferred
+  epic-4: in-progress  # REOPENED 2026-08-18; 4.1-4.13 + 4.17 done as of 2026-08-19; 4.14 and 4.15 in review; 4.18, 4.19 backlog; 4.16 BLOCKED on NFR10, not deferred
   4-1-conformance-matrix-namespace-and-topics: done
   # 4.2 was worked before it had a story file: the chapter-6 quality rows landed
   # with the quality-code fix (d28bb02), which is why it read 'in-progress' with
@@ -1913,7 +1913,29 @@ development_status:
   # deleting `touch` gives `loop_age_ms: null` beside `wedged: false`, a dead loop
   # reading as healthy, and a helper mapping null to 0 would have made it green.
   4-14-chaos-poller-wedge: review  # implemented 2026-08-19; FETCH_TIMEOUT named, [#62] answered
-  4-15-ac-leak-01-resource-stability: backlog
+  # 2026-08-19, WRITTEN AND IMPLEMENTED. THE CRITERIA WERE AMENDED FIRST, on a
+  # spike's output rather than an estimate — CLAUDE.md's rule about never
+  # deferring a decision to an artifact that does not exist, applied to the
+  # measurement method itself. NFR3 asked for RSS sampled every 60 s and a slope
+  # over 24 h; the run takes ~100 s (measured: 1000 iterations/s, the 1 ms pacing
+  # floor), so that is TWO samples and a x864 extrapolation. ADR 0038 [#97],
+  # decided by Guy: thresholds untouched (RSS <= 100 MB, FD <= 64), sampling >= 100
+  # points, slope <= 80 kB per 1000 iterations — 0.23 %/day at the default period,
+  # an order of magnitude STRICTER than the clause it replaces. epics.md and the
+  # PRD amended together with the ADR.
+  # THE REFRAMING THAT SETTLED IT: 100k iterations is 34.7 DAYS of production for
+  # one meter at the 30 s period. The run is not a weak stand-in for a 24-hour
+  # observation; it is thirty-five times longer than one.
+  # RESULT: 100234 iterations in 99.7 s, 200 samples, RSS max 22.5 % of its bound,
+  # slope 1.01 kB/1000 (1.3 % of its bound), FDs 11 -> 12 of 64. The client's
+  # failure path separately: 10000 refused fetches, descriptors flat at 10.
+  # NAMED RATHER THAN INFERRED: the HTTP client's NOMINAL path is not exercised —
+  # it refuses non-https and validates certificates — and it is the likeliest leak
+  # site. Said in the gate itself and in ADR 0038 §5.
+  # Both falsification predictions were wrong again (1123.7 vs 1040.4; 1034 vs
+  # 5496 — `ulimit -n` did not cap the leak as assumed). Sixth and seventh in five
+  # stories. Both injections are env-reachable so a reader can re-run them.
+  4-15-ac-leak-01-resource-stability: review  # implemented 2026-08-19; ADR 0038 [#97], no production code changed
   4-16-latency-budget: backlog
   # 2026-08-10, IMPLEMENTED out of order — ADR 0030's one named exception, taken
   # because the wire is only cheap to break while nothing is historised and a live

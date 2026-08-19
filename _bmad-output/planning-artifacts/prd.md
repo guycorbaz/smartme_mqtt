@@ -86,7 +86,7 @@ These criteria operationalize the Executive Summary's guiding principle, **"neve
 | Cloud-down freshness (app) | Bridge UP + smart-me unreachable → metrics published with **quality=STALE**, node stays alive, no frozen value shown fresh (chaos test b — the most frequent failure) |
 | Sparkplug conformance | **Manual pre-release contract test against a real Ignition MQTT Engine** (not CI): flux accepted, correct values + units, STALE on death, **NCMD/Rebirth answered with fresh NBIRTH**. CI runs the property tests: `seq` wrap 255→0, rebirth-on-gap, `bdSeq` NDEATH==NBIRTH |
 | Recovery | After API/broker outage, auto-return to fresh + rebirth, no human action (contract-level, injected clock) |
-| Memory/FD | **AC-LEAK-01**: 100k-iteration loop, RSS + FD count stable via `/proc/self` (~30 s). No formal 48–72h soak gate — **production 24/7 is the soak**; FD + last-success-per-meter exposed on the health endpoint. |
+| Memory/FD | **AC-LEAK-01**: 100k-iteration loop, RSS + FD count stable via `/proc/self` (**≈ 100 s** — measured 2026-08-19; the *~30 s* here was an estimate). No formal 48–72h soak gate — **production 24/7 is the soak**; FD + last-success-per-meter exposed on the health endpoint. |
 | Update | 1× `docker pull` + restart, **zero config loss** (automated integration test) |
 
 ### Test strategy (proportionate to a personal 4-meter tool)
@@ -98,7 +98,7 @@ These criteria operationalize the Executive Summary's guiding principle, **"neve
 - **Tier 4 (chaos, two distinct scenarios — both must go STALE):** (a) **STALE-on-DEATH** — kill the process / cut the bridge↔broker link → Ignition marks STALE via NDEATH (native). (b) **STALE-on-cloud-timeout** — bridge stays UP on MQTT but the smart-me cloud is unreachable/frozen → the bridge must publish **quality=STALE** on the affected metrics while the node stays alive (the *most frequent* real failure; this is the test that actually protects the SCADA from a frozen value shown as fresh).
 - **Design seams required:** `trait Clock` (first-class — never `SystemTime::now()` hardcoded), `trait Source` (test seam), an inspectable per-meter state (`Fresh|Stale|Failed`), and a **minimal injectable output sink** (`Fn(MeterId, Measurement/Quality)` or channel) so bridge tests can assert "on Stale, no fresh NDATA is emitted" without encoding Sparkplug. **No `Publisher` trait** — the concrete `SparkplugPublisher` owns its NBIRTH/NDATA/NDEATH lifecycle as methods; a trait is introduced only if a second real publisher is built.
 - **Fixtures-first:** first repo commit includes a real captured `fixtures/smartme_sample.json`; a checked-in Sparkplug B `.proto` (via `prost`/`build.rs`) with a small payload decoder for eyeball debugging of binary frames.
-- **AC-LEAK-01** retained (100k-iteration RSS/FD check); no formal soak gate — production 24/7 is the soak.
+- **AC-LEAK-01** retained (100k-iteration RSS/FD check); no formal soak gate — production 24/7 is the soak. *Measurement method amended by [ADR 0038] ([#97]): per-iteration growth, not a 24-hour slope.*
 
 ## Product Scope
 
@@ -337,7 +337,8 @@ Must-have capabilities (without any one, the product fails its "never lies" purp
 ### Reliability & Availability
 - **NFR1:** Runs unattended for weeks; automatic recovery from smart-me API and MQTT broker outages without manual restart (bounded exponential backoff + jitter, e.g. 1 s → 60 s cap).
 - **NFR2:** Per-meter staleness signalled no later than `last_success + 2×poll_interval + publish_margin`, where **`publish_margin` = the per-fetch timeout** ([ADR 0028](../../docs/adr/0028-publish-margin-is-the-fetch-timeout.md), 2026-08-08). The term had never had a value: it appeared only inside this formula, so the bound could be quoted and not met or missed. It is derived rather than chosen — the binding case is `PERIOD_MIN`, not the default period, where any margin at all would do. Measured on the wire at `PERIOD_MIN` by story 3.3; the ceiling is deliberately looser than the latency the bridge achieves (`last_success + poll_interval + fetch_timeout` since ADR 0027 made one missed tick enough), so that a regression has something to fail against.
-- **NFR3:** No unbounded memory/FD growth — **RSS_max ≤ 100 MB** on target; **RSS slope ≤ 1 %/24 h** by linear regression on RSS sampled every 60 s; **FD ≤ 64** via `/proc/self/fd`.
+- **NFR3:** No unbounded memory/FD growth — **RSS_max ≤ 100 MB** on target; **RSS slope ≤ 80 kB per 1 000 iterations** by linear regression over at least 100 samples taken across the run; **FD ≤ 64** via `/proc/self/fd`.
+  - *Amended 2026-08-19 by [ADR 0038] ([#97]), thresholds untouched.* The former wording asked for RSS sampled every 60 s and a slope over 24 h. A 100 000-iteration run takes **≈ 100 s** (measured), which yields two samples and no regression worth the name, and the 24-hour figure was a ×864 extrapolation of it. At the default 30 s period the run is instead **34.7 days of production** for one meter, and the per-iteration bound above is **0.23 % of RSS_max per day** — stricter than the clause it replaces, and stated for the window it is measured on.
 - **NFR4:** Availability is best-effort; during a smart-me outage the system stays honest (quality=STALE) rather than available — integrity is never traded for availability.
 
 ### Data Integrity & Correctness ("never lies")
@@ -386,3 +387,6 @@ Must-have capabilities (without any one, the product fails its "never lies" purp
 - **smart-me REST API contract stability** — a single unversioned upstream; the manual pre-release contract test + the CI golden/round-trip tests (Tier 2c) are the sentinels for schema drift.
 - **Author availability for the manual pre-release Ignition contract test.** Noted tension: the *Cold Reopening* journey assumes long absence while the manual oracle assumes periodic presence — the **CI golden/round-trip test (Tier 2c) resolves this** by catching Sparkplug regressions without the author, leaving the manual test as a per-release confirmation only.
 - **NTP-synchronized host clock (UTC)** — see NFR24.
+
+[ADR 0038]: ../../docs/adr/0038-the-leak-gate-measures-per-iteration-growth-not-a-24-hour-slope.md
+[#97]: https://github.com/guycorbaz/smartme_mqtt/issues/97

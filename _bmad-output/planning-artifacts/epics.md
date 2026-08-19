@@ -89,7 +89,7 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 **Reliability & Availability**
 - NFR1: Runs unattended for weeks; automatic recovery from smart-me API and MQTT broker outages without manual restart (bounded exponential backoff + jitter, e.g. 1 s → 60 s cap).
 - NFR2: Per-meter staleness signalled no later than `last_success + 2×poll_interval + publish_margin`, where **`publish_margin` = the per-fetch timeout** ([ADR 0028](../../docs/adr/0028-publish-margin-is-the-fetch-timeout.md), 2026-08-08 — the term had no value until then, so the bound was quotable but not measurable). Story 3.3 measures it.
-- NFR3: No unbounded memory/FD growth — RSS_max ≤ 100 MB; RSS slope ≤ 1 %/24 h (linear regression, RSS sampled every 60 s); FD ≤ 64 via `/proc/self/fd`.
+- NFR3: No unbounded memory/FD growth — RSS_max ≤ 100 MB; **RSS slope ≤ 80 kB per 1 000 iterations** (linear regression over ≥ 100 samples across the run); FD ≤ 64 via `/proc/self/fd`. *(Measurement method amended by [ADR 0038] on 2026-08-19, [#97]: a 100 000-iteration run takes ≈ 100 s — measured — so a 60 s cadence yields two samples and a 24-hour slope is a ×864 extrapolation. The thresholds are unchanged; the per-iteration bound is 0.23 %/day at the default period, an order of magnitude stricter than the 1 %/24 h it replaces.)*
 - NFR4: Availability is best-effort; during a smart-me outage the system stays honest (quality=STALE) rather than available — integrity never traded for availability.
 
 **Data Integrity & Correctness ("never lies")**
@@ -1203,9 +1203,12 @@ So that a leak surfaces here rather than on the fourth epic built on top of it.
 **Acceptance Criteria:**
 
 **Given** a 100k-iteration run with the transport exercised
-**When** RSS is sampled every 60 s and file descriptors are counted via `/proc/self/fd`
-**Then** RSS_max ≤ 100 MB, the RSS slope by linear regression is ≤ 1 %/24 h, and FD ≤ 64
-**And** the measured figures are recorded, not merely asserted — a threshold met by a wide margin and one met barely are different results.
+**When** RSS is sampled at least 100 times across the run and file descriptors are counted via `/proc/self/fd`
+**Then** RSS_max ≤ 100 MB, the RSS slope by linear regression is ≤ 80 kB per 1 000 iterations, and FD ≤ 64
+**And** the measured figures are recorded, not merely asserted — a threshold met by a wide margin and one met barely are different results
+**And** what the run does NOT exercise is named in the gate itself: the real HTTP client is driven on its failure path only, because it refuses any non-`https` endpoint and validates certificates.
+
+*Amended 2026-08-19 by [ADR 0038] ([#97]), after the measuring spike `CLAUDE.md` requires instead of a deferred decision. The original criteria could not be executed: a 100 000-iteration run takes **≈ 100 s** — 1 000 iterations/s, which is the 1 ms pacing floor, not the cost of the work — so sampling every 60 s yields two points, a regression through two points is an exact line, and the 24-hour slope was a ×864 extrapolation of it. The thresholds are untouched. At the default 30 s period, 100 000 iterations is **34.7 days of production** for one meter, and 80 kB/1 000 iterations is 0.23 % of RSS_max per day — stricter than the clause it replaces and measured on the window it is stated for. Spike figures, for the record: RSS 20 224 → 20 960 kB then constant to the kilobyte, FDs 10 → 11.*
 
 **Given** the run
 **When** it is executed
@@ -1294,3 +1297,5 @@ So that "chapter 4 is done" is a countable claim rather than a remembered one.
 *Created 2026-07-28, out of the Story 4.2 code review. Story 4.1 audited the chapter's **topic grammar** and left the payload requirements the same chapter also states; nothing at the time obliged it to report how much of the chapter it had covered, since the completeness rule was only added to 4.2 and 4.3 afterwards. The count was 27 in the review's own report and is **29** on an independent recount — the review under-counted, which is worth noting about numbers produced by a single pass. Deliberately a separate story rather than re-opening 4.1: 4.1's work is correct as far as it goes and its commits are pushed; this is the remainder, and it is cheaper to schedule than to retro-fit.*
 
 [ADR 0036]: ../../docs/adr/0036-ar7-names-the-property-not-the-exporter.md
+[ADR 0038]: ../../docs/adr/0038-the-leak-gate-measures-per-iteration-growth-not-a-24-hour-slope.md
+[#97]: https://github.com/guycorbaz/smartme_mqtt/issues/97
