@@ -3128,6 +3128,19 @@ mod tests {
     }
 
     async fn drive(source: FakeSource) -> (State, Vec<MeterUpdate>) {
+        drive_with(config(), source).await
+    }
+
+    /// As [`drive`], with the fetch deadline chosen by the caller.
+    ///
+    /// **Added 2026-08-19 for the tests whose subject is not the deadline**
+    /// ([#94]). `config()`'s 2 s is right for the tests that exercise the
+    /// timeout and wrong for every other one: under a loaded machine — a full
+    /// workspace run with Docker alongside — the deadline can elapse before the
+    /// FAKE source is even polled, and the tick becomes a `Timeout` carrying
+    /// none of what the test was written to observe. That produced three
+    /// refused pushes on 2026-08-19 and one observation on 2026-08-13.
+    async fn drive_with(config: PollConfig, source: FakeSource) -> (State, Vec<MeterUpdate>) {
         let clock = FakeClock::new(UtcMillis(SANE_NOW));
         let beats = Heartbeats::for_meters([MeterId::new("garage")]);
         let heartbeat = beats.of(&MeterId::new("garage")).expect("present");
@@ -3138,7 +3151,7 @@ mod tests {
             meter: &meter,
             clock: &clock,
             policy: policy(),
-            config: config(),
+            config,
             heartbeat: &heartbeat,
             outbox: &tx,
         };
@@ -3237,7 +3250,17 @@ mod tests {
             .with_ansi(false)
             .finish();
         let guard = tracing::subscriber::set_default(subscriber);
-        let (state, sent) = drive(
+        // **A deadline that cannot expire under load** ([#94], 2026-08-19). The
+        // subject here is what a decode failure TELLS AN OPERATOR; the fetch
+        // deadline is not part of it, and `config()`'s 2 s was close enough to a
+        // busy machine's scheduling delay that the tick sometimes became a
+        // `Timeout` before the FAKE source was polled — carrying none of what is
+        // asserted below. Three pushes were refused by that on 2026-08-19.
+        let (state, sent) = drive_with(
+            PollConfig {
+                interval: Duration::from_secs(5),
+                fetch_timeout: Duration::from_secs(60),
+            },
             FakeSource::new().then(Err(SourceError::Transient {
                 reason: "response decode failed: missing field `ActivePower` at line 2 column 76"
                     .to_string(),
@@ -3280,9 +3303,49 @@ mod tests {
         log.lines()
             .find(|l| l.contains("this meter could not be read"))
             .unwrap_or_else(|| {
+                // **THE LOAD CASE FIRST, because the guard that named it could
+                // never fire** ([#94], repaired 2026-08-19). The caller below
+                // asserts `!line.contains("source fetch timed out")` — but this
+                // function panics before that line exists, so a tick that became
+                // a `Timeout` under load produced the generic message and three
+                // people read it as a lost log line rather than as a busy
+                // machine. The deadline is now 60 s at the call site, so this
+                // should be unreachable; if it fires anyway, it says which.
+                if log.contains("source-unreachable")
+                    || log.contains("SourceUnreachable")
+                    || log.contains("source fetch timed out")
+                {
+                    panic!(
+                        "THE TICK TIMED OUT INSTEAD OF FAILING TO DECODE, so this test never \
+                         reached its subject. That is a BUSY MACHINE, not a defect: the fetch \
+                         deadline elapsed before the fake source was polled. Re-run before \
+                         believing anything, and see [#94]. The log was: {log:?}"
+                    )
+                }
                 panic!("no line reported the failure to the operator; the log was: {log:?}")
             })
             .to_string()
+    }
+
+    /// **The guard above, exercised — because a guard nobody can trigger is the
+    /// shape this repository keeps finding in its own tests.**
+    ///
+    /// [#94] cost three refused pushes partly because the timeout case reported
+    /// itself as a missing log line. This pins the message that tells them apart,
+    /// against a log body copied from a real failure on 2026-08-19.
+    ///
+    /// FALSIFIED 2026-08-19 — mutation RUN: dropping the `source-unreachable`
+    /// branch makes this test fail with `panic did not contain expected string`,
+    /// naming the generic message it falls back to.
+    #[test]
+    #[should_panic(expected = "THE TICK TIMED OUT INSTEAD OF FAILING TO DECODE")]
+    fn a_timed_out_tick_is_reported_as_a_busy_machine_not_a_lost_line() {
+        unreadable_line(
+            "2026-08-19T12:12:03.612837Z  INFO smartme_bridge::app::poll_publish: no reading \
+             this tick and none ever, so there is no value to re-publish; the device birth \
+             already declared it valueless meter=garage next=Stale published=Verdicts { power: \
+             Verdict { quality: Stale, cause: Some(SourceUnreachable) } }",
+        );
     }
 
     /// The same surface for the refusal an operator can actually act on: ADR 0029's
