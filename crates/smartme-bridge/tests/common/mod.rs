@@ -125,7 +125,7 @@ pub async fn start_broker_on_fixed_port() -> (ContainerAsync<GenericImage>, u16)
 /// `address already in use`, which is loud; holding a constant produces a
 /// container that refuses to start for the same reason *every* time another
 /// project is running, which is what actually happened.
-fn an_unused_host_port() -> u16 {
+pub fn an_unused_host_port() -> u16 {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("the kernel has a port");
     listener
         .local_addr()

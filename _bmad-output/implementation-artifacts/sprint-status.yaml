@@ -1894,7 +1894,25 @@ development_status:
   # repaired: "all four" `lost(...)` calls, of which there are two — the four are
   # [#86]'s REASONS. Second miscount this story has had to fix.
   4-13-chaos-broker-recovery: done  # closed 2026-08-19 after review; [#95] opened for the call site this test does not reach
-  4-14-chaos-poller-wedge: backlog
+  # 2026-08-19, WRITTEN AND IMPLEMENTED. The story the epic asked for was not
+  # achievable as written: "a source that hangs beyond every deadline" does not
+  # exist — every fetch is wrapped in `timeout(fetch_timeout, …)` and the
+  # heartbeat is written before it. And the arithmetic forbids the case entirely:
+  # FETCH_TIMEOUT (10 s) < PERIOD_MIN (5 s) x WEDGED_AFTER_PERIODS (3) = 15 s, so
+  # a hanging source can NEVER make /healthz say wedged at any configuration this
+  # bridge accepts. That margin was holding AR7/AR12 up and nothing was watching
+  # it; AC1 is now the test that does, and `fetch_timeout` became a named
+  # constant so the test pins the value production runs with.
+  # AC2 and AC3 differ in ONE number — the same tarpit and period, a fetch
+  # deadline inside the allowance or past it — which is AC1's arithmetic observed
+  # end to end. AC3's configuration cannot be written in config.toml, and the
+  # test says so rather than looking like a reachable failure.
+  # [#62] ANSWERED by measurement: degraded_meters DOES name a stale meter
+  # (story 3.3), and the 200 beside it is AR12's intent, not an oversight.
+  # Four mutations run; the heartbeat one's prediction did not survive its run —
+  # deleting `touch` gives `loop_age_ms: null` beside `wedged: false`, a dead loop
+  # reading as healthy, and a helper mapping null to 0 would have made it green.
+  4-14-chaos-poller-wedge: review  # implemented 2026-08-19; FETCH_TIMEOUT named, [#62] answered
   4-15-ac-leak-01-resource-stability: backlog
   4-16-latency-budget: backlog
   # 2026-08-10, IMPLEMENTED out of order — ADR 0030's one named exception, taken

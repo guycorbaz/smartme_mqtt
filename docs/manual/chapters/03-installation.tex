@@ -193,6 +193,11 @@ has stopped looping, which is exactly what a restart fixes. Everything else answ
 \code{200}, including an honest \code{STALE} and every deliberate silence, because
 restarting a container over those destroys the continuity they exist to report.
 
+A slow smart-me server cannot produce the \code{503}. One fetch is abandoned after
+ten seconds, and the loop is only called wedged once it has missed three publish
+periods --- the shortest of which is five seconds. That margin is held by a test
+rather than by arithmetic nobody re-does.
+
 \begin{warning}
 \textbf{Do not add a healthcheck yet.} The endpoint also answers \code{500} from any
 handler that panics, its own included --- the guard that catches a panicking page

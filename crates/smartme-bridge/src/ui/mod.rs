@@ -1146,6 +1146,53 @@ mod tests {
         );
     }
 
+    /// **Story 4.14 AC1 — a slow server must not be able to restart this bridge.**
+    ///
+    /// # What holds AR12 up, and it is not a test elsewhere
+    ///
+    /// AR12's rule is *"an honest STALE never triggers a restart; a wedged poller
+    /// does"*, and today the first half is true because of three numbers that
+    /// have never been in the same sentence. The poll loop writes its heartbeat
+    /// BEFORE the fetch and wraps the fetch in
+    /// [`FETCH_TIMEOUT`](crate::app::config::FETCH_TIMEOUT), so a source that
+    /// hangs holds the loop for at most 10 s. `/healthz` calls it wedged past
+    /// [`WEDGED_AFTER_PERIODS`] × the period, and the shortest period an operator
+    /// may set is [`PERIOD_MIN`](crate::app::config::PERIOD_MIN), 5 s — an
+    /// allowance of 15 s.
+    ///
+    /// **The margin is 5 s and nothing was watching it.** Raise the fetch
+    /// deadline for a good local reason, or shorten `PERIOD_MIN`, or drop `N` to
+    /// 2, and a smart-me server having a slow minute becomes a container restart
+    /// that kills the Sparkplug session of every meter — a fault outside this
+    /// process, answered by destroying state inside it.
+    ///
+    /// This test is deliberately arithmetic rather than scenario-based: the
+    /// scenario is `chaos_poller_wedge`, and a scenario test would go red for a
+    /// dozen reasons that are not this one.
+    ///
+    /// FALSIFIED 2026-08-19 — mutation RUN, output copied: `FETCH_TIMEOUT` raised
+    /// to 20 s goes red with `A BLOCKED FETCH CAN NOW OUTLIVE THE WEDGE
+    /// ALLOWANCE: a fetch may hold the loop for 20s while /healthz calls it
+    /// wedged after 3 x 5s = 15s`.
+    #[test]
+    fn the_wedge_allowance_outlives_a_blocked_fetch() {
+        let allowance = crate::app::config::PERIOD_MIN * WEDGED_AFTER_PERIODS;
+        assert!(
+            crate::app::config::FETCH_TIMEOUT < allowance,
+            "A BLOCKED FETCH CAN NOW OUTLIVE THE WEDGE ALLOWANCE: a fetch may \
+             hold the loop for {fetch:?} while /healthz calls it wedged after \
+             {n} x {period:?} = {allowance:?}. Under Epic 7 that verdict restarts \
+             the container, so a smart-me server having a slow minute would end \
+             the Sparkplug session of every meter — AR12's \"an honest STALE \
+             never triggers a restart\" would be false. Whichever of the three \
+             numbers moved, move it back or re-decide AR12 in an ADR",
+            fetch = crate::app::config::FETCH_TIMEOUT,
+            n = WEDGED_AFTER_PERIODS,
+            period = crate::app::config::PERIOD_MIN,
+            allowance = allowance,
+        );
+    }
+
     /// AR12 — the half that was missing entirely until a review found it.
     ///
     /// `/healthz` returned 200 unconditionally, so the Docker healthcheck Epic 7

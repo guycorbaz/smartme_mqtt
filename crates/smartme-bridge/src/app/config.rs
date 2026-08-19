@@ -59,6 +59,21 @@ pub const PERIOD_MIN: Duration = Duration::from_secs(5);
 /// A period of "never" would not slow that repair down — it would remove it.
 pub const PERIOD_MAX: Duration = Duration::from_secs(300);
 
+/// How long one fetch may take before the poll loop gives up on it and judges
+/// the tick `Stale` instead.
+///
+/// **Not operator-settable, and the margin is why.** `/healthz` calls the loop
+/// `wedged` once a meter's last tick is older than
+/// [`WEDGED_AFTER_PERIODS`](crate::ui::WEDGED_AFTER_PERIODS) × its period, and
+/// Epic 7 wires that verdict to a container restart. The heartbeat is written
+/// before the fetch (`poll_publish.rs`, *"Heartbeat FIRST"*), so a hanging source
+/// holds the loop for at most this long — and at the shortest legal period
+/// ([`PERIOD_MIN`], 5 s) the allowance is 15 s against this 10 s. **A slow server
+/// therefore cannot cost the bridge its Sparkplug session**, and
+/// `the_wedge_allowance_outlives_a_blocked_fetch` (story 4.14 AC1) is what keeps
+/// that true when one of the three numbers moves.
+pub const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// The period when none is configured. **Exactly what was hard-coded before
 /// this setting existed**, so adopting the setting is not itself a change of
 /// behaviour: a release that shipped both would be two changes wearing one name.
@@ -748,7 +763,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
         bd_seq_path: PathBuf::from(present(&raw.state_dir).unwrap_or("/data")).join("bdseq.toml"),
         poll: PollConfig {
             interval,
-            fetch_timeout: Duration::from_secs(10),
+            fetch_timeout: FETCH_TIMEOUT,
         },
         policy: Policy::DEFAULT,
         // Passed through unvalidated and unused by the runtime: `main.rs` has
