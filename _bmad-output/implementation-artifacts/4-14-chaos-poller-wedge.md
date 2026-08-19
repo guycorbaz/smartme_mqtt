@@ -12,7 +12,7 @@ Status: review
 > loop ticks on either side of it.
 >
 > **And the arithmetic says it can never be enough.** `fetch_timeout` is **10 s**, fixed in code
-> and not settable by an operator (`config.rs:751`). The wedge allowance is
+> and not settable by an operator (`config.rs`, `FETCH_TIMEOUT`). The wedge allowance is
 > `WEDGED_AFTER_PERIODS × period` = `3 × period` (`ui/mod.rs:51`, `:363`), and `PERIOD_MIN` is
 > **5 s** (`config.rs:49`, ADR 0020). At the worst legal setting the allowance is **15 s** against
 > a **10 s** maximum block. A hanging source cannot make `/healthz` say `wedged`, at any
@@ -113,7 +113,7 @@ looking at `/healthz`.
         `fetch_timeout < PERIOD_MIN × WEDGED_AFTER_PERIODS`, with the three values named and the
         consequence spelled out in the failure message.
   - [x] `fetch_timeout` is not a constant today — it is a bare `Duration::from_secs(10)` at
-        **one** production site, `config.rs:751`. (The drafting note said two; the second,
+        **one** production site, `config.rs`, `FETCH_TIMEOUT`. (The drafting note said two; the second,
         `reconfigure.rs:483`, is inside `mod tests` and was corrected on reading. Counting a test
         as production is how a margin gets pinned in the wrong place.) **Give it a name**
         (`FETCH_TIMEOUT`) so the invariant below pins the value the bridge actually runs with.
@@ -201,7 +201,7 @@ healthcheck in front of it. Name it, pin it, leave it in code.
 - [Source: `crates/smartme-bridge/src/ui/mod.rs:363`] — `loop_age`, per-meter allowance
 - [Source: `crates/smartme-bridge/src/ui/mod.rs:821`] — the `wedged` verdict and the status code
 - [Source: `crates/smartme-bridge/src/app/config.rs:49`] — `PERIOD_MIN` (ADR 0020)
-- [Source: `crates/smartme-bridge/src/app/config.rs:751`] — the fixed `fetch_timeout`
+- [Source: `crates/smartme-bridge/src/app/config.rs`, `FETCH_TIMEOUT`] — the fixed `fetch_timeout`
 - [Source: `crates/smartme-bridge/tests/chaos_stale_on_cloud_timeout.rs`] — story 1.14, the sibling this must not duplicate
 - [Source: `docs/adr/0027-*.md`] — non-200 codes are for a wedged poller only
 - [Source: `CLAUDE.md`] — falsify before trusting; never defer a decision to an artifact that does not exist
@@ -290,6 +290,21 @@ today, and the only way to know is to build both sides.
 | 2 | `WEDGED_AFTER_PERIODS` 3 → 100 | `a_loop_blocked_past_its_allowance…` | `THE BLOCKED LOOP NEVER READ AS WEDGED … loop_age_ms: 4957, loop_age_allowed_ms: 30000` |
 | 3 | `wedged = false` forced in `healthz` | `a_loop_blocked_past_its_allowance…` | same sentence, and a body that contradicts itself: `loop_age_ms: 4947, loop_age_allowed_ms: 900` |
 | 4 | `heartbeat.touch(…)` deleted from `step_once` | `a_source_that_is_up_and_stuck…` | `THE LOOP HAS NO AGE AT ALL. loop_age_ms is null, which is what a bridge whose poll task never ticked reports` — **not** the frozen age the note predicted |
+
+### Review Findings (2026-08-19, same day)
+
+Reviewed mechanically: every identifier cited against the functions that exist, every `file.rs:N`
+against the file. Four identifiers resolve; one line citation did not.
+
+- [x] [Review][Patch] **The story invalidated its own citation.** It cited `config.rs:751` for the
+      fixed `fetch_timeout` three times — and then inserted `FETCH_TIMEOUT` seventeen lines above
+      it, moving the target to `:766`. Written, correct, and stale by the end of the same commit.
+      Now cited by symbol, which is [#101]'s prescription and the reason that issue exists.
+
+**Verified and left standing:** `config.rs:49` (`PERIOD_MIN`), `poll_publish.rs:659` (the heartbeat
+before anything that can block), `:671` (the fetch deadline), `ui/mod.rs:51`
+(`WEDGED_AFTER_PERIODS`) — all four still point at exactly what they name, and they are the four
+the AC1 invariant rests on.
 
 ### File List
 
