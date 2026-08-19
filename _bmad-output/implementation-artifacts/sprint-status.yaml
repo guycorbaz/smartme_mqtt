@@ -1950,7 +1950,23 @@ development_status:
   # rumqttc's queue, not on leaving the socket — [#85]), and whether the unchanged
   # thresholds should be tightened once measured, since acceptance happens strictly
   # earlier than an acknowledgement would.
-  4-16-latency-budget: backlog  # no longer BLOCKED
+  # 2026-08-19, WRITTEN AND IMPLEMENTED the day 4.18 unblocked it. Both decisions
+  # the unblocking note named were TAKEN at drafting, not deferred again:
+  #  1. WHERE acceptance is observed — it is not. The test measures a strictly
+  #     LARGER interval (acquisition to arrival at an independent subscriber),
+  #     which contains acceptance, so p95(read->subscriber) <= 3 s implies
+  #     p95(read->accepted) <= 3 s. That also makes it immune to [#85].
+  #  2. WHETHER to tighten the thresholds — NO. p95 measures 0.1 % of its budget;
+  #     tightening to today's figures would turn an operator-facing promise about
+  #     staleness on a screen into a regression detector for this machine's
+  #     scheduler. Left at 3 s / 5 s with the margin on the record.
+  # RESULT: p50 1.219ms, p95 1.978ms, p99 2.141ms, worst 2.539ms over 300 readings.
+  # The worst reading is 2.5 MILLISECONDS against a 3 SECOND budget.
+  # AC3 RECORDED UNMET: NFR10's 24 h window is not covered — a day contains
+  # reconnections and a broker restart, which a 30-second run cannot see. [#102],
+  # and the gate's own header says it. Same position ADR 0038 took for the leak
+  # gate: production is the only day-long window this project has.
+  4-16-latency-budget: review  # implemented 2026-08-19; [#102] for the uncovered window
   # 2026-08-10, IMPLEMENTED out of order — ADR 0030's one named exception, taken
   # because the wire is only cheap to break while nothing is historised and a live
   # Ignition began reading this bridge that morning.
