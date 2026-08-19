@@ -1,6 +1,6 @@
 # Story 4.14: `chaos_poller_wedge`
 
-Status: review
+Status: done
 
 > **THE WEDGE THIS STORY IS NAMED AFTER CANNOT BE CAUSED BY THE SOURCE, and that was
 > established by reading the code before drafting rather than discovered mid-implementation.**

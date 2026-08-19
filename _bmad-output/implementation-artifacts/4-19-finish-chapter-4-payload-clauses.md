@@ -1,6 +1,6 @@
 # Story 4.19: Finish chapter 4 — the 29 clauses Story 4.1 did not record
 
-Status: review
+Status: done
 
 > **This story changes no code.** It makes "chapter 4 is done" a countable claim rather than a
 > remembered one — and the counting is what found a `MUST` nobody had read.

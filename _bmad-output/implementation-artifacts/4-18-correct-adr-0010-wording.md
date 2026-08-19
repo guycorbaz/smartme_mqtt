@@ -1,6 +1,6 @@
 # Story 4.18: Correct ADR 0010's wording — its conclusion stands, its premise is overstated
 
-Status: review
+Status: done
 
 > **This story changes no code.** It repairs a document of record whose overstatement made a
 > `MUST` violation invisible for an epic, and it amends the one requirement that still rested on
@@ -133,6 +133,17 @@ assumed.
 
 **No code changed, no conformance row moved, `CONTRACT_VERSION` unchanged at 10.** The two rows
 that state the will's QoS moved to `conformant` in story 4.17 and are untouched here.
+
+### Review Findings (2026-08-19, same day)
+
+Reviewed mechanically alongside 4.14 and 4.19: every identifier cited against the functions that
+exist, every `file.rs:N` against the file it names. **This story cites neither** — its claims are
+figures it printed and clauses it quotes, both of which were checked at writing against the run
+output and the pinned specification.
+
+**Nothing found.** Recorded rather than left silent: a review that finds nothing and says so is
+worth more than one that is assumed to have happened. The two stories reviewed beside it each
+carried a false citation, which is the base rate this one was measured against.
 
 ### File List
 

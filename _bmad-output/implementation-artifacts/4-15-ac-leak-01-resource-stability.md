@@ -1,6 +1,6 @@
 # Story 4.15: `AC-LEAK-01` — resource stability under sustained load (NFR3, NFR9)
 
-Status: review
+Status: done
 
 > **THE ACCEPTANCE CRITERIA COULD NOT BE EXECUTED AS WRITTEN, and the measuring spike said so
 > before a line of the gate existed.** `CLAUDE.md`: *either decide at drafting time, or write the
@@ -178,6 +178,17 @@ stability is not a Sparkplug clause — and `CONTRACT_VERSION` stays at 10.
 |---|---|---|
 | 1 | `AC_LEAK_INJECT_RSS=1` — 1 kB per iteration, never dropped | `RSS IS GROWING WITH THE ITERATION COUNT: 1040.4 kB per 1000 iterations against a bound of 80` |
 | 2 | `AC_LEAK_INJECT_FD=1` — one held handle per iteration | `THE PROCESS IS ACCUMULATING FILE DESCRIPTORS: 5496 open against a bound of 64` |
+
+### Review Findings (2026-08-19, same day)
+
+Reviewed mechanically alongside 4.14 and 4.19: every identifier cited against the functions that
+exist, every `file.rs:N` against the file it names. **This story cites neither** — its claims are
+figures it printed and clauses it quotes, both of which were checked at writing against the run
+output and the pinned specification.
+
+**Nothing found.** Recorded rather than left silent: a review that finds nothing and says so is
+worth more than one that is assumed to have happened. The two stories reviewed beside it each
+carried a false citation, which is the base rate this one was measured against.
 
 ### File List
 
