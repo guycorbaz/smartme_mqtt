@@ -81,6 +81,17 @@
 //! tests passing** — measured, not assumed, and that is precisely the hole [#86]
 //! recorded. This test is the first thing in the tree that can see it.
 //!
+//! **AND HALF OF THAT HOLE IS STILL OPEN, measured by the 2026-08-19 review.** The
+//! driver has TWO `lost(...)` call sites, not the four [#86]'s title counts — the
+//! title counts REASONS. This test reaches one of them, the
+//! `Some(reason) => lost(reason, fault)` arm, through `before-birth`. Deleting the
+//! other one on its own — `lost(DropReason::TransportQueueFull, None)`,
+//! `mqtt_driver.rs:1408` — leaves this test GREEN, run and observed. So
+//! `transport-queue-full` is still counted by nothing that could notice its
+//! absence, and `undeclared-device` and `unpublishable` are still pinned by
+//! `reason_for`'s mapping alone. Tracked at [#95]; do not read AC3 as covering
+//! them.
+//!
 //! **Task 1, the fixed port.** Swapping `start_broker_on_fixed_port` for
 //! `start_broker` goes red on the readiness guard with `the broker did not
 //! complete an MQTT CONNACK within 30 s of being restarted` — the restarted
@@ -451,9 +462,10 @@ async fn a_broker_that_comes_back_gets_a_new_session_and_the_old_timestamps() {
     assert!(
         !moved.is_empty(),
         "NOT ONE DRIVER-SIDE DROP WAS COUNTED, though three readings were handed over with no \
-         broker to send them to. The driver's `lost(...)` calls are the only thing that moves \
-         these cells, and until this test existed deleting all four of them left the whole \
-         suite green ([#86]). The whole fleet reads: {:?}",
+         broker to send them to. The driver's two `lost(...)` calls are the only thing that \
+         moves these cells, and until this test existed deleting BOTH of them left the whole \
+         suite green ([#86]). Deleting only the `transport-queue-full` one still does ([#95]). \
+         The whole fleet reads: {:?}",
         fleet
             .dropped()
             .into_iter()
@@ -464,6 +476,11 @@ async fn a_broker_that_comes_back_gets_a_new_session_and_the_old_timestamps() {
     // `before-birth`, `transport-queue-full`, or both depends on where the
     // reconnect ladder happened to be when each reading arrived — timing this
     // test does not control. Pinning it would pin the harness, not the property.
+    //
+    // **The cost of that choice, named rather than left to be rediscovered:** every
+    // run measured so far lands on `before-birth`, so the OTHER call site — the
+    // `transport-queue-full` one at `mqtt_driver.rs:1408` — is never exercised here.
+    // Deleting it alone leaves this assertion green (measured, 2026-08-19). [#95].
 
     let _ = death_tx.send(());
     let _ = tokio::time::timeout(Duration::from_secs(10), driver).await;

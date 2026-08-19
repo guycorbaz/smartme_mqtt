@@ -41,6 +41,14 @@
 //! own acquisition time too … left: Some(1786968000000), right:
 //! Some(1786968060000)`.
 //!
+//! **The NBIRTH's publication instant — added by the 2026-08-19 review, mutation
+//! RUN.** Replacing `clock.wall()` with `UtcMillis(42)` at both `announce` call
+//! sites (`mqtt_driver.rs:1223` and `:1292`) — [#30]'s prescription word for word —
+//! goes red with `THE NODE BIRTH DOES NOT SPEAK THE PUBLICATION INSTANT. It was
+//! published somewhere in [1787132581436, 1787132581477] and carries 42`. **Before
+//! that assertion the same mutation left the WHOLE suite green**: 258 unit tests,
+//! and every chaos test that observes an NBIRTH, this one included.
+//!
 //! **The second reading exists because of the first draft's own failure.** This
 //! test ended with a sweep over "whatever else arrived", and it swept ZERO
 //! messages — an assertion over an empty set, scored as coverage. The count was
@@ -125,6 +133,11 @@ async fn a_reconnect_re_declares_the_reading_without_moving_its_clock() {
     let (death_tx, death_rx) = oneshot::channel();
     let (_device_tx, device_rx) = mpsc::channel(4);
 
+    // The window the NBIRTH's own timestamp has to fall inside, read from the very
+    // clock the driver is about to be handed, before it can have published
+    // anything. See the assertion below for why a window and not a value.
+    let before_birth = clock.wall().0;
+
     let driver = tokio::spawn(mqtt_driver::run(
         MqttConfig {
             client_id: NODE_ID.to_string(),
@@ -147,11 +160,53 @@ async fn a_reconnect_re_declares_the_reading_without_moving_its_clock() {
     ));
 
     // ---- a session, and one reading in it ---------------------------------
-    common::wait_for(&mut seen, Duration::from_secs(20), |s| {
+    let nbirth = common::wait_for(&mut seen, Duration::from_secs(20), |s| {
         s.topic.contains("/NBIRTH/")
     })
     .await
     .expect("the bridge must birth on its first connection");
+
+    // **The NBIRTH carries the instant it was PUBLISHED, and this is the clause's
+    // own words rather than a presence check** —
+    // `tck-id-payloads-nbirth-timestamp` (`Sparkplug_6:1064`): *"NBIRTH messages
+    // MUST include a payload timestamp that denotes the time at which the message
+    // was published"*.
+    //
+    // **Added by the 2026-08-19 review of story 4.12, which found the row it had
+    // moved to `conformant` still satisfied by the mutation [#30] prescribed.**
+    // 4.12's `an_hour_of_outage_does_not_move_the_re_declared_reading_forward`
+    // hands `birth()` the instant itself, so it proves the publisher stamps the
+    // argument it is given — never that the CALL SITE gives it a clock. Replacing
+    // `clock.wall()` at `mqtt_driver.rs:1223` and `:1292` with a constant left the
+    // whole suite green, which is [#30]'s prescription word for word.
+    //
+    // A WINDOW, not a value, and the window is what a live clock allows: the
+    // bridge is holding a `SystemClock` this test cannot address. It is bounded
+    // below by a reading of that same clock taken before the driver existed and
+    // above by one taken after the message arrived, so any stamp that is not the
+    // publication instant — a constant, the reading's `ValueDate`, a frozen
+    // first-connect instant re-used on every rebirth — falls outside it.
+    let after_birth = clock.wall().0;
+    let born_at = i64::try_from(
+        nbirth
+            .payload
+            .timestamp
+            .expect("every Sparkplug payload carries a timestamp"),
+    )
+    .expect("a Sparkplug timestamp is epoch-millis and fits an i64");
+    assert!(
+        (before_birth..=after_birth).contains(&born_at),
+        "THE NODE BIRTH DOES NOT SPEAK THE PUBLICATION INSTANT. It was published \
+         somewhere in [{before_birth}, {after_birth}] and carries {born_at}, so a host \
+         pairing this session against its own clock is reading a number the bridge \
+         made up (tck-id-payloads-nbirth-timestamp)"
+    );
+    assert_ne!(
+        born_at, READING_AT,
+        "the node birth must not carry the READING's clock: a session announcement \
+         is not a measurement, and ADR 0013's deviation is deliberately confined to \
+         the two rows that re-declare data"
+    );
 
     tx.send(a_reading()).await.expect("the driver is listening");
     let ddata = common::wait_for(&mut seen, Duration::from_secs(20), |s| {

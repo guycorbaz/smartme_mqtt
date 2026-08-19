@@ -397,11 +397,15 @@ impl SparkplugPublisher {
                     TimestampSource::ReadingValueDate => millis(update.measurement.value_date),
                     TimestampSource::PublicationInstant => timestamp,
                 },
-                None => match timestamp_source_for(Emission::DeviceBirthColdStart) {
-                    TimestampSource::PublicationInstant => timestamp,
-                    // A device with no reading has no acquisition time to carry.
-                    TimestampSource::ReadingValueDate => timestamp,
-                },
+                // A device with no reading has NO acquisition time to carry, so
+                // this line emits the publication instant whichever way the table
+                // answers. It was written as a `match` over
+                // `Emission::DeviceBirthColdStart` by story 4.12 and both arms
+                // returned `timestamp` — a branch that cannot change what is
+                // emitted, reading as a mechanism it was not. **That row is pinned
+                // by `the_timestamp_table_says_which_clock_each_message_speaks`,
+                // not by this call site** (2026-08-19 review).
+                None => timestamp,
             };
             let payload = live.device_birth(payload_ts, metrics);
             sink.emit(Outbound {
@@ -763,11 +767,15 @@ fn degrade(verdict: Verdict) -> Verdict {
 ///
 /// # The specification's own split, read rather than remembered
 ///
-/// The norm puts acquisition time in the **metric** timestamp — *"the time at
-/// which the value of a metric was captured"*
-/// (`tck-id-payloads-metric-timestamp-in-UTC`, `Sparkplug_6:479`) — and requires
-/// the **payload** timestamp to denote *"the time at which the message was
-/// published"*, in identical words for NBIRTH, DBIRTH, NDATA, DDATA and DDEATH.
+/// The norm puts acquisition time in the **metric** timestamp — *"this timestamp
+/// represents the time at which the value of a metric was captured"*, which is the
+/// **non-normative comment** under `tck-id-payloads-metric-timestamp-in-UTC`
+/// (`Sparkplug_6:479-482`); the clause itself binds only *"The timestamp MUST be in
+/// UTC"*, and the attribution is separated here because this repository cites
+/// clauses, not the prose around them (2026-08-19 review). The **payload**
+/// timestamp is another matter and is bound outright: it MUST denote *"the time at
+/// which the message was published"*, in identical words for NBIRTH, DBIRTH, NDATA,
+/// DDATA and DDEATH.
 ///
 /// **This bridge deviates on two of those, deliberately, and [ADR 0013] is why.**
 /// Stamping `now` on a re-declared 45-minute-old reading would hand a consumer

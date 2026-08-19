@@ -669,3 +669,20 @@ in the three story files.
 - **A dropped DDATA leaves a Sparkplug sequence hole and is still what a rebirth re-declares as
   last published** ([#92]). Pre-existing ordering in `SparkplugPublisher::publish`; story 4.11
   is what makes the disagreement visible. The same issue carries the republication over-count.
+
+## Deferred from: review of stories 4.12 and 4.13 (2026-08-19)
+
+- **Only one of the driver's two `lost(...)` call sites is pinned** ([#95]). `chaos_broker_recovery`
+  reaches the `Some(reason) => lost(reason, fault)` arm through `before-birth`; deleting
+  `lost(DropReason::TransportQueueFull, None)` on its own leaves the test green, measured. So
+  [#86]'s table is answered for one of its four reasons, not four — `transport-queue-full`,
+  `undeclared-device` and `unpublishable` remain unpinned end to end. **No owner yet**, and the
+  shape is probably a driver-level test with a refusing sink rather than a chaos test: making an
+  outage produce a `transport-queue-full` deterministically means filling `rumqttc`'s request
+  channel, which is timing no chaos harness here controls.
+
+- **Story 4.12's AC1 second clause is vacuous** ([#96]). No test publishes a reading that was in
+  flight when the link dropped: 4.12 hands over none during its break and 4.13's three are all
+  lost `before-birth`. The clause is true by construction (story 4.11's `try_send`), which is the
+  state every one of the four thrown-away Epic 1 tests was in. **No owner yet** — the window it
+  needs is the one [#85] describes from the other side, so read that first.

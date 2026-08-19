@@ -1,6 +1,6 @@
 # Story 4.12: Anti-replay at the down→up instant
 
-Status: review
+Status: done
 
 > **READ THIS BEFORE PLANNING ANY CODE.** The property this story is named after is **already
 > implemented**, in two places, with its reasoning written beside it.
@@ -272,8 +272,57 @@ the whole reason the rule says *run it first*.
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` — modified
 - `_bmad-output/implementation-artifacts/4-12-anti-replay-at-the-down-up-instant.md` — new
 
+### Review Findings (2026-08-19)
+
+Reviewed by reading the code and the pinned norm, and by RUNNING the mutations the record
+claimed rather than re-reading the notes that reported them. **The sharpest finding is that the
+one conformance row this story moved had not, in fact, been earned** — and it was found by
+applying [#30]'s own prescription instead of the story's paraphrase of it.
+
+- [x] [Review][Patch] **`payloads-nbirth-timestamp` was moved to `conformant` on evidence that
+      does not reach the clause.** [#30] prescribes *"replace `clock.wall()` with a small
+      constant and every test stays green"*, and `clock.wall()` is read at the CALL SITE
+      (`mqtt_driver.rs:1223`, `:1292`). This story's mutation 6 changed the stamp INSIDE
+      `birth()`, which the unit test sees because the unit test hands `birth()` the instant
+      itself — it proves the publisher stamps its argument, never that the caller supplies a
+      clock. **Measured: both arguments replaced by `UtcMillis(42)` left 258 unit tests and
+      every NBIRTH-observing chaos test green.** Repaired rather than reverted:
+      `chaos_no_replay_at_reconnect` now bounds the NBIRTH stamp between two readings of the
+      driver's own clock, and the mutation goes red there (`published somewhere in
+      [1787132581436, 1787132581477] and carries 42`). The row stays `conformant`; the tally
+      does not move; the matrix says what was wrong with the first evidence.
+- [x] [Review][Patch] **The cold-start `match` could not change what it emitted** — both arms
+      returned `timestamp`, so the claim *"the two DBIRTH paths resolve their clock through the
+      table, so moving a row moves what is emitted"* is true of the re-declaring path and false
+      of this one. Replaced by the direct value and a comment naming the test that actually
+      pins the row. A branch that cannot fail is the shape this repository keeps removing.
+- [x] [Review][Patch] **A non-normative comment was cited as a clause.** *"the time at which
+      the value of a metric was captured"* is the commentary under
+      `tck-id-payloads-metric-timestamp-in-UTC`; the clause binds only *"The timestamp MUST be
+      in UTC"*. The quotation was exact and the attribution was not — precisely the distance
+      `CLAUDE.md`'s opening rule is about. Both are now shown for what they are.
+- [x] [Review][Defer] **AC1's second clause is vacuous** — [#96]. No test publishes a reading
+      that was in flight when the link dropped: 4.12 hands over none during the break, and
+      4.13's three are all lost `before-birth`. The story explicitly asked for it (*"Assert it;
+      do not fix it"*) and the assertion was not written. Recorded as unmet with an issue rather
+      than closed silently.
+- [x] [Review][Note] **AC3 says *"the seven message types this bridge publishes"*; the bridge
+      publishes five** (NBIRTH, NDEATH, DBIRTH, DDATA, DDEATH), which the table splits into six
+      emissions. The seven is `mqtt_driver`'s delivery table, which carries an NDATA row because
+      the norm binds one. The enum's own doc comment already says *"Six, and NDATA is not among
+      them"*; the AC was left unamended and is corrected here rather than in place, because the
+      criterion was discharged for every message the bridge actually sends.
+
+**Verified and left standing:** all six `tck-id` citations and their line numbers, checked one
+by one against `docs/spec/sparkplug-b-3.0.0/`; the absence of `tck-id-payloads-ndeath-timestamp`;
+the corrected premise about `a_rebirth_redeclares_what_is_known_instead_of_blanking_it` (it does
+assert a timestamp, since 4.7); and the arithmetic of the chapter-6 tally.
+
 ### Change Log
 
 - **2026-08-18** — Story 4.12 implemented as the verification story it was drafted to be. Four
   tests, eight mutations, one conformance row earned and one story premise corrected. No
   production behaviour changed.
+- **2026-08-19, review** — three patches applied and one mutation added (nine in total). The
+  conformance row this story moved is now backed by the falsification [#30] actually asked for;
+  [#96] opened for AC1's unproven clause. Story closed `done`.

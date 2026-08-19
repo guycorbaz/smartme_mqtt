@@ -62,7 +62,7 @@
 #   Ignition contract test (human action required — stays backlog until Guy runs it).
 
 generated: 2026-07-25
-last_updated: 2026-08-18
+last_updated: 2026-08-19
 project: smartme_mqtt
 project_key: NOKEY
 tracking_system: file-system
@@ -1449,7 +1449,7 @@ development_status:
   # four runtime oracles do not exist, so "never lies" rests on the freshness state
   # machine alone, and ~15 items in deferred-work.md are parked on epics that have
   # themselves been deferred.
-  epic-4: in-progress  # REOPENED 2026-08-18; 4.1-4.10 + 4.17 done; 4.11 ready-for-dev; 4.16 BLOCKED on NFR10, not deferred
+  epic-4: in-progress  # REOPENED 2026-08-18; 4.1-4.13 + 4.17 done as of 2026-08-19; 4.14, 4.15, 4.18, 4.19 backlog; 4.16 BLOCKED on NFR10, not deferred
   4-1-conformance-matrix-namespace-and-topics: done
   # 4.2 was worked before it had a story file: the chapter-6 quality rows landed
   # with the quality-code fix (d28bb02), which is why it read 'in-progress' with
@@ -1870,8 +1870,30 @@ development_status:
   # and `cargo test` compiles without that gate.
   4-10-own-the-reconnect-loop-bdseq-per-connect: done
   4-11-broker-outage-traced-drop-exhaustive: done  # closed 2026-08-18 after a three-layer review; AC1 UNMET in the tests [#86], ADR 0036 [#89]
-  4-12-anti-replay-at-the-down-up-instant: review  # implemented 2026-08-18; nbirth-timestamp earned out of gap, chapter-6 tally 38.4.8.59 -> 39.4.7.59
-  4-13-chaos-broker-recovery: review  # implemented 2026-08-18; [#86] CLOSED by falsification, [#43] measured and left open (death on an orderly stop, none on SIGKILL)
+  # REVIEWED 2026-08-19 and CLOSED. The behaviour was right and the record was not:
+  # the one conformance row this story moved had NOT been earned. [#30] prescribes
+  # replacing `clock.wall()` AT THE CALL SITE with a constant; the story's mutation
+  # changed the stamp inside `birth()`, which its own unit test sees only because
+  # that test hands `birth()` the instant. Applying [#30] literally left 258 unit
+  # tests and every NBIRTH-observing chaos test GREEN — measured, not argued. The
+  # missing assertion was written into `chaos_no_replay_at_reconnect` (the stamp is
+  # bounded between two readings of the driver's own clock) and the mutation goes
+  # red there, so the row stays `conformant` and the tally does not move. Two more
+  # patches: a cold-start `match` whose two arms returned the same value while being
+  # described as a mechanism, and a NON-NORMATIVE comment cited as a clause. AC1's
+  # second clause is recorded UNMET — [#96]: no test publishes a reading that was in
+  # flight when the link dropped, and the story had explicitly asked for one.
+  4-12-anti-replay-at-the-down-up-instant: done  # closed 2026-08-19 after review; nbirth-timestamp row re-earned, [#96] opened
+  # REVIEWED 2026-08-19 and CLOSED. [#86] stays closed on its own words — deleting
+  # EVERY `lost(...)` call does turn this test red — but the driver has TWO call
+  # sites and this test reaches ONE. Deleting only
+  # `lost(DropReason::TransportQueueFull, None)` leaves it green, measured; so
+  # `transport-queue-full`, `undeclared-device` and `unpublishable` are still not
+  # pinned end to end. [#95] carries that residue, and the test now names it rather
+  # than letting a future reader infer AC3 covered all four reasons. One count
+  # repaired: "all four" `lost(...)` calls, of which there are two — the four are
+  # [#86]'s REASONS. Second miscount this story has had to fix.
+  4-13-chaos-broker-recovery: done  # closed 2026-08-19 after review; [#95] opened for the call site this test does not reach
   4-14-chaos-poller-wedge: backlog
   4-15-ac-leak-01-resource-stability: backlog
   4-16-latency-budget: backlog

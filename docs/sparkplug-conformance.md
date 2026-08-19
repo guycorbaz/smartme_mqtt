@@ -949,7 +949,7 @@ is legal and is a deliberate choice — a consumer should never have to infer go
 | `payloads-metric-timestamp-in-UTC` | MUST | the metric timestamp is the reading's own `ValueDate`, carried through the same UTC pipeline | same proofs — **and the claim is bounded to the unit**: they prove no offset enters the `ValueDate` → epoch-millis conversion, which is what *"in UTC"* asks. That the field is *populated at all* is a separate obligation, and it is the `gap` on the row below | conformant |
 | `payloads-name-birth-data-requirement` | MUST | *(a timestamp clause — see the editorial note above)* `encode_metric` always sets the metric-level `timestamp` (`encode.rs:242`) | — **every timestamp assertion in the tree is payload-level**; nothing reads an encoded metric's `timestamp` field, and the mutation that drops it stays green | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
 | `payloads-name-cmd-requirement` | MAY | *(a timestamp clause)* governs metrics in NCMD/DCMD, which are Host-published | — | n/a — see the NCMD/DCMD note |
-| `payloads-nbirth-timestamp` | MUST | NBIRTH is stamped with `clock.wall()`, passed into `announce` at the CONNACK call site (`mqtt_driver.rs:964`) and at the rebirth one (`:1033`) — the publish instant, as the clause requires | `an_hour_of_outage_does_not_move_the_re_declared_reading_forward` (story 4.12) asserts the **value**: it births at a known instant an hour past the reading and requires the NBIRTH to carry that instant and the DBIRTH not to. **Falsified against #30's own words** — replacing the stamp with `42` goes red, `left: Some(42), right: Some(1784988392050)`, where before *"every test stayed green"* | conformant |
+| `payloads-nbirth-timestamp` | MUST | NBIRTH is stamped with `clock.wall()`, passed into `announce` at the CONNACK call site (`mqtt_driver.rs:1223`) and at the rebirth one (`:1292`) — the publish instant, as the clause requires | `chaos_no_replay_at_reconnect` bounds the stamp on the wire between two readings of the driver's own clock, one taken before the driver existed and one after the NBIRTH arrived. **Falsified against #30's own words, at the call site the issue named** — replacing both `clock.wall()` arguments with `UtcMillis(42)` goes red with `THE NODE BIRTH DOES NOT SPEAK THE PUBLICATION INSTANT … published somewhere in [1787132581436, 1787132581477] and carries 42`. Story 4.12's `an_hour_of_outage_does_not_move_the_re_declared_reading_forward` asserts the publisher's half — that `birth()` stamps the instant it is handed — and **that alone did not earn this row**: see the note under the tally | conformant |
 | `payloads-dbirth-timestamp` | MUST | **cold start conforms** (stamped `now`); **a rebirth re-declaring a known reading is stamped with that reading's `ValueDate`**, and since story 4.12 that choice is routed through `timestamp_source_for(Emission::DeviceBirthRedeclaring)` — a table, not two call sites | `a_rebirth_redeclares_what_is_known_instead_of_blanking_it`; and story 4.12's `an_hour_of_outage_does_not_move_the_re_declared_reading_forward` (unit, an hour of simulated outage) and `chaos_no_replay_at_reconnect` (a real transport break, an independent subscriber). Moving the table row changes what is **emitted**: `left: Some(1784988392050), right: Some(1784984792050)` | **deviation** ([#29](https://github.com/guycorbaz/smartme_mqtt/issues/29)) |
 | `payloads-ddata-timestamp` | MUST | **the payload timestamp is the reading's `ValueDate`, not the publish instant.** Enforced by `publish`'s SIGNATURE rather than a branch: it is handed no clock, so the publication instant is unrepresentable there (story 4.12) | `a_good_reading_carries_units_serial_and_the_source_timestamp`, `a_stale_verdict_never_publishes_a_fresh_looking_metric`, and story 4.12's two new tests — the second observing it on the wire, through a reconnect, from an independent subscriber | **deviation** ([#29](https://github.com/guycorbaz/smartme_mqtt/issues/29)) |
 | `payloads-ndata-timestamp` | MUST | NDATA is never emitted | — | n/a |
@@ -1617,10 +1617,18 @@ began emitting the message. See the note under that table for what did *not* mov
 
 **This tally was `38 · 4 · 8 · 59` until Story 4.12** (2026-08-18), which moved
 `payloads-nbirth-timestamp` from `gap (unproven)` to `conformant`: `38 + 1 = 39` and `8 − 1 = 7`.
-The row moved on a **value** assertion plus the mutation [#30] itself prescribed — replacing the
-stamp with a constant — which is the standard this matrix sets for leaving `unproven`. No verdict
-changed, and no other row moved: the two `timestamp` deviations gained evidence and stayed
+No verdict changed and no other row moved: the two `timestamp` deviations gained evidence and stayed
 deviations, because more proof of a deliberate deviation is not a step toward conformance.
+
+**The row was moved a day before its evidence existed, and the review of 4.12 (2026-08-19) found
+it.** [#30]'s prescription is *"replace `clock.wall()` with a small constant and every test stays
+green"*, and `clock.wall()` is read at the **call site**, `mqtt_driver.rs:1223` and `:1292`. Story
+4.12's unit test hands `birth()` the instant itself, so it proves the publisher stamps the argument
+it is given and says nothing about what the caller gives it. Applying [#30]'s mutation literally —
+both arguments replaced by `UtcMillis(42)` — left **the whole suite green**: 258 unit tests, and
+every chaos test that observes an NBIRTH. The row stayed `conformant` rather than being reverted
+because the missing assertion was written the same day, in `chaos_no_replay_at_reconnect`, and the
+mutation now goes red there. **The tally is unchanged; only the evidence behind it is real.**
 
 **This tally was `31 · 5 · 14 · 59` until Story 4.10** (2026-08-01), which moved
 `payloads-nbirth-bdseq-repeat` from `deviation` to `conformant`: `31 + 1 = 32` and `5 − 1 = 4`. That
@@ -1655,9 +1663,9 @@ deliberately outside the tally, because it is a scope decision rather than a `tc
   clauses, the `engUnit` property's `type`, the quality property's `type`, `-propertyvalue-type-req`,
   and the metric-level `timestamp`. *The will's retain flag left this list on 2026-08-11:
   `the_registered_will_carries_the_qos_and_retain_the_norm_mandates` now observes it. **The NBIRTH
-  payload timestamp left it on 2026-08-18**, story 4.12: this issue asked for a value check where
-  a presence check stood, and `an_hour_of_outage_does_not_move_the_re_declared_reading_forward`
-  now falsifies against the constant the issue itself named.* All
+  payload timestamp left it on 2026-08-18**, story 4.12 — although not on the evidence claimed at
+  the time; `chaos_no_replay_at_reconnect` carries the falsification since 2026-08-19, and the note
+  under the tally says what was wrong with the first one.* All
   [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30).
 - **1 × `gap (unimplemented)`** — we do not do it: edge-node-descriptor uniqueness
   ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)).

@@ -1,6 +1,6 @@
 # Story 4.13: `chaos_broker_recovery`
 
-Status: review
+Status: done
 
 > **ONE CLAUSE OF THIS STORY'S ACCEPTANCE CRITERION IS NOT ACHIEVABLE BY THE MECHANISM IT
 > NAMES, and that was established at drafting rather than discovered mid-implementation.**
@@ -278,6 +278,33 @@ behind them. They are reproducible but not verifiable after the fact.
 - `_bmad-output/implementation-artifacts/4-13-chaos-broker-recovery.md` — modified
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` — modified
 
+### Review Findings (2026-08-19)
+
+A second review, run against the code rather than the record, and by mutation rather than by
+reading. It confirms the story's own adversarial pass and adds one finding that pass did not
+reach: **the evidence [#86] was closed on covers one of the two call sites it names.**
+
+- [x] [Review][Patch] **[#86] was closed on a proof of half its subject, and the half is not
+      the one its title counts.** The driver has TWO `lost(...)` call sites, and this test
+      reaches one of them — the `Some(reason) => lost(reason, fault)` arm, through
+      `before-birth`. **Measured: deleting only `lost(DropReason::TransportQueueFull, None)`
+      (`mqtt_driver.rs:1408`) leaves this test green.** The closing claim (*"deleting both call
+      sites turns this test red"*) is true and was read as more than it says. The test's module
+      header and its AC3 assertion now name the residue, and [#95] carries it. **[#86] stays
+      closed**: its literal question — deleting *every* call leaves the suite green — is
+      answered.
+- [x] [Review][Patch] **A count in the assertion message was wrong** — *"deleting all four of
+      them"* about the `lost(...)` calls, of which there are two; the four belongs to [#86]'s
+      title, which counts reasons. This is the second miscount this story has had to repair
+      (the first was four measurement lines against five), and both were in prose about
+      mechanisms that are themselves correct.
+
+**Verified and left standing:** `FleetState::dropped()` omits zero cells, so AC3's
+`!moved.is_empty()` is a real assertion and not a shape that passes on an empty fleet; the AC2
+measurement and its two-sided window; the readiness probe's CONNACK wait; and the fixed-port
+helper's stated race. The mutations recorded by the story's own review were not re-run — the one
+they claimed to cover was, and it behaved as the record says.
+
 ### Change Log
 
 - 2026-08-18 — Story 4.13 implemented. `chaos_broker_recovery` proves the down→up transition from
@@ -286,3 +313,5 @@ behind them. They are reproducible but not verifiable after the fact.
   [#86]. AC2's measurement corrected the story's drafting premise — one NDEATH does reach a
   subscriber on an orderly stop, none on a SIGKILL. A harness flake (TCP readiness mistaken for
   broker readiness) was diagnosed and repaired.
+- 2026-08-19, review — two patches applied. [#95] opened for the `transport-queue-full` call
+  site, which this test does not reach; [#86] stays closed on its own words. Story closed `done`.
