@@ -30,7 +30,26 @@ use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-const PORT: u16 = 18090;
+/// A port nothing holds at this instant, asked of the kernel rather than chosen.
+///
+/// **This was `const PORT: u16 = 18090` until 2026-08-19** ([#98]). A constant was
+/// defensible while nothing else could take it — and then an orphaned bridge did,
+/// for an hour, and every run of this test was answered by it. The orphan is fixed
+/// by `Bridge`'s `Drop`; the constant is fixed here, because [ADR 0037] already
+/// established what a fixed port costs on a machine where *"d'autres
+/// développements sont en cours dans d'autres fenêtres"* is the normal state.
+///
+/// Nothing forced the constant: this test WRITES `ui_port` into the configuration
+/// it hands the binary, so it can name any port it likes. The window between the
+/// release here and the bridge's bind is the same one `common::an_unused_host_port`
+/// documents, and losing it is loud rather than silent.
+fn an_unused_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .expect("the kernel has a port")
+        .local_addr()
+        .expect("a bound listener has an address")
+        .port()
+}
 
 fn state_dir(name: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!("smartme_panic_{}_{name}", std::process::id()));
@@ -52,6 +71,51 @@ fn get(port: u16, path: &str) -> Option<String> {
     let mut raw = String::new();
     stream.read_to_string(&mut raw).ok()?;
     Some(raw)
+}
+
+/// A spawned bridge that dies with the test, **whatever path the test leaves by**.
+///
+/// **Added 2026-08-19, [#98], after this test refused a push and then kept
+/// refusing it.** `std::process::Child` does not kill on drop, and this test tore
+/// its bridge down on exactly two paths: the UI never answering, and the nominal
+/// end. Any assertion failing between them left the binary running — on a port that was a CONSTANT,
+/// which is a CONSTANT — and every later run was then answered by that orphan,
+/// whose state directory the new run had just deleted. `loop_age_ms: null`, a
+/// failure in 0.10 s where a real bridge takes 11 s, and a fresh orphan each time:
+/// one transient failure became a permanent inability to push.
+///
+/// `Drop` covers every exit path, panics included. It is the same shape as
+/// `ScratchDir` in the chaos tests, which has always removed its directory this
+/// way; the process needed the same treatment and did not have it.
+///
+/// FALSIFIED 2026-08-19, and BOTH HALVES were run, because "no orphan" is only
+/// evidence if the same experiment can produce one:
+/// - an assertion made to fail between the spawn and the teardown — test RED,
+///   `pgrep -f target/debug/smartme-bridge` finds NOTHING;
+/// - the same, with this `Drop` body emptied — test RED, and `pgrep` finds
+///   `1932524 /home/.../target/debug/smartme-bridge`, still holding 18090.
+struct Bridge(Option<Child>);
+
+impl Bridge {
+    fn child(&mut self) -> &mut Child {
+        self.0.as_mut().expect("the bridge has not been taken")
+    }
+
+    /// Hands the child over for `wait_with_output`, which consumes it. After
+    /// this the guard has nothing left to kill, which is correct: the caller now
+    /// owns the teardown and is about to do it.
+    fn take(mut self) -> Child {
+        self.0.take().expect("the bridge has not been taken")
+    }
+}
+
+impl Drop for Bridge {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 fn wait_for_ui(port: u16, child: &mut Child) -> Option<String> {
@@ -81,7 +145,7 @@ fn loop_age(health: &str) -> Option<i64> {
     digits.parse().ok()
 }
 
-fn write_config(dir: &std::path::Path) {
+fn write_config(dir: &std::path::Path, port: u16) {
     std::fs::write(
         dir.join("config.toml"),
         format!(
@@ -98,7 +162,7 @@ fn write_config(dir: &std::path::Path) {
              publish_period_secs = 5\n\
              api_base = \"https://192.0.2.1\"\n\
              mapping_confirmed = true\n\
-             ui_port = {PORT}\n\
+             ui_port = {port}\n\
              \n\
              [[meters]]\n\
              meter_id = \"garage\"\n\
@@ -134,36 +198,38 @@ fn write_config(dir: &std::path::Path) {
 #[test]
 fn a_panicking_handler_costs_the_page_and_nothing_else() {
     let dir = state_dir("probe");
-    write_config(&dir);
+    let port = an_unused_port();
+    write_config(&dir, port);
 
-    let mut bridge = Command::new(env!("CARGO_BIN_EXE_smartme-bridge"))
-        .env_clear()
-        .env("PATH", std::env::var("PATH").unwrap_or_default())
-        .env("SMARTME_STATE_DIR", &dir)
-        // The UI port for a run with no `ui_port` in its file ([ADR 0037]).
-        // NOT 8080: that is a deployment contract, and it is shared with other
-        // projects on this machine. Nothing here tests the UI; the variable
-        // exists so no test binary reaches for a port it does not own.
-        .env("SMARTME_UI_PORT", "18104")
-        .env("SMARTME_CLIENT_ID", "x")
-        .env("SMARTME_CLIENT_SECRET", "x")
-        // The subscriber's fmt layer writes to stdout; the panic hook writes to
-        // stderr. Both are captured, because the assertion below is precisely
-        // that the failure reached the FORMER.
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("the bridge binary runs");
+    let mut bridge = Bridge(Some(
+        Command::new(env!("CARGO_BIN_EXE_smartme-bridge"))
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap_or_default())
+            .env("SMARTME_STATE_DIR", &dir)
+            // The UI port for a run with no `ui_port` in its file ([ADR 0037]).
+            // NOT 8080: that is a deployment contract, and it is shared with other
+            // projects on this machine. Nothing here tests the UI; the variable
+            // exists so no test binary reaches for a port it does not own.
+            .env("SMARTME_UI_PORT", an_unused_port().to_string())
+            .env("SMARTME_CLIENT_ID", "x")
+            .env("SMARTME_CLIENT_SECRET", "x")
+            // The subscriber's fmt layer writes to stdout; the panic hook writes to
+            // stderr. Both are captured, because the assertion below is precisely
+            // that the failure reached the FORMER.
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the bridge binary runs"),
+    ));
 
-    let before = wait_for_ui(PORT, &mut bridge);
+    let before = wait_for_ui(port, bridge.child());
 
     // THE PREMISE, and without it every assertion after the panic is vacuous.
+    // The explicit `kill` that used to stand here is gone: `Bridge`'s `Drop` does
+    // it on this path and on every other one, which is the whole of [#98].
     let before = match before {
         Some(health) => health,
-        None => {
-            let _ = bridge.kill();
-            panic!("the UI never answered, so nothing below could mean anything");
-        }
+        None => panic!("the UI never answered, so nothing below could mean anything"),
     };
     assert!(
         loop_age(&before).is_some(),
@@ -172,7 +238,7 @@ fn a_panicking_handler_costs_the_page_and_nothing_else() {
     );
 
     // The panic itself.
-    let answer = get(PORT, "/debug/panic");
+    let answer = get(port, "/debug/panic");
     assert!(
         answer
             .as_deref()
@@ -201,7 +267,7 @@ fn a_panicking_handler_costs_the_page_and_nothing_else() {
     let mut previous = loop_age(&before);
     while Instant::now() < deadline && !moved {
         std::thread::sleep(Duration::from_millis(250));
-        if let Some(health) = get(PORT, "/healthz") {
+        if let Some(health) = get(port, "/healthz") {
             if let (Some(then), Some(now)) = (previous, loop_age(&health)) {
                 moved = now < then;
             }
@@ -210,9 +276,10 @@ fn a_panicking_handler_costs_the_page_and_nothing_else() {
         }
     }
 
-    let alive = bridge.try_wait().expect("wait").is_none();
-    let _ = bridge.kill();
-    let output = bridge.wait_with_output().expect("wait");
+    let alive = bridge.child().try_wait().expect("wait").is_none();
+    let mut child = bridge.take();
+    let _ = child.kill();
+    let output = child.wait_with_output().expect("wait");
     let said = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
