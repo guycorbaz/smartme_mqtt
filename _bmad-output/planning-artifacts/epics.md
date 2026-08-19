@@ -100,7 +100,7 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 
 **Performance & Footprint**
 - NFR9: Idle CPU/RAM low enough to co-exist on a Raspberry Pi / NAS (RSS_max target < ~100 MB).
-- NFR10: A new reading reaches MQTT within one poll cycle; read→broker-ACK latency p95 ≤ 3 s, p99 ≤ 5 s over a 24 h window under nominal load.
+- NFR10: A new reading reaches MQTT within one poll cycle; **read→accepted-for-transmission** latency p95 ≤ 3 s, p99 ≤ 5 s over a 24 h window under nominal load. *(Amended 2026-08-19 by [ADR 0010]'s addendum, [#99]: there is no broker ACK at the QoS 0 the norm mandates for data — `tck-id-topics-ndata-mqtt`, `-ddata-mqtt` — so the original wording was unmeasurable in the way FR20 was unimplementable. Thresholds unchanged, which makes the requirement easier: acceptance happens strictly earlier than any acknowledgement would. Story 4.16 unblocks on this.)*
 - NFR11: Time-to-first-value < 15 min from a clean machine, with identity binding proven within it.
 
 **Security**
@@ -825,7 +825,7 @@ Stories 4.1–4.3 are the audit. **They come first on purpose and the rest of th
 *Two drafting notes, applying the rule adopted at the Epic 1 retrospective (an acceptance criterion may not defer its decision to an artifact that does not yet exist):*
 
 - *Primary Host / STATE is split into a **measurement** story and a **decision** story. Nothing here says "decide later, verified by the audit".*
-- ***NFR10 is not written into an AC below.** It specifies "read→broker-ACK latency p95 ≤ 3 s", and ADR 0010 established that no broker acknowledgement exists at the QoS 0 Sparkplug mandates — the same defect FR20 had. It needs the same amendment treatment before a story can discharge it. Tracked separately; Story 4.16 is blocked on it.*
+- ***NFR10 was not written into an AC below, and is now amendable.** It specified "read→broker-ACK latency p95 ≤ 3 s", and ADR 0010 established that no broker acknowledgement exists at the QoS 0 Sparkplug mandates for data — the same defect FR20 had. **Amended 2026-08-19** to read→accepted-for-transmission ([ADR 0010]'s addendum, [#99]); Story 4.16 is unblocked and unwritten.*
 
 ### Story 4.1: Conformance matrix — framework, namespace and topic clauses
 
@@ -1220,9 +1220,9 @@ As the operator,
 I want a stated latency budget from reading to publication,
 So that "a new reading reaches MQTT within one poll cycle" is measured rather than assumed.
 
-**Blocked.** NFR10 specifies "read→**broker-ACK** latency p95 ≤ 3 s, p99 ≤ 5 s", and ADR 0010 established that MQTT defines no acknowledgement at the QoS 0 Sparkplug mandates — the same defect FR20 carried. The measurable analogue is read→accepted-for-transmission, which is a weaker claim and must be agreed rather than substituted quietly.
+**UNBLOCKED 2026-08-19.** NFR10 specified "read→**broker-ACK** latency p95 ≤ 3 s, p99 ≤ 5 s", and ADR 0010 established that MQTT defines no acknowledgement at the QoS 0 Sparkplug mandates for data — the same defect FR20 carried. The measurable analogue, read→accepted-for-transmission, **is a weaker claim and has been agreed rather than substituted quietly**: [ADR 0010]'s addendum states it, [#99] records it, and the PRD and this file carry it.
 
-This story stays unwritten until NFR10 is amended. Recording it as blocked, rather than writing an acceptance criterion around the problem, is the rule adopted at the Epic 1 retrospective.
+The story stays **unwritten** — this note unblocks it, it does not draft it. Two things its author should decide at drafting, not defer: where "accepted for transmission" is observed (`try_publish` returning `Ok` is entry into `rumqttc`'s queue, not exit from the socket — [#85]), and whether the unchanged thresholds should be tightened once measured, since acceptance happens strictly earlier than an acknowledgement would.
 
 ### Story 4.17: Fix the Will QoS — the specification says 1, we send 0
 
@@ -1299,3 +1299,5 @@ So that "chapter 4 is done" is a countable claim rather than a remembered one.
 [ADR 0036]: ../../docs/adr/0036-ar7-names-the-property-not-the-exporter.md
 [ADR 0038]: ../../docs/adr/0038-the-leak-gate-measures-per-iteration-growth-not-a-24-hour-slope.md
 [#97]: https://github.com/guycorbaz/smartme_mqtt/issues/97
+[ADR 0010]: ../../docs/adr/0010-fr20-delivery-claim-at-qos0.md
+[#99]: https://github.com/guycorbaz/smartme_mqtt/issues/99

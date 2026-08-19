@@ -1449,7 +1449,7 @@ development_status:
   # four runtime oracles do not exist, so "never lies" rests on the freshness state
   # machine alone, and ~15 items in deferred-work.md are parked on epics that have
   # themselves been deferred.
-  epic-4: in-progress  # REOPENED 2026-08-18; 4.1-4.13 + 4.17 done as of 2026-08-19; 4.14 and 4.15 in review; 4.18, 4.19 backlog; 4.16 BLOCKED on NFR10, not deferred
+  epic-4: in-progress  # REOPENED 2026-08-18; 4.1-4.13 + 4.17 done as of 2026-08-19; 4.14, 4.15 and 4.18 in review; 4.19 backlog; 4.16 unblocked 2026-08-19 and unwritten
   4-1-conformance-matrix-namespace-and-topics: done
   # 4.2 was worked before it had a story file: the chapter-6 quality rows landed
   # with the quality-code fix (d28bb02), which is why it read 'in-progress' with
@@ -1936,7 +1936,14 @@ development_status:
   # 5496 — `ulimit -n` did not cap the leak as assumed). Sixth and seventh in five
   # stories. Both injections are env-reachable so a reader can re-run them.
   4-15-ac-leak-01-resource-stability: review  # implemented 2026-08-19; ADR 0038 [#97], no production code changed
-  4-16-latency-budget: backlog
+  # UNBLOCKED 2026-08-19 by story 4.18's amendment of NFR10 (ADR 0010 addendum,
+  # [#99]) — and left UNWRITTEN, which is the point: the note unblocks it, it does
+  # not draft it. Two decisions belong to its drafting and must not be deferred
+  # again: WHERE acceptance is observed (`try_publish` answers Ok on entering
+  # rumqttc's queue, not on leaving the socket — [#85]), and whether the unchanged
+  # thresholds should be tightened once measured, since acceptance happens strictly
+  # earlier than an acknowledgement would.
+  4-16-latency-budget: backlog  # no longer BLOCKED
   # 2026-08-10, IMPLEMENTED out of order — ADR 0030's one named exception, taken
   # because the wire is only cheap to break while nothing is historised and a live
   # Ignition began reading this bridge that morning.
@@ -1977,7 +1984,25 @@ development_status:
   # could observe the will actually registered — the totals move 89 -> 91 conformant,
   # 35 -> 33 gaps.
   4-17-fix-the-will-qos: done
-  4-18-correct-adr-0010-wording: backlog
+  # 2026-08-19, IMPLEMENTED. No code changed: this repairs a document of record.
+  # ADR 0010's CONCLUSION STANDS — tck-id-topics-ndata-mqtt and -ddata-mqtt both
+  # mandate QoS 0, so no broker ACK exists for data and FR20 was genuinely
+  # unimplementable. ITS PREMISE WAS WRONG TWICE: "every edge-node message" is
+  # false about NDEATH (no tck-id-topics-ndeath-mqtt exists at all), and "only host
+  # STATE messages use QoS 1" is false about the WILL, which two clauses in two
+  # chapters require to be QoS 1 — and the will IS the NDEATH registered at
+  # CONNECT. So the sentence was wrong precisely about the message whose QoS this
+  # project then got wrong: [#26] stood from 2026-07-28 to 2026-08-10, invisible
+  # because a document of record said 0 was required everywhere.
+  # NFR10 AMENDED in the same pass to read->accepted-for-transmission, which
+  # UNBLOCKS 4.16. Thresholds unchanged, which makes the requirement EASIER, and
+  # that is said in the ADR, the PRD, the epic and [#99] rather than left to be
+  # noticed — the epic's own rule was that it must be agreed, not substituted
+  # quietly.
+  # ONE COPY of the false premise found elsewhere (1-11-12-13-async-shell.md) and
+  # annotated in place. mqtt_driver.rs was already repaired by 4.17; CLAUDE.md
+  # already carries the lesson. Both checked, not assumed.
+  4-18-correct-adr-0010-wording: review  # implemented 2026-08-19; [#99], 4.16 unblocked
   # 2026-07-28: added out of the Story 4.2 code review. Chapter 4 records 41 of its
   # 70 clauses; Story 4.1 audited the topic grammar and left the chapter's own
   # payload-content requirements. Separate story rather than re-opening 4.1, whose

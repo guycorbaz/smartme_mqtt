@@ -350,7 +350,8 @@ Must-have capabilities (without any one, the product fails its "never lies" purp
 
 ### Performance & Footprint
 - **NFR9:** Idle CPU/RAM low enough to co-exist on a Raspberry Pi / NAS (RSS_max target < ~100 MB).
-- **NFR10:** A new reading reaches MQTT within one poll cycle; read→broker-ACK latency **p95 ≤ 3 s, p99 ≤ 5 s** over a 24 h window under nominal load (no throughput requirement — 4 meters).
+- **NFR10:** A new reading reaches MQTT within one poll cycle; **read→accepted-for-transmission** latency **p95 ≤ 3 s, p99 ≤ 5 s** over a 24 h window under nominal load (no throughput requirement — 4 meters).
+  - *Amended 2026-08-19 by [ADR 0010]'s addendum ([#99]).* It read "read→broker-ACK". The norm mandates QoS 0 for data (`tck-id-topics-ndata-mqtt`, `tck-id-topics-ddata-mqtt`) and MQTT defines no acknowledgement at QoS 0, so the original was unmeasurable exactly as FR20 was unimplementable. **The thresholds are unchanged and that makes the requirement easier** — acceptance happens strictly earlier than an acknowledgement would. They stand because they were chosen as an operator-facing budget, not as a protocol measurement; tightening them is Story 4.16's call, on its measurements.
 - **NFR11:** Time-to-first-value < 15 min from a clean machine, with identity binding proven within it.
 
 ### Security
@@ -390,3 +391,5 @@ Must-have capabilities (without any one, the product fails its "never lies" purp
 
 [ADR 0038]: ../../docs/adr/0038-the-leak-gate-measures-per-iteration-growth-not-a-24-hour-slope.md
 [#97]: https://github.com/guycorbaz/smartme_mqtt/issues/97
+[ADR 0010]: ../../docs/adr/0010-fr20-delivery-claim-at-qos0.md
+[#99]: https://github.com/guycorbaz/smartme_mqtt/issues/99

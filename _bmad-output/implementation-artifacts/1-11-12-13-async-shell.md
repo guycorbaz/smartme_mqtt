@@ -18,6 +18,14 @@ amendment, one by the test that was missing:
   delivery — reported published only once accepted for transmission, with a per-device traced
   drop rather than silence", which is exactly what the driver implements. PRD, epics and
   architecture amended.
+  - **CORRECTION, 2026-08-19 (story 4.18, [#99]), left here rather than tidied away.** The
+    sentence *"Sparkplug mandates QoS 0 for every edge-node message"* is **false**, and it is
+    ADR 0010's overstatement repeated. The norm mandates QoS 0 for NBIRTH, DBIRTH, NDATA, DDATA
+    and DDEATH; it states **no** QoS for NDEATH in chapter 4, and the Will — which IS the NDEATH
+    registered at CONNECT — **MUST be QoS 1**. The resolution above still stands, because FR20
+    was about DATA and data is where the claim happened to be true. The overstatement is what
+    kept [#26] invisible for an epic, which is why it is corrected wherever it was copied rather
+    than only at its source.
 - **`chaos_sigterm_no_lie` verification (1.13) — NOW MET (2026-07-26, issue #15).** The test
   exists and the death path is verified end to end. See below for what it proves and what it
   still does not.

@@ -1,6 +1,6 @@
 # ADR 0010 — FR20 amended: no broker ACK exists at Sparkplug's mandatory QoS 0
 
-- **Status:** Accepted
+- **Status:** Accepted; premise corrected by the addendum of 2026-08-19 ([#99])
 - **Date:** 2026-07-26
 - **Related:** Story 1.12 (mqtt_driver), issue #19, FR20, FR22 (broker-outage policy)
 - **Amends:** FR20's original wording ("can confirm a value is actually acknowledged by the
@@ -67,3 +67,65 @@ surfaced when an adversarial code review checked the AC against the protocol rat
 the code. Worth remembering the class: a requirement can be perfectly clear, perfectly reviewed,
 and still impossible — and the thing that catches it is asking "could this be true?" rather than
 "does the code do it?".
+
+## Addendum, 2026-08-19 — the conclusion stands, the premise was overstated
+
+**Story 4.18, [#99]. Nothing above is withdrawn**: FR20's amendment holds, and the reason it
+holds is now cited clause by clause instead of asserted in a blanket sentence.
+
+### What was wrong
+
+The Context above says:
+
+> The Sparkplug B specification requires **QoS 0** for every edge-node message
+> (NBIRTH/NDATA/NDEATH/DBIRTH/DDATA/DDEATH). Only host STATE messages use QoS 1.
+
+**Both sentences are false as written, and the second is false about the very message that made
+the first one dangerous.** Read against the pinned copy, clause by clause:
+
+| Message | What the norm actually says | Where |
+|---|---|---|
+| NBIRTH | MUST be QoS 0, retain false | `tck-id-topics-nbirth-mqtt`, `Sparkplug_4:195` |
+| DBIRTH | MUST be QoS 0, retain false | `tck-id-topics-dbirth-mqtt`, `Sparkplug_4:384` |
+| NDATA | MUST be QoS 0, retain false | `tck-id-topics-ndata-mqtt`, `Sparkplug_4:273` |
+| DDATA | MUST be QoS 0, retain false | `tck-id-topics-ddata-mqtt`, `Sparkplug_4:444` |
+| DDEATH | MUST be QoS 0, retain false | `tck-id-topics-ddeath-mqtt`, `Sparkplug_4:481` |
+| **NDEATH** | **no `tck-id-topics-ndeath-mqtt` exists at all** — chapter 4 states no QoS for it | — |
+| **The Will (which IS the NDEATH registered at CONNECT)** | **MUST be QoS 1** | `tck-id-message-flow-edge-node-birth-publish-will-message-qos` (`Sparkplug_5:183`) and `tck-id-payloads-ndeath-will-message-qos` (`Sparkplug_6:1513`) |
+
+So "every edge-node message" is wrong on one of the six it names, and "only host STATE messages
+use QoS 1" is wrong about the will — two clauses in two chapters say the opposite.
+
+### Why the conclusion survives it
+
+FR20 was about **data**, and data is exactly where the blanket claim happened to be true.
+`topics-ndata-mqtt` and `topics-ddata-mqtt` both mandate QoS 0, MQTT defines no acknowledgement
+at QoS 0, and therefore no broker ACK exists for any reading this bridge publishes. The decision
+above was right for the right reason; it was merely stated with a reach it did not have.
+
+### What the overstatement cost
+
+**An epic.** The bridge registered its will at QoS 0 — a MUST violation — and the sentence in
+this ADR is why nobody looked: a document of record said the norm required 0 everywhere, so the
+will's 0 read as compliance. [#26] was open from 2026-07-28 and fixed only on 2026-08-10 by story
+4.17, whose own test had pinned the violation in place by asserting it.
+
+That is the class this project keeps meeting, and `CLAUDE.md`'s opening rule exists for it: this
+ADR was written from a summary of the specification rather than from the specification, and a
+summary is where a "MUST be 1" becomes a "MUST be 0" without anyone lying.
+
+### NFR10, amended in the same pass
+
+NFR10 read *"read→**broker-ACK** latency p95 ≤ 3 s, p99 ≤ 5 s"*. There is no broker ACK for data,
+for the reason confirmed above, so the requirement was unmeasurable in the same way FR20 was
+unimplementable. It becomes:
+
+> A new reading reaches MQTT within one poll cycle; **read→accepted-for-transmission** latency
+> p95 ≤ 3 s, p99 ≤ 5 s over a 24 h window under nominal load.
+
+**The thresholds are unchanged, deliberately, and that makes the requirement easier — say so.**
+"Accepted for transmission" happens strictly earlier than any acknowledgement would, so the same
+numbers now bound a shorter interval. They are kept because they were chosen as an operator-facing
+budget — how stale a value on a screen may be — and not as a protocol measurement; **story 4.16
+now has something it can measure**, and if the measured figures sit far under the budget, that is
+4.16's evidence for tightening it, not this addendum's to guess at.
