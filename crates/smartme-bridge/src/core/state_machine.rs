@@ -144,10 +144,25 @@ impl Policy {
     /// after a restart honestly deserves: on one reading, nobody can tell.
     ///
     /// `Failed` is ABSORBING: a fatal error (auth rejected, config wrong) means
-    /// retrying with the same config would lie, and config is restart-only — so
-    /// only a process restart (fresh `State::initial()`) can leave `Failed`, per
-    /// ADR 0009's "stop + surface". A later Timeout must not launder `Bad` into
-    /// `Stale`, and a later Ok proves nothing about the broken config.
+    /// retrying with the same configuration would lie, so only a process restart
+    /// (fresh `State::initial()`) can leave `Failed`, per ADR 0009's "stop +
+    /// surface". A later Timeout must not launder `Bad` into `Stale`, and a later
+    /// Ok proves nothing about the broken configuration.
+    ///
+    /// **The reason was "config is restart-only", and that became half-false on
+    /// 2026-08-10** when story 5.2 made the file reload without a restart ([#58]).
+    /// The absorption survives, and the narrowed reason is what makes it sound:
+    /// **every input that could REPAIR a fatal fault costs `ProcessRestart`**
+    /// anyway. The credential lives in the environment (ADR 0023) and
+    /// `reconfigure::classify` notes it `ProcessRestart`; so does `api_base`; and a
+    /// meter's identity arrives as removed-plus-added, which calls `restart(…)`.
+    /// What story 5.2 made hot — the publish period, the log directory — cannot
+    /// clear a rejected credential or a wrong device id, so nothing hot can leave a
+    /// meter in `Failed` wrongly.
+    ///
+    /// `the_inputs_that_could_clear_a_fatal_fault_all_cost_a_restart` in
+    /// `app::reconfigure` pins that, so this justification stops being prose the
+    /// day someone makes the credential hot.
     ///
     /// Otherwise `prev` never softens a verdict: a previously-Fresh meter with a
     /// doubtful tick goes Stale immediately (when in doubt, publish STALE).
@@ -660,7 +675,10 @@ mod tests {
     #[test]
     fn failed_is_absorbing_until_restart() {
         // A perfect reading after a fatal error proves nothing about the broken
-        // config: Failed latches (ADR 0009 "stop + surface"; config restart-only).
+        // config: Failed latches (ADR 0009 "stop + surface"). The narrowed reason
+        // is in `step_quality`'s doc since [#58]: what could repair a fatal fault
+        // costs a ProcessRestart anyway, so story 5.2's hot reload does not weaken
+        // the absorption.
         let good_tick = Ok(reading(Quality::Good, BASE, Some(BASE + 500)));
         assert_eq!(
             POLICY.step_quality(State::Failed, &good_tick, SANE_NOW),

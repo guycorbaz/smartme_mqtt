@@ -464,6 +464,66 @@ mod tests {
         vec![MeterId::new("garage")]
     }
 
+    /// **[#58] — the narrowed reason `state_machine` gives for `Failed` being
+    /// absorbing, made checkable.**
+    ///
+    /// `State::Failed` is absorbing, and the justification used to be *"config is
+    /// restart-only"*. Story 5.2 made the file reload without a restart on
+    /// 2026-08-10, so that sentence became half-false while the behaviour stayed
+    /// right. The reason that survives is this one: **every input that could
+    /// REPAIR a fatal fault costs a `ProcessRestart` anyway**, so nothing story 5.2
+    /// made hot can leave a meter wrongly latched.
+    ///
+    /// Fatal faults and what would repair them: a rejected credential (the
+    /// credential), an unreachable or wrong account endpoint (`api_base`), a device
+    /// the account refuses or a serial that is not the one reported (the meter's
+    /// identity). This walks all three.
+    ///
+    /// **The day someone makes the credential hot, this goes red** — and the
+    /// absorption in `state_machine` has to be revisited with it. That is the whole
+    /// point of writing it here rather than trusting the doc comment.
+    ///
+    /// FALSIFIED 2026-08-19 — mutation RUN, output copied: noting the credential
+    /// `Cost::Hot` goes red with `a rejected credential is repaired by changing the
+    /// credential … left: Some(Hot), right: Some(ProcessRestart)`.
+    #[test]
+    fn the_inputs_that_could_clear_a_fatal_fault_all_cost_a_restart() {
+        // 1. The credential — `Cause::CredentialRejected`'s repair.
+        let mut new = base();
+        new.credentials = smart_me_client::Credentials::ClientCredentials {
+            client_id: "id".to_string(),
+            client_secret: "corrected".to_string(),
+        };
+        assert_eq!(
+            classify(&base(), &new, &served()).cost(),
+            Some(Cost::ProcessRestart),
+            "a rejected credential is repaired by changing the credential, and a \
+             meter latched in `Failed` may only leave it on a restart. If this ever \
+             becomes hot, `Policy::step_quality`'s absorption is no longer sound"
+        );
+
+        // 2. The account endpoint — where `ConfigurationContradicted` and a wrong
+        //    base URL are repaired.
+        let mut new = base();
+        new.api_base = "https://api.example.test".to_string();
+        assert_eq!(
+            classify(&base(), &new, &served()).cost(),
+            Some(Cost::ProcessRestart),
+            "the account endpoint is repaired by changing `api_base`"
+        );
+
+        // 3. A meter's identity — `IdentityMismatch` and `DeviceNotInAccount`.
+        //    A corrected serial arrives as removed-plus-added.
+        let mut new = base();
+        new.meters = vec![meter("garage", "9202686", true)];
+        assert_eq!(
+            classify(&base(), &new, &served()).cost(),
+            Some(Cost::ProcessRestart),
+            "a corrected serial or device id is a meter identity change, and it \
+             reaches the runtime as removed-plus-added — which restarts"
+        );
+    }
+
     fn base() -> BridgeConfig {
         BridgeConfig {
             api_base: "https://api.smart-me.com".to_string(),
