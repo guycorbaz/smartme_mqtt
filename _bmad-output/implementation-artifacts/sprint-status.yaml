@@ -1449,7 +1449,7 @@ development_status:
   # four runtime oracles do not exist, so "never lies" rests on the freshness state
   # machine alone, and ~15 items in deferred-work.md are parked on epics that have
   # themselves been deferred.
-  epic-4: in-progress  # REOPENED 2026-08-18; 4.1-4.13 + 4.17 done as of 2026-08-19; 4.14, 4.15 and 4.18 in review; 4.19 backlog; 4.16 unblocked 2026-08-19 and unwritten
+  epic-4: in-progress  # REOPENED 2026-08-18; 4.1-4.13 + 4.17 done; 4.14, 4.15, 4.18 and 4.19 in review as of 2026-08-19; 4.16 unblocked and unwritten; epic-4-retrospective still required
   4-1-conformance-matrix-namespace-and-topics: done
   # 4.2 was worked before it had a story file: the chapter-6 quality rows landed
   # with the quality-code fix (d28bb02), which is why it read 'in-progress' with
@@ -2008,7 +2008,25 @@ development_status:
   # payload-content requirements. Separate story rather than re-opening 4.1, whose
   # work is correct as far as it goes and already pushed. Independent recount says
   # 29 missing, not the 27 the review reported.
-  4-19-finish-chapter-4-payload-clauses: backlog
+  # 2026-08-19, IMPLEMENTED. No code changed. Chapter 4 closes: 29 clauses ruled
+  # on (14 conformant, 4 deviations, 11 n/a), tally 17.0.3.21 over 41 rows ->
+  # 31.4.3.32 over 70 clauses, and the WHOLE specification now closes at
+  # 106.10.32.155 = 303 with no "of" left in the total.
+  # THE FINDING IS A MUST NOBODY HAD READ. `topics-nbirth-bdseq-increment` states
+  # TWO obligations — start at zero AND increment per CONNECT — where chapter 6
+  # states only the second. 4.10 delivered the increment; the zero start is NOT
+  # satisfied: a brand-new bridge publishes bdSeq = 1, which story 4.13's own
+  # mutation had already printed off the wire (`born 1, reborn 1`). [#100].
+  # TWO INSTRUCTIONS POINTED AT WRONG ANSWERS: the epic said "deviation owned by
+  # 4.10" (written before 4.10 fixed it) and the matrix said "cite 4.10 rather
+  # than open a gap" (right for the increment, silent about the other half).
+  # Reading chapter 4's own sentence is what produced the third, correct answer.
+  # AND THE GATE HAD A HOLE I MISSED THIS MORNING: the whole-specification table
+  # still read `6 — Payloads | 38 | 4 | 8` while chapter 6's tally read 39.4.7.59
+  # since story 4.12 — internally consistent because the Total was built from the
+  # stale row. The checker now pairs each chapter tally with its row, falsified
+  # against the real defect.
+  4-19-finish-chapter-4-payload-clauses: review  # implemented 2026-08-19; chapter 4 done, [#100] opened
   # NOT owed yet: Epic 4 is at 10/19 stories, plus 4.17 in review. `required`
   # means it must run BEFORE the epic closes, not that it is late.
   epic-4-retrospective: required

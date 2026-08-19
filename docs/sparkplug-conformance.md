@@ -65,7 +65,7 @@ witness say so.
 | 1 — Introduction, Sparkplug identifiers | 4.3 | **done** — all 8 `tck-id`s accounted for |
 | 2 — Principles | 4.3 | **done** — all 4 `tck-id`s accounted for |
 | 3 — Architecture components | 4.3 | **done** — the chapter's single `tck-id` accounted for |
-| 4 — Topics & namespace | 4.1, completed by **4.19** | **audited, not complete** — 41 of the chapter's 70 `tck-id`s carry a row; the other 29 are Story 4.19. See the chapter-4 tally |
+| 4 — Topics & namespace | 4.1, completed by 4.19 | **done** — all 70 `tck-id`s carry a verdict since 2026-08-19. See the chapter-4 tally |
 | 5 — Operational behaviour, session lifecycle, host interaction | 4.3 | **done** — all 99 `tck-id`s accounted for |
 | 6 — Payloads, metrics, datatypes | 4.2 | **done** — all 109 `tck-id-payloads-*` clauses accounted for |
 | 10 — Conformance profiles | 4.3 | **done** — all 12 `tck-id`s accounted for |
@@ -291,6 +291,22 @@ constraint; ideally the bridge refuses to start on a detectable collision. Issue
 | `topics-ndata-mqtt` | MUST | as above | — | n/a |
 | `topics-ncmd-topic` | MUST | `spBv1.0/{group}/NCMD/{node}` — built by `node_topic(MessageType::NCmd)` from the same validated grammar as every published topic, and used as the subscription filter (Story 4.6, `mqtt_driver.rs:882`) | `the_ncmd_topic_follows_the_namespace_grammar` pins the full literal; `chaos_ncmd_subscription` reads the filter back out of the **broker's** log, so the form is witnessed on the wire and not only at the call site | conformant — **moved from `gap (unimplemented)` by Story 4.6.** The clause is about the topic *form*, and the form now exists because something subscribes to it |
 | `topics-ncmd-mqtt` | MUST | a **publication** clause — see the note below | — | n/a |
+| `topics-nbirth-metrics` | MUST | the NBIRTH carries three metrics — `bdSeq`, `Contract/Version`, `Node Control/Rebirth` — each built through `Metric::new`, which takes a name and a typed value, so a metric without all three is unrepresentable | `the_node_birth_publishes_the_contract_version` asserts name and value on the decoded payload; `every_node_birth_declares_the_rebirth_command` asserts `datatype == Some(11)` and the value, both mutation-tested | conformant |
+| `topics-nbirth-metric-reqs` | MUST | *"every metric the Edge Node will ever report on"* — and the set is CLOSED, not merely declared: **the bridge emits no NDATA at all**, so no node-level metric can appear after the birth. Chapter 4 asks for a superset; ours is an equality | `operational-behavior-data-publish-nbirth`'s cell records that `MessageType::NData` occurs only inside a test loop; `the_node_birth_publishes_the_contract_version` and `every_node_birth_declares_the_rebirth_command` pin the two declared metrics by name | conformant |
+| `topics-nbirth-seq-num` | MUST | `seq = 0`, and the type makes it structural: `birth()` resets the counter rather than assigning a number | `encode.rs::birth_carries_seq_zero_and_the_session_number`, `prop_seq_bdseq.rs::prop_rebirth_always_restarts_numbering_at_zero`, and `chaos_ncmd_rebirth` reads `seq = 0` off a real broker | conformant |
+| `topics-nbirth-timestamp` | MUST | *"a timestamp denoting the date and time the message was sent"* — `clock.wall()` at the CONNACK call site (`mqtt_driver.rs:1223`) and the rebirth one (`:1292`) | `chaos_no_replay_at_reconnect` bounds the stamp on the wire between two readings of the driver's own clock. **Falsified against [#30]'s own prescription** — both arguments replaced by `UtcMillis(42)` goes red with `published somewhere in [1787132581436, 1787132581477] and carries 42`; before that assertion existed (2026-08-19) the same mutation left the whole suite green | conformant |
+| `topics-nbirth-templates` | MUST | conditional — *"if Template instances will be published"*. None are: `MetricValue` has no template variant and `encode_metric` cannot emit one | — the condition never holds, so there is nothing to prove | n/a — consistent with the scope-limit block, which rules the same way on chapter 6's template clauses |
+| `topics-nbirth-bdseq-included` | MUST | `build_birth` prepends the `bdSeq` metric before anything else (`encode.rs:181`) | `birth_carries_seq_zero_and_the_session_number`, `prop_will_birth_and_death_agree_on_bdseq_for_every_session_number` | conformant |
+| `topics-nbirth-bdseq-increment` | MUST | **Two obligations in one clause, and only one of them holds.** *Increment by one on every new MQTT CONNECT*: delivered by Story 4.10 — the driver owns its reconnect loop and registers a fresh will per CONNECT. *Start at zero*: **it does not.** `load_bd_seq` returns `BdSeq::before_first()` = 0 on a first run, and `SparkplugPublisher::new` advances past it (`NodeSession::start` → `next_session()`), so a brand-new bridge publishes **1** as its first `bdSeq` | `chaos_bd_seq_advances_on_every_connect` proves the increment. The zero-start is refuted by measurement rather than reading: story 4.13's `new_session()` mutation printed `born 1, reborn 1` — the first session number observed on the wire is 1 | **deviation** ([#100](https://github.com/guycorbaz/smartme_mqtt/issues/100)) — **the increment half cites Story 4.10 rather than opening a fresh gap**, as the chapter-5 note asks; the zero-start half is new, and chapter 6 states no equivalent, which is why reading chapter 4's own wording was the point |
+| `topics-nbirth-bdseq-matching` | MUST | the NBIRTH's `bdSeq` and the registered will's are the same value — both read one `publisher.bd_seq()` | `the_will_matches_the_session_before_and_after_the_birth`, `prop_will_birth_and_death_agree_on_bdseq_for_every_session_number`, and `chaos_bd_seq_advances_on_every_connect` observes the pairing across a real reconnect | conformant |
+| `topics-nbirth-rebirth-metric` | MUST | a metric named exactly `Node Control/Rebirth`, `Boolean(false)` — `rebirth_metric` (`sparkplug_publisher.rs:419`), built into `node_metrics` which BOTH session arms use | `every_node_birth_declares_the_rebirth_command` locates it by name, asserts datatype 11 and `BooleanValue(false)`, and is mutation-tested against `Null(Boolean)` and `Boolean(true)`; `chaos_ncmd_rebirth` reads it off a real broker | conformant |
+| `topics-ndata-payload` | MUST | NDATA is never emitted | — | n/a — the same reading as `topics-ndata-topic` and `-mqtt` above |
+| `topics-ndata-seq-num` | MUST | as above | — | n/a |
+| `topics-ndata-timestamp` | MUST | as above | — | n/a |
+| `topics-ndeath-payload` | MUST | *"MUST only include a single metric, the bdSeq number"* — `death_payload` builds `metrics: vec![bd_seq_metric(…)]` (`encode.rs:215`), a one-element literal, so a second metric would have to be written in deliberately | `the_will_matches_the_session_before_and_after_the_birth` decodes the will and reads `metrics[0]`; `chaos_sigterm_no_lie` reads the NDEATH off a real broker | conformant |
+| `topics-ndeath-seq` | MUST NOT | `death_payload` sets `seq: None` explicitly | `the_will_matches_the_session_before_and_after_the_birth` asserts `decode(&will).seq == None` — *"a DEATH is never numbered"* | conformant |
+| `topics-ncmd-payload` | MUST | an NCMD is published by a Host Application | — | n/a — the same reading as `topics-ncmd-mqtt`, whose note explains it |
+| `topics-ncmd-timestamp` | MUST | as above, and the clause says so itself: *"sent from the Host Application's MQTT client"* | — | n/a |
 
 > **`topics-ndata-mqtt` settles a question that was got wrong twice.** It reads *"NDATA messages
 > MUST be published with MQTT QoS equal to 0 and retain equal to false"*, and `topics-ddata-mqtt`
@@ -310,6 +326,16 @@ constraint; ideally the bridge refuses to start on a detectable collision. Issue
 | `topics-ddeath-mqtt` | MUST | QoS 0, retain false | `the_delivery_table_matches_the_specification_clause_by_clause` enumerates `DDeath` explicitly | conformant |
 | `topics-dcmd-topic` | MUST | **not implemented** — no DCMD subscription, and a subscriber must build this topic form too. **⏳ TIME-LIMITED, recorded at Story 4.7:** a planned meter relay command is a writable Device output, which is the condition its chapter-5 twin `-device-dcmd-subscribe` is `n/a` upon; when it lands both go live together. Not re-verdicted here — [#38](https://github.com/guycorbaz/smartme_mqtt/issues/38) owns the expiry | — | **gap (unimplemented)** (**Story 4.19**, re-owned) — Story 4.6 declined DCMD deliberately: `-device-dcmd-subscribe` is conditional on *"if the Device supports writing to outputs"* (`:403-407`) and no device here does. `MessageType` has no `DCmd` variant on purpose. See the criterion note below: this row probably belongs at `n/a` |
 | `topics-dcmd-mqtt` | MUST | a **publication** clause — see the note below | — | n/a |
+| `topics-dbirth-metrics` | MUST | each metric carries name, datatype and current value; a cold-start device carries `MetricValue::Null(Double)`, which **declares the datatype and carries no value** — the clause's *"current value"* for a device that has none | `cold_start_birth_declares_tags_with_no_value_and_stale_quality` asserts `value == None`, `is_null == Some(true)` and the surviving datatype; `a_null_metric_carries_no_value_but_keeps_its_datatype` asserts it across the wire | conformant |
+| `topics-dbirth-metric-reqs` | MUST | the DBIRTH declares `Power` and `Energy`, and `metrics_for` publishes exactly those two on every DDATA — the declared set and the published set are one list, not two | `cold_start_birth_declares_tags_with_no_value_and_stale_quality` and `a_good_reading_carries_units_serial_and_the_source_timestamp` both locate metrics **by name**, so a divergence panics | conformant |
+| `topics-dbirth-seq` | MUST | the DBIRTH takes the edge node's next `seq`: the NBIRTH is 0 and the DBIRTH that follows is 1, from one shared counter | `device_messages_share_the_edge_node_numbering`; `chaos_ncmd_rebirth` reads `seq = 0` then `seq = 1` off a real broker | conformant |
+| `topics-dbirth-timestamp` | MUST | *"a timestamp denoting the date and time the message was sent"*. **Cold start conforms** (the publication instant); **a DBIRTH re-declaring a known reading carries that reading's `ValueDate`**, routed through `timestamp_source_for(Emission::DeviceBirthRedeclaring)` | `an_hour_of_outage_does_not_move_the_re_declared_reading_forward` and `chaos_no_replay_at_reconnect` both assert the re-declared stamp is the reading's, not the reconnection instant | **deviation** ([#29](https://github.com/guycorbaz/smartme_mqtt/issues/29)) — ADR 0013, and read against chapter 4's own wording rather than copied: stamping `now` on a 45-minute-old value would satisfy this clause and produce the exact lie the project exists to prevent |
+| `topics-ddata-payload` | MUST | *"the metrics that have changed since the last DBIRTH or DDATA"* — **the bridge publishes both metrics on every tick, changed or not**; no change detection exists in the tree | `poll_publish.rs:143`; the behaviour is the operational twin of `principles-rbe-recommended` | **deviation** ([#32](https://github.com/guycorbaz/smartme_mqtt/issues/32)) — chapter 4's own statement of the report-by-exception decision already ruled on under chapter 2, recorded here rather than re-decided |
+| `topics-ddata-seq-num` | MUST | one shared edge-node counter, incremented per message and wrapping at 255 | `device_messages_share_the_edge_node_numbering`, `prop_seq_stays_in_range_and_wraps_at_the_boundary`, and `the_birth_then_data_sequence_is_contiguous` | conformant |
+| `topics-ddata-timestamp` | MUST | the payload timestamp is the reading's `ValueDate`, not the publish instant. Enforced by `publish`'s SIGNATURE: it is handed no clock, so the publication instant is unrepresentable there | `a_good_reading_carries_units_serial_and_the_source_timestamp`, `a_stale_verdict_never_publishes_a_fresh_looking_metric`, and story 4.12's two tests — the second observing it on the wire through a reconnect | **deviation** ([#29](https://github.com/guycorbaz/smartme_mqtt/issues/29)) — ADR 0013 |
+| `topics-ddeath-seq-num` | MUST | the DDEATH takes the next number from the same edge-node counter | `device_messages_share_the_edge_node_numbering`; `chaos_device_certificates` reads the DDEATH off a real broker | conformant |
+| `topics-dcmd-payload` | MUST | a DCMD is published by a Host Application | — | n/a — the same reading as `topics-dcmd-mqtt`, whose note explains it |
+| `topics-dcmd-timestamp` | MUST | as above, and the clause says so itself: *"sent from the Host Application's MQTT client"* | — | n/a |
 
 > **`topics-ncmd-mqtt` and `topics-dcmd-mqtt` are `n/a`, and they were `gap`s until the code review
 > of Story 4.2 (2026-07-28).** Both read *"NCMD/DCMD messages **MUST be published** with MQTT QoS
@@ -332,7 +358,13 @@ constraint; ideally the bridge refuses to start on a detectable collision. Issue
 `-birth-sub-required`, `-birth-required`, `-birth-payload`, `-birth-payload-timestamp`,
 `-death-qos`, `-death-retain`, `-death-topic`, `-death-required`, `-death-payload`,
 `-death-payload-connect`, `-death-payload-disconnect-clean`,
-`-death-payload-disconnect-with-no-disconnect-packet`
+`-death-payload-disconnect-with-no-disconnect-packet`,
+`-death-payload-timestamp-connect`, `-death-payload-timestamp-disconnect-clean`,
+`-death-payload-timestamp-disconnect-with-no-disconnect-packet`
+
+**The last three were added by Story 4.19.** The specification carries seven `-death-payload*`
+ids and this block listed four, which is how three clauses came to be recorded nowhere while the
+block read as complete — the same failure mode as the chapter's 29, in miniature.
 
 **n/a — we are an Edge Node.** These govern what a Host Application publishes on
 `spBv1.0/STATE/…`. Whether the bridge should *observe* a Host Application's STATE is a different
@@ -1438,10 +1470,12 @@ rather than added, because adding a single row of another story's 29 would leave
 `42` with no account of the rest; but it is now a clause the bridge SATISFIES and does not claim,
 which is the less common direction for this document to be wrong in.
 
-**17 conformant · 0 deviations · 3 gaps · 21 n/a** (16 Host Application, 3 messages we do not emit,
-2 command clauses that bind a Host Application publisher)
+**31 conformant · 4 deviations · 3 gaps · 32 n/a** (19 Host Application, 6 messages we do not emit,
+6 command clauses that bind a Host Application publisher, 1 template clause whose condition never
+holds)
 
-`17 + 0 + 3 + 21 = 41` rows. **This corrects a miscount**: the tally read `17 · 0 · 8 · 21` until the
+`31 + 4 + 3 + 32 = 70` clauses — **the whole chapter, with no remainder, since Story 4.19**
+(2026-08-19). It read `17 · 0 · 3 · 21` over 41 rows until then. **This corrects a miscount**: the tally read `17 · 0 · 8 · 21` until the
 code review of Story 4.2 recounted the rows mechanically — the conformant and n/a figures were
 over-stated, and two of the gaps (`topics-ncmd-mqtt`, `topics-dcmd-mqtt`) then became `n/a`.
 
@@ -1455,8 +1489,18 @@ and `topics-dcmd-topic` (Story 4.19 — see the criterion note in chapter 5's de
 probably belongs at `n/a`). **The two DDEATH topic rows left this list on 2026-08-04**, when Story
 5.2 made the bridge emit one.
 
-**41 rows is not the chapter's clause set.** `Sparkplug_4_Topics.adoc` carries **70** `tck-id`s, so
-**29 are recorded nowhere**, and the shape of the 29 explains itself: **26 are `topics-*` clauses
+**41 rows was not the chapter's clause set, and Story 4.19 closed the gap on 2026-08-19.** The
+paragraph below is kept as the record of what was missing and why; the 29 it describes now carry
+verdicts — **14 conformant, 4 deviations, 11 n/a** — and the chapter's arithmetic closes at 70.
+
+**One of the 29 was not the verdict this document expected.** `topics-nbirth-bdseq-increment` states
+TWO obligations — *start at zero* and *increment by one per CONNECT* — and chapter 6 states only the
+second. Story 4.10 delivered the increment; the zero-start is not satisfied, because a brand-new
+bridge publishes `1` as its first `bdSeq` ([#100]). Reading chapter 4's own wording rather than
+copying the twin's verdict is what found it, which is the rule Story 4.19 was given.
+
+**The historical record follows.** `Sparkplug_4_Topics.adoc` carries **70** `tck-id`s, and until
+2026-08-19 **29 were recorded nowhere**, and the shape of the 29 explains itself: **26 are `topics-*` clauses
 about payload *content*** — `-nbirth-metrics`, `-nbirth-metric-reqs`, `-nbirth-seq-num`,
 `-nbirth-timestamp`, `-nbirth-templates`, the three `-nbirth-bdseq-*`, `-nbirth-rebirth-metric`,
 their DBIRTH/NDATA/DDATA/NCMD/DCMD/NDEATH/DDEATH counterparts — plus **3
@@ -1763,11 +1807,11 @@ conformance scope".
 | 1 — Introduction | 3 | 0 | 4 | 1 | 8 |
 | 2 — Principles | 1 | 1 | 1 | 1 | 4 |
 | 3 — Components | 0 | 0 | 0 | 1 | 1 |
-| 4 — Topics | 17 | 0 | 3 | 21 | **41 of 70** |
+| 4 — Topics | 31 | 4 | 3 | 32 | 70 |
 | 5 — Operational behaviour | 32 | 1 | 17 | 49 | 99 |
-| 6 — Payloads | 38 | 4 | 8 | 59 | 109 |
+| 6 — Payloads | 39 | 4 | 7 | 59 | 109 |
 | 10 — Conformance | 0 | 0 | 0 | 12 | 12 |
-| **Total** | **91** | **6** | **33** | **144** | **274 of 303** |
+| **Total** | **106** | **10** | **32** | **155** | **303** |
 
 **The total was `72 · 8 · 50 · 144` until Story 4.7**, which moved seven rows from
 `gap (unimplemented)` to `conformant` — six in chapter 5, one in chapter 6. `72 + 7 = 79`,

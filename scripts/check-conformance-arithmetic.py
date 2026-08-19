@@ -31,6 +31,26 @@ problems = []
 if summed != list(total):
     problems.append(f"the chapter rows sum to {summed}, the Total row says {list(total)}")
 
+# EACH CHAPTER'S OWN TALLY MUST MATCH ITS ROW IN THE WHOLE-SPECIFICATION TABLE.
+#
+# Added 2026-08-19 (Story 4.19) because the document had disagreed with itself for a
+# day and this script had not noticed: Story 4.12 moved chapter 6 from `38 · 4 · 8`
+# to `39 · 4 · 7` in the chapter tally and left the summary row at `38 … 8`. The
+# check above still passed — the rows summed to a Total that was itself built from
+# the stale row, which is exactly how a consistent-looking document can be wrong.
+#
+# Tallies appear in chapter order, as do the rows, so they pair by position.
+if len(tallies) != len(rows):
+    problems.append(f"{len(tallies)} chapter tallies against {len(rows)} rows in the total table")
+else:
+    for (label, *cells), tally in zip([(r[0],) + r[1:] for r in rows], tallies):
+        row_values = tuple(int(c) for c in cells)
+        if row_values != tally:
+            problems.append(
+                f"chapter {label}: its own tally says {list(tally)}, the whole-specification "
+                f"table says {list(row_values)}"
+            )
+
 HISTORY = re.compile(r"\bwas\b[^.]*\buntil\b|\buntil Story\b|Corrected", re.I)
 offset = 0
 for para in s.split("\n\n"):
