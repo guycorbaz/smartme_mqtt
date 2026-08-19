@@ -118,11 +118,27 @@ impl Drop for Bridge {
     }
 }
 
+/// Waits for a `/healthz` **that shows a running poll loop**, not merely one that
+/// answers.
+///
+/// **The distinction is the test's whole premise** ([#98]'s neighbour, found
+/// 2026-08-19). The UI is served as soon as the lifecycle loop reaches its Running
+/// arm, which happens BEFORE the first poll tick has touched a heartbeat — so a
+/// probe that returned on the first answer could hand back
+/// `"loop_age_ms":null`, and the assertion below would fail against a bridge that
+/// was starting perfectly. That is a race, not a defect, and it went unseen while
+/// an orphaned bridge on a fixed port produced a louder failure first.
+///
+/// FALSIFIED 2026-08-19 — with the deadline set to zero the test goes red with
+/// `the poll loop never started within 20 s`, which is the shape a bridge whose
+/// meters never spawn would produce.
 fn wait_for_ui(port: u16, child: &mut Child) -> Option<String> {
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
         if let Some(answer) = get(port, "/healthz") {
-            return Some(answer);
+            if loop_age(&answer).is_some() {
+                return Some(answer);
+            }
         }
         if child.try_wait().expect("wait").is_some() {
             return None;
@@ -229,7 +245,11 @@ fn a_panicking_handler_costs_the_page_and_nothing_else() {
     // it on this path and on every other one, which is the whole of [#98].
     let before = match before {
         Some(health) => health,
-        None => panic!("the UI never answered, so nothing below could mean anything"),
+        None => panic!(
+            "the poll loop never started within 20 s, so nothing below could mean anything. \
+             Either the UI never answered at all, or it answered with `loop_age_ms: null` \
+             throughout — a bridge serving its screen while polling nothing"
+        ),
     };
     assert!(
         loop_age(&before).is_some(),
