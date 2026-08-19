@@ -120,6 +120,32 @@ nowhere while the block read as complete.
 **The whole specification now closes**: `106 · 10 · 32 · 155 = 303`, with no "of" anywhere in the
 total — every `tck-id` in chapters 1–6 and 10 carries a verdict.
 
+### Review Findings (2026-08-19, same day)
+
+Reviewed by checking this story's own citations mechanically — every test name against the
+functions that exist, every `file.rs:N` against the file. **Two of its own were wrong**, and that
+is what found the larger one.
+
+- [x] [Review][Patch] **A cited test did not exist.** `topics-ddata-seq-num` named
+      `the_birth_then_data_sequence_is_contiguous` as its proof. Nothing by that name is defined
+      anywhere; the real assertion is
+      `sequence_numbering_is_continuous_across_node_and_device_messages`. This is story 4.11's
+      defect — *"a doc comment claimed an assertion that does not exist"* — committed again, in a
+      row written to close a completeness audit.
+- [x] [Review][Patch] **A line citation pointed at the wrong line.** `sparkplug_publisher.rs:419`
+      was cited for `rebirth_metric`, which lives at `:614`; `:419` is `self.declared = declared;`.
+      **The number was copied from an existing cell rather than checked** — so the drift
+      propagated into a new row, which is the cheapest way to write a wrong citation.
+- [x] [Review][Defer] **The matrix cites 53 distinct code positions by line number, and the drift
+      is general** — 34 point at code, 4 at a bare closing brace, 13 at a comment, 2 at
+      unresolvable files. Measured, filed as [#101] with the fix (cite the symbol, which is
+      mechanically checkable) rather than migrated here: 53 citations is a chore for one pass, not
+      a story's tail.
+
+**Verified and left standing:** the 29 verdicts, the arithmetic (`31 · 4 · 3 · 32 = 70`, total
+`106 · 10 · 32 · 155 = 303`), the strengthened checker and its falsification, and every other test
+name cited in the chapter — 26 checked, 25 resolve to a function or a test file.
+
 ### File List
 
 - `docs/sparkplug-conformance.md` — modified (29 verdicts, tallies, Status row, chapter-6 row corrected)
