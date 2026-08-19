@@ -2497,6 +2497,23 @@ development_status:
   # channel taxes the hot path" — measured, snapshot() has ONE production caller,
   # so the clone is per HTTP request, never per tick.
   6-3-the-published-state-becomes-legible: review  # implemented 2026-08-19; no screen, by design
+  # 2026-08-19, WRITTEN AND IMPLEMENTED. FR28, FR30, FR34 and FR36 are one page,
+  # not four screens — `/meters`, a row per meter, consuming the state 6.3 built
+  # without judging any of it (AR19).
+  # THE VALUE IS TWO NUMBERS, NOT A MEASUREMENT: MeterId and Serial are String
+  # newtypes, so keeping the reading whole would allocate twice per meter per tick
+  # under the send_modify lock — which 6.3 AC4 forbids. The unit is not stored at
+  # all: Kw/Kwh are domain types and kW/kWh are constants.
+  # `Eq` LEFT MeterState, and the reason is the type: a measured f64 has no total
+  # equality. PartialEq remains and nothing keyed a map on it.
+  # THE FALSIFICATION FOUND A DEFECT IN THE SCREEN ITSELF: printing the full HTML
+  # showed `spBv1.0/G/DDATA/N/—`, a topic built with a dash for a meter the running
+  # configuration no longer carries — a destination nothing will ever publish on.
+  # No serial, no topic, now.
+  # CLIPPY REFUSED EIGHT ARGUMENTS AND THE MODEL IMPROVED: record_at takes a
+  # `Publication`, so an instant can no longer be supplied without the threshold it
+  # was judged against.
+  6-4-the-meter-view: review  # implemented 2026-08-19; FR37 and FR35 remain
   epic-6-retrospective: required  # added 2026-08-10 — the line was absent entirely
 
   # ADDED 2026-08-08, previously absent from this file entirely.

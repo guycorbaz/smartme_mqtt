@@ -446,6 +446,10 @@ pub fn router(state: UiState) -> Router {
     let routes = Router::new()
         .route("/", get(index))
         .route("/healthz", get(healthz))
+        // Story 6.4: the meter view. Its own route rather than a section of `/`,
+        // because the two answer different questions — `/` says whether the bridge
+        // is publishing at all, this says what each meter is doing.
+        .route("/meters", get(screens::meter_view))
         .route(
             "/config",
             get(screens::config_form).post(screens::save_config),
@@ -1190,6 +1194,178 @@ mod tests {
             n = WEDGED_AFTER_PERIODS,
             period = crate::app::config::PERIOD_MIN,
             allowance = allowance,
+        );
+    }
+
+    /// **Story 6.4 AC2, AC5 — a frozen meter reads differently from a quiet one.**
+    ///
+    /// This is what `last_changed_at` was built for in story 6.3, and the test that
+    /// makes that field earn its place: without the pair, a meter that stopped
+    /// measuring an hour ago and one measuring every second look identical, because
+    /// ADR 0027 makes both publish every cycle.
+    ///
+    /// FALSIFIED 2026-08-19 — mutation RUN, output copied: rendering
+    /// `last_changed_at` from `last_published_at` (the "obvious simplification")
+    /// goes red with `a FROZEN meter must not read like a quiet one … both columns
+    /// say "just now"`.
+    #[tokio::test]
+    async fn a_frozen_meter_and_a_quiet_one_do_not_read_the_same() {
+        use crate::core::oracle::Verdict;
+        use crate::core::state_machine::State as OracleState;
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let now = UtcMillis(1_784_984_793_000);
+        let clock = Arc::new(crate::core::clock::FakeClock::new(now));
+        let meter = crate::domain::MeterId::new("appart-est");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let state = ui(publishing(
+            beats.clone(),
+            clock.clone(),
+            Arc::clone(&config),
+        ));
+
+        // Measured an hour ago, republished a second ago — ADR 0027's normal case
+        // for a meter that has stopped moving.
+        let acquired = UtcMillis(now.0 - 3_600_000);
+        beats.record_at(
+            &meter,
+            OracleState::Stale,
+            Verdict::stale(crate::core::oracle::Cause::NotRevalidated),
+            Some(crate::app::poll_publish::Publication {
+                at: UtcMillis(now.0 - 3_600_000),
+                threshold_ms: 90_000,
+                value_date: Some(acquired),
+                power_kw: Some(0.018),
+                energy_kwh: Some(4_843.822),
+            }),
+        );
+        beats.record_at(
+            &meter,
+            OracleState::Stale,
+            Verdict::stale(crate::core::oracle::Cause::NotRevalidated),
+            Some(crate::app::poll_publish::Publication {
+                at: UtcMillis(now.0 - 1_000),
+                threshold_ms: 90_000,
+                value_date: Some(acquired),
+                power_kw: Some(0.018),
+                energy_kwh: Some(4_843.822),
+            }),
+        );
+
+        let html = body(
+            crate::ui::screens::meter_view(State(Arc::clone(&state)))
+                .await
+                .into_response(),
+        )
+        .await;
+
+        assert!(
+            html.contains("1 second ago"),
+            "the publication follows every cycle and the page must say so:\n{html}"
+        );
+        assert!(
+            html.contains("1 hour ago"),
+            "a FROZEN meter must not read like a quiet one: it last MEASURED an hour \
+             ago and the page has to say it, or the operator reads a recent \
+             publication as a recent reading — which is the exact lie this bridge \
+             exists to refuse:\n{html}"
+        );
+    }
+
+    /// **Story 6.4 AC2 — a value nobody has published is a dash, never a zero.**
+    ///
+    /// FR16's rule — *never a substituted value* — reaching the screen. A `0.000 kW`
+    /// where nothing has been read is a number an operator would act on.
+    ///
+    /// FALSIFIED 2026-08-19 — mutation RUN: `unwrap_or(0.0)` in place of the dash
+    /// goes red with `a value nobody published must not render as a number … found
+    /// "0.000 kW"`.
+    #[tokio::test]
+    async fn a_meter_that_has_published_nothing_shows_no_number() {
+        use std::sync::Arc;
+
+        let clock = Arc::new(crate::core::clock::FakeClock::new(
+            crate::domain::UtcMillis(1_784_984_793_000),
+        ));
+        let meter = crate::domain::MeterId::new("appart-est");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let state = ui(publishing(beats, clock, Arc::clone(&config)));
+
+        let html = body(
+            crate::ui::screens::meter_view(State(Arc::clone(&state)))
+                .await
+                .into_response(),
+        )
+        .await;
+
+        assert!(
+            !html.contains("0.000 kW"),
+            "a value nobody published must not render as a number: `None` means \
+             nothing was read, and a zero is a measurement. FR16 forbids the \
+             substitution at the source; this is the same rule at the screen:\n{html}"
+        );
+        assert!(
+            html.contains("Meter"),
+            "and the table itself must be there, or the assertion above passes over \
+             an empty page:\n{html}"
+        );
+    }
+
+    /// **Story 6.4 AC3 — the three states FR32 asks to be told apart.**
+    ///
+    /// An empty table reads as "all quiet", which is the misreading FR32 exists to
+    /// prevent: *unconfigured*, *starting*, and *running with a fault* are three
+    /// different situations and an operator acts differently on each. The page must
+    /// say which in words, not by the absence of rows.
+    ///
+    /// FALSIFIED 2026-08-19 — mutation RUN: returning the table shell for the
+    /// unconfigured phase goes red with `an unconfigured bridge must SAY so … found
+    /// a table instead`.
+    #[tokio::test]
+    async fn the_three_states_are_told_apart_in_words() {
+        use std::sync::Arc;
+
+        // 1. Nothing configured: no control at all.
+        let silent = ui(Phase::silent(Lifecycle::Unconfigured));
+        let html = body(
+            crate::ui::screens::meter_view(State(Arc::clone(&silent)))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert!(
+            html.contains("no configuration has been confirmed"),
+            "an unconfigured bridge must SAY so: an empty table would read as \
+             'all quiet', which is the whole of FR32:\n{html}"
+        );
+        assert!(
+            !html.contains("<th>Meter</th>"),
+            "and it must not show the table shell either — a header with no rows is \
+             the same misreading wearing a border:\n{html}"
+        );
+
+        // 2. Running, but no meter has completed a tick: the fleet is empty rather
+        //    than absent, and that is NOT the same message.
+        let clock = Arc::new(crate::core::clock::FakeClock::new(
+            crate::domain::UtcMillis(1_784_984_793_000),
+        ));
+        let beats = Heartbeats::for_meters([]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let starting = ui(publishing(beats, clock, Arc::clone(&config)));
+        let html = body(
+            crate::ui::screens::meter_view(State(Arc::clone(&starting)))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert!(
+            html.contains("<th>Meter</th>"),
+            "a running bridge shows its table, even with nothing in it yet — the \
+             operator needs to see that the page works and the fleet is empty, not \
+             wonder which:\n{html}"
         );
     }
 

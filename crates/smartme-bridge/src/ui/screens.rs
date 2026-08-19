@@ -1269,6 +1269,157 @@ pub(super) async fn confirm_mapping(
     Redirect::to("/").into_response()
 }
 
+/// **Story 6.4 — the meter view.** FR28, FR30, FR34 and FR36 on one page.
+///
+/// # It reads; it does not judge
+///
+/// AR19: *"UI consumes this state, never recomputes it."* Every verdict, quality
+/// and culprit on this page comes from `MeterState`, written by the poll loop that
+/// reached the judgement. The only things derived here are **words** — the repair
+/// gesture and the relative ages — because story 6.3 AC4 keeps text out of the
+/// state, where it would be built under a lock every poll task waits on.
+pub(super) async fn meter_view(State(state): State<Arc<UiState>>) -> impl IntoResponse {
+    let phase = state.phase();
+    let Some(control) = phase.control() else {
+        // FR32's first state: nothing is configured, and an empty table would read
+        // as "all quiet" — the exact misreading this requirement exists to prevent.
+        return page(
+            "Meters",
+            "<h1>Meters</h1><p>The bridge is not publishing. There is no meter list \
+             because no configuration has been confirmed yet.</p>\
+             <p><a href=/config>Configure it</a></p>",
+        );
+    };
+    let config = control.current();
+    let fleet = phase.fleet();
+    let now = control.clock().wall();
+
+    let Some(fleet) = fleet else {
+        return page(
+            "Meters",
+            "<h1>Meters</h1><p>The bridge is starting: no meter has completed a poll \
+             cycle yet. This is not an error, and it is not silence — come back in \
+             one period.</p>",
+        );
+    };
+
+    let mut rows = String::new();
+    for meter in &fleet.meters {
+        let configured = config.meters.iter().find(|m| m.meter == meter.meter);
+        let serial = configured.map(|m| m.serial.as_str());
+        // THE TOPIC IS BUILT BY THE PUBLISHER'S OWN PATH, never spelled here: a
+        // page that concatenated it could show a topic the grammar refuses and the
+        // bridge would never publish on.
+        //
+        // **AND NO TOPIC IS SHOWN WITHOUT A SERIAL.** The first draft passed the
+        // dash through, and a falsification run printed the result:
+        // `spBv1.0/G/DDATA/N/—` — a topic nothing will ever publish on, rendered
+        // as though it were the destination. A meter the running configuration no
+        // longer carries has no topic, and saying so is the honest answer.
+        let topic = serial
+            .and_then(|serial| {
+                sparkplug_b::EdgeNode::new(&config.group_id, &config.node_id)
+                    .ok()
+                    .and_then(|node| {
+                        node.device_topic(sparkplug_b::MessageType::DData, serial)
+                            .ok()
+                    })
+            })
+            .map_or_else(|| "—".to_string(), |t| t.to_string());
+        let serial = serial.unwrap_or("—");
+
+        let power = meter
+            .last_power_kw
+            .map(|v| format!("{v:.3} kW"))
+            // `None` is "nothing published yet", never "0" — FR16's rule reaching
+            // the screen: a missing value is never a substituted one.
+            .unwrap_or_else(|| "—".to_string());
+        let energy = meter
+            .last_energy_kwh
+            .map(|v| format!("{v:.3} kWh"))
+            .unwrap_or_else(|| "—".to_string());
+
+        let quality = meter
+            .published
+            .map(|v| {
+                v.cause().map_or_else(
+                    || format!("{:?}", v.quality()),
+                    |c| format!("{:?} ({})", v.quality(), c.as_str()),
+                )
+            })
+            .unwrap_or_else(|| "not yet judged".to_string());
+
+        let published = meter
+            .last_published_at
+            .map(|at| ago(now, at))
+            .unwrap_or_else(|| "never".to_string());
+        // FR30 AND AC5's pair: "published a second ago, changed an hour ago" is a
+        // frozen meter; the same two words with the same value is a quiet one.
+        let changed = meter
+            .last_changed_at
+            .map(|at| ago(now, at))
+            .unwrap_or_else(|| "never".to_string());
+
+        let blame = meter.culprit.map_or_else(
+            || "—".to_string(),
+            |c| format!("{} — {}", c.as_str(), repair(c)),
+        );
+
+        rows.push_str(&format!(
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{power}</td><td>{energy}</td>\
+             <td>{}</td><td>{published}</td><td>{changed}</td><td>{}</td></tr>",
+            escape(meter.meter.as_str()),
+            escape(serial),
+            escape(&topic),
+            escape(&quality),
+            escape(&blame),
+        ));
+    }
+
+    page(
+        "Meters",
+        &format!(
+            "<h1>Meters</h1>\
+             <table><tr><th>Meter</th><th>Serial</th><th>Topic</th><th>Power</th>\
+             <th>Energy</th><th>Published as</th><th>Last published</th>\
+             <th>Last changed</th><th>Whose fault</th></tr>{rows}</table>\
+             <p><strong>Last published</strong> is every cycle; <strong>last \
+             changed</strong> is when the meter last measured something new. A gap \
+             between them is a meter that has stopped moving — not a bridge that \
+             has stopped publishing.</p>\
+             <p><a href=/>State of the bridge</a> · <a href=/config>Configuration</a></p>"
+        ),
+    )
+}
+
+/// What to do about a fault, derived from its culprit (story 6.4 AC4).
+///
+/// **Derived, never stored**: story 6.3 AC4 keeps `String`s out of the fleet state,
+/// which is written under a lock every poll task waits on.
+fn repair(culprit: crate::core::oracle::Culprit) -> &'static str {
+    use crate::core::oracle::Culprit;
+    match culprit {
+        Culprit::World => "nothing to do here; the source or the broker has to come back",
+        Culprit::You => "open the configuration: a credential, a serial or a device id is wrong",
+        Culprit::Bridge => "the bridge lost the reading itself — read the log, then report it",
+    }
+}
+
+/// A human-readable age. Absolute instants belong in the log; a screen read at
+/// three in the morning wants "four minutes ago" (FR36).
+fn ago(now: crate::domain::UtcMillis, then: crate::domain::UtcMillis) -> String {
+    let seconds = (now.0 - then.0).max(0) / 1_000;
+    match seconds {
+        0 => "just now".to_string(),
+        1 => "1 second ago".to_string(),
+        s if s < 60 => format!("{s} seconds ago"),
+        s if s < 120 => "1 minute ago".to_string(),
+        s if s < 3_600 => format!("{} minutes ago", s / 60),
+        s if s < 7_200 => "1 hour ago".to_string(),
+        s => format!("{} hours ago", s / 3_600),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

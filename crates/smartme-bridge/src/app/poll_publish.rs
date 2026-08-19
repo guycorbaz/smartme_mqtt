@@ -173,10 +173,38 @@ impl DropReason {
 
 /// One meter, as the fleet stood at one instant.
 ///
+/// What one publication knows about itself (AR19, stories 6.3 and 6.4).
+///
+/// **A type rather than five parameters**, and clippy asked for it before the
+/// design did: `record_at` reached eight arguments and the lint refused. It was
+/// right — these five values are one event seen from five angles, and passing them
+/// separately let a caller supply the instant without the threshold it was judged
+/// against, which is exactly the pairing AC1 exists to keep together.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Publication {
+    /// When the bridge published.
+    pub at: UtcMillis,
+    /// The staleness threshold the verdict was reached against.
+    pub threshold_ms: i64,
+    /// The source's own acquisition time, which is what tells a new reading from
+    /// the same one republished.
+    pub value_date: Option<UtcMillis>,
+    /// The published power, as a number. `None` is "nothing read", never zero.
+    pub power_kw: Option<f64>,
+    /// The published energy index. See [`Self::power_kw`].
+    pub energy_kwh: Option<f64>,
+}
+
 /// AR6's `MeterState`, which the architecture has named since Epic 0 and which
 /// **did not exist until 2026-08-08** — story 3.1 ticked the box for it. What
 /// shipped instead was three independent atomics per meter, read one at a time.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// **`Eq` was dropped on 2026-08-19 (story 6.4), and the reason is the type rather
+/// than the compiler.** This state now carries a measured value as `f64`, and a
+/// measurement has no total equality: `NaN != NaN` is not a defect of Rust but the
+/// arithmetic saying that "unknown equals unknown" is not a question with an answer.
+/// `PartialEq` remains, so every existing comparison still works; nothing keyed a
+/// map or a set on this state, which is what made the change free.
+#[derive(Debug, Clone, PartialEq)]
 pub struct MeterState {
     /// Which meter this is.
     pub meter: MeterId,
@@ -251,6 +279,24 @@ pub struct MeterState {
     /// The acquisition time of the reading behind the last publication, kept so
     /// the field above can tell a new reading from a repeated one.
     pub source_value_date: Option<UtcMillis>,
+    /// The last published reading, as **numbers** (story 6.4 AC1).
+    ///
+    /// # Why two floats and not the `Measurement`
+    ///
+    /// `MeterId` and `Serial` are `String` newtypes, so keeping the measurement
+    /// whole would allocate twice per meter per tick — under the `send_modify`
+    /// lock every poll task waits on, which story 6.3 AC4 forbids. Two
+    /// `Option<f64>` allocate nothing.
+    ///
+    /// **The unit is not here on purpose.** `Kw` and `Kwh` are domain types; kW and
+    /// kWh are constants of this bridge, and a per-meter copy would duplicate what
+    /// the type already holds — a second place for them to disagree.
+    ///
+    /// `None` means "nothing published yet", never "zero": FR16's rule that a
+    /// missing field is never a substituted value reaches the screen through this.
+    pub last_power_kw: Option<f64>,
+    /// The energy index of the same reading. See [`Self::last_power_kw`].
+    pub last_energy_kwh: Option<f64>,
     /// Whose fault the last fault was (AR19, story 6.3 AC3) — `None` when nothing
     /// is wrong.
     ///
@@ -296,7 +342,8 @@ pub struct MeterState {
 /// implementation looks coherent, including the per-meter atomics this replaces.
 /// With it, a reader that sampled meters one at a time observes a total that no
 /// single instant ever had.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+// `Eq` follows `MeterState`'s, dropped with it and for the same reason.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct FleetState {
     /// One entry per served meter, in the order the tasks were spawned.
     pub meters: Vec<MeterState>,
@@ -451,6 +498,8 @@ impl Heartbeats {
                 staleness_threshold_ms: None,
                 last_changed_at: None,
                 source_value_date: None,
+                last_power_kw: None,
+                last_energy_kwh: None,
                 culprit: None,
                 dropped: [0; DropReason::COUNT],
             })
@@ -495,7 +544,7 @@ impl Heartbeats {
     ///
     /// [ADR 0027]: ../../../docs/adr/0027-a-failed-source-is-a-fault-the-screen-must-name.md
     pub fn record(&self, meter: &MeterId, state: State, published: Verdict) {
-        self.record_at(meter, state, published, None, None, None);
+        self.record_at(meter, state, published, None);
     }
 
     /// As [`record`](Self::record), carrying what AR19 asks the state to know:
@@ -514,28 +563,26 @@ impl Heartbeats {
         meter: &MeterId,
         state: State,
         published: Verdict,
-        at: Option<UtcMillis>,
-        threshold_ms: Option<i64>,
-        value_date: Option<UtcMillis>,
+        publication: Option<Publication>,
     ) {
         self.0.send_modify(|fleet| {
             if let Some(entry) = fleet.meters.iter_mut().find(|m| &m.meter == meter) {
                 entry.verdict = Some(state);
                 entry.published = Some(published);
-                if let Some(at) = at {
-                    entry.last_published_at = Some(at);
+                if let Some(p) = publication {
+                    entry.last_published_at = Some(p.at);
                     // CHANGE IS THE SOURCE'S, NOT OURS. A reading carrying the same
                     // `ValueDate` as the last one is the same reading republished —
                     // which ADR 0027 requires and which must not read as movement.
-                    if value_date.is_some() && value_date != entry.source_value_date {
-                        entry.last_changed_at = Some(at);
+                    if p.value_date.is_some() && p.value_date != entry.source_value_date {
+                        entry.last_changed_at = Some(p.at);
                     }
-                }
-                if value_date.is_some() {
-                    entry.source_value_date = value_date;
-                }
-                if threshold_ms.is_some() {
-                    entry.staleness_threshold_ms = threshold_ms;
+                    if p.value_date.is_some() {
+                        entry.source_value_date = p.value_date;
+                    }
+                    entry.staleness_threshold_ms = Some(p.threshold_ms);
+                    entry.last_power_kw = p.power_kw;
+                    entry.last_energy_kwh = p.energy_kwh;
                 }
                 entry.culprit = published.cause().map(crate::core::oracle::Cause::culprit);
                 fleet.generation += 1;
@@ -567,6 +614,8 @@ impl Heartbeats {
                 entry.staleness_threshold_ms = None;
                 entry.last_changed_at = None;
                 entry.source_value_date = None;
+                entry.last_power_kw = None;
+                entry.last_energy_kwh = None;
                 fleet.generation += 1;
             }
         });
@@ -1657,9 +1706,13 @@ pub async fn run<S: Source + Send>(
             &meter,
             state,
             published,
-            Some(clock.wall()),
-            Some(current.policy.max_age_ms()),
-            memory.last.as_ref().map(|m| m.value_date),
+            Some(Publication {
+                at: clock.wall(),
+                threshold_ms: current.policy.max_age_ms(),
+                value_date: memory.last.as_ref().map(|m| m.value_date),
+                power_kw: memory.last.as_ref().and_then(|m| m.power.map(|p| p.0)),
+                energy_kwh: memory.last.as_ref().and_then(|m| m.energy.map(|e| e.0)),
+            }),
         );
 
         // THE ENDING ARMS HERE (story 3.5 AC3, ADR 0034): the account
@@ -4021,18 +4074,26 @@ mod tests {
             &meter,
             State::Fresh,
             Verdict::good(),
-            Some(first),
-            Some(90_000),
-            Some(acquired),
+            Some(Publication {
+                at: first,
+                threshold_ms: 90_000,
+                value_date: Some(acquired),
+                power_kw: Some(0.018),
+                energy_kwh: Some(4_843.0),
+            }),
         );
         // The SAME reading, republished a cycle later — ADR 0027's normal case.
         beats.record_at(
             &meter,
             State::Stale,
             Verdict::stale(Cause::NotRevalidated),
-            Some(second),
-            Some(90_000),
-            Some(acquired),
+            Some(Publication {
+                at: second,
+                threshold_ms: 90_000,
+                value_date: Some(acquired),
+                power_kw: Some(0.018),
+                energy_kwh: Some(4_843.0),
+            }),
         );
 
         let fleet = beats.snapshot();
@@ -4077,9 +4138,13 @@ mod tests {
             &meter,
             State::Fresh,
             Verdict::good(),
-            Some(UtcMillis(1_000)),
-            Some(90_000),
-            Some(UtcMillis(1_784_984_792_050)),
+            Some(Publication {
+                at: UtcMillis(1_000),
+                threshold_ms: 90_000,
+                value_date: Some(UtcMillis(1_784_984_792_050)),
+                power_kw: Some(0.018),
+                energy_kwh: Some(4_843.0),
+            }),
         );
         assert_eq!(
             beats.snapshot().meters[0].culprit,
