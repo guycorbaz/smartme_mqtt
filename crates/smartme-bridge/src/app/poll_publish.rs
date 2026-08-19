@@ -1793,7 +1793,24 @@ mod tests {
         assert!(
             while_waiting.contains("the wait is being honoured"),
             "and an honoured wait is not the same event as a fresh refusal: \
-             {while_waiting:?}"
+             {while_waiting:?}\n\
+             \n\
+             **IF THAT SEGMENT IS EMPTY, THIS IS [#94] AND HERE IS WHAT DECIDES IT.** \
+             The waiting branch is unconditional — `rate_limited_until` is Some and the \
+             FakeClock never advances, so the third tick MUST log. Three readings, \
+             printed rather than left to the next investigator:\n\
+             - the wait as the memory holds it: {:?}\n\
+             - the whole capture, not the segment: {:?}\n\
+             - the segment boundary: {} bytes before the third tick\n\
+             \n\
+             A wait of None means the SECOND tick did not arm it, and the fault is \
+             upstream of the capture. A wait armed, with the line absent from the whole \
+             capture, is the capture losing a line — which is what [#94] describes and \
+             what two eliminated hypotheses (the fetch deadline; the callsite interest \
+             cache) do NOT explain.",
+            mem.rate_limited_until,
+            sink.text(),
+            after_refusal.len()
         );
         assert!(
             while_waiting.contains("remaining_s="),
