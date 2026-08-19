@@ -231,6 +231,101 @@ pub enum Cause {
     DeviceNotInAccount,
 }
 
+/// Whose fault a fault is, as an operator would apportion it (AR19).
+///
+/// # Why this is a value and not a rendering
+///
+/// AR19 requires the published state to carry the culprit **first-class**, and says
+/// why in the same breath: *"UI consumes this state, never recomputes it."* A label
+/// computed in a template is a second place the judgement lives, and the two drift
+/// the first time one of them is edited.
+///
+/// # The classification is a judgement, written down per variant
+///
+/// Story 6.3 walked all twenty-one [`Cause`] variants and found **not one** that
+/// means `Bridge` — correct rather than surprising: this oracle judges READINGS,
+/// and a reading is never the bridge's fault. The bridge's own faults are in
+/// `DropReason`, on the publishing side, which is why AR19 derives the culprit from
+/// *"the error nature and source-vs-sink health"* rather than from a cause alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Culprit {
+    /// Nothing here can repair it: the source is down, the meter was reset, the
+    /// account answered something the bridge cannot use.
+    World,
+    /// The operator can repair it: a credential, a serial, a device id, a
+    /// configuration that contradicts itself.
+    You,
+    /// The bridge lost the reading itself. **No [`Cause`] produces this** — only
+    /// `DropReason` does.
+    Bridge,
+}
+
+impl Culprit {
+    /// The token this culprit travels under, on `/healthz` and on the screens.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::World => "world",
+            Self::You => "you",
+            Self::Bridge => "bridge",
+        }
+    }
+}
+
+impl Cause {
+    /// Whose fault this cause is (AR19, story 6.3).
+    ///
+    /// **One row per variant, each with its reason**, on the pattern `qos_for` and
+    /// `timestamp_source_for` established: a table a test can pin.
+    pub const fn culprit(self) -> Culprit {
+        match self {
+            // THE WORLD. The source did not answer, answered something unusable, or
+            // the meter itself moved under us. Nothing in this deployment repairs
+            // any of them.
+            Self::SourceUnreachable
+            | Self::SourceRefused
+            | Self::NoFreshnessProof
+            | Self::SourceClockImplausible
+            | Self::TimestampsDisagree
+            | Self::ReadingTooOld
+            | Self::ValueUnusable
+            | Self::SourceMarkedStale
+            | Self::SourceTimestampUnparseable
+            | Self::SourceRateLimited
+            | Self::FeedNotAdvancing
+            // A counter that went backwards is a reset, a rollover or a replaced
+            // meter (story 2.2) — the instinct says "bridge", and the instinct is
+            // wrong: the bridge is reporting faithfully what the meter did.
+            | Self::CounterWentBackwards
+            // The API's contract moved under us (story 2.5's own words). Repaired
+            // by reading smart-me's documentation, not by touching a meter.
+            | Self::UnitNotRecognised
+            | Self::ValueNotFinite
+            | Self::ValueOverflowed
+            // NOT A FAULT AT ALL, and the honest answer is still the world's. ADR
+            // 0027 requires a verdict every cycle, so a value not re-judged is
+            // republished degraded. What the operator sees is the source not having
+            // produced anything new — the screen should say "waiting", not "blame".
+            | Self::NotRevalidated => Culprit::World,
+
+            // THE HOST'S CLOCK IS THE OPERATOR'S MACHINE, not the world's: NTP is
+            // theirs to fix, and calling it `World` would send them to smart-me.
+            Self::HostClockUnsynced
+            | Self::CredentialRejected
+            | Self::ConfigurationContradicted
+            // AMBIGUOUS, AND CLASSIFIED ANYWAY (story 6.3 AC3). The configuration
+            // declares a serial the account does not confirm, which an operator
+            // repairs — but a physically REPLACED meter is the world moving, and
+            // the configuration merely reporting it. `You` is chosen because the
+            // gesture is the same either way: look at the configuration against the
+            // account. Recorded so a future reader knows the ambiguity was seen.
+            | Self::IdentityMismatch
+            // ADR 0034: the account no longer has this device. Either it was removed
+            // there or the id is wrong here — both end at the configuration screen.
+            | Self::DeviceNotInAccount => Culprit::You,
+        }
+    }
+}
+
 impl Cause {
     /// Every cause, in a fixed order.
     ///
@@ -892,6 +987,103 @@ pub fn feed_is_advancing(previous: Option<UtcMillis>, current: UtcMillis) -> Ver
     match previous {
         Some(before) if current <= before => Verdict::stale(Cause::FeedNotAdvancing),
         _ => Verdict::good(),
+    }
+}
+
+#[cfg(test)]
+mod culprit_tests {
+    use super::{Cause, Culprit};
+
+    /// **Story 6.3 AC3 — every cause is classified, and the classification is a
+    /// judgement rather than a default.**
+    ///
+    /// The compiler already refuses an unhandled variant. What it cannot refuse is a
+    /// new variant swept into whichever arm was nearest, so this pins each answer:
+    /// adding a cause means writing a row here and deciding.
+    ///
+    /// FALSIFIED 2026-08-19 — mutation RUN, output copied: moving
+    /// `CredentialRejected` into the `World` arm goes red with `a rejected
+    /// credential is repaired by the operator, not waited out: credential-rejected
+    /// ends at the configuration screen … left: World, right: You`.
+    #[test]
+    fn every_cause_names_whose_fault_it_is() {
+        let world = [
+            Cause::SourceUnreachable,
+            Cause::SourceRefused,
+            Cause::NoFreshnessProof,
+            Cause::SourceClockImplausible,
+            Cause::TimestampsDisagree,
+            Cause::ReadingTooOld,
+            Cause::ValueUnusable,
+            Cause::SourceMarkedStale,
+            Cause::SourceTimestampUnparseable,
+            Cause::SourceRateLimited,
+            Cause::FeedNotAdvancing,
+            Cause::CounterWentBackwards,
+            Cause::UnitNotRecognised,
+            Cause::ValueNotFinite,
+            Cause::ValueOverflowed,
+            Cause::NotRevalidated,
+        ];
+        for cause in world {
+            assert_eq!(
+                cause.culprit(),
+                Culprit::World,
+                "{} is nothing this deployment can repair; telling an operator \
+                 otherwise sends them to a screen that cannot help",
+                cause.as_str()
+            );
+        }
+
+        let yours = [
+            Cause::HostClockUnsynced,
+            Cause::CredentialRejected,
+            Cause::ConfigurationContradicted,
+            Cause::IdentityMismatch,
+            Cause::DeviceNotInAccount,
+        ];
+        for cause in yours {
+            assert_eq!(
+                cause.culprit(),
+                Culprit::You,
+                "a rejected credential is repaired by the operator, not waited out: \
+                 {} ends at the configuration screen",
+                cause.as_str()
+            );
+        }
+
+        assert_eq!(
+            world.len() + yours.len(),
+            Cause::ALL.len(),
+            "every cause must appear in exactly one column above; {} exist and {} \
+             are classified here",
+            Cause::ALL.len(),
+            world.len() + yours.len()
+        );
+    }
+
+    /// **The finding this story was reshaped by: NO cause accuses the bridge.**
+    ///
+    /// A culprit derived from causes alone would be structurally incapable of ever
+    /// saying `Bridge` — the one accusation an operator most needs to see.
+    /// `DropReason::culprit` is the other half. This test makes that a property
+    /// rather than an observation: if a future cause really does mean "the bridge is
+    /// broken", this goes red and its author decides whether the oracle is its home.
+    ///
+    /// FALSIFIED 2026-08-19 — mutation RUN: classifying `ValueUnusable` as `Bridge`
+    /// goes red with `NO CAUSE MAY ACCUSE THE BRIDGE, and value-unusable does`.
+    #[test]
+    fn no_cause_accuses_the_bridge_because_the_oracle_judges_readings() {
+        for cause in Cause::ALL {
+            assert_ne!(
+                cause.culprit(),
+                Culprit::Bridge,
+                "NO CAUSE MAY ACCUSE THE BRIDGE, and {} does. This oracle judges \
+                 readings; a reading is never this process's fault. A reading LOST \
+                 is — and that lives in `DropReason::culprit`",
+                cause.as_str()
+            );
+        }
     }
 }
 

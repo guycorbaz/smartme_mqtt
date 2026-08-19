@@ -17,7 +17,7 @@ use crate::core::clock::{Clock, MonotonicMs};
 use crate::core::oracle::{Cause, Judgement, Measured, Verdict, Verdicts, energy_is_monotonic};
 use crate::core::source::{Source, SourceError, Tick};
 use crate::core::state_machine::{Policy, State};
-use crate::domain::{MeterId, Quality};
+use crate::domain::{MeterId, Quality, UtcMillis};
 
 /// How the loop is paced and how long a single fetch may take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +95,33 @@ pub enum DropReason {
 }
 
 impl DropReason {
+    /// Whose fault a lost reading is (AR19, story 6.3).
+    ///
+    /// **This is where `Culprit::Bridge` comes from.** No [`Cause`] can produce it —
+    /// the oracle judges readings, and a reading is never the bridge's fault — so a
+    /// culprit derived from causes alone could never accuse this process. Five of
+    /// these six can.
+    ///
+    /// [`Cause`]: crate::core::oracle::Cause
+    pub const fn culprit(self) -> crate::core::oracle::Culprit {
+        use crate::core::oracle::Culprit;
+        match self {
+            // THE BRIDGE LOST IT. Its own inbox was full, its own transport task
+            // was gone, it had not birthed yet, it had not declared the device, or
+            // it could not build a topic. Every one of these is repaired here.
+            Self::OutboxFull
+            | Self::MqttTaskGone
+            | Self::BeforeBirth
+            | Self::UndeclaredDevice
+            | Self::Unpublishable => Culprit::Bridge,
+            // THE BROKER IS NOT KEEPING UP, or is gone. `rumqttc`'s request channel
+            // fills because the far end is not draining it — that is the world,
+            // and telling an operator to look at this process would send them to
+            // the wrong machine.
+            Self::TransportQueueFull => Culprit::World,
+        }
+    }
+
     /// Every reason, in the order the counters are indexed.
     ///
     /// The array is the single source of both the count and the index, so a
@@ -201,6 +228,39 @@ pub struct MeterState {
     ///
     /// `None` before the first completed tick, for the reason above.
     pub published: Option<Verdict>,
+    /// When this meter last published, and **against which staleness threshold**
+    /// (AR19, story 6.3 AC1).
+    ///
+    /// The threshold travels with the instant because a freshness judgement read
+    /// against a different threshold than the one used is a different judgement —
+    /// and the threshold is configurable, so a screen that assumed the current one
+    /// would misread every verdict reached before the last change.
+    pub last_published_at: Option<UtcMillis>,
+    /// The threshold in force when the verdict above was reached, in milliseconds.
+    pub staleness_threshold_ms: Option<i64>,
+    /// When what this meter publishes last **changed** — distinct from when it was
+    /// last published (AR19, story 6.3 AC2).
+    ///
+    /// ADR 0027 requires a verdict every cycle, so most publications repeat the
+    /// previous reading. Without this field a frozen meter and a quiet one look
+    /// identical: both show a recent publication. **Change is measured on the
+    /// source's own `ValueDate`**, not on the bridge's clock — a source
+    /// re-answering with the same acquisition time has produced nothing new,
+    /// whatever the bridge does with it.
+    pub last_changed_at: Option<UtcMillis>,
+    /// The acquisition time of the reading behind the last publication, kept so
+    /// the field above can tell a new reading from a repeated one.
+    pub source_value_date: Option<UtcMillis>,
+    /// Whose fault the last fault was (AR19, story 6.3 AC3) — `None` when nothing
+    /// is wrong.
+    ///
+    /// **Last writer wins, deliberately.** A publication records the culprit of its
+    /// cause; a lost reading records the culprit of its drop reason. The operator
+    /// is shown the most recent fault rather than the worst one, because "what is
+    /// happening now" is the question a 3 a.m. screen answers — and a worst-of
+    /// rule would keep an hour-old credential rejection on screen while the broker
+    /// is refusing everything.
+    pub culprit: Option<crate::core::oracle::Culprit>,
     /// How many judged readings never reached the wire, per [`DropReason`]
     /// (story 4.11, FR22, AR7).
     ///
@@ -387,6 +447,11 @@ impl Heartbeats {
                 period_ms: 0,
                 verdict: None,
                 published: None,
+                last_published_at: None,
+                staleness_threshold_ms: None,
+                last_changed_at: None,
+                source_value_date: None,
+                culprit: None,
                 dropped: [0; DropReason::COUNT],
             })
             .collect();
@@ -430,10 +495,49 @@ impl Heartbeats {
     ///
     /// [ADR 0027]: ../../../docs/adr/0027-a-failed-source-is-a-fault-the-screen-must-name.md
     pub fn record(&self, meter: &MeterId, state: State, published: Verdict) {
+        self.record_at(meter, state, published, None, None, None);
+    }
+
+    /// As [`record`](Self::record), carrying what AR19 asks the state to know:
+    /// **when** it published, **against which threshold**, and **what the source's
+    /// own acquisition time was** so a repeat can be told from a change.
+    ///
+    /// # Nothing formatted is built here
+    ///
+    /// `send_modify` holds a write lock every poll task waits on, so this writes
+    /// data and never text (story 6.3 AC4). The repair gesture an operator reads is
+    /// derived at render time from [`Culprit`](crate::core::oracle::Culprit) and the
+    /// cause; storing the sentence would put a `String` allocation under that lock,
+    /// once per meter per tick, for the benefit of a page nobody may open.
+    pub fn record_at(
+        &self,
+        meter: &MeterId,
+        state: State,
+        published: Verdict,
+        at: Option<UtcMillis>,
+        threshold_ms: Option<i64>,
+        value_date: Option<UtcMillis>,
+    ) {
         self.0.send_modify(|fleet| {
             if let Some(entry) = fleet.meters.iter_mut().find(|m| &m.meter == meter) {
                 entry.verdict = Some(state);
                 entry.published = Some(published);
+                if let Some(at) = at {
+                    entry.last_published_at = Some(at);
+                    // CHANGE IS THE SOURCE'S, NOT OURS. A reading carrying the same
+                    // `ValueDate` as the last one is the same reading republished —
+                    // which ADR 0027 requires and which must not read as movement.
+                    if value_date.is_some() && value_date != entry.source_value_date {
+                        entry.last_changed_at = Some(at);
+                    }
+                }
+                if value_date.is_some() {
+                    entry.source_value_date = value_date;
+                }
+                if threshold_ms.is_some() {
+                    entry.staleness_threshold_ms = threshold_ms;
+                }
+                entry.culprit = published.cause().map(crate::core::oracle::Cause::culprit);
                 fleet.generation += 1;
             }
         });
@@ -455,6 +559,14 @@ impl Heartbeats {
             if let Some(entry) = fleet.meters.iter_mut().find(|m| &m.meter == meter) {
                 entry.verdict = None;
                 entry.published = None;
+                // The enriched opinion goes with the verdict it belongs to, for the
+                // reason the doc above gives: retiring clears the OPINION. What
+                // stays is what a wedge detector reads — `last_tick` and the period.
+                entry.culprit = None;
+                entry.last_published_at = None;
+                entry.staleness_threshold_ms = None;
+                entry.last_changed_at = None;
+                entry.source_value_date = None;
                 fleet.generation += 1;
             }
         });
@@ -546,6 +658,10 @@ impl MeterPulse {
     pub fn dropped(&self, reason: DropReason) {
         self.fleet.send_modify(|fleet| {
             let entry = &mut fleet.meters[self.index];
+            // **THE ONLY PATH BY WHICH `Culprit::Bridge` REACHES A SCREEN** (story
+            // 6.3): no `Cause` yields it, because the oracle judges readings and a
+            // reading is never this process's fault. A reading LOST is.
+            entry.culprit = Some(reason.culprit());
             let cell = &mut entry.dropped[reason.index()];
             *cell = cell.saturating_add(1);
             fleet.generation += 1;
@@ -1531,7 +1647,20 @@ pub async fn run<S: Source + Send>(
         // The verdict reaches anything outside that can report on this meter —
         // BOTH halves of it since Story 2.3, so a screen cannot call a meter
         // healthy while the broker is being told otherwise ([#62]).
-        pulse.record(&meter, state, published);
+        // AR19's enriched state, written where the verdict already was (story
+        // 6.3). Everything here is data the tick already holds: the wall instant,
+        // the threshold the verdict was reached against, and the source's own
+        // acquisition time — which is what lets `last_changed_at` tell a NEW
+        // reading from the same one republished, as ADR 0027 requires every cycle
+        // to do.
+        pulse.record_at(
+            &meter,
+            state,
+            published,
+            Some(clock.wall()),
+            Some(current.policy.max_age_ms()),
+            memory.last.as_ref().map(|m| m.value_date),
+        );
 
         // THE ENDING ARMS HERE (story 3.5 AC3, ADR 0034): the account
         // pronounced this device absent. Only THIS latch: a credential or
@@ -3864,6 +3993,113 @@ mod tests {
             slugs.len(),
             DropReason::COUNT,
             "every reason needs its own slug: {slugs:?}"
+        );
+    }
+
+    /// **Story 6.3 AC2 — a republished reading is not a changed one.**
+    ///
+    /// ADR 0027 requires a verdict every cycle, so most publications repeat the
+    /// previous value. Without two distinct fields a frozen meter and a quiet one
+    /// look identical: both show a recent publication. **Change is measured on the
+    /// SOURCE's acquisition time**, not on the bridge's clock — a source
+    /// re-answering with the same `ValueDate` has produced nothing new, whatever
+    /// the bridge does with it.
+    ///
+    /// FALSIFIED 2026-08-19 — mutation RUN, output copied: dropping the
+    /// `value_date != entry.source_value_date` guard, so every publication counts
+    /// as a change, goes red with `a REPUBLISHED reading must not move
+    /// last_changed_at … left: Some(UtcMillis(3000)), right: Some(UtcMillis(1000))`.
+    #[test]
+    fn a_republished_reading_moves_the_publication_instant_and_not_the_change() {
+        let meter = MeterId::new("garage");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let first = UtcMillis(1_000);
+        let second = UtcMillis(3_000);
+        let acquired = UtcMillis(1_784_984_792_050);
+
+        beats.record_at(
+            &meter,
+            State::Fresh,
+            Verdict::good(),
+            Some(first),
+            Some(90_000),
+            Some(acquired),
+        );
+        // The SAME reading, republished a cycle later — ADR 0027's normal case.
+        beats.record_at(
+            &meter,
+            State::Stale,
+            Verdict::stale(Cause::NotRevalidated),
+            Some(second),
+            Some(90_000),
+            Some(acquired),
+        );
+
+        let fleet = beats.snapshot();
+        let state = &fleet.meters[0];
+        assert_eq!(
+            state.last_published_at,
+            Some(second),
+            "the publication instant follows every cycle, because every cycle publishes"
+        );
+        assert_eq!(
+            state.last_changed_at,
+            Some(first),
+            "a REPUBLISHED reading must not move last_changed_at: the source answered \
+             with the same acquisition time, so nothing new was measured. This is the \
+             field that tells a frozen meter from a quiet one"
+        );
+        assert_eq!(
+            state.staleness_threshold_ms,
+            Some(90_000),
+            "and the verdict carries the threshold it was reached against, or a screen \
+             reading it against today's threshold reads a different judgement"
+        );
+    }
+
+    /// **Story 6.3 AC3 — a lost reading is the one thing that accuses the bridge.**
+    ///
+    /// No `Cause` yields `Culprit::Bridge` — `oracle::culprit_tests` pins that as a
+    /// property. This is the other half: the path by which the accusation an
+    /// operator most needs to see actually reaches a screen.
+    ///
+    /// FALSIFIED 2026-08-19 — mutation RUN: removing the `entry.culprit` write from
+    /// `dropped` goes red with `a reading the BRIDGE lost must say so … left: None`.
+    #[test]
+    fn a_reading_the_bridge_lost_names_the_bridge() {
+        let meter = MeterId::new("garage");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let pulse = beats.of(&meter).expect("served");
+
+        // A publication first, so the culprit cannot be `Bridge` by never having
+        // been written — the shape this repository keeps finding in its own tests.
+        beats.record_at(
+            &meter,
+            State::Fresh,
+            Verdict::good(),
+            Some(UtcMillis(1_000)),
+            Some(90_000),
+            Some(UtcMillis(1_784_984_792_050)),
+        );
+        assert_eq!(
+            beats.snapshot().meters[0].culprit,
+            None,
+            "nothing is wrong yet, and `None` is how that is said"
+        );
+
+        pulse.dropped(DropReason::Unpublishable);
+
+        assert_eq!(
+            beats.snapshot().meters[0].culprit,
+            Some(crate::core::oracle::Culprit::Bridge),
+            "a reading the BRIDGE lost must say so: `Unpublishable` is this process \
+             failing to build a topic, not the world failing to answer"
+        );
+        assert_eq!(
+            DropReason::TransportQueueFull.culprit(),
+            crate::core::oracle::Culprit::World,
+            "but a full transport queue is the BROKER not draining — sending an \
+             operator to this process would send them to the wrong machine"
         );
     }
 

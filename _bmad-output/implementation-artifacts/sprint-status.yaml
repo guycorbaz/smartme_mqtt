@@ -2477,6 +2477,26 @@ development_status:
   # every NewSession field.
   # CLOSED 2026-08-10 — see the closure block at the top of this file.
   6-2-the-configuration-screen: done
+  # 2026-08-19, WRITTEN AND IMPLEMENTED. AR19's enriched state, and the order is
+  # the point: "UI consumes this state, never recomputes it", so the state comes
+  # first and NO SCREEN ships here. Three of AR19's five parts — published_at with
+  # the threshold it was judged against, last_changed_at distinct from
+  # last_published_at, and culprit as a first-class value. Root-cause grouping and
+  # the Cold-Reopening mapping are named as out of scope, not forgotten.
+  # THE FINDING RESHAPED THE STORY: walking all 21 `Cause` variants gives 16 World
+  # and 5 You and NOT ONE Bridge — correct rather than surprising, since the oracle
+  # judges READINGS and a reading is never this process's fault. The bridge's own
+  # faults are in DropReason (5 of 6 are Bridge). A culprit built from causes alone
+  # would have been structurally incapable of accusing the bridge, which is the one
+  # accusation an operator most needs. Now a PROPERTY, not a remark:
+  # `no_cause_accuses_the_bridge_because_the_oracle_judges_readings`.
+  # Change is measured on the SOURCE's ValueDate, not the bridge's clock: a source
+  # re-answering the same reading has produced nothing new, which is what tells a
+  # frozen meter from a quiet one.
+  # A DRAFTING ASSUMPTION WAS WRONG AND IS RECORDED AS SUCH: "enriching the watch
+  # channel taxes the hot path" — measured, snapshot() has ONE production caller,
+  # so the clone is per HTTP request, never per tick.
+  6-3-the-published-state-becomes-legible: review  # implemented 2026-08-19; no screen, by design
   epic-6-retrospective: required  # added 2026-08-10 — the line was absent entirely
 
   # ADDED 2026-08-08, previously absent from this file entirely.
