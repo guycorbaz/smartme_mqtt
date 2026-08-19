@@ -301,6 +301,14 @@ against the file. Four identifiers resolve; one line citation did not.
       it, moving the target to `:766`. Written, correct, and stale by the end of the same commit.
       Now cited by symbol, which is [#101]'s prescription and the reason that issue exists.
 
+- [x] [Review][Patch] **The harness could fail to start and blame the bridge for it.**
+      `bridge_with_ui` probed `/healthz` up to a hundred times and then **fell through silently**,
+      so a UI that never bound left every assertion below to fail on its own terms. A pre-push
+      gate reported `THE BLOCKED LOOP NEVER READ AS WEDGED … Last body: ` — with an **empty**
+      body, which is the tell: nothing had answered at all. The probe now asserts, naming the
+      bind race this file already documents (`an_unused_host_port` releases the port before
+      `ui::serve` binds it). Found by the gate, not by reading.
+
 **Verified and left standing:** `config.rs:49` (`PERIOD_MIN`), `poll_publish.rs:659` (the heartbeat
 before anything that can block), `:671` (the fetch deadline), `ui/mod.rs:51`
 (`WEDGED_AFTER_PERIODS`) — all four still point at exactly what they name, and they are the four

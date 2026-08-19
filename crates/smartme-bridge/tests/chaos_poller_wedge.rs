@@ -228,12 +228,30 @@ async fn bridge_with_ui(
 
     // The UI binds asynchronously; a probe that raced it would report "no
     // answer" about a server that was seconds from listening.
+    //
+    // **AND IT FAILS HERE IF IT NEVER ANSWERS, which it did not until 2026-08-19.**
+    // This loop used to fall through silently, so a UI that never bound left every
+    // assertion below to fail on its own terms — a pre-push gate reported
+    // `THE BLOCKED LOOP NEVER READ AS WEDGED … Last body: ` with an EMPTY body,
+    // accusing the bridge of not wedging when nothing had answered at all. A
+    // harness that cannot start must say so, or it indicts the code under test.
+    let mut answered = false;
     for _ in 0..100 {
         if healthz(ui_port).is_some() {
+            answered = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    assert!(
+        answered,
+        "THE UI NEVER ANSWERED on port {ui_port} within 10 s, so nothing below is about the \
+         bridge. The likeliest cause is the bind race this harness documents: \
+         `an_unused_host_port` asks the kernel for a free port and releases it, and something \
+         else can take it before `ui::serve` binds — narrow, and real enough to have happened. \
+         Re-run; if it repeats, the server is failing to start for a reason worth reading in \
+         the log"
+    );
     (ui_port, stop_tx)
 }
 
