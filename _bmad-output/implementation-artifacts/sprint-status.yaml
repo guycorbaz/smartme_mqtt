@@ -1456,7 +1456,15 @@ development_status:
   # accused the bridge of not wedging when nothing had answered at all. 4.15 and 4.18
   # carried nothing. MECHANICAL CHECKING found the citations; REPEATED EXECUTION found
   # the harness. Neither found the other's defects, which is the argument for both.
-  epic-4: in-progress  # 4.1-4.15, 4.17-4.19 done as of 2026-08-19; 4.16 unblocked and unwritten; epic-4-retrospective required
+  # CLOSED 2026-08-19. All 19 stories settled, CONTRACT_VERSION unchanged at 10
+  # throughout — this epic was verification, not construction. Chapter 4 of the
+  # conformance matrix closes at 70 clauses and the whole specification at
+  # 106.10.32.155 = 303, with no "of" left in any total. NFR3 and NFR10 measured
+  # for the first time, both by more than an order of magnitude. ADRs 0036, 0037,
+  # 0038 and an addendum to 0010 whose overstatement had kept a MUST invisible for
+  # an epic. Seven issues opened on measured findings and carried, none of them a
+  # defect this epic introduced.
+  epic-4: done
   4-1-conformance-matrix-namespace-and-topics: done
   # 4.2 was worked before it had a story file: the chapter-6 quality rows landed
   # with the quality-code fix (d28bb02), which is why it read 'in-progress' with
@@ -1966,7 +1974,7 @@ development_status:
   # reconnections and a broker restart, which a 30-second run cannot see. [#102],
   # and the gate's own header says it. Same position ADR 0038 took for the leak
   # gate: production is the only day-long window this project has.
-  4-16-latency-budget: review  # implemented 2026-08-19; [#102] for the uncovered window
+  4-16-latency-budget: done  # closed 2026-08-19; citations resolved mechanically per action E4
   # 2026-08-10, IMPLEMENTED out of order — ADR 0030's one named exception, taken
   # because the wire is only cheap to break while nothing is historised and a live
   # Ignition began reading this bridge that morning.
@@ -2052,7 +2060,15 @@ development_status:
   4-19-finish-chapter-4-payload-clauses: done  # closed 2026-08-19 after review; [#100] and [#101] opened
   # NOT owed yet: Epic 4 is at 10/19 stories, plus 4.17 in review. `required`
   # means it must run BEFORE the epic closes, not that it is late.
-  epic-4-retrospective: required
+  # epic-4-retro-2026-08-19.md — VALIDATED by Guy 2026-08-19, which closes the epic.
+  # Five action items (E1-E5), three of them mechanisms rather than reminders: cite
+  # the symbol never the line, a harness that cannot start must say so, and resolve
+  # a story's citations mechanically before closing it. E4 was applied to 4.16 and
+  # to the retrospective itself before this line was written.
+  # THE ONE THING NOT TO CARRY FORWARD UNEXAMINED IS [#94]: a pre-push gate that
+  # refuses half of what it is given trains people toward `--no-verify`, and
+  # CLAUDE.md makes that an on-record claim. The erosion is the risk, not the test.
+  epic-4-retrospective: done
   # 2026-08-03: Epic 5 opens with its scope CHANGED, not merely detailed. It used to
   # be framed as ".env secrets discipline" while Epic 6 was a read-only surface, so
   # configuration editing in the UI was owned by nobody — although the PRD's prose
