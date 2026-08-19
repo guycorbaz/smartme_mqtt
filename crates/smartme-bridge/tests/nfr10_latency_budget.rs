@@ -210,7 +210,10 @@ async fn a_reading_reaches_the_wire_inside_the_latency_budget() {
         node,
         vec![Serial::new(SERIAL)],
         Arc::clone(&clock),
-        pulse.clone(),
+        smartme_bridge::app::mqtt_driver::Health {
+            meters: pulse.clone(),
+            sink: smartme_bridge::app::mqtt_driver::SinkHealth::new(),
+        },
         rx,
         device_rx,
         death_rx,

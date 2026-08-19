@@ -225,7 +225,10 @@ async fn a_broker_that_comes_back_gets_a_new_session_and_the_old_timestamps() {
         node,
         vec![Serial::new(SERIAL)],
         Arc::clone(&clock),
-        pulse.clone(),
+        smartme_bridge::app::mqtt_driver::Health {
+            meters: pulse.clone(),
+            sink: smartme_bridge::app::mqtt_driver::SinkHealth::new(),
+        },
         rx,
         device_rx,
         death_rx,

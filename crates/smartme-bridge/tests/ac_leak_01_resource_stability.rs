@@ -266,7 +266,10 @@ async fn a_hundred_thousand_iterations_do_not_grow_the_process() {
         node,
         vec![Serial::new(SERIAL)],
         Arc::clone(&clock),
-        pulse.clone(),
+        smartme_bridge::app::mqtt_driver::Health {
+            meters: pulse.clone(),
+            sink: smartme_bridge::app::mqtt_driver::SinkHealth::new(),
+        },
         rx,
         device_rx,
         death_rx,

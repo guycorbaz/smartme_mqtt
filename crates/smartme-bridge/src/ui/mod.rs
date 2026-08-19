@@ -924,8 +924,22 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
             .collect::<Vec<_>>()
             .join(",")
     );
+    // THE SINK'S OWN HEALTH, and it stays OUT of the status code ([#53], story
+    // 6.5). An unreachable broker is an honest STALE: the bridge is working
+    // correctly and saying so, and the container restart Epic 7 wires to a non-200
+    // would fix nothing while killing every meter's session. The rule is unchanged
+    // — unhealthy only for a wedged poll loop — and this is a fact for the body.
+    //
+    // `null` is not `false`: a bridge that has never connected has not lost
+    // anything, and telling an operator "disconnected" about one that never tried
+    // sends them after an outage that did not happen.
+    let (sink_connected, sink_since) = phase.control().and_then(Control::sink).map_or_else(
+        || ("null".to_string(), "null".to_string()),
+        |s| (s.connected.to_string(), s.since.0.to_string()),
+    );
     let body = format!(
         "{{\"status\":\"{}\",\"intends_to_publish\":{},\"wedged\":{},\
+          \"sink_connected\":{sink_connected},\"sink_since_ms\":{sink_since},\
           \"failed_sources\":{},\"degraded_meters\":{},\"dropped_readings\":{},\
           \"loop_age_ms\":{},\"loop_age_allowed_ms\":{},\
           \"version\":\"{}\",\"contract\":{}}}",
@@ -1366,6 +1380,132 @@ mod tests {
             "a running bridge shows its table, even with nothing in it yet — the \
              operator needs to see that the page works and the fleet is empty, not \
              wonder which:\n{html}"
+        );
+    }
+
+    /// **Story 6.5, [#53] — the sink's state is reported, and it never touches the
+    /// status code.**
+    ///
+    /// The trap this test exists against is the one [#53] describes: a field that
+    /// compiles, renders, and reports `null` for ever teaches nobody anything. So
+    /// the sink is DRIVEN here — connected, then lost — and the assertions are on
+    /// what changed.
+    ///
+    /// FALSIFIED 2026-08-19 — two mutations RUN, output copied. Letting a
+    /// disconnected sink drive the code (`if !connected { 503 }`) goes red with
+    /// `AN UNREACHABLE BROKER IS AN HONEST STALE … status 503`. Reporting `false`
+    /// instead of `null` before the first connect goes red with `a bridge that has
+    /// never connected has not lost anything`.
+    #[tokio::test]
+    async fn the_sink_is_reported_in_the_body_and_never_in_the_status_code() {
+        use crate::app::mqtt_driver::SinkHealth;
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let clock = Arc::new(crate::core::clock::FakeClock::new(UtcMillis(
+            1_784_984_793_000,
+        )));
+        let meter = crate::domain::MeterId::new("appart-est");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let sink = SinkHealth::new();
+        let control =
+            Control::detached_with_sink(Arc::clone(&config), beats.clone(), clock, sink.clone());
+        let state = ui(Phase::running(control));
+
+        // 1. NEVER CONNECTED. `null`, not `false`.
+        let answer = healthz(State(Arc::clone(&state))).await.into_response();
+        assert_eq!(answer.status(), 200);
+        let html = body(answer).await;
+        assert!(
+            html.contains("\"sink_connected\":null"),
+            "a bridge that has never connected has not lost anything, and `false` \
+             would send an operator after an outage that did not happen:\n{html}"
+        );
+
+        // 2. CONNECTED.
+        sink.observed(true, UtcMillis(1_784_984_700_000));
+        let html = body(healthz(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            html.contains("\"sink_connected\":true")
+                && html.contains("\"sink_since_ms\":1784984700000"),
+            "the fact and its instant, both:\n{html}"
+        );
+
+        // 3. LOST — and the status code MUST NOT MOVE.
+        sink.observed(false, UtcMillis(1_784_984_790_000));
+        let answer = healthz(State(Arc::clone(&state))).await.into_response();
+        let status = answer.status();
+        let html = body(answer).await;
+        assert!(
+            html.contains("\"sink_connected\":false"),
+            "the loss is reported:\n{html}"
+        );
+        assert_eq!(
+            status, 200,
+            "AN UNREACHABLE BROKER IS AN HONEST STALE. The bridge is working \
+             correctly and saying so; Epic 7 wires non-200 to a container restart, \
+             which would kill every meter's Sparkplug session over somebody else's \
+             outage. The rule is unchanged: unhealthy ONLY for a wedged poll loop"
+        );
+    }
+
+    /// **Story 6.5 AC3, FR29 — the page says WHICH END to look at.**
+    ///
+    /// A source that answers nothing and a broker that is gone produce the same
+    /// silence on the wire and need opposite gestures. This is the assertion that
+    /// makes the two healths independent in practice rather than in the struct.
+    ///
+    /// FALSIFIED 2026-08-19 — mutation RUN: rendering the unreachable branch as
+    /// "connected" goes red with `an unreachable broker must be named as such`.
+    #[tokio::test]
+    async fn the_page_says_which_end_is_at_fault() {
+        use crate::app::mqtt_driver::SinkHealth;
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let now = UtcMillis(1_784_984_793_000);
+        let clock = Arc::new(crate::core::clock::FakeClock::new(now));
+        let beats = Heartbeats::for_meters([crate::domain::MeterId::new("appart-est")]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let sink = SinkHealth::new();
+        let state = ui(Phase::running(Control::detached_with_sink(
+            Arc::clone(&config),
+            beats,
+            clock,
+            sink.clone(),
+        )));
+
+        // Never connected is its own message, not a disconnection.
+        let html = body(
+            crate::ui::screens::meter_view(State(Arc::clone(&state)))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert!(
+            html.contains("never connected"),
+            "a bridge that never reached the broker must say so, not report a \
+             loss:\n{html}"
+        );
+
+        sink.observed(false, UtcMillis(now.0 - 600_000));
+        let html = body(
+            crate::ui::screens::meter_view(State(Arc::clone(&state)))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert!(
+            html.contains("unreachable") && html.contains("10 minutes ago"),
+            "an unreachable broker must be named as such, with since when — \
+             otherwise 'nothing is published' sends the operator to the meters, \
+             which are fine:\n{html}"
+        );
+        assert!(
+            html.contains("restarting it repairs nothing"),
+            "and the page must say the gesture is NOT to restart the bridge: that \
+             is the same judgement `/healthz` makes by staying at 200:\n{html}"
         );
     }
 

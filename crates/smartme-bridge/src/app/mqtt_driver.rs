@@ -1077,22 +1077,97 @@ fn trace_command_outcome(topic: &str, inbound: &Inbound) {
 /// `pulse` is the SAME fleet state the poll tasks write, not a second one: FOUR
 /// of the six ways a reading can be lost happen on this side of the channel
 /// (story 4.11), and a count kept separately here would give `/healthz` two
+/// Whether the broker is reachable, and since when (story 6.5, [#53]).
+///
+/// # Why this is observed rather than inferred
+///
+/// `/healthz` reported `publishing: true` for any bridge that had reached the
+/// publishing arm, including one whose broker was unreachable — corrected to
+/// `intends_to_publish` on 2026-08-04 because that is all the bridge could
+/// honestly assert. This is the fact that field could not carry: the driver sees
+/// every CONNACK and every drop, and until now told nobody.
+///
+/// **`None` is not `Disconnected`.** A bridge that has never connected has not
+/// lost anything, and an operator reading "disconnected" about a bridge that never
+/// tried would go looking for an outage that did not happen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SinkState {
+    /// Whether the last transport event was a CONNACK.
+    pub connected: bool,
+    /// When that event happened.
+    pub since: crate::domain::UtcMillis,
+}
+
+/// The shared handle: the driver writes, every surface reads.
+///
+/// Same shape as [`Heartbeats`](crate::app::poll_publish::Heartbeats) — a `watch`
+/// the writer owns and readers clone from — and for the same reason: a reader
+/// holding a snapshot holds a state that existed.
+#[derive(Clone)]
+pub struct SinkHealth(std::sync::Arc<tokio::sync::watch::Sender<Option<SinkState>>>);
+
+impl Default for SinkHealth {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SinkHealth {
+    /// A sink nothing has reported on yet.
+    pub fn new() -> Self {
+        Self(std::sync::Arc::new(tokio::sync::watch::Sender::new(None)))
+    }
+
+    /// Records a transport event. The driver calls this and nobody else.
+    pub fn observed(&self, connected: bool, at: crate::domain::UtcMillis) {
+        self.0.send_replace(Some(SinkState {
+            connected,
+            since: at,
+        }));
+    }
+
+    /// The sink as it stands, or `None` if it has never connected.
+    pub fn state(&self) -> Option<SinkState> {
+        *self.0.borrow()
+    }
+}
+
+/// The two independent healths FR29 asks for, travelling together.
+///
+/// **This type exists because the `#[allow]` below named its own revisit trigger**
+/// — *"eight parameters, and the revisit trigger is the ninth"* — and story 6.5
+/// reached it. The revision it asked for is this one: the meters' health and the
+/// broker's are not two unrelated parameters, they are the pair FR29 requires to be
+/// reported independently. Bundling them removes a decision rather than adding
+/// ceremony, which is exactly the test the old comment set.
+#[derive(Clone)]
+pub struct Health {
+    /// Per-meter liveness and verdicts — the SOURCE side.
+    pub meters: crate::app::poll_publish::Heartbeats,
+    /// Broker reachability — the SINK side.
+    pub sink: SinkHealth,
+}
+
 /// numbers to reconcile for one question.
 #[allow(clippy::too_many_arguments)]
-// Eight parameters, and the revisit trigger is the ninth — the same rule
-// `poll_publish::run` records, for the same reason: these do not travel together,
-// so bundling them would add ceremony at the one call site without removing a
-// decision.
+// **Eight parameters, and the ninth arrived on 2026-08-19** — story 6.5 needed the
+// sink's health beside the meters'. The trigger this comment set was honoured
+// rather than raised: the two healths went into `Health`, because they are the pair
+// FR29 requires to be reported independently and they DO travel together. The count
+// is unchanged at eight, and the next revisit trigger is the ninth again.
 pub async fn run(
     config: MqttConfig,
     node: sparkplug_b::EdgeNode,
     mut meters: Vec<Serial>,
     clock: std::sync::Arc<dyn Clock + Send + Sync>,
-    pulse: crate::app::poll_publish::Heartbeats,
+    health: Health,
     mut inbox: mpsc::Receiver<MeterUpdate>,
     mut devices: mpsc::Receiver<DeviceCommand>,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) {
+    // The meters' half of `health`, bound once so the body below reads exactly as it
+    // did before story 6.5 grouped the two.
+    let pulse = health.meters.clone();
     // The command topic, built from the same validated grammar as everything we
     // publish, and built BEFORE `node` is handed to the publisher.
     //
@@ -1210,6 +1285,11 @@ pub async fn run(
                     match event {
                         Some(Transport::Connected) => {
                             established = true;
+                            // **THE FACT [#53] ASKED FOR**, recorded where it is
+                            // known and nowhere else: this arm fires on every
+                            // CONNACK, so it covers the first connect and every
+                            // reconnect alike.
+                            health.sink.observed(true, clock.wall());
                             // 5. Connected: subscribe to NCMD BEFORE birthing. The
                             // order of these two statements IS the requirement; see
                             // the module docs.
@@ -1230,6 +1310,7 @@ pub async fn run(
                             trace_subscription_outcome(topic, granted(&codes));
                         }
                         Some(Transport::Lost) => {
+                            health.sink.observed(false, clock.wall());
                             tracing::warn!("transport lost; the will covers us until we reconnect");
                         }
                         None => {

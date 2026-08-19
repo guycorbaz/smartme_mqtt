@@ -116,6 +116,9 @@ pub struct Control {
     config: ConfigHandle,
     devices: mpsc::Sender<DeviceCommand>,
     heartbeats: Heartbeats,
+    /// The sink's health (story 6.5). Handed to the UI the same way the heartbeats
+    /// are: a read-only view of what the driver observed.
+    sink: crate::app::mqtt_driver::SinkHealth,
     clock: Arc<dyn Clock + Send + Sync>,
 }
 
@@ -128,6 +131,20 @@ impl Control {
     /// drops births and deaths is exactly the object this project must never
     /// hand to production code: it would report a device certificate as sent
     /// while nothing reached the wire.
+    /// As [`detached`](Self::detached), with a sink the caller can drive — story
+    /// 6.5's tests need to observe a connect and a loss, and a helper that could
+    /// only build a never-connected sink would make [#53]'s whole point untestable.
+    pub(crate) fn detached_with_sink(
+        config: ConfigHandle,
+        heartbeats: Heartbeats,
+        clock: Arc<dyn Clock + Send + Sync>,
+        sink: crate::app::mqtt_driver::SinkHealth,
+    ) -> Self {
+        let mut control = Self::detached(config, heartbeats, clock);
+        control.sink = sink;
+        control
+    }
+
     pub(crate) fn detached(
         config: ConfigHandle,
         heartbeats: Heartbeats,
@@ -141,6 +158,9 @@ impl Control {
             config,
             devices,
             heartbeats,
+            // A detached control has never connected, which is the honest answer
+            // for a surface that is being read rather than driven.
+            sink: crate::app::mqtt_driver::SinkHealth::new(),
             clock,
         }
     }
@@ -160,6 +180,12 @@ impl Control {
     /// Handed out rather than duplicated: `/healthz` must report the SAME
     /// instant the loop records, or a healthcheck would be acting on a second
     /// opinion about whether the bridge is alive.
+    /// What the driver last observed of the broker, or `None` if it has never
+    /// connected — which is not the same as disconnected (story 6.5 AC4).
+    pub fn sink(&self) -> Option<crate::app::mqtt_driver::SinkState> {
+        self.sink.state()
+    }
+
     pub fn heartbeats(&self) -> Heartbeats {
         self.heartbeats.clone()
     }
@@ -363,6 +389,10 @@ pub async fn run_with_control(
     // decides.
     let (tx, rx) = mpsc::channel(64);
     let heartbeats = Heartbeats::for_meters(served.iter().map(|m| m.meter.clone()));
+    // The sink's health, observed by the driver and read by every surface (story
+    // 6.5, [#53]). Created here beside the meters' so the two reach `Control`
+    // together — FR29 asks for them independently, which means both must exist.
+    let sink = crate::app::mqtt_driver::SinkHealth::new();
     let (death_tx, death_rx) = oneshot::channel();
     // Reconfiguration gets its OWN channel, for the same reason inbound commands
     // do: sharing the reading path would put an externally-driven, bursty
@@ -373,6 +403,7 @@ pub async fn run_with_control(
         config: Arc::clone(&handle),
         devices: device_tx.clone(),
         heartbeats: heartbeats.clone(),
+        sink: sink.clone(),
         clock: Arc::clone(&clock),
     });
 
@@ -389,7 +420,10 @@ pub async fn run_with_control(
         node,
         served.iter().map(|m| m.serial.clone()).collect(),
         Arc::clone(&clock),
-        heartbeats.clone(),
+        crate::app::mqtt_driver::Health {
+            meters: heartbeats.clone(),
+            sink: sink.clone(),
+        },
         rx,
         device_rx,
         death_rx,
@@ -525,6 +559,7 @@ mod tests {
                         .filter(|m| m.enabled)
                         .map(|m| m.meter.clone()),
                 ),
+                sink: crate::app::mqtt_driver::SinkHealth::new(),
                 clock: Arc::new(crate::core::clock::SystemClock::new()),
             },
             rx,

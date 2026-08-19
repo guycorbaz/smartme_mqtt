@@ -2514,6 +2514,24 @@ development_status:
   # `Publication`, so an instant can no longer be supplied without the threshold it
   # was judged against.
   6-4-the-meter-view: review  # implemented 2026-08-19; FR37 and FR35 remain
+  # 2026-08-19, WRITTEN AND IMPLEMENTED. [#53] decided the order exactly as AR19 did
+  # for 6.3: FR37's third light cannot be lit by an INTENTION, so the sink's actual
+  # state comes first. The driver has emitted Transport::Connected since Epic 1 and
+  # told nobody; now it writes a SinkHealth watch, Control carries it, /healthz
+  # reports it and the meter page names it.
+  # THE GUARD [#53] SET IS THE CRITERION: an unreachable broker stays 200. It is an
+  # honest STALE — the bridge works and says so — and Epic 7 wires non-200 to a
+  # container restart, which would kill every meter's session over somebody else's
+  # outage. Falsified: letting the sink drive the code yields 503 and the test
+  # refuses it.
+  # `null` IS NOT `false`: a bridge that never connected has lost nothing.
+  # THE #[allow] NAMED ITS OWN REVISIT TRIGGER AND IT FIRED. mqtt_driver::run said
+  # "eight parameters, and the revisit trigger is the ninth" since Epic 1 (action
+  # D4). This story needed the ninth and HONOURED the trigger instead of raising the
+  # count: the two healths went into `Health`, because FR29 requires them reported
+  # independently and they do travel together. An allow that carries its trigger was
+  # written in July and paid in August.
+  6-5-the-sink-says-whether-it-is-connected: review  # implemented 2026-08-19; [#53] closes, FR29 delivered
   epic-6-retrospective: required  # added 2026-08-10 — the line was absent entirely
 
   # ADDED 2026-08-08, previously absent from this file entirely.

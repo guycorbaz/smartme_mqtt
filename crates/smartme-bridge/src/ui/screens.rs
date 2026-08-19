@@ -1376,10 +1376,31 @@ pub(super) async fn meter_view(State(state): State<Arc<UiState>>) -> impl IntoRe
         ));
     }
 
+    // FR29's two healths, side by side and INDEPENDENT. "Nothing is being
+    // published" is useless without which end to look at: a source that answers
+    // nothing and a broker that is gone produce the same silence on the wire and
+    // need opposite gestures.
+    let sink_line = match control.sink() {
+        None => "The broker: <strong>never connected</strong> since this bridge \
+                 started. Nothing has been published, and nothing was lost — check \
+                 the broker address in the configuration."
+            .to_string(),
+        Some(s) if s.connected => format!(
+            "The broker: <strong>connected</strong>, {}.",
+            ago(now, s.since)
+        ),
+        Some(s) => format!(
+            "The broker: <strong>unreachable</strong> since {}. Readings are still \
+             judged and their verdicts still stand; what stops here is delivery. \
+             This is not a bridge fault and restarting it repairs nothing.",
+            ago(now, s.since)
+        ),
+    };
+
     page(
         "Meters",
         &format!(
-            "<h1>Meters</h1>\
+            "<h1>Meters</h1><p>{sink_line}</p>\
              <table><tr><th>Meter</th><th>Serial</th><th>Topic</th><th>Power</th>\
              <th>Energy</th><th>Published as</th><th>Last published</th>\
              <th>Last changed</th><th>Whose fault</th></tr>{rows}</table>\

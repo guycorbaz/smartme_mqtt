@@ -153,7 +153,10 @@ async fn a_reconnect_re_declares_the_reading_without_moving_its_clock() {
         Arc::clone(&clock),
         // Story 4.11's counters. Empty on purpose: this test asserts nothing about
         // lost readings.
-        Heartbeats::default(),
+        smartme_bridge::app::mqtt_driver::Health {
+            meters: Heartbeats::default(),
+            sink: smartme_bridge::app::mqtt_driver::SinkHealth::new(),
+        },
         rx,
         device_rx,
         death_rx,

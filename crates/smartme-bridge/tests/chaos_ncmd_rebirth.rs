@@ -300,7 +300,10 @@ async fn chaos_a_rebirth_request_is_answered_with_a_complete_birth_sequence() {
         // serve rather than panicking — so an empty fleet here counts nothing and
         // changes nothing. A test that wants the counts must build one for its own
         // meters.
-        smartme_bridge::app::poll_publish::Heartbeats::default(),
+        smartme_bridge::app::mqtt_driver::Health {
+            meters: smartme_bridge::app::poll_publish::Heartbeats::default(),
+            sink: smartme_bridge::app::mqtt_driver::SinkHealth::new(),
+        },
         rx,
         // AC4's reconfiguration channel. These tests never send on it; the
         // sender is kept alive so the driver's branch stays armed rather than
