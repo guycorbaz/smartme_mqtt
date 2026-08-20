@@ -201,7 +201,7 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 - FR35: Epic 6 — auto-written timestamped config context line
 - FR36: Epic 6 — "state of the bridge" orientation screen
 - FR37: Epic 6 — on-demand end-to-end validation for a chosen meter
-- FR38: Epic 6 — daily-rotated logs, configurable level/retention, no secrets
+- FR38: Epic 6 — daily-rotated logs, configurable level/retention, no secrets — **DELIVERED OUTSIDE ANY STORY** (`main.rs`, 2026-08-01): `rolling::Builder` with `Rotation::DAILY` and `max_log_files(log_keep)`, the level through `EnvFilter`, and no credential in the configuration at all ([ADR 0023](../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md)). *Recorded 2026-08-20 by the review of stories 6.3-6.5: no story claims it, so this map was the only place counting it, and it was counting it as owed.*
 - FR39: Epic 7 — deploy + start via `docker compose`
 - FR40: Epic 7 — update by pulling a new image without config loss
 - FR41: Epic 8 — documented update procedure with rollback + verification
@@ -209,6 +209,7 @@ This document provides the complete epic and story breakdown for smartme_mqtt, d
 - FR43: Epic 5 — external/bundled broker, optionally secured, per config
 - FR44: Epic 6 — running app/image version in UI + health endpoint
 - FR45: Epic 1 — cumulative energy encoded as 64-bit double (never float32)
+- FR46: Epic 5 *(the model and persistence half)* + Epic 6 *(the screen half)* — configuration editable and persisted from the web UI ([ADR 0021](../../docs/adr/0021-configuration-is-editable-from-the-ui.md)). **The screen half is DELIVERED** by story 6.2: `save_config` takes `api_base`, `broker_host`, `broker_port`, `group_id`, `node_id`, `publish_period_secs`, `log_dir`, `log_keep`, `ui_port` and the meter mapping — FR46's own enumeration. *Added 2026-08-20 by the review of stories 6.3-6.5: FR46 was written into the PRD on 2026-08-03 and into both epics' scope lines, and **never into this map**, which is what coverage is measured against. Story 6.2 cites FR23, FR25 and FR28 and not the requirement it delivers.*
 
 ## Epic List
 

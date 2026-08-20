@@ -121,7 +121,7 @@ where a reader who never opens this file will find it.
 
 ### References
 
-- [Source: `_bmad-output/planning-artifacts/epics.md:1197`] — Story 4.15, criteria as amended
+- [Source: `_bmad-output/planning-artifacts/epics.md:1198`] — Story 4.15, criteria as amended
 - [Source: `_bmad-output/planning-artifacts/prd.md:340`] — NFR3, as amended
 - [Source: `docs/adr/0038-*.md`] — the amendment and its arithmetic
 - [Source: `CLAUDE.md`] — write the measuring spike first; falsify before trusting

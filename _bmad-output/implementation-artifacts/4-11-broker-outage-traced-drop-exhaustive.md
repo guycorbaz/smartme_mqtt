@@ -235,7 +235,7 @@ evidence.
 
 ### References
 
-- [Source: `_bmad-output/planning-artifacts/epics.md:1133`] — Story 4.11 statement and both ACs
+- [Source: `_bmad-output/planning-artifacts/epics.md:1134`] — Story 4.11 statement and both ACs
 - [Source: `_bmad-output/planning-artifacts/epics.md:141`] — AR7, `readings_dropped_total{meter,reason}`
 - [Source: `_bmad-output/planning-artifacts/prd.md:295`] — FR22
 - [Source: `_bmad-output/planning-artifacts/prd.md:340`] — NFR3 (bounds; measured by 4.15)

@@ -64,7 +64,7 @@ The retain-false invariant itself, and its tests — they stay regardless of the
 ## References
 
 - [Source: `_bmad-output/planning-artifacts/prd.md:294`] — FR21's letter
-- [Source: `_bmad-output/planning-artifacts/epics.md:315`] — the near-moot record, 2026-08-08
+- [Source: `_bmad-output/planning-artifacts/epics.md:316`] — the near-moot record, 2026-08-08
 - [Source: `docs/adr/0033-...md`] — the withdrawal precedent and its criterion ("can the
   bridge be wrong about this in a way it cannot detect?" — here, stronger: the bridge cannot
   even PRODUCE the fault's subject)

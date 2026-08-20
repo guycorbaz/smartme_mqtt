@@ -86,7 +86,7 @@ reader.*
 
 ### References
 
-- [Source: `_bmad-output/planning-artifacts/epics.md:1250`] — Story 4.18's criteria
+- [Source: `_bmad-output/planning-artifacts/epics.md:1251`] — Story 4.18's criteria
 - [Source: `docs/adr/0010-fr20-delivery-claim-at-qos0.md`] — the ADR and its addendum
 - [Source: `docs/spec/sparkplug-b-3.0.0/chapters/Sparkplug_4_Topics.adoc`] — the five QoS clauses
 - [Source: `CLAUDE.md`] — read the norm first; this story is that rule applied to a past failure

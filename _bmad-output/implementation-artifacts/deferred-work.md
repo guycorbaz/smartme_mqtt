@@ -163,7 +163,7 @@ Items deferred from reviews; each carries its origin and where it should be pick
   wire before `pump.abort()`; on a loaded runner (jobs capped at 2, plus a container broker) the
   pump may not drain in time, which surfaces as a `chaos_sigterm_no_lie` failure indistinguishable
   from the real regression.
-- The suite now treats a will-only graceful death as a hard failure, while `epics.md:696` still
+- The suite now treats a will-only graceful death as a hard failure, while `epics.md:697` still
   states the AC as a disjunction that permits it. Spec and gate disagree — the epic text needs
   amending (see the Story 1.13 notes).
 - `shutdown_signal()` registers its SIGTERM handler only when first polled, at `supervisor.rs:129`.
@@ -561,7 +561,7 @@ need a decision; one more is new and was repaired.
   saying so here conflated two different things.** Story 3.6 implements FR21 — *purge orphan
   RETAINED MESSAGES on old topics* — and this bridge publishes everything with `retain =
   false`, as the specification requires, so **it cannot create the orphans FR21 purges**
-  (`epics.md:287` already said as much). The orphan tag folder is Ignition's own persisted
+  (`epics.md:288` already said as much). The orphan tag folder is Ignition's own persisted
   tree; no MQTT purge reaches it, and cleaning it is the host's business, not the bridge's.
   Story 3.6 is therefore near-moot as written and must be re-scoped or withdrawn before Epic 3
   can close — a scope decision, not a blocker.

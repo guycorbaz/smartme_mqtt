@@ -255,7 +255,7 @@ The matrix already carries both quality rows and calls `payloads-propertyset-qua
 ### References
 
 - [Source: `_bmad-output/planning-artifacts/epics.md#Story 4.2`] — the two ACs, verbatim above
-- [Source: `_bmad-output/planning-artifacts/epics.md:750`] — Stories 4.1–4.3 are the audit; the rest of Epic 4 may be reshaped by their findings
+- [Source: `_bmad-output/planning-artifacts/epics.md:751`] — Stories 4.1–4.3 are the audit; the rest of Epic 4 may be reshaped by their findings
 - [Source: `docs/spec/sparkplug-b-3.0.0/chapters/Sparkplug_6_Payloads.adoc`] — the clause set; v3.0.0, EPL-2.0
 - [Source: `docs/sparkplug-conformance.md#Chapter 6`] — the 8 rows already present, and the verdict definitions
 - [Source: `docs/adr/0012-quality-codes-spec-versus-host.md`] — the quality deviation

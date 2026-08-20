@@ -18,7 +18,7 @@ so that NFR17 is verified by an artifact that actually publishes what the produc
 
 ## Acceptance Criteria
 
-The epic states two (`epics.md:973-982`). **Both are amended and four are added**, for reasons in
+The epic states two (`epics.md:974-982`). **Both are amended and four are added**, for reasons in
 *Dev Notes → What the epic gets wrong*. Read that section first: the epic's AC1 names an artifact
 that **cannot answer a rebirth**, and the gate it names has silently stopped testing the product.
 

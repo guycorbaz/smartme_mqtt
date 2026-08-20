@@ -110,7 +110,7 @@ consume this state without recomputing it — which is the only reason to do the
 ## References
 
 - [Source: `_bmad-output/planning-artifacts/epics.md:153`] — AR19, and *"UI consumes this state, never recomputes it"*
-- [Source: `_bmad-output/planning-artifacts/epics.md:327`] — Epic 6's scope
+- [Source: `_bmad-output/planning-artifacts/epics.md:328`] — Epic 6's scope
 - [Source: `crates/smartme-bridge/src/core/oracle.rs`] — the twenty-one causes and their slugs
 - [Source: `crates/smartme-bridge/src/app/poll_publish.rs`] — `MeterState`, `DropReason`, `send_modify`
 - [Source: `crates/smartme-bridge/src/app/mqtt_driver.rs`] — `qos_for`, the table pattern AC3 copies

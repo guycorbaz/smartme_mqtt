@@ -333,3 +333,14 @@ absence of a published host port — a deployment property Epic 7 must carry as 
 
 **[#56] opened:** nothing inside the image can consume `/healthz` — no `curl`, no `wget`, and
 the shell is not bash — so AC3 was falsified against nobody's implementation.
+
+### Coverage note — 2026-08-20
+
+**This story delivers FR46 and cites FR23, FR25 and FR28 instead.** `save_config` takes
+`api_base`, `broker_host`, `broker_port`, `group_id`, `node_id`, `publish_period_secs`,
+`log_dir`, `log_keep`, `ui_port` and the meter mapping — FR46's own enumeration, *"without
+editing a file or restarting the container"*. Nothing is missing from the code; what was
+missing is the claim, and FR46 was absent from the FR coverage map entirely (it entered the
+PRD on 2026-08-03 with [ADR 0021] and both epics' scope lines, and never the map, which is
+what coverage is measured against). Both are recorded now. Found by the review of stories
+6.3–6.5, which had to ask what Epic 6 still owed before it could say what remained.

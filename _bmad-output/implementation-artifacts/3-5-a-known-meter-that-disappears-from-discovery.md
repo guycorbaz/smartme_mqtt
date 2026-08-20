@@ -188,7 +188,7 @@ changes; `./scripts/ci-local.sh` full run; `gh run list`.** [#65] closes with th
 ### References
 
 - [Source: `_bmad-output/planning-artifacts/prd.md:274`] — FR6
-- [Source: `_bmad-output/planning-artifacts/epics.md:300`] — the DDEATH reservation, decided
+- [Source: `_bmad-output/planning-artifacts/epics.md:301`] — the DDEATH reservation, decided
   2026-08-06
 - [Source: [#65]] — the three never-decided consequences, verbatim
 - [Source: story 3.4's drafting decision 2] — discovery is on demand; the loop this story

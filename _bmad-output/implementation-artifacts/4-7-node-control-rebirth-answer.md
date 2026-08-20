@@ -12,7 +12,7 @@ so that I can resynchronise without waiting for the bridge to reconnect on its o
 
 ## Acceptance Criteria
 
-The epic states three (`epics.md:915-928`). **Two of them are amended and three are added**, for
+The epic states three (`epics.md:916-928`). **Two of them are amended and three are added**, for
 reasons recorded under *Dev Notes → What the epic gets wrong, and what it leaves out*. Read that
 section before implementing: one epic clause, taken literally, would force the bridge to **delete a
 value it can honestly account for**, and would turn an existing green test red for the right reason.
@@ -273,7 +273,7 @@ fourth**. The mechanism that works is the itemised table, not the intention.*
         (`:930`). Recompute chapter 5's and chapter 6's tallies **and** the whole-specification total,
         and state the arithmetic.
   - [x] **Chapter 4's `topics-nbirth-rebirth-metric` has no row at all** — it is one of the 29 clauses
-        Story 4.19 owns (`epics.md:1140` instructs 4.19 to point it at Story 4.7). **Do not open the
+        Story 4.19 owns (`epics.md:1141` instructs 4.19 to point it at Story 4.7). **Do not open the
         row here**; record the evidence in this story's notes so 4.19 can cite it, and leave chapter
         4's tally alone.
   - [x] `crates/sparkplug-b/src/lib.rs:26-33` — the *Conformance scope* lists the `Node Control/Rebirth`
@@ -446,7 +446,7 @@ three criteria are not the whole story.
 chapters require an NBIRTH to declare `Node Control/Rebirth`, boolean, `false`. The bridge's node
 BIRTH carries exactly one metric, `Contract/Version` (`sparkplug_publisher.rs:243`, `:252`), plus the
 `bdSeq` the crate prepends. The matrix already scores all five as `gap (unimplemented)` **owned by
-Story 4.7** (`:514-516`, `:930`), and `epics.md:1140` routes chapter 4's copy here too. The epic's
+Story 4.7** (`:514-516`, `:930`), and `epics.md:1141` routes chapter 4's copy here too. The epic's
 own acceptance criteria never mention them. Without this metric a host has no declared endpoint to
 address, and the bridge fails five MUSTs while advertising that it answers rebirths.
 

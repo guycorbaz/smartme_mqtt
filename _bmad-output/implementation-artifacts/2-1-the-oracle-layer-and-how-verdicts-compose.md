@@ -28,7 +28,7 @@ without a version bump. Neither the document nor the test exists today; `CONTRAC
 served but nothing guards what it stands for. Building the mapping here without its guard would
 be the "repair the instance, not the class" pattern the Epic 5 retrospective named (action B1).
 
-**And the sequencing precondition is met.** `epics.md:245` deferred Epic 2 behind Epic 4 partly
+**And the sequencing precondition is met.** `epics.md:246` deferred Epic 2 behind Epic 4 partly
 because *"Epic 2 will define many oracle→quality mappings (AR16), which are cheaper to land on a
 settled publishing machine than to revisit after rebirth and anti-replay change republication
 semantics"*. The publishing machine settled with stories 4.1–4.10.
@@ -199,10 +199,10 @@ being run.
 
 ### References
 
-- [Source: `_bmad-output/planning-artifacts/epics.md:264`] — Epic 2's AR16/AR17 assignment
+- [Source: `_bmad-output/planning-artifacts/epics.md:265`] — Epic 2's AR16/AR17 assignment
 - [Source: `_bmad-output/planning-artifacts/epics.md:150`] — AR16, the versioned contract and
   `contract_golden.rs`
-- [Source: `_bmad-output/planning-artifacts/epics.md:245`] — why Epic 2 followed Epic 4, and the
+- [Source: `_bmad-output/planning-artifacts/epics.md:246`] — why Epic 2 followed Epic 4, and the
   precondition now met
 - [Source: `docs/spec/sparkplug-b-3.0.0/chapters/Sparkplug_6_Payloads.adoc:617-636`] — the
   `Quality` property key and its permitted values

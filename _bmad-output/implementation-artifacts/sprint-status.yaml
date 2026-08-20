@@ -2561,6 +2561,17 @@ development_status:
   # AND THE STORY'S OWN COMMIT MOVED ITS OWN CITATION 81 LINES (mqtt_driver.rs:1489 ->
   # :1570) — [#101]'s defect, recurring at the first opportunity after action E4.
   6-5-the-sink-says-whether-it-is-connected: done  # closed 2026-08-20 after review; AC3 met on the wrong surface, repaired; [#53] stays closed
+  # 2026-08-20, WRITTEN. FR37 — the on-demand end-to-end check, which story 6.5 made
+  # writable: until the sink's state was observed, the third light would have been lit
+  # by an INTENTION. THE STORY DECIDES AT DRAFTING what a check may not do: it does not
+  # judge the reading it fetches, because `step_once` judges against a per-meter memory
+  # (`energy_reference`, `last_http_date`, `last_value_date`) that a click must not move
+  # — a validation that mutated it would make the NEXT real tick report a backwards
+  # counter, and one that judged without it would be a second place the truth lives.
+  # The three links therefore report three facts, each from its owner. AND NOTHING IS
+  # PUBLISHED to light the third one: a DDATA carrying a test value is, in the
+  # historian, indistinguishable from a measurement.
+  6-6-the-end-to-end-check: ready-for-dev  # written 2026-08-20; FR37, no judgement and no publication
   epic-6-retrospective: required  # added 2026-08-10 — the line was absent entirely
 
   # ADDED 2026-08-08, previously absent from this file entirely.

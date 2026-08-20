@@ -226,7 +226,7 @@ The anchors below are what the review had to reconstruct; a future reader gets t
   falsification output is copied at `:169` and names the topic that reached the wire — an
   **NBIRTH**, not a DDATA, which is the whole distinction AC1 was written around.
 - **Task 6, the consequences.** All four: `04-configuration.tex:53` and `:76`,
-  `09-appendix-config-reference.tex:71`, `.env.example:30` and `:122`, and `epics.md:285` records
+  `09-appendix-config-reference.tex:71`, `.env.example:30` and `:122`, and `epics.md:286` records
   **FR25 met by 5.3**. This is the only one of the seven `review` stories whose consequence sweep
   is complete — story 3.2's reached the manual and not `epics.md`.
 

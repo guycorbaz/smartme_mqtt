@@ -284,7 +284,7 @@ disagree observably: the third reading's verdict is what discriminates them.
 
 - [Source: `_bmad-output/planning-artifacts/prd.md:284`] — FR14
 - [Source: `_bmad-output/planning-artifacts/prd.md:286`] — FR16, whose boundary with FR14 is drawn above
-- [Source: `_bmad-output/planning-artifacts/epics.md:264`] — Epic 2's AR16/AR17 assignment
+- [Source: `_bmad-output/planning-artifacts/epics.md:265`] — Epic 2's AR16/AR17 assignment
 - [Source: `docs/adr/0031-a-verdict-belongs-to-a-metric.md`] — why this oracle can exist per metric
 - [Source: `docs/adr/0032-at-equal-severity-a-latching-cause-outranks-a-degrading-one.md`] — the latch/degrade rule
 - [Source: `_bmad-output/implementation-artifacts/2-3-the-oracle-layer-finished.md`] — AC3, recorded UNMET, which this story closes

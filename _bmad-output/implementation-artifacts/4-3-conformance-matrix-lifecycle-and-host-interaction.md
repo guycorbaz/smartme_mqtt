@@ -343,7 +343,7 @@ Read these before writing rows. The lifecycle lives in three places and the spli
 ### References
 
 - [Source: `_bmad-output/planning-artifacts/epics.md#Story 4.3`] — AC1 and AC2 verbatim; AC3 added by the amendment note there
-- [Source: `_bmad-output/planning-artifacts/epics.md:750`] — Stories 4.1–4.3 are the audit; the rest of Epic 4 may be reshaped by their findings
+- [Source: `_bmad-output/planning-artifacts/epics.md:751`] — Stories 4.1–4.3 are the audit; the rest of Epic 4 may be reshaped by their findings
 - [Source: `docs/spec/sparkplug-b-3.0.0/chapters/Sparkplug_5_Operational_Behavior.adoc`] — 99 ids; `:158` NCMD subscribe, `:403` DCMD subscribe (QoS 1)
 - [Source: `docs/spec/sparkplug-b-3.0.0/chapters/Sparkplug_2_Principles.adoc`] — 4 ids; `:50-52` RBE, `:97-99` birth order, `:133-138` clean session
 - [Source: `docs/spec/sparkplug-b-3.0.0/chapters/Sparkplug_10_Conformance.adoc`] — 12 ids; profiles at `:35`, `:42`, `:53`, `:71`

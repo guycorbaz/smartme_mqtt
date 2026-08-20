@@ -61,7 +61,7 @@ while a story in it is undecided:
 
 - **Story 3.6 is near-moot and must be re-scoped or withdrawn before Epic 3 can close.** FR21
   purges *orphan retained messages*, and this bridge publishes everything with `retain = false`
-  — the specification requires it — so it cannot create the orphans FR21 purges (`epics.md:287`
+  — the specification requires it — so it cannot create the orphans FR21 purges (`epics.md:288`
   already says so). What is genuinely owed at a namespace change is an **orphan tag folder in
   the host**, which is Ignition's own persisted tree and which no MQTT purge can reach.
   `deferred-work.md` conflates the two and is corrected alongside this ADR.

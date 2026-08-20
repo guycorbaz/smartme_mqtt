@@ -220,7 +220,7 @@ without the run's copied output is a prediction).
 
 ### References
 
-- [Source: `_bmad-output/planning-artifacts/epics.md:290-306`] — Epic 3, the two decisions of
+- [Source: `_bmad-output/planning-artifacts/epics.md:291-306`] — Epic 3, the two decisions of
   2026-08-13 (the second purpose; honesty first) and the 5.3 boundary sentence
 - [Source: `_bmad-output/planning-artifacts/prd.md:270,274`] — FR2, FR6 (3.5's, for the
   boundary of what this story must NOT build)

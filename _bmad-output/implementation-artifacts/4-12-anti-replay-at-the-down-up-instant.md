@@ -185,7 +185,7 @@ rather than a stamping one. **Do not change `publish`'s ordering in this story.*
 
 ### References
 
-- [Source: `_bmad-output/planning-artifacts/epics.md:1150`] — Story 4.12, both original ACs
+- [Source: `_bmad-output/planning-artifacts/epics.md:1151`] — Story 4.12, both original ACs
 - [Source: `_bmad-output/planning-artifacts/epics.md:141`] — AR7's anti-replay invariant (amended by ADR 0036)
 - [Source: `crates/smartme-bridge/src/adapters/sparkplug_publisher.rs:521`] — the DDATA stamp
 - [Source: `crates/smartme-bridge/src/adapters/sparkplug_publisher.rs:378`] — the rebirth re-declaration, `degrade` and `payload_ts`

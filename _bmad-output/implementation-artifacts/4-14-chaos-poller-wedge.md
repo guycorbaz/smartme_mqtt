@@ -193,7 +193,7 @@ healthcheck in front of it. Name it, pin it, leave it in code.
 
 ### References
 
-- [Source: `_bmad-output/planning-artifacts/epics.md:1184`] — Story 4.14, the original AC
+- [Source: `_bmad-output/planning-artifacts/epics.md:1185`] — Story 4.14, the original AC
 - [Source: `_bmad-output/planning-artifacts/epics.md:146`] — AR12, the liveness heartbeat
 - [Source: `crates/smartme-bridge/src/app/poll_publish.rs:659`] — the heartbeat, written first
 - [Source: `crates/smartme-bridge/src/app/poll_publish.rs:671`] — the fetch deadline

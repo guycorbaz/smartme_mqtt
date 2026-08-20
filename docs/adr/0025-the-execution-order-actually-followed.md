@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Date:** 2026-08-05
 - **Supersedes:** nothing. **Amends:** the execution order recorded at the Epic 1
-  retrospective (2026-07-26) and restated at `epics.md:217`.
+  retrospective (2026-07-26) and restated at `epics.md:218`.
 - **Issue:** [#55](https://github.com/guycorbaz/smartme_mqtt/issues/55)
 
 ## Context
@@ -78,7 +78,7 @@ wording) and 4.19 (chapter 4's 29 clauses). **4.16 is not merely deferred, it is
 has been since 2026-08-01: NFR10 asks for a read-to-broker-ACK latency, and ADR 0010 established
 there is no ACK at QoS 0. Its measurable analogue must be agreed, not substituted quietly.
 
-**4. The epics are still not renumbered.** `epics.md:227` rejected renumbering because seventeen
+**4. The epics are still not renumbered.** `epics.md:228` rejected renumbering because seventeen
 Rust doc comments, the coverage map, the manual and the issue tracker all reference epic numbers.
 That reasoning is unchanged, and this ADR is the cheaper answer to the same confusion.
 

@@ -158,7 +158,7 @@ Cite 4.12 as the *unit-and-takeover* proof; do not cite it as evidence for anyth
 
 ### References
 
-- [Source: `_bmad-output/planning-artifacts/epics.md:1167`] — Story 4.13's original ACs
+- [Source: `_bmad-output/planning-artifacts/epics.md:1168`] — Story 4.13's original ACs
 - [Source: `crates/smartme-bridge/tests/common/mod.rs`] — `start_broker`, `named_subscriber`, `wait_for`
 - [Source: `crates/smartme-bridge/tests/chaos_no_replay_at_reconnect.rs`] — story 4.12's takeover proof, the sibling this must not duplicate
 - [Source: `crates/smartme-bridge/tests/chaos_bdseq_per_connect.rs`] — the `bdSeq`-advances property, re-observed here
