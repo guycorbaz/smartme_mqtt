@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "Pure, generic Sparkplug B library: protobuf encode/decode, EON node/device model, seq/bdSeq/rebirth lifecycle."
+# The publication bar NFR19 describes (story 8.2). `cargo publish --dry-run` is the
+# arbiter of what is required here: the rules are crates.io's, not this project's.
+repository = "https://github.com/guycorbaz/smartme_mqtt"
+readme = "README.md"
+keywords = ["sparkplug", "mqtt", "iiot", "scada", "protobuf"]
+categories = ["network-programming", "encoding"]
 
 [dependencies]
 prost = { workspace = true }

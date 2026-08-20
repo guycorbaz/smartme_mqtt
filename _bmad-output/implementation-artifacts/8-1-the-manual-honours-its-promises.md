@@ -1,6 +1,6 @@
 # Story 8.1: The manual honours its eight promises
 
-Status: review
+Status: done
 
 > **Eight `\stub{}` marks stand in the manual, and four of them are overdue.** Each one names
 > what it defers and the condition for writing it. Three say *"once Epic 6 exists"* or *"once
@@ -150,3 +150,29 @@ is the harness defect Epic 4's action E2 named and Epic 7 met twice.
 
 - **2026-08-20** — Story 8.1. Eight promises honoured, one mechanical guard added. No
   production code changed. `CONTRACT_VERSION` untouched.
+
+### Review — 2026-08-20
+
+**The story's mechanical guard was half a guard, and the review completed it.** It checked the
+routes the manual sends an operator to, and not **the causes it tells them to match against
+what they are seeing**. The troubleshooting chapter is written around slugs —
+`credential-rejected`, `feed-not-advancing`, `source-rate-limited` — and a renamed one is worse
+than a stale route: a route 404s and tells them; a slug that no longer exists just never
+appears, and the operator concludes the chapter does not apply to them.
+
+Now checked, and falsified by misspelling one as `credential-refused`.
+
+**It found five slugs it thought were inventions and that were real.** `outbox-full`,
+`transport-queue-full`, `mqtt-task-gone`, `before-birth` and `undeclared-device` are
+`DropReason`s — a second vocabulary, published beside the first on `/healthz` and on the
+screens. The test knew only `Cause`. **A guard that does not know the whole vocabulary accuses
+correct documentation**, which is the second time in this story that a scan had to be checked
+before being trusted; both times the presence assertion is what caught it.
+
+**One command in the manual was verified rather than assumed.** Chapter 8 tells the operator to
+run `docker compose config | grep image:` to note their rollback point. Run here, with no
+variables supplied, it prints the pinned image — the `.env` beside the file supplies what
+Compose's `:?` form demands, which is precisely the deployment the chapter describes.
+
+**Nothing else found.** No stub remains, the manual builds with no undefined reference, and
+every route and slug it names exists.

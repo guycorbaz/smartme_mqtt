@@ -205,9 +205,36 @@ pub fn encode(payload: &Payload) -> Vec<u8> {
 /// Provided so a consumer — a test asserting what was actually put on the wire,
 /// or a subscriber — does not have to depend on `prost` directly just to look
 /// at a payload this crate produced.
-pub fn decode(bytes: &[u8]) -> Result<Payload, prost::DecodeError> {
-    Payload::decode(bytes)
+///
+/// **The error is this crate's own** (story 8.2, NFR19). It returned
+/// `prost::DecodeError` until 2026-08-20, which meant a consumer that wanted to
+/// match on a failure had to depend on `prost` — at the version this crate pins —
+/// for ever, and a `prost` major bump broke their code as well as ours. The
+/// message is preserved verbatim; what is no longer borrowed is the type.
+pub fn decode(bytes: &[u8]) -> Result<Payload, DecodeError> {
+    Payload::decode(bytes).map_err(|error| DecodeError {
+        detail: error.to_string(),
+    })
 }
+
+/// Why a byte string could not be read as a Sparkplug payload.
+///
+/// Opaque on purpose: the reason is a diagnostic for a human or a log, not
+/// something to branch on. There is exactly one way to fail — the bytes are not
+/// this protobuf — so a variant per cause would be an enum with one arm and a
+/// promise of more.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodeError {
+    detail: String,
+}
+
+impl core::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "not a Sparkplug B payload: {}", self.detail)
+    }
+}
+
+impl std::error::Error for DecodeError {}
 
 /// A DEATH payload: the session's number, and deliberately NO sequence number —
 /// the broker publishes it at a moment the node cannot number, and a fabricated

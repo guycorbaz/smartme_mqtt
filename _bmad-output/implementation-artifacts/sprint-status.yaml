@@ -2690,5 +2690,20 @@ development_status:
   # nobody re-reads the manual when an epic closes. All eight are now written — none
   # re-dated — and a test reads every route the manual names against every `.route(` the
   # UI registers, because a manual is the one artefact whose defects no compiler catches.
-  8-1-the-manual-honours-its-promises: review  # implemented 2026-08-20; FR41, FR42, NFR23, AR20
+  # REVIEWED AND CLOSED 2026-08-20. The guard was half a guard: it checked the ROUTES
+  # the manual sends an operator to and not the CAUSE SLUGS it tells them to match
+  # against what they see — and a renamed slug is worse than a stale route, because a
+  # route 404s and a slug just never appears. Now checked; falsified. AND IT ACCUSED
+  # FIVE REAL SLUGS of being inventions: the DropReason vocabulary, which the manual
+  # quotes beside Cause and which the test did not know.
+  8-1-the-manual-honours-its-promises: done  # closed 2026-08-20 after review
+  # 2026-08-20, WRITTEN AND IMPLEMENTED. NFR19 names five things and the crate had
+  # three. AND A THIRD-PARTY TYPE DID LEAK, found by reading signatures rather than
+  # intent: `decode` returned `prost::DecodeError`, so a consumer matching on a failure
+  # was pinned to this crate's prost version for ever. Now the crate's own, guarded by
+  # a test — the generated `protobuf` module is exempt BY NAME, because prost is a
+  # declared public dependency there and the README says so rather than leaving it to
+  # be discovered from a compiler error. `cargo publish --dry-run` is the arbiter of
+  # AC2, not my reading of crates.io's rules. Publication itself stays deferred [#3].
+  8-2-the-crate-publication-bar: review  # implemented 2026-08-20; NFR19, AR21
   epic-8-retrospective: required  # added 2026-08-10 — the line was absent entirely

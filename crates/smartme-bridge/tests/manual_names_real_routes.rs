@@ -7,9 +7,10 @@
 //! them open the manual.
 //!
 //! This is deliberately narrow. It does not check that the manual is TRUE; it
-//! checks the one class of claim that can be checked mechanically and that goes
-//! stale silently: the routes. Routes move — story 6.6 added `/check`, and nothing
-//! would have noticed the day one was renamed.
+//! checks the two classes of claim that can be checked mechanically and that go
+//! stale silently: **the routes it sends an operator to**, and **the causes it
+//! names**. Both move — story 6.6 added `/check`, story 6.8 gave every cause a
+//! gesture — and nothing would notice the day one was renamed.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -118,6 +119,93 @@ fn every_route_the_manual_names_is_one_the_bridge_serves() {
         "the manual names routes this bridge does not serve. An operator following \
          one of these during an incident finds a 404, and the manual is the one \
          artefact whose defects no compiler catches:\n{}\n\nServed today: {served:?}",
+        offenders.join("\n")
+    );
+}
+
+/// **Story 8.1, review — the manual may not name a cause the oracles cannot produce.**
+///
+/// The troubleshooting chapter is written around cause slugs: `credential-rejected`,
+/// `feed-not-advancing`, `source-rate-limited`. Those are the words that appear on
+/// the wire and on the screens, and they are what an operator matches against what
+/// they are seeing. **A slug that no longer exists sends them looking for a string
+/// the bridge never prints** — and unlike a route, nothing 404s to tell them.
+///
+/// The cause vocabulary is part of the published contract (chapter 5), so it changes
+/// only with a `CONTRACT_VERSION` bump — which makes this check cheap and its
+/// failures meaningful.
+///
+/// FALSIFIED 2026-08-20 — mutation RUN, output copied: renaming a cause in the
+/// manual to `credential-refused` goes red with
+///
+/// ```text
+/// the manual names causes the oracles cannot produce … 07-troubleshooting.tex:
+/// names credential-refused
+/// ```
+#[test]
+fn every_cause_the_manual_names_is_one_the_oracles_can_produce() {
+    // **BOTH vocabularies, because the manual quotes both.** `Cause` is what the
+    // oracles decide about a reading; `DropReason` is what the bridge lost and why.
+    // They are different enums and they appear side by side on `/healthz` and on the
+    // screens — a test that knew only the first would have called five real slugs
+    // inventions, which is what its first run did.
+    let live: BTreeSet<&str> = smartme_bridge::core::oracle::Cause::ALL
+        .iter()
+        .map(|c| c.as_str())
+        .chain(
+            smartme_bridge::app::poll_publish::DropReason::ALL
+                .iter()
+                .map(|r| r.as_str()),
+        )
+        .collect();
+    assert!(
+        live.len() >= 26 && live.contains("credential-rejected") && live.contains("outbox-full"),
+        "the cause vocabulary read {live:?}, which is not the real one — this test \
+         would then prove nothing"
+    );
+
+    // Slugs are lower-case words joined by hyphens, and the manual writes them in
+    // `\code{}` like everything else it quotes verbatim.
+    let mut offenders = Vec::new();
+    for entry in fs::read_dir(repo().join("docs/manual/chapters")).expect("chapters") {
+        let path = entry.expect("entry").path();
+        if path.extension().is_none_or(|e| e != "tex") {
+            continue;
+        }
+        let text = fs::read_to_string(&path).expect("chapter");
+        for chunk in text.split("\\code{").skip(1) {
+            let Some(end) = chunk.find('}') else { continue };
+            let body = &chunk[..end];
+            // WHAT IS NOT A CAUSE, and each exclusion is a family rather than a
+            // name: the specification's own clause identifiers (`tck-id-…`, and the
+            // `-dbirth-retain` fragments a list of them elides to), and this
+            // workspace's crate names. Everything else that has the shape of a slug
+            // is checked — a cause misspelled as `credential-refused` is exactly
+            // what this exists to catch.
+            let is_clause_id = body.starts_with("tck-id-") || body.starts_with('-');
+            let is_crate_name = matches!(
+                body,
+                "sparkplug-b" | "smart-me-client" | "smartme-bridge" | "cargo-deny"
+            );
+            let looks_like_a_slug = body.contains('-')
+                && body.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+                && body.len() > 6
+                && !is_clause_id
+                && !is_crate_name;
+            if looks_like_a_slug && !live.contains(body) {
+                offenders.push(format!(
+                    "{}: names {body}",
+                    path.file_name().expect("named").to_string_lossy()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "the manual names causes the oracles cannot produce. An operator matching \
+         what they see against these finds nothing, and unlike a route there is no \
+         404 to tell them:\n{}\n\nLive vocabulary: {live:?}",
         offenders.join("\n")
     );
 }

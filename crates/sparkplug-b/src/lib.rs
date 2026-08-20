@@ -80,7 +80,7 @@ pub mod seq;
 pub mod topic;
 
 pub use datatype::DataType;
-pub use encode::{LiveSession, NodeSession, decode, encode};
+pub use encode::{DecodeError, LiveSession, NodeSession, decode, encode};
 pub use model::{Metric, MetricValue, Quality};
 pub use seq::{BD_SEQ_METRIC, BdSeq, SeqCounter};
 pub use topic::{EdgeNode, MessageType, NAMESPACE, TopicError};
