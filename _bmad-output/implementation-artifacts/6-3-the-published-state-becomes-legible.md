@@ -1,6 +1,6 @@
 # Story 6.3: The published state becomes legible — AR19's enriched state, before any screen consumes it
 
-Status: review
+Status: done
 
 > **AR19 settles the order of work before this story begins**: *"UI consumes this state, never
 > recomputes it."* The screens FR28, FR30, FR34 and FR36 ask for cannot be written first and
@@ -85,7 +85,7 @@ is written into the fleet state**
 **And** the measurement is recorded rather than asserted.
 
 *Measured at drafting, 2026-08-19, and it corrected the drafting assumption: `snapshot()` has
-exactly one production caller, `ui/mod.rs:323`, so the clone is paid per HTTP request and not per
+exactly one production caller, `ui/mod.rs:324`, so the clone is paid per HTTP request and not per
 tick. The concern that shaped the first draft of this story — "enriching the watch channel taxes
 the hot path" — was wrong. What remains true, and becomes AC4's rule, is that `send_modify` holds
 a lock the poll tasks wait on, so nothing expensive may be built inside it.*
@@ -150,7 +150,7 @@ belongs.
 
 **AC5 — met, and the drafting assumption behind it was wrong.** The story was first shaped by
 "enriching the watch channel taxes the hot path". Measured: `snapshot()` has exactly one
-production caller, `ui/mod.rs:323`, so the clone is paid per HTTP request, never per tick. Writes
+production caller, `ui/mod.rs:324`, so the clone is paid per HTTP request, never per tick. Writes
 go through `send_modify`, which mutates in place. What survives is the rule AC4 states — that lock
 is held by every poll task, so nothing formatted is built inside it.
 
@@ -185,3 +185,32 @@ thing about written lessons.
 - **2026-08-19** — Story 6.3. AR19's enriched state, three of its five parts, with the culprit as
   a first-class value in two halves. No screen. Four mutations run. `CONTRACT_VERSION` unchanged
   at 10 — nothing here reaches the wire.
+
+### Review — 2026-08-20
+
+**Every acceptance criterion holds, and the two halves of the culprit table are the right
+shape.** AC3's pinning was checked against the mechanism rather than the name: adding a
+`Cause` variant stops the build at `Cause::culprit`'s exhaustive `match` *and* reddens
+`every_cause_names_whose_fault_it_is`, whose final assertion compares the two columns'
+combined length against `Cause::ALL`. Both were exercised.
+
+**One residue, recorded rather than repaired.** That length comparison would also pass if a
+future edit listed one variant twice and dropped another — sixteen plus five is sixteen plus
+five either way. The consequence is bounded: the missing variant is still *classified* (the
+`match` refuses to compile otherwise), it is merely no longer *pinned*, so no behaviour can
+drift silently, only an assertion can go quiet. Left as it stands; a `HashSet` of the
+twenty-one would close it if a third table ever joins these two.
+
+**AC5's measurement was re-taken and still holds.** `snapshot()` has exactly one production
+caller — `ui/mod.rs:324` — every other call site sits below `poll_publish.rs:1731`, inside
+`#[cfg(test)]`. The clone is paid per HTTP request. `record_at` adds no allocation under
+`send_modify`: five `Option` fields of `Copy` types, and `Culprit` is a fieldless enum.
+
+**Its consumers arrived in 6.4, and two of them arrived one story late.** `source_value_date`
+and `staleness_threshold_ms` — the pair AC1 exists for — were written every tick and read by
+nobody until the review of story 6.4 added the freshness column. The state was right; the
+screen had not caught up. Recorded here because AC1's *"the threshold travels with the
+instant"* is only true end to end since 2026-08-20.
+
+**Citation corrected mechanically (action E4):** `ui/mod.rs:323` → `:324`. The line named the
+function signature; the call is the line below.

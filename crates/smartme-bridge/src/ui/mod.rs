@@ -128,13 +128,14 @@ impl Lifecycle {
             // form: *connected* AND *publishing*. `Phase::starting()` then made it
             // reachable before any socket had been opened at all.
             //
-            // Broker connectivity is still not plumbed to the UI ([#53]). Until
-            // it is, what this page can honestly say is what the bridge is
-            // trying to do.
+            // **Broker connectivity IS plumbed now** (story 6.5, [#53]), and this
+            // sentence said it was not until the review of that story on
+            // 2026-08-20. What the claim needed was never a hedge: it needed the
+            // fact beside it, which the sink line above now carries.
             Lifecycle::Running => {
                 "The bridge is configured and confirmed, so it is polling the meters \
-                 and publishing what it reads. Whether the broker is actually \
-                 reachable is not reported here yet — the log says so."
+                 and publishing what it reads. Whether what it reads is reaching the \
+                 host is the broker's own line, beside this one."
             }
             // NOT "still running on the configuration it started with".
             //
@@ -721,6 +722,25 @@ async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
             screens::escape(&degraded.join(", ")),
         )
     };
+    // AND THE OTHER HALF OF FR29's PAIR: whether the broker is there.
+    //
+    // **Added by the review of story 6.5 (2026-08-20), which found AC3 met on
+    // `/meters` and not on the screen the criterion names.** The two defects were
+    // the same one seen twice: this page went on saying the broker's reachability
+    // "is not reported here yet — the log says so" about a bridge that had just
+    // been given the fact, and an operator reading `/` during an outage was sent
+    // to the log for something the page could have told them. That is precisely
+    // the shape of [#53], which story 6.5 closed on the other surface.
+    //
+    // Absent in every silent phase, because there is no driver to have observed
+    // anything — and absent is then the truth rather than a default, which is the
+    // rule `fleet()` and `failed_sources` already apply.
+    let sink_line = phase.control().map_or_else(String::new, |control| {
+        format!(
+            "<p>{}</p>",
+            screens::sink_health_line(control.sink(), control.clock().wall())
+        )
+    });
     Html(format!(
         "<!doctype html><meta charset=utf-8>\
          <title>smartme_mqtt</title>\
@@ -730,9 +750,11 @@ async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
          {}\
          {}\
          {}\
+         {}\
          <hr><p>version {} · contract {}</p>",
         lifecycle.headline(),
         lifecycle.detail(),
+        sink_line,
         caveat,
         degraded_caveat,
         lifecycle.next_step(),
@@ -837,9 +859,11 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
     // as working when it is not, and the endpoint that exists to say so was
     // saying it.
     //
-    // Broker connectivity is not plumbed to the UI yet ([#53]); until it is, the
-    // honest report is what the bridge INTENDS plus the heartbeat, which a caller
-    // can check for itself.
+    // It keeps that name now that the sink IS plumbed ([#53], story 6.5): the two
+    // are different questions, and `sink_connected` below answers the second one.
+    // "Has the bridge reached its publishing arm" stays worth reporting on its own
+    // — a bridge that never got there and one whose broker went away are not the
+    // same incident.
     // A FAULT IS NOT A DELIBERATE SILENCE, and the body has to tell them apart
     // (Story 3.2 AC5, ADR 0027 §2). The status code stays 200: Epic 7 wires this
     // to a container restart, and a restart provably cannot clear a rejected
@@ -1288,6 +1312,91 @@ mod tests {
         );
     }
 
+    /// **Story 6.4 AC2 — FR28's FRESHNESS AGE**, added by the review of that
+    /// story, 2026-08-20.
+    ///
+    /// The page shipped with eight of AC2's nine columns and the completion note
+    /// listed the eight as though they were the nine. What was missing is the one
+    /// FR28 names by that name: how old the MEASUREMENT is. Story 6.3 had stored
+    /// `source_value_date` and `staleness_threshold_ms` for it — both fields were
+    /// written every tick and read by nobody.
+    ///
+    /// **The two questions are genuinely different**, which is what this test
+    /// pins: a bridge republishing every ten seconds has a fresh publication
+    /// instant while carrying a reading four minutes old. Reading the second as the
+    /// first is the age lie this project exists to refuse, one surface further out
+    /// than the wire.
+    ///
+    /// FALSIFIED 2026-08-20 — two mutations RUN, output copied:
+    ///
+    /// ```text
+    /// // 1. freshness rendered from `last_published_at`, the obvious simplification:
+    /// the page must say how old the READING is, not only when we last republished it:
+    /// …<td>0.018 kW</td><td>4843.822 kWh</td><td>1 second ago (stale past 90 s)</td>…
+    ///
+    /// // 2. the threshold dropped from the cell:
+    /// and the threshold that judged it must travel with it (story 6.3 AC1)…
+    /// …<td>4 minutes ago</td><td>Good</td><td>1 second ago</td>…
+    /// ```
+    ///
+    /// Mutation 1 is the whole point of the column: the row still read plausibly —
+    /// a fresh age, a threshold, a `Good` — and every number in it was about the
+    /// publication rather than the measurement.
+    #[tokio::test]
+    async fn the_page_says_how_old_the_reading_is_and_under_which_threshold() {
+        use crate::core::oracle::Verdict;
+        use crate::core::state_machine::State as OracleState;
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let now = UtcMillis(1_784_984_793_000);
+        let clock = Arc::new(crate::core::clock::FakeClock::new(now));
+        let meter = crate::domain::MeterId::new("appart-est");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let state = ui(publishing(
+            beats.clone(),
+            clock.clone(),
+            Arc::clone(&config),
+        ));
+
+        // Measured four minutes ago, published one second ago — the normal case,
+        // not a pathological one: ADR 0027 publishes a verdict every cycle and the
+        // meter's own cadence is slower than the poll period.
+        beats.record_at(
+            &meter,
+            OracleState::Fresh,
+            Verdict::good(),
+            Some(crate::app::poll_publish::Publication {
+                at: UtcMillis(now.0 - 1_000),
+                threshold_ms: 90_000,
+                value_date: Some(UtcMillis(now.0 - 240_000)),
+                power_kw: Some(0.018),
+                energy_kwh: Some(4_843.822),
+            }),
+        );
+
+        let html = body(
+            crate::ui::screens::meter_view(State(Arc::clone(&state)))
+                .await
+                .into_response(),
+        )
+        .await;
+
+        assert!(
+            html.contains("4 minutes ago"),
+            "the page must say how old the READING is, not only when we last \
+             republished it: a fresh publication instant beside a four-minute-old \
+             measurement is exactly the pair an operator misreads:\n{html}"
+        );
+        assert!(
+            html.contains("stale past 90 s"),
+            "and the threshold that judged it must travel with it (story 6.3 AC1) \
+             — an age compared against a bound the operator has to remember is the \
+             oracle's work done again, by hand, at three in the morning:\n{html}"
+        );
+    }
+
     /// **Story 6.4 AC2 — a value nobody has published is a dash, never a zero.**
     ///
     /// FR16's rule — *never a substituted value* — reaching the screen. A `0.000 kW`
@@ -1506,6 +1615,88 @@ mod tests {
             html.contains("restarting it repairs nothing"),
             "and the page must say the gesture is NOT to restart the bridge: that \
              is the same judgement `/healthz` makes by staying at 200:\n{html}"
+        );
+    }
+
+    /// **Story 6.5 AC3, on the screen the criterion actually names** — added by
+    /// the review of that story, 2026-08-20.
+    ///
+    /// The story shipped the sink line on `/meters` and declared AC3 met. `/` —
+    /// the page an operator opens first, and the only one a link from a bookmark
+    /// reaches — went on saying the broker's reachability *"is not reported here
+    /// yet — the log says so"*, about a bridge that had just been handed the fact.
+    /// During an outage that is the surface that could not say which end had gone,
+    /// which is [#53] reappearing one page over from where story 6.5 closed it.
+    ///
+    /// **Both halves are asserted**, on the pattern the failed-source test set: a
+    /// page that shouted about the broker whatever the state would pass the second
+    /// half and be useless, so the never-connected wording is checked first.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN, output copied: dropping the sink line
+    /// from `index` (`let sink_line = String::new();`, the state this page was in
+    /// before this repair) goes red on the FIRST assertion, which is the one that
+    /// matters — the page said nothing whatever about the broker:
+    ///
+    /// ```text
+    /// thread 'ui::tests::the_state_screen_names_the_broker_too' panicked at
+    /// crates/smartme-bridge/src/ui/mod.rs:1655:9:
+    /// a bridge that never reached the broker must say so on this page too, and must
+    /// not report a loss that did not happen:
+    /// <!doctype html>…<p><strong>Running</strong></p><p>The bridge is configured and
+    /// confirmed, so it is polling the meters and publishing what it reads. Whether
+    /// what it reads is reaching the host is the broker's own line, beside this
+    /// one.</p><p><a href="/config">Change the configuration</a></p>…
+    /// ```
+    ///
+    /// The dump is the page itself, and it shows the sentence promising a line that
+    /// is not there — the mutation made the detail text lie a second way.
+    #[tokio::test]
+    async fn the_state_screen_names_the_broker_too() {
+        use crate::app::mqtt_driver::SinkHealth;
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let now = UtcMillis(1_784_984_793_000);
+        let clock = Arc::new(crate::core::clock::FakeClock::new(now));
+        let beats = Heartbeats::for_meters([crate::domain::MeterId::new("appart-est")]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let sink = SinkHealth::new();
+        let state = ui(Phase::running(Control::detached_with_sink(
+            Arc::clone(&config),
+            beats,
+            clock,
+            sink.clone(),
+        )));
+
+        let html = body(index(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            html.contains("never connected"),
+            "a bridge that never reached the broker must say so on this page too, \
+             and must not report a loss that did not happen:\n{html}"
+        );
+        assert!(
+            !html.contains("not reported here yet"),
+            "and it must no longer send the operator to the log for a fact it \
+             holds — that sentence was true until story 6.5 and false the moment \
+             it landed:\n{html}"
+        );
+
+        sink.observed(false, UtcMillis(now.0 - 600_000));
+        let html = body(index(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            html.contains("unreachable") && html.contains("10 minutes ago"),
+            "the state screen must name an unreachable broker, with since when: it \
+             is the page an operator opens first, and \"the bridge is publishing \
+             what it reads\" is only half the truth while nothing says whether it \
+             arrives:\n{html}"
+        );
+
+        sink.observed(true, UtcMillis(now.0 - 5_000));
+        let html = body(index(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            html.contains("connected") && !html.contains("unreachable"),
+            "and a reconnect must clear it, or the page keeps an outage alive after \
+             it healed:\n{html}"
         );
     }
 

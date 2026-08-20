@@ -62,7 +62,7 @@
 #   Ignition contract test (human action required — stays backlog until Guy runs it).
 
 generated: 2026-07-25
-last_updated: 2026-08-19
+last_updated: 2026-08-20
 project: smartme_mqtt
 project_key: NOKEY
 tracking_system: file-system
@@ -2496,7 +2496,16 @@ development_status:
   # A DRAFTING ASSUMPTION WAS WRONG AND IS RECORDED AS SUCH: "enriching the watch
   # channel taxes the hot path" — measured, snapshot() has ONE production caller,
   # so the clone is per HTTP request, never per tick.
-  6-3-the-published-state-becomes-legible: review  # implemented 2026-08-19; no screen, by design
+  # 2026-08-20, REVIEWED AND CLOSED. Every AC holds; AC5's measurement re-taken and
+  # still true (one production caller, `ui/mod.rs:324`). ONE RESIDUE RECORDED: the
+  # table test compares column LENGTHS against `Cause::ALL`, so a future edit listing
+  # one variant twice and dropping another would stay green — bounded, because the
+  # exhaustive `match` still forces the classification, only the pinning goes quiet.
+  # AND ITS TWO CONSUMERS ARRIVED ONE STORY LATE: `source_value_date` and
+  # `staleness_threshold_ms` were read by nobody until 6.4's review added the
+  # freshness column, so AC1's "the threshold travels with the instant" is only true
+  # end to end since 2026-08-20.
+  6-3-the-published-state-becomes-legible: done  # closed 2026-08-20 after review; every AC holds, one pinning residue recorded
   # 2026-08-19, WRITTEN AND IMPLEMENTED. FR28, FR30, FR34 and FR36 are one page,
   # not four screens — `/meters`, a row per meter, consuming the state 6.3 built
   # without judging any of it (AR19).
@@ -2513,7 +2522,17 @@ development_status:
   # CLIPPY REFUSED EIGHT ARGUMENTS AND THE MODEL IMPROVED: record_at takes a
   # `Publication`, so an instant can no longer be supplied without the threshold it
   # was judged against.
-  6-4-the-meter-view: review  # implemented 2026-08-19; FR37 and FR35 remain
+  # 2026-08-20, REVIEWED AND CLOSED. AC2 LISTS NINE COLUMNS AND EIGHT SHIPPED: the
+  # missing one is FR28's FRESHNESS AGE — how old the MEASUREMENT is — and the
+  # completion note ticked AC2 against its own summary rather than against the
+  # criterion. Visible from outside because story 6.3 stored `source_value_date` and
+  # `staleness_threshold_ms` every tick and NOBODY read them. Repaired at review: a
+  # "Reading age" column carrying the age with the threshold that judged it, pinned
+  # and falsified twice (rendering it from `last_published_at` still reads
+  # plausibly — every number in the row would then be about the publication).
+  # AC4 is met on the culprit and NOT on the cause: 21 causes share 3 sentences.
+  # Left as FR31's subject rather than repaired here — [#103].
+  6-4-the-meter-view: done  # closed 2026-08-20 after review; AC2's ninth column was missing and is repaired; AC4 partial [#103]
   # 2026-08-19, WRITTEN AND IMPLEMENTED. [#53] decided the order exactly as AR19 did
   # for 6.3: FR37's third light cannot be lit by an INTENTION, so the sink's actual
   # state comes first. The driver has emitted Transport::Connected since Epic 1 and
@@ -2531,7 +2550,17 @@ development_status:
   # count: the two healths went into `Health`, because FR29 requires them reported
   # independently and they do travel together. An allow that carries its trigger was
   # written in July and paid in August.
-  6-5-the-sink-says-whether-it-is-connected: review  # implemented 2026-08-19; [#53] closes, FR29 delivered
+  # 2026-08-20, REVIEWED AND CLOSED. AC3 SAYS "the state screen" AND THE STORY MET IT
+  # ON /meters: `/` went on saying the broker's reachability "is not reported here yet
+  # — the log says so" about a bridge that had just been handed the fact, so the page
+  # an operator opens FIRST was the one surface that could not name which end had
+  # gone. That is [#53] reappearing one page over from where this story closed it.
+  # Repaired at review: `sink_health_line` extracted and shared by both pages (one
+  # spelling, not two), rendered by `index` in every phase that has a driver, and two
+  # comments that contradicted the code beneath them removed. Falsified.
+  # AND THE STORY'S OWN COMMIT MOVED ITS OWN CITATION 81 LINES (mqtt_driver.rs:1489 ->
+  # :1570) — [#101]'s defect, recurring at the first opportunity after action E4.
+  6-5-the-sink-says-whether-it-is-connected: done  # closed 2026-08-20 after review; AC3 met on the wrong surface, repaired; [#53] stays closed
   epic-6-retrospective: required  # added 2026-08-10 — the line was absent entirely
 
   # ADDED 2026-08-08, previously absent from this file entirely.

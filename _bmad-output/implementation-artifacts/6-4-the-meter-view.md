@@ -1,6 +1,6 @@
 # Story 6.4: The meter view — one page that answers "what is happening" at three in the morning
 
-Status: review
+Status: done
 
 > **Four requirements, one page.** FR28, FR30, FR34 and FR36 describe the same table seen from
 > four angles: a row per meter carrying its value and how old it is, its last success, its last
@@ -108,7 +108,7 @@ boundary rather than a surprise.
 - [Source: `_bmad-output/planning-artifacts/prd.md:307`] — FR28, FR30, FR34, FR36
 - [Source: `_bmad-output/planning-artifacts/epics.md:153`] — AR19
 - [Source: `crates/smartme-bridge/src/app/poll_publish.rs`] — `MeterState`'s eleven fields
-- [Source: `crates/smartme-bridge/src/domain/measurement.rs:60`] — `string_newtype!`, why the value is stored as numbers
+- [Source: `crates/smartme-bridge/src/domain/measurement.rs:55`] — `string_newtype!`, why the value is stored as numbers
 - [Source: `CLAUDE.md`] — falsify before trusting
 
 ## Dev Agent Record
@@ -174,3 +174,43 @@ do not look for it. Moved.
 - **2026-08-19** — Story 6.4. FR28, FR30, FR34 and FR36 on one page, consuming the state 6.3
   built. Three mutations run; one of them found a defect in the screen itself. FR37 and FR35 stay
   out of scope, named.
+
+### Review — 2026-08-20
+
+**AC2 was ticked on eight of its nine columns, and the ninth is the one FR28 names.** The
+criterion lists *"meter, serial, target topic, value with its unit, freshness age, published
+quality, last publication, last change, and culprit"*; the completion note above lists the
+same row **without the freshness age** and calls AC2 met. Nothing was hidden — the note is an
+accurate description of what shipped — but the list it compares itself against is the one it
+had just written, not the criterion's. This is the defect epic 5's retrospective named (boxes
+ticked for absent work) and the one action A6 ([#24]) exists to catch: **check the AC, not the
+summary of the AC.**
+
+**What made it visible from outside the story:** story 6.3 stored `source_value_date` and
+`staleness_threshold_ms` every tick, and a search for their readers found none. A field
+written and never read is either dead or a missing consumer, and here it was the second.
+
+**Repaired in this review, not deferred.** `/meters` gains a **Reading age** column: the
+measurement's own age, with the threshold that judged it beside it — *"4 minutes ago (stale
+past 90 s)"*. The two questions are genuinely different, which is the point: a bridge
+republishing every ten seconds shows a one-second publication instant while carrying a
+four-minute-old reading, and reading the first as the second is an age lie one surface out
+from the wire. Pinned by
+`the_page_says_how_old_the_reading_is_and_under_which_threshold`, falsified twice — rendering
+the age from `last_published_at` (the plausible simplification: the row still reads well, and
+every number in it is about the publication) and dropping the threshold.
+
+**AC4 holds on the culprit and not on the cause, and that half is now [#103].** The criterion
+says the gesture is *"derived from the culprit **and the cause**"*; `repair()` takes only the
+culprit, so twenty-one causes share three sentences. It is not wrong — the three gestures do
+match the three culprits — but *"open the configuration: a credential, a serial or a device id
+is wrong"* names three repairs where the cause already knows which one. The cause IS on the
+page, in the quality cell, so nothing is hidden from the operator. Left as it stands because
+it is FR31's own subject — *actionable error messages, auth vs permissions vs timeout vs empty
+result* — and FR31 is unwritten work in this epic rather than a defect in this story.
+
+**AC1, AC3, AC5 — verified as claimed.** `record_at` adds no allocation under `send_modify`;
+the three states are distinguished in words with no empty table reachable; the frozen/quiet
+pair is pinned and was falsified when the story ran.
+
+**Citation corrected mechanically (action E4):** `measurement.rs:60` → `:55`.

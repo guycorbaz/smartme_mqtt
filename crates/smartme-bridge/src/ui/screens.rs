@@ -1339,6 +1339,34 @@ pub(super) async fn meter_view(State(state): State<Arc<UiState>>) -> impl IntoRe
             .map(|v| format!("{v:.3} kWh"))
             .unwrap_or_else(|| "—".to_string());
 
+        // FR28's FRESHNESS AGE, and it is the reading's own age — not the age of
+        // our last publication.
+        //
+        // **Added by the review of story 6.4 (2026-08-20).** The page shipped with
+        // eight of AC2's nine columns: `last_published_at` and `last_changed_at`
+        // were there, and the age of the measurement itself was not — so story 6.3
+        // stored `source_value_date` and `staleness_threshold_ms` for a consumer
+        // that did not exist, and the one number FR28 names by that name was the
+        // one missing. The two are different questions: a bridge republishing every
+        // ten seconds has a fresh publication instant and may be carrying a reading
+        // an hour old.
+        //
+        // **The threshold travels with the age** (story 6.3 AC1): an age read
+        // against a different threshold than the one that judged it is a different
+        // judgement, and an operator comparing "four minutes" against a bound they
+        // have to remember is being asked to redo the oracle's work in their head.
+        let freshness = match (meter.source_value_date, meter.staleness_threshold_ms) {
+            (Some(measured), Some(threshold)) => format!(
+                "{} (stale past {} s)",
+                ago(now, measured),
+                threshold / 1_000
+            ),
+            (Some(measured), None) => ago(now, measured),
+            // Nothing published yet, or an opinion retired with a disabled meter.
+            // Absent, never zero — the same rule the two values above apply.
+            (None, _) => "—".to_string(),
+        };
+
         let quality = meter
             .published
             .map(|v| {
@@ -1367,6 +1395,7 @@ pub(super) async fn meter_view(State(state): State<Arc<UiState>>) -> impl IntoRe
 
         rows.push_str(&format!(
             "<tr><td>{}</td><td>{}</td><td>{}</td><td>{power}</td><td>{energy}</td>\
+             <td>{freshness}</td>\
              <td>{}</td><td>{published}</td><td>{changed}</td><td>{}</td></tr>",
             escape(meter.meter.as_str()),
             escape(serial),
@@ -1380,7 +1409,51 @@ pub(super) async fn meter_view(State(state): State<Arc<UiState>>) -> impl IntoRe
     // published" is useless without which end to look at: a source that answers
     // nothing and a broker that is gone produce the same silence on the wire and
     // need opposite gestures.
-    let sink_line = match control.sink() {
+    //
+    // **The sentence is built in ONE place** — the state screen says the same
+    // thing, and two spellings of "the broker is unreachable" is two places for
+    // the truth to live (the review of story 6.5, 2026-08-20).
+    let sink_line = sink_health_line(control.sink(), now);
+
+    page(
+        "Meters",
+        &format!(
+            "<h1>Meters</h1><p>{sink_line}</p>\
+             <table><tr><th>Meter</th><th>Serial</th><th>Topic</th><th>Power</th>\
+             <th>Energy</th><th>Reading age</th><th>Published as</th>\
+             <th>Last published</th>\
+             <th>Last changed</th><th>Whose fault</th></tr>{rows}</table>\
+             <p><strong>Reading age</strong> is how old the measurement itself \
+             is, beside the threshold it was judged against. <strong>Last \
+             published</strong> is every cycle; <strong>last changed</strong> is \
+             when the meter last measured something new. A gap between the last two \
+             is a meter that has stopped moving — not a bridge that has stopped \
+             publishing.</p>\
+             <p><a href=/>State of the bridge</a> · <a href=/config>Configuration</a></p>"
+        ),
+    )
+}
+
+/// What to do about a fault, derived from its culprit (story 6.4 AC4).
+///
+/// **Derived, never stored**: story 6.3 AC4 keeps `String`s out of the fleet state,
+/// which is written under a lock every poll task waits on.
+/// The broker's own health, in the words an operator reads (FR29, story 6.5).
+///
+/// **Shared by the meter page and the state screen**, because the review of story
+/// 6.5 found the sink named on `/meters` only: the page a human opens first said
+/// the bridge "is polling the meters and publishing what it reads" and that the
+/// broker's reachability "is not reported here yet" — about a bridge that had just
+/// learned it. Data in, words out, exactly like [`repair`]: nothing formatted is
+/// stored (story 6.3 AC4).
+pub(super) fn sink_health_line(
+    sink: Option<crate::app::mqtt_driver::SinkState>,
+    now: crate::domain::UtcMillis,
+) -> String {
+    match sink {
+        // `None` is not `Disconnected`: a bridge that never reached the broker has
+        // not lost anything, and reporting a loss sends an operator after an outage
+        // that did not happen.
         None => "The broker: <strong>never connected</strong> since this bridge \
                  started. Nothing has been published, and nothing was lost — check \
                  the broker address in the configuration."
@@ -1395,28 +1468,9 @@ pub(super) async fn meter_view(State(state): State<Arc<UiState>>) -> impl IntoRe
              This is not a bridge fault and restarting it repairs nothing.",
             ago(now, s.since)
         ),
-    };
-
-    page(
-        "Meters",
-        &format!(
-            "<h1>Meters</h1><p>{sink_line}</p>\
-             <table><tr><th>Meter</th><th>Serial</th><th>Topic</th><th>Power</th>\
-             <th>Energy</th><th>Published as</th><th>Last published</th>\
-             <th>Last changed</th><th>Whose fault</th></tr>{rows}</table>\
-             <p><strong>Last published</strong> is every cycle; <strong>last \
-             changed</strong> is when the meter last measured something new. A gap \
-             between them is a meter that has stopped moving — not a bridge that \
-             has stopped publishing.</p>\
-             <p><a href=/>State of the bridge</a> · <a href=/config>Configuration</a></p>"
-        ),
-    )
+    }
 }
 
-/// What to do about a fault, derived from its culprit (story 6.4 AC4).
-///
-/// **Derived, never stored**: story 6.3 AC4 keeps `String`s out of the fleet state,
-/// which is written under a lock every poll task waits on.
 fn repair(culprit: crate::core::oracle::Culprit) -> &'static str {
     use crate::core::oracle::Culprit;
     match culprit {

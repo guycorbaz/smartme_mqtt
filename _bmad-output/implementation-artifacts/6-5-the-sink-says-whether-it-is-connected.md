@@ -1,12 +1,13 @@
 # Story 6.5: The sink says whether it is connected — FR29, and what [#53] has been waiting for since 4 August
 
-Status: review
+Status: done
 
 > **[#53] decides the order of work, exactly as AR19 did for 6.3.** *"This issue is what is still
 > missing: the sink's actual state."* The bridge knows it **intends** to publish — `/healthz` was
 > corrected from `publishing` to `intends_to_publish` on 2026-08-04 for precisely that reason — and
 > it does not know whether the broker is reachable. `Transport::Connected` exists in the driver
-> (`mqtt_driver.rs:1489`) and is plumbed nowhere.
+> (`mqtt_driver.rs:1570` — cited as `:1489` at drafting, which this story's own
+> commit then moved, the defect [#101] records) and is plumbed nowhere.
 >
 > **So FR37 cannot be written first.** An end-to-end validation whose third light was lit by an
 > intention rather than a fact is the kind of lie this project exists to refuse. This story makes
@@ -79,7 +80,7 @@ is good
 
 - [Source: `https://github.com/guycorbaz/smartme_mqtt/issues/53`] — the issue this closes, and its guard on the status code
 - [Source: `_bmad-output/planning-artifacts/prd.md:308`] — FR29
-- [Source: `crates/smartme-bridge/src/app/mqtt_driver.rs:1489`] — `Transport::Connected`, already emitted
+- [Source: `crates/smartme-bridge/src/app/mqtt_driver.rs:1570`] — `Transport::Connected`, already emitted *(resolved mechanically at review, 2026-08-20: the drafting citation `:1489` was moved 81 lines by this story's own commit — action E4)*
 - [Source: `crates/smartme-bridge/src/app/supervisor.rs:115`] — `Control`, the established way to hand a live handle to the UI
 - [Source: `CLAUDE.md`] — falsify before trusting
 
@@ -148,3 +149,39 @@ this story implements: *"This issue is what is still missing: the sink's actual 
 - **2026-08-19** — Story 6.5. The sink's state is observed rather than inferred, reported in the
   body and never in the status code, and named on the page with the gesture it calls for. [#53]
   closes. FR29 delivered; FR37 is now writable.
+
+### Review — 2026-08-20
+
+**AC3 was met on `/meters` and not on the screen the criterion names.** It says *"when the
+**state screen** is rendered, source health and sink health are separate lines"*. The sink
+line shipped on the meter page; `/` — the page an operator opens first, and the one a
+bookmark reaches — went on saying, in `Lifecycle::Running`'s own words, that *"whether the
+broker is actually reachable is not reported here yet — the log says so"*, about a bridge that
+had just been handed the fact. **That sentence became false in the same commit that made it
+false**, and the story's completion note recorded AC3 as met while naming the other surface
+("the meter page names which end is at fault"), which is how the substitution passed.
+
+The stake is not cosmetic: during an outage, `/` was the one surface that could not say which
+end had gone, which is [#53] reappearing one page over from where this story closed it.
+
+**Repaired in this review.** `screens::sink_health_line` is extracted and shared, so the two
+pages cannot drift into two spellings of the same fact; `index` renders it in every phase that
+has a driver and omits it in the silent phases, where there is nothing to have observed —
+the rule `fleet()` and `failed_sources` already apply. `Lifecycle::Running`'s text now points
+at the line instead of at the log. Pinned by `the_state_screen_names_the_broker_too` (never
+connected → unreachable → reconnected), falsified by removing the line from `index`.
+
+**Two stale comments removed with it.** `healthz` still said *"broker connectivity is not
+plumbed to the UI yet ([#53]); until it is…"* — directly above the `sink_connected` field this
+story added — and the comment above `Lifecycle::Running` said the same. A comment that
+contradicts the code beneath it is how the next reader learns the wrong thing fastest.
+
+**AC1, AC2, AC4 — verified as claimed, and AC2 is the one worth restating.** `/healthz` carries
+`sink_connected` and `sink_since_ms` in the body while the status code follows the wedge and
+nothing else; the write sites are the two transport arms (`mqtt_driver.rs:1292` and `:1313`),
+so every CONNACK and every drop is covered exactly once; `None` is not `Disconnected`.
+
+**Citation corrected mechanically (action E4):** `mqtt_driver.rs:1489` → `:1570`. The drafting
+citation was accurate and **this story's own commit moved it 81 lines** — the same defect as
+[#101] and the one action E4 exists to catch, recurring at the first opportunity after the
+retrospective that created the action.
