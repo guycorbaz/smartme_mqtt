@@ -55,13 +55,25 @@ ok "lock file matches the manifests and is committed"
 # This validates the file as shipped, and again with the fallback uncommented.
 # It proves the shape, not that Traefik routes: standing up Traefik in a gate
 # would be proving somebody else's software.
-if command -v docker >/dev/null 2>&1; then
-    step "docker-compose.yml — the reference deployment parses, both ways"
+step "docker-compose.yml — the reference deployment parses, both ways"
+if ! command -v docker >/dev/null 2>&1; then
+    # SAID, not skipped in silence. A check that vanishes when a tool is absent
+    # reads afterwards exactly like a check that passed.
+    printf '\033[33m~ skipped: docker is not on this machine\033[0m\n'
+else
     # The credential variables use Compose's `:?` form, which fails immediately
     # when unset — deliberately, so a deployment cannot start without them. The
-    # gate supplies throwaway values: what is under test is the file's shape.
-    export SMARTME_CLIENT_ID=gate SMARTME_CLIENT_SECRET=gate
-    if ! docker compose -f docker-compose.yml config -q; then
+    # gate supplies throwaway values.
+    #
+    # **On the command, NEVER exported** — repaired by the review of story 7.2. An
+    # `export` here would have left `SMARTME_CLIENT_ID` and `SMARTME_CLIENT_SECRET`
+    # set for every step BELOW, including the whole Rust suite. This repository has
+    # already recorded what that costs: story 6.6's own test had to be made immune
+    # to those variables, because other tests in the same binary set them and the
+    # environment is per-process. A gate that quietly hands the suite a credential
+    # is a gate that changes what it is measuring.
+    if ! SMARTME_CLIENT_ID=gate SMARTME_CLIENT_SECRET=gate \
+        docker compose -f docker-compose.yml config -q; then
         echo "docker-compose.yml does not parse; the manual tells the operator to copy it"
         exit 1
     fi
@@ -72,7 +84,8 @@ if command -v docker >/dev/null 2>&1; then
     # Uncomment the `ports:` block: the two lines are `#ports:` and its mapping.
     sed 's/^\( *\)#ports:/\1ports:/; s/^\( *\)#  - "\(.*\)"/\1  - "\2"/' \
         docker-compose.yml > "$fallback"
-    if ! docker compose -f "$fallback" config -q; then
+    if ! SMARTME_CLIENT_ID=gate SMARTME_CLIENT_SECRET=gate \
+        docker compose -f "$fallback" config -q; then
         rm -f "$fallback"
         echo "the non-Traefik fallback does not parse — a deployment without Traefik is documented and would fail at the first command"
         exit 1

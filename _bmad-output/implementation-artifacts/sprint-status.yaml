@@ -2637,7 +2637,7 @@ development_status:
   #     keeps non-200 codes for a WEDGED POLLER only, because this epic wires them
   #     to a container restart and a restart kills the Sparkplug session for every
   #     meter. A panic in a DISPLAY handler must not restart the bridge.
-  epic-7: in-progress
+  epic-7: done
   # 2026-08-20, WRITTEN AND IMPLEMENTED. AR12's restart could not fire in a real
   # deployment: the image has no curl, no wget and a shell that is not bash, so
   # NOTHING INSIDE THE CONTAINER could consume /healthz ([#56], open since 5 August).
@@ -2662,8 +2662,18 @@ development_status:
   # previous one configured now has to come up publishing and rewrite nothing.
   # TWO ROWS SAY `unproven` RATHER THAN BEING DRESSED UP: Traefik routing and the
   # image platform are read, not asserted.
-  7-2-what-epic-7-already-delivered-proved: review  # implemented 2026-08-20; FR39/FR40/AR11/AR22 claimed and exercised
-  epic-7-retrospective: required  # added 2026-08-10 — the line was absent entirely
+  # REVIEWED AND CLOSED 2026-08-20. ONE DEFECT, INTRODUCED INTO THE GATE ITSELF: the
+  # compose check `export`ed the two credential variables, leaving them set for every
+  # step below — the whole Rust suite included, which is the exact hazard story 6.6's
+  # test had to be made immune to. Repaired (supplied on the command, never exported),
+  # and the `command -v docker` silence now prints that it was skipped.
+  7-2-what-epic-7-already-delivered-proved: done  # closed 2026-08-20 after review
+  # DONE 2026-08-20 — epic-7-retro-2026-08-20.md. Two stories, and almost nothing built:
+  # F3 applied at the OPEN found FR39/FR40/AR11/AR22 already delivered and claimed by no
+  # story, so the epic became verification. TWO OF ITS THREE DEFECTS WERE IN TESTS: a
+  # falsification that hung instead of failing, and a harness that blocked its own
+  # runtime and blamed the bridge. The third was introduced into the gate itself.
+  epic-7-retrospective: done  # added 2026-08-10 — the line was absent entirely
 
   # ADDED 2026-08-08, previously absent from this file entirely.
   #

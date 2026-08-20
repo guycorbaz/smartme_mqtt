@@ -1,6 +1,6 @@
 # Story 7.2: What Epic 7 already delivered, proved rather than assumed
 
-Status: review
+Status: done
 
 > **This story exists because of Epic 6's action F3.** That epic looked like it owed four
 > requirements and owed two: FR46 was delivered by story 6.2 and never written into the
@@ -154,3 +154,21 @@ is 7.1's and is not re-proved here.
 - **2026-08-20** — Story 7.2. Epic 6's action F3, applied to Epic 7's own inheritance. Three
   mutations run and one no-op recorded. No production code changed: this story adds proof, not
   behaviour.
+
+### Review — 2026-08-20
+
+**One defect, introduced by this story into the gate itself.** The compose check `export`ed
+`SMARTME_CLIENT_ID` and `SMARTME_CLIENT_SECRET` to satisfy Compose's `:?` form — and an
+`export` in `ci-local.sh` leaves them set for **every step below it, the whole Rust suite
+included**. This repository has already paid for that shape once: story 6.6's own test had to
+be made immune to those variables because other tests in the same binary set them and the
+environment is per-process. **A gate that quietly hands the suite a credential changes what it
+is measuring.** Repaired: the values are supplied on the command, never exported.
+
+**And one silence removed.** The block was wrapped in `if command -v docker`, so on a machine
+without Docker it produced no output at all — and a check that vanishes reads afterwards
+exactly like a check that passed. It now prints that it was skipped.
+
+**The rest holds.** The two `unproven` rows are still honest, the FR40 container check cleans
+up its container on every path, and the presence guard on the fallback fires through its
+consequence.
