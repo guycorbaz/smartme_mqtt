@@ -2646,7 +2646,23 @@ development_status:
   # AC3 IS THE ONE THAT WOULD HAVE BEEN FOUND IN PRODUCTION: a typo in the
   # HEALTHCHECK line used to fall through to a normal start — a second bridge inside
   # the container, every thirty seconds, under the same edge node.
-  7-1-the-healthcheck-the-image-can-actually-run: review  # implemented 2026-08-20; [#56] closes
+  # REVIEWED AND CLOSED 2026-08-20. ONE GAP, AND IT WAS THE STATE THE FEATURE EXISTS
+  # FOR: the probe was tested against a healthy endpoint and against no endpoint, and
+  # never against one answering non-200 — which is exactly what AR12 restarts on.
+  # Pinned now against a hand-written 503, falsified. AC5's container half is met on
+  # the healthy side only and says so: turning a container unhealthy needs a poller
+  # wedged INSIDE the image, so the probe's verdict and the wedge that produces one
+  # are pinned separately and meet in the middle. Recorded as the story's residue.
+  7-1-the-healthcheck-the-image-can-actually-run: done  # closed 2026-08-20 after review; [#56] closed
+  # 2026-08-20, WRITTEN AND IMPLEMENTED. Epic 6's action F3 applied at the START of an
+  # epic rather than at its close: the Dockerfile, the compose file and the publish
+  # workflow all existed and NO STORY CLAIMED ANY OF THEM. The work was to prove them,
+  # and to write the proof that was missing — FR40 was evidenced by a struct written
+  # and read back, which is a claim about serde. A new container on the volume a
+  # previous one configured now has to come up publishing and rewrite nothing.
+  # TWO ROWS SAY `unproven` RATHER THAN BEING DRESSED UP: Traefik routing and the
+  # image platform are read, not asserted.
+  7-2-what-epic-7-already-delivered-proved: review  # implemented 2026-08-20; FR39/FR40/AR11/AR22 claimed and exercised
   epic-7-retrospective: required  # added 2026-08-10 — the line was absent entirely
 
   # ADDED 2026-08-08, previously absent from this file entirely.

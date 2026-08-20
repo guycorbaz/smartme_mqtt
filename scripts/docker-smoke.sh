@@ -380,6 +380,44 @@ if grep -q "$SMOKE_SECRET" "$TMP/firstrun.log"; then
     fail "the credential reached the container log"
 fi
 ok "a first run is completed entirely over HTTP against the image"
+
+# --- FR40: A NEW CONTAINER ON THE SAME VOLUME IS AN UPDATE -------------------
+#
+# **What FR40's evidence was until this check, and why it was not enough.** FR40
+# says "update by pulling a new image without config loss", and everything that
+# tested it operated on the FILE: a struct written, read back, and compared. That
+# is a claim about `serde`. Nobody had ever observed a container come up on a
+# volume a previous container configured — which is the actual gesture, and the one
+# where an ownership, a path or a schema mistake would show.
+#
+# The volume from the first-run block above is reused deliberately: it holds a
+# configuration written by the image itself, confirmed through its own screens.
+config_before=$(sha256sum "$TMP/firstrun/config.toml" | cut -d' ' -f1)
+[[ -n "$config_before" ]] || fail "the first run left no configuration to update onto"
+
+upd="smartme_smoke_update_$$"
+docker rm -f "$upd" >/dev/null 2>&1 || true
+docker run -d --name "$upd" \
+    -e SMARTME_CLIENT_ID=x -e SMARTME_CLIENT_SECRET="$SMOKE_SECRET" \
+    -e SMARTME_STATE_DIR=/state \
+    -p "$PORT:8080" \
+    -v "$TMP/firstrun:/state" \
+    "$IMAGE" >/dev/null
+
+republishing=""
+for _ in $(seq 1 40); do
+    if [[ "$(http GET /healthz || true)" == *'"status":"running"'* ]]; then republishing=yes; break; fi
+    sleep 1
+done
+docker logs "$upd" > "$TMP/update.log" 2>&1 || true
+config_after=$(sha256sum "$TMP/firstrun/config.toml" | cut -d' ' -f1)
+docker rm -f "$upd" >/dev/null 2>&1 || true
+
+[[ -n "$republishing" ]] \
+    || { tail -25 "$TMP/update.log"; fail "FR40: a new container on an already-configured volume did not come up publishing. An update would then hand the operator a bridge asking to be configured again, with the configuration sitting right there"; }
+[[ "$config_before" == "$config_after" ]] \
+    || fail "FR40: the second container REWROTE the configuration ($config_before -> $config_after). A run that finds a file must not touch it: rewriting is how a schema stamp, a default or a dropped optional key silently edits what the operator wrote"
+ok "an update — a new container on a configured volume — republishes and rewrites nothing"
 printf '  \033[36mNFR11\033[0m time from a clean state directory to a publishing bridge: \033[1m%s s\033[0m\n' "$elapsed"
 printf '        (budget is 900 s. This is the container only — it excludes pulling\n'
 printf '         the image and the operator typing, which are the other two terms.)\n'

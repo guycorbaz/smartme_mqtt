@@ -1,6 +1,6 @@
 # Story 7.1: The healthcheck the image can actually run — AR12, and what [#56] has been holding since 5 August
 
-Status: review
+Status: done
 
 > **The Dockerfile has been waiting for this change by name.** Its comment says the
 > `HEALTHCHECK` line *"belongs in the same change as the endpoint it probes, not before it"*.
@@ -167,3 +167,30 @@ Epic 4's action E2 exactly. `flavor = "multi_thread"` is load-bearing and says s
 
 - **2026-08-20** — Story 7.1. AR12's restart can fire for the first time; [#56] closes. Three
   mutations run. `CONTRACT_VERSION` stays at 10.
+
+### Review — 2026-08-20
+
+**One gap, and it was the state the whole feature exists for.** The story shipped with the
+probe tested against a healthy `/healthz` and against no endpoint at all — **and never against
+one that answers non-200**. AR12's restart fires on exactly that, and nothing exercised the
+probe's verdict for it. Now asserted against a hand-written server that answers 503, and
+falsified by making any answer count as healthy.
+
+**Why a hand-written server rather than a wedged bridge**, recorded so the next reader does not
+undo it: the unit under test is the *probe's verdict*. `/healthz`'s own decision to return 503
+already has two tests — the unit one and `chaos_poller_wedge` end to end — and building a wedged
+bridge here would have tested that decision a third time and the probe not at all.
+
+**AC5's container half is met on the healthy side only, and that is recorded rather than
+claimed.** `docker-smoke.sh` observes a real container reporting `healthy`, which is what [#56]
+said was impossible. Observing a container turn `unhealthy` needs a wedged poller *inside* the
+image — a source that hangs, which the image has no way to be given — so it is not done here.
+The probe's verdict on a 503 is now pinned, and the wedge that produces one is pinned by
+`chaos_poller_wedge`. **The two halves meet in the middle rather than end to end**, and that
+join is the story's residue.
+
+**AC1's one assumption, named:** the probe reads `SMARTME_STATE_DIR` to find the same
+`config.toml` the server read. Inside the container both come from the same environment, so
+they cannot disagree. A probe invoked from elsewhere with a different state directory would
+resolve a different port — which is why the `HEALTHCHECK` line invokes it with no environment
+of its own.

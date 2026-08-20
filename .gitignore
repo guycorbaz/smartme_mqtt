@@ -6,3 +6,4 @@
 # _bmad-output/ ARE tracked; the framework and local session data are not).
 /_bmad/
 /.claude/
+.compose-fallback.*.yml

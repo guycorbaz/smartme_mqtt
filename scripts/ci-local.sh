@@ -44,6 +44,51 @@ cargo metadata --locked --format-version 1 >/dev/null
 ok "lock file matches the manifests and is committed"
 
 # ---------------------------------------------------------------------------
+# The reference deployment parses — both ways it is offered (story 7.2, FR39)
+# ---------------------------------------------------------------------------
+#
+# `docker-compose.yml` IS the deployment for this project: the manual tells the
+# operator to copy it. It carries a commented `ports:` block for deployments
+# without Traefik, and a commented block is a block nothing has ever parsed —
+# which is how a file comes to offer a fallback that does not work.
+#
+# This validates the file as shipped, and again with the fallback uncommented.
+# It proves the shape, not that Traefik routes: standing up Traefik in a gate
+# would be proving somebody else's software.
+if command -v docker >/dev/null 2>&1; then
+    step "docker-compose.yml — the reference deployment parses, both ways"
+    # The credential variables use Compose's `:?` form, which fails immediately
+    # when unset — deliberately, so a deployment cannot start without them. The
+    # gate supplies throwaway values: what is under test is the file's shape.
+    export SMARTME_CLIENT_ID=gate SMARTME_CLIENT_SECRET=gate
+    if ! docker compose -f docker-compose.yml config -q; then
+        echo "docker-compose.yml does not parse; the manual tells the operator to copy it"
+        exit 1
+    fi
+    # IN THE REPOSITORY, not in /tmp: the file says `env_file: .env`, and Compose
+    # resolves that relative to the file's own directory. A copy in /tmp looks for
+    # /tmp/.env and fails for a reason that has nothing to do with what is tested.
+    fallback="$(mktemp ./.compose-fallback.XXXXXX.yml)"
+    # Uncomment the `ports:` block: the two lines are `#ports:` and its mapping.
+    sed 's/^\( *\)#ports:/\1ports:/; s/^\( *\)#  - "\(.*\)"/\1  - "\2"/' \
+        docker-compose.yml > "$fallback"
+    if ! docker compose -f "$fallback" config -q; then
+        rm -f "$fallback"
+        echo "the non-Traefik fallback does not parse — a deployment without Traefik is documented and would fail at the first command"
+        exit 1
+    fi
+    # PRESENCE BEFORE VERDICT: if the sed matched nothing, both files are the
+    # same and the check above proved nothing about the fallback.
+    if ! grep -qE '^\s*ports:' "$fallback"; then
+        rm -f "$fallback"
+        echo "the fallback was never uncommented, so this check proved nothing — the commented block's shape must have changed"
+        exit 1
+    fi
+    rm -f "$fallback"
+    ok "the reference deployment parses, with and without the Traefik fallback"
+fi
+
+# ---------------------------------------------------------------------------
 # .github/workflows/ci.yml
 # ---------------------------------------------------------------------------
 step "ci.yml — fmt"

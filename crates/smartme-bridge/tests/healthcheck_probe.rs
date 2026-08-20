@@ -88,6 +88,66 @@ async fn a_bridge_that_answers_is_healthy_even_when_it_publishes_nothing() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// **AC2's unhealthy half in its FIRST form: the endpoint answers, and says no.**
+///
+/// **Added by the review of this story, 2026-08-20, and it is the gap that
+/// mattered.** The story shipped with the probe tested against a healthy endpoint
+/// and against no endpoint at all — and never against a `/healthz` that returns
+/// non-200, which is *the one state the whole feature exists for*. AR12's restart
+/// fires on exactly that, and nothing exercised it.
+///
+/// **A hand-written server rather than a wedged bridge**, deliberately: the unit
+/// under test is the probe's verdict, and `/healthz`'s own decision to return 503
+/// has its own tests (`a_wedged_poll_loop_is_unhealthy_and_a_slow_one_is_not`, and
+/// `chaos_poller_wedge` end to end). Building a wedged bridge here would test that
+/// decision a third time and the probe not at all.
+///
+/// FALSIFIED 2026-08-20 — mutation RUN, output copied: treating any answer as
+/// healthy (`Ok(_) => exit(0)`) goes red with
+///
+/// ```text
+/// a 503 from /healthz is the ONE state a restart repairs, and the probe reported
+/// healthy: exit code Some(0)
+/// ```
+#[test]
+fn a_bridge_that_answers_503_is_unhealthy() {
+    let dir = scratch("wedged");
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("a port");
+    let port = listener.local_addr().expect("addr").port();
+
+    // One request, answered 503, then the thread ends. `Connection: close` so the
+    // client does not wait on a keep-alive that nobody will service.
+    let server = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            use std::io::{Read, Write};
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer);
+            let _ = stream.write_all(
+                b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 2\r\n\
+                  Connection: close\r\n\r\n{}",
+            );
+        }
+    });
+
+    let output = probe(port, &dir);
+    let _ = server.join();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a 503 from /healthz is the ONE state a restart repairs, and the probe \
+         reported healthy: exit code {:?}",
+        output.status.code()
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("503"),
+        "and the health log must carry what was answered, or an operator reading \
+         `docker inspect` learns only that something is wrong: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// **AC2's unhealthy half, in its second form: nothing answers at all.**
 ///
 /// A bridge whose own web server is not responding cannot be asked anything, and
