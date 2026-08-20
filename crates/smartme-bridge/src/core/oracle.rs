@@ -409,19 +409,19 @@ impl Cause {
 
             // THE OPERATOR'S, and each names ONE field rather than three.
             Self::CredentialRejected => {
-                "the smart-me credential was rejected: set SMARTME_CLIENT_ID and \
-                 SMARTME_CLIENT_SECRET where the container reads them, then restart. \
-                 There is no field for it on any screen, deliberately"
+                "set SMARTME_CLIENT_ID and SMARTME_CLIENT_SECRET where the container \
+                 reads them, then restart: smart-me rejected the credential this bridge \
+                 is using. There is no field for it on any screen, deliberately"
             }
             Self::DeviceNotInAccount => {
-                "the account does not have this device id: open the configuration, load \
-                 the account's meters, and pick this meter again — the pick fills the \
+                "open the configuration, load the account's meters and pick this meter \
+                 again: the account does not have this device id, and the pick fills the \
                  device id and the serial together"
             }
             Self::IdentityMismatch => {
-                "the serial in the configuration is not the one this device reports: open \
-                 the configuration and compare that row against the account. If the meter \
-                 was physically replaced, the row is what needs updating"
+                "open the configuration and compare that row against the account: the \
+                 serial here is not the one this device reports. If the meter was \
+                 physically replaced, the row is what needs updating"
             }
             Self::ConfigurationContradicted => {
                 "open the configuration: it says something this bridge cannot act on, and \
@@ -1137,8 +1137,14 @@ mod culprit_tests {
         // A GESTURE IS SOMETHING TO DO. A sentence that only rewords the slug reads
         // as an explanation and leaves the reader where they were, which is what
         // this asserts mechanically: every row opens on an act.
+        // **`"the"` IS NOT IN THIS LIST, and it was until the review of this story.**
+        // Three gestures opened on the fact — *"the account does not have this device
+        // id: open the configuration…"* — so the list had to admit `the`, and
+        // admitting it let ANY declarative sentence through: the assertion still ran
+        // and could no longer fail for the reason it was written. The three were
+        // reworded to open on the act; the fact follows the colon.
         const ACTS: &[&str] = &[
-            "wait", "read", "open", "check", "look", "report", "fix", "nothing", "the",
+            "wait", "read", "open", "check", "look", "report", "fix", "set", "nothing",
         ];
         for cause in Cause::ALL {
             let gesture = cause.gesture();

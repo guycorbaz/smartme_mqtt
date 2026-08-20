@@ -1,6 +1,6 @@
 # Story 6.8: The gesture each cause asks for — FR31, and the last thing Epic 6 owes
 
-Status: review
+Status: done
 
 > **[#103] is this story, and it was opened by the review of 6.4 rather than guessed at.**
 > `repair()` derives the gesture from `Culprit` alone, so twenty-one causes share three
@@ -151,3 +151,27 @@ accommodation.
 - **2026-08-20** — Story 6.8. FR31, and [#103] closed. Three mutations run.
   `CONTRACT_VERSION` stays at 10 — these are words on screens, and nothing here reaches the
   wire.
+
+### Review — 2026-08-20
+
+**One defect, and it was in this story's own test.** AC2's mechanical check — *every gesture
+begins with something to do* — had `"the"` in its list of openings, because three gestures
+opened on the fact (*"the account does not have this device id: open the configuration…"*).
+Admitting `the` let **any declarative sentence through**: the assertion still ran and could no
+longer fail for the reason it was written, which is the shape this repository's own rule warns
+about — a test that passes for the wrong reason. The three were reworded to open on the act,
+the fact follows the colon, and `the` is out of the list. Falsified afterwards: a gesture
+rewritten as a statement now goes red.
+
+**AC5 is met by construction and is NOT pinned, recorded rather than dressed up.** No surface
+renders a `Debug` of an error type: the check renders `SmartMeError`'s `Display`, which story
+2.6 wrote a repair into, and the pages render the taxonomy's own words. A mechanical guard
+would have to distinguish `{:?}` on a domain enum — `Quality` is rendered that way and should
+be — from `{:?}` on an error, which no static rule this repository could write does reliably.
+An assertion that cannot fail is worse than none.
+
+**The other criteria hold**, and AC3's agreement check is the one that will earn its place
+later: it is what stops the two tables drifting the next time somebody edits one sentence.
+
+**Nothing else found.** No citation in this story points at a line — it cites files and an
+issue — which is, incidentally, the practice [#101] recommends.

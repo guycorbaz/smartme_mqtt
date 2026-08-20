@@ -2332,7 +2332,7 @@ development_status:
   # ([#50]). Two stories in review, one AC partially unmet ([#49]). It stays `in-progress`
   # rather than `done` until those reviews run — a review is not a formality here; the
   # 4.2 one moved four conformance verdicts.
-  epic-6: in-progress
+  epic-6: done
   # 2026-08-04 — 6.1 WRITTEN, and it is now the SHORTEST PATH TO A USABLE PRODUCT.
   #
   # ADR 0023 made the web UI the only way to configure the bridge, and the web UI does not
@@ -2604,8 +2604,21 @@ development_status:
   # for a rejected credential, and ADR 0023 put the credential in the ENVIRONMENT —
   # that screen has no field for it, so the page sent the operator to a form that
   # could not hold the repair.
-  6-8-the-gesture-each-cause-asks-for: review  # implemented 2026-08-20; FR31, [#103] closes
-  epic-6-retrospective: required  # added 2026-08-10 — the line was absent entirely
+  # REVIEWED AND CLOSED 2026-08-20. ONE DEFECT, IN THE STORY'S OWN TEST: AC2's check
+  # ("every gesture begins with something to do") admitted "the" as an opening, because
+  # three gestures opened on the fact — and admitting it let ANY declarative sentence
+  # through, so the assertion could no longer fail for its own reason. Reworded, "the"
+  # removed, falsified afterwards. AC5 is met by construction and recorded as NOT
+  # pinned: a guard would have to tell `{:?}` on a domain enum from `{:?}` on an error,
+  # and an assertion that cannot fail is worse than none.
+  6-8-the-gesture-each-cause-asks-for: done  # closed 2026-08-20 after review; FR31, [#103] closed
+  # DONE 2026-08-20 — epic-6-retro-2026-08-20.md. Its signature defect: THREE acceptance
+  # criteria ticked against a summary of themselves (6.4 AC2's ninth column, 6.5 AC3's
+  # surface, 6.8 AC2's own test admitting "the"). That is action A6 / [#24] unhonoured
+  # for the third epic running, and Epic 5's retrospective predicted this exact failure
+  # — so F1 makes it a sentence somebody has to type: quote the criterion verbatim,
+  # then answer it.
+  epic-6-retrospective: done  # added 2026-08-10 — the line was absent entirely
 
   # ADDED 2026-08-08, previously absent from this file entirely.
   #
