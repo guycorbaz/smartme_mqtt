@@ -503,7 +503,9 @@ fn render(state: &Arc<UiState>, chosen: Option<&str>, refusal: Option<Refusal>) 
                     ago(now, at),
                     escape(&what),
                     cause.as_str(),
-                    repair(cause.culprit())
+                    // The cause's own gesture (story 6.8), not the culprit's
+                    // three-way one — this page exists to be acted on.
+                    cause.gesture()
                 ),
                 SourceLink::NoCredential => {
                     "<strong>was not asked</strong>: there is no credential in the \
@@ -547,7 +549,10 @@ fn render(state: &Arc<UiState>, chosen: Option<&str>, refusal: Option<Refusal>) 
                 entry.culprit.map_or_else(String::new, |c| format!(
                     " Whose fault: {} — {}.",
                     c.as_str(),
-                    repair(c)
+                    verdict.cause().map_or_else(
+                        || repair(c).to_string(),
+                        |cause| cause.gesture().to_string()
+                    )
                 )),
             ),
         },

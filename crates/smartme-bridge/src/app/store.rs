@@ -970,6 +970,81 @@ mod tests {
         path
     }
 
+    /// **[ADR 0040] on the path production actually takes** — added by the review
+    /// of story 6.7, 2026-08-20.
+    ///
+    /// The migration was pinned on `read`, and `read` is what the SCREENS call. The
+    /// bridge starts through `load`, and a migration that worked for the form while
+    /// startup still refused would have produced the worst of both: a bridge that
+    /// will not publish, showing a configuration screen that says everything is
+    /// fine.
+    ///
+    /// `load` delegates to `read` today, so this passes as written — which is
+    /// exactly why it is worth asserting: nothing stated that it must, and the two
+    /// could be given separate version checks by anybody repairing one of them.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN: giving `load` its own strict version
+    /// check (`version != SCHEMA_VERSION` → refuse, before delegating) goes red with
+    /// `the bridge must START on a migrated file`.
+    #[test]
+    fn the_bridge_starts_on_a_migrated_file_and_not_only_the_screens() {
+        let home = dir("migrate_startup");
+        let mut four = sound();
+        four.schema_version = 4;
+        std::fs::write(
+            config_path(&home),
+            toml::to_string(&four).expect("serialize"),
+        )
+        .expect("plant a version-4 file");
+
+        let raw = load(&home, credential()).expect(
+            "the bridge must START on a migrated file: a migration that only reached \
+             the screens would leave a bridge refusing to publish while its own \
+             configuration page rendered happily",
+        );
+        assert_eq!(raw.broker_host.as_deref(), Some("broker"));
+        assert_eq!(raw.meters.len(), 1);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// **A file that cannot be READ acquires no creation date** — the third arm of
+    /// `save`'s rule, added by the review of story 6.7 because the story's own test
+    /// covered the other two only.
+    ///
+    /// A syntax error the configuration form repairs is the live case ([ADR 0026]
+    /// makes `Misconfigured` a startup state, and the form is where it is fixed).
+    /// The file may well have had a creation date; stamping `now` would claim this
+    /// configuration was born at the moment somebody corrected a typo, and carrying
+    /// nothing forward is the only honest answer available.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN: collapsing the unreadable arm into the
+    /// no-file one (`None => Some(now.0)`) goes red with `a configuration repaired
+    /// from a broken file was not created at the moment of the repair`.
+    #[test]
+    fn a_repaired_file_is_not_treated_as_a_new_configuration() {
+        let home = dir("repaired_not_created");
+        std::fs::write(config_path(&home), "this is not toml {{{").expect("plant a broken file");
+
+        let now = crate::domain::UtcMillis(1_784_984_793_000);
+        save(&home, &sound(), now).expect("the form repairs it");
+
+        assert_eq!(
+            read(&home).expect("reads now").created_ms,
+            None,
+            "a configuration repaired from a broken file was not created at the \
+             moment of the repair: the file existed, its creation date may have \
+             existed too, and neither is knowable now — so the honest answer is \
+             that it is unknown"
+        );
+        assert_eq!(
+            read(&home).expect("reads now").last_change_ms,
+            Some(now.0),
+            "but the CHANGE is knowable: this write changed the settings, whatever \
+             they were before"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
     /// **[ADR 0040] — a version-4 file reads, and every setting survives.**
     ///
     /// The bump from 4 to 5 is required by this module's own rule; without a

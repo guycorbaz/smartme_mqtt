@@ -161,7 +161,7 @@ and a check that answered.
 - [Source: `_bmad-output/planning-artifacts/prd.md:316`] — FR37
 - [Source: `_bmad-output/planning-artifacts/epics.md:153`] — AR19, *"UI consumes this state, never recomputes it"*
 - [Source: `crates/smartme-bridge/src/app/poll_publish.rs:801`] — `step_once`, and the `MeterMemory` this story refuses to touch
-- [Source: `crates/smartme-bridge/src/ui/screens.rs:850`] — `fetch_listing`, the UI's existing path to smart-me
+- [Source: `crates/smartme-bridge/src/ui/screens.rs:876`] — `fetch_listing`, the UI's existing path to smart-me
 - [Source: `crates/smartme-bridge/src/app/mqtt_driver.rs:1094`] — `SinkState`, the third link's fact
 - [Source: `docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md`] — no credential on any screen
 - [Source: `docs/adr/0024-the-config-ui-refuses-submissions-from-other-origins.md`] — the origin guard on POST routes

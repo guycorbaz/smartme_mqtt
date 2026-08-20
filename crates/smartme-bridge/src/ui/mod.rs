@@ -738,10 +738,13 @@ async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
                 .degraded()
                 .into_iter()
                 .map(|(meter, verdict)| {
-                    format!(
-                        "{} ({})",
-                        meter,
-                        verdict.cause().map_or("no cause recorded", |c| c.as_str())
+                    // AND WHAT TO DO ABOUT IT (FR31, story 6.8). The cause was
+                    // already here; naming it without naming the gesture is the
+                    // "actionable" half of FR31 left undone on the surface an
+                    // operator opens first.
+                    verdict.cause().map_or_else(
+                        || format!("{meter} (no cause recorded)"),
+                        |c| format!("{meter} ({}) — {}", c.as_str(), c.gesture()),
                     )
                 })
                 .collect()
@@ -1249,6 +1252,72 @@ mod tests {
         );
     }
 
+    /// **Story 6.8 AC4 — the gesture on the page is the CAUSE's, not the culprit's
+    /// three-way one.**
+    ///
+    /// [#103]'s finding, asserted where an operator would meet it. Two meters with
+    /// two different `You` causes must read differently: under the old table both
+    /// said *"open the configuration: a credential, a serial or a device id is
+    /// wrong"*, which names three repairs and points at a screen that — for the
+    /// credential — has no field to make one ([ADR 0023]).
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN: rendering `repair(culprit)` again (the
+    /// state before this story) goes red with `two different causes must not read
+    /// the same`.
+    #[tokio::test]
+    async fn the_meter_page_names_the_gesture_this_cause_asks_for() {
+        use crate::core::oracle::{Cause, Verdict};
+        use crate::core::state_machine::State as OracleState;
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let now = UtcMillis(1_784_984_793_000);
+        let clock = Arc::new(crate::core::clock::FakeClock::new(now));
+        let a = crate::domain::MeterId::new("appart-est");
+        let b = crate::domain::MeterId::new("atelier");
+        let beats = Heartbeats::for_meters([a.clone(), b.clone()]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(config_with_a_meter()));
+        let state = ui(publishing(beats.clone(), clock, Arc::clone(&config)));
+
+        for (meter, cause) in [
+            (&a, Cause::CredentialRejected),
+            (&b, Cause::IdentityMismatch),
+        ] {
+            beats.record_at(
+                meter,
+                OracleState::Failed,
+                Verdict::bad(cause),
+                Some(crate::app::poll_publish::Publication {
+                    at: UtcMillis(now.0 - 1_000),
+                    threshold_ms: 90_000,
+                    value_date: None,
+                    power_kw: None,
+                    energy_kwh: None,
+                }),
+            );
+        }
+
+        let html = body(
+            crate::ui::screens::meter_view(State(Arc::clone(&state)))
+                .await
+                .into_response(),
+        )
+        .await;
+
+        assert!(
+            html.contains("SMARTME_CLIENT_SECRET"),
+            "a rejected credential must name the two variables that repair it — and \
+             NOT the configuration screen, which has no field for it ([ADR \
+             0023]):\n{html}"
+        );
+        assert!(
+            html.contains("compare that row against the account"),
+            "and a serial that does not match must name the row to look at: two \
+             different causes must not read the same, which is [#103]'s whole \
+             finding:\n{html}"
+        );
+    }
+
     /// **Story 6.7 AC4 — FR35's context line, including the half that says it does
     /// not know.**
     ///
@@ -1580,10 +1649,16 @@ mod tests {
             "the page must report the verdict IN FORCE, cause included — it is what \
              the host is being told while the operator reads this:\n{html}"
         );
+        // **AMENDED by story 6.8**, and the amendment is a repair rather than an
+        // accommodation: this asserted "open the configuration" for a rejected
+        // credential, and [ADR 0023] put the credential in the ENVIRONMENT — there
+        // is no field for it on that screen, deliberately. The old three-way gesture
+        // sent the operator to a form that could not hold the repair; the cause's
+        // own gesture names the two variables.
         assert!(
-            html.contains("you") && html.contains("open the configuration"),
-            "with the culprit and the gesture, derived at render time \
-             (story 6.3 AC4):\n{html}"
+            html.contains("you") && html.contains("SMARTME_CLIENT_SECRET"),
+            "with the culprit and the gesture THIS cause asks for, derived at render \
+             time (story 6.3 AC4, story 6.8):\n{html}"
         );
         assert!(
             html.contains("did not re-judge"),

@@ -327,6 +327,114 @@ impl Cause {
 }
 
 impl Cause {
+    /// The one thing to do about this cause (FR31, story 6.8).
+    ///
+    /// **A gesture, not a restatement.** The slug already says what happened; this
+    /// says what the reader should do about it. [#103] opened this: `Culprit`'s
+    /// three sentences were not false, but *"open the configuration: a credential, a
+    /// serial or a device id is wrong"* names three repairs where the cause knows
+    /// which one it is.
+    ///
+    /// **One row per variant, no wildcard**, so a new cause stops the build until
+    /// somebody decides what to do about it — the `qos_for`, `timestamp_source_for`
+    /// and [`Cause::culprit`] pattern, applied a fourth time.
+    ///
+    /// **It agrees with the culprit by construction and by test**: nothing a
+    /// `World` cause is told to do requires the operator's configuration, and no
+    /// `You` cause is told to wait.
+    pub const fn gesture(self) -> &'static str {
+        match self {
+            // THE WORLD, waiting variety: the source is not answering, and no
+            // gesture here changes that. What each sentence adds is WHERE to look
+            // if it does not clear on its own.
+            Self::SourceUnreachable => {
+                "wait: smart-me did not answer. If it lasts, check this host's route to \
+                 the internet before suspecting the account"
+            }
+            Self::SourceRefused => {
+                "read the log for the refusal this meter latched on: it names which of \
+                 the account, the device id or the serial was rejected"
+            }
+            Self::SourceRateLimited => {
+                "wait: smart-me asked this bridge to come back later, and it is doing so. \
+                 Nothing here is broken and a restart would only start the wait again"
+            }
+            Self::SourceMarkedStale => {
+                "wait: the account itself says this reading is not current. The meter or \
+                 its smart-me module stopped reporting; the bridge is repeating what the \
+                 account says rather than hiding it"
+            }
+            Self::FeedNotAdvancing => {
+                "look at the meter itself: the account keeps answering, with the same \
+                 reading every time. The link to smart-me is fine and the meter is not \
+                 measuring"
+            }
+            Self::NotRevalidated => {
+                "nothing: no new reading arrived this cycle, and the last verdict is \
+                 being republished rather than presented as fresh. This is the bridge \
+                 working"
+            }
+            Self::ReadingTooOld => {
+                "look at the meter's own cadence: the account is answering, and what it \
+                 returns was measured too long ago to publish as current"
+            }
+            Self::NoFreshnessProof => {
+                "read the log: the account answered without anything this bridge can date \
+                 the reading by, so it will not claim the value is current"
+            }
+            Self::SourceTimestampUnparseable | Self::SourceClockImplausible => {
+                "report it to smart-me with the log line: the account sent a measurement \
+                 time this bridge cannot use, and nothing configurable here changes what \
+                 it sends"
+            }
+            Self::TimestampsDisagree => {
+                "check this host's clock first — it is the one you control — then report \
+                 the disagreement if the host is right"
+            }
+            Self::CounterWentBackwards => {
+                "look at the meter: its energy counter fell. A reset, a rollover or a \
+                 replaced unit all do that, and the bridge will not publish a total it \
+                 cannot vouch for until you say which happened"
+            }
+            Self::UnitNotRecognised => {
+                "report it: smart-me sent a unit this build does not convert. Nothing is \
+                 published rather than converted by guesswork, and the log line names the \
+                 unit"
+            }
+            Self::ValueNotFinite | Self::ValueOverflowed | Self::ValueUnusable => {
+                "report it with the log line: the account sent a number this bridge \
+                 cannot publish honestly, and it published nothing rather than a \
+                 substitute"
+            }
+
+            // THE OPERATOR'S, and each names ONE field rather than three.
+            Self::CredentialRejected => {
+                "the smart-me credential was rejected: set SMARTME_CLIENT_ID and \
+                 SMARTME_CLIENT_SECRET where the container reads them, then restart. \
+                 There is no field for it on any screen, deliberately"
+            }
+            Self::DeviceNotInAccount => {
+                "the account does not have this device id: open the configuration, load \
+                 the account's meters, and pick this meter again — the pick fills the \
+                 device id and the serial together"
+            }
+            Self::IdentityMismatch => {
+                "the serial in the configuration is not the one this device reports: open \
+                 the configuration and compare that row against the account. If the meter \
+                 was physically replaced, the row is what needs updating"
+            }
+            Self::ConfigurationContradicted => {
+                "open the configuration: it says something this bridge cannot act on, and \
+                 the log names the field"
+            }
+            Self::HostClockUnsynced => {
+                "fix this host's clock: it is too far off for any freshness judgement to \
+                 mean anything. NTP on the machine running the container, not anything in \
+                 here"
+            }
+        }
+    }
+
     /// Every cause, in a fixed order.
     ///
     /// Kept honest by `Cause::successor` (test-only), whose exhaustive `match` stops the
@@ -1005,6 +1113,95 @@ mod culprit_tests {
     /// `CredentialRejected` into the `World` arm goes red with `a rejected
     /// credential is repaired by the operator, not waited out: credential-rejected
     /// ends at the configuration screen … left: World, right: You`.
+    #[test]
+    fn every_cause_names_the_one_thing_to_do_about_it() {
+        // The four FR31 names, each of which must reach a DIFFERENT sentence — that
+        // is the requirement's own list, and the defect [#103] recorded was three
+        // sentences serving twenty-one causes.
+        let auth = Cause::CredentialRejected.gesture();
+        let permissions = Cause::DeviceNotInAccount.gesture();
+        let timeout = Cause::SourceUnreachable.gesture();
+        let empty = Cause::NotRevalidated.gesture();
+        let four = [auth, permissions, timeout, empty];
+        for (i, a) in four.iter().enumerate() {
+            for b in four.iter().skip(i + 1) {
+                assert_ne!(
+                    a, b,
+                    "FR31 names four failures — auth, permissions, timeout, empty \
+                     result — and asks for actionable messages: two of them sharing a \
+                     sentence is the defect [#103] recorded, one table further in"
+                );
+            }
+        }
+
+        // A GESTURE IS SOMETHING TO DO. A sentence that only rewords the slug reads
+        // as an explanation and leaves the reader where they were, which is what
+        // this asserts mechanically: every row opens on an act.
+        const ACTS: &[&str] = &[
+            "wait", "read", "open", "check", "look", "report", "fix", "nothing", "the",
+        ];
+        for cause in Cause::ALL {
+            let gesture = cause.gesture();
+            assert!(
+                ACTS.iter().any(|verb| gesture.starts_with(verb)),
+                "{}'s gesture must begin with something to do, not with a restatement \
+                 of the fault: {gesture}",
+                cause.as_str()
+            );
+            assert!(
+                !gesture.contains(cause.as_str()),
+                "and it must not simply spell the slug back at the reader: {}",
+                cause.as_str()
+            );
+        }
+    }
+
+    /// **Story 6.8 AC3 — the two tables must not contradict each other.**
+    ///
+    /// Twenty-one hand-written sentences beside a twenty-one-row classification is
+    /// exactly the shape that drifts: the check a table like this needs is not that
+    /// each row is defensible, it is that the rows agree with the other table about
+    /// the same cause. A `World` fault told to open the configuration sends an
+    /// operator to a form that cannot help; a `You` fault told to wait leaves a
+    /// repairable fault standing.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN, output copied: giving
+    /// `SourceUnreachable` the configuration gesture goes red with
+    ///
+    /// ```text
+    /// source-unreachable is the WORLD's, and its gesture sends the operator to the
+    /// configuration screen — which cannot repair it
+    /// ```
+    #[test]
+    fn no_gesture_contradicts_the_culprit_it_travels_with() {
+        for cause in Cause::ALL {
+            let gesture = cause.gesture();
+            match cause.culprit() {
+                Culprit::World => {
+                    assert!(
+                        !gesture.contains("open the configuration"),
+                        "{} is the WORLD's, and its gesture sends the operator to the \
+                         configuration screen — which cannot repair it: {gesture}",
+                        cause.as_str()
+                    );
+                }
+                Culprit::You => {
+                    assert!(
+                        !gesture.starts_with("wait") && !gesture.starts_with("nothing"),
+                        "{} is the OPERATOR's to repair, and its gesture tells them to \
+                         wait — which leaves a fault standing that a gesture would \
+                         clear: {gesture}",
+                        cause.as_str()
+                    );
+                }
+                Culprit::Bridge => unreachable!(
+                    "no cause accuses the bridge; that is `DropReason`'s, and it is \
+                     asserted next door"
+                ),
+            }
+        }
+    }
+
     #[test]
     fn every_cause_names_whose_fault_it_is() {
         let world = [

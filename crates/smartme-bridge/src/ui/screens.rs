@@ -1418,9 +1418,21 @@ pub(super) async fn meter_view(State(state): State<Arc<UiState>>) -> impl IntoRe
             .map(|at| ago(now, at))
             .unwrap_or_else(|| "never".to_string());
 
+        // THE GESTURE IS THE CAUSE'S when there is one (story 6.8, [#103]).
+        //
+        // `Culprit::repair` names three repairs where the cause knows which one it
+        // is — *"a credential, a serial or a device id"* — and it stays for the one
+        // case that has no cause: a reading the bridge itself lost, which is
+        // `DropReason`'s.
         let blame = meter.culprit.map_or_else(
             || "—".to_string(),
-            |c| format!("{} — {}", c.as_str(), repair(c)),
+            |c| {
+                let gesture = meter.published.and_then(|v| v.cause()).map_or_else(
+                    || repair(c).to_string(),
+                    |cause| cause.gesture().to_string(),
+                );
+                format!("{} — {}", c.as_str(), gesture)
+            },
         );
 
         rows.push_str(&format!(

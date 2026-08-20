@@ -1,6 +1,6 @@
 # Story 6.7: The configuration context line — what the bridge knows about its own configuration
 
-Status: review
+Status: done
 
 > **The last requirement Epic 6 owes.** FR35 asks for one auto-written line on the state
 > screen: *"configured on X, last change Y, 4 meters, 2 priority Kamstrup"*. Three of those
@@ -98,8 +98,8 @@ absent rather than invented
 - [Source: `_bmad-output/planning-artifacts/prd.md:314`] — FR35
 - [Source: `_bmad-output/planning-artifacts/prd.md:155`] — the sentence the PRD writes out
 - [Source: `docs/adr/0039-the-configuration-remembers-when-it-was-written-and-which-meters-matter.md`] — where the three missing facts come from, and why not the mtime
-- [Source: `crates/smartme-bridge/src/app/store.rs:676`] — `save`, and the `mapping_confirmed` precedent
-- [Source: `crates/smartme-bridge/src/app/store.rs:59`] — `SCHEMA_VERSION`
+- [Source: `crates/smartme-bridge/src/app/store.rs:867`] — `save`, and the `mapping_confirmed` precedent
+- [Source: `crates/smartme-bridge/src/app/store.rs:60`] — `SCHEMA_VERSION`
 - [Source: `CLAUDE.md`] — falsify before trusting; decide at drafting
 
 ## Dev Agent Record
@@ -196,3 +196,29 @@ alone.
 - **2026-08-20** — Story 6.7. FR35, and the three facts it needed that did not exist. Six
   mutations run. `CONTRACT_VERSION` stays at 10 — the configuration file is read by the
   bridge, never published.
+
+### Review — 2026-08-20
+
+**Every acceptance criterion holds, and two gaps in the story's own testing were closed rather
+than noted.**
+
+**The migration was pinned on `read`, and production starts through `load`.** `load` delegates
+to `read`, so it worked — but nothing said it had to, and the two could be given separate
+version checks by anybody repairing one of them. The consequence of that drift would be the
+worst of both states: a bridge refusing to publish while its own configuration screen renders
+happily. Now asserted, and falsified by giving `load` its own strict check.
+
+**`save`'s third arm was untested.** The story tested "no file" and "readable file"; the live
+case it did not test is **a file that exists and cannot be read** — a syntax error the form
+repairs, which [ADR 0026] makes a startup state. Stamping `now` there would claim the
+configuration was born at the moment somebody fixed a typo. Now asserted, and falsified.
+
+**Three citations had drifted by the time the review ran, and all three were moved by this
+story's own edits** — `screens.rs:850`, `store.rs:676`, `store.rs:59`. Resolved mechanically
+(action E4). This is the third story in a row where the citation defect [#101] recurs at the
+first opportunity: the measurement is now on that issue, and the structural answer — cite
+documents by anchor, keep line numbers for code — is still undecided.
+
+**One residue, named:** the context line renders ages, not calendar dates, and the reason is a
+dependency decision rather than a formatting one (see above). If an absolute date is wanted,
+it needs a date library and its own ADR.
