@@ -32,7 +32,48 @@ mod port_lock;
 /// Fixed per case rather than allocated: the bridge reads its port from
 /// `config.toml`, so the test has to choose it before the process starts.
 fn port_for(case: u16) -> u16 {
-    18080 + case
+    // **CHOSEN, not computed — repaired 2026-08-20 after the pre-push gate refused a
+    // push for a defect that was not in this repository.**
+    //
+    // These were `18080 + case`, and on 2026-08-20 another project on this machine
+    // held 18082: the bridge could not bind it, the test talked to that service
+    // instead, and it reported *"the page must say what is missing"* with an
+    // `HTTP/1.1 401 www-authenticate: Basic realm="opencmdb"` printed underneath.
+    // **The harness accused the product**, which is Epic 4's action E2 and Epic 7's
+    // G4 arriving a third time — and [#93] is the standing record that a fixed port
+    // on this machine is a collision waiting for an afternoon.
+    //
+    // The `case` argument is kept so each test still names a port of its own in the
+    // reading; what it no longer does is decide which one.
+    let _ = case;
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("the kernel has a spare port");
+    let port = listener.local_addr().expect("bound").port();
+    drop(listener);
+    port
+}
+
+/// A port of this test's own, proved free at the instant it is handed out.
+fn checked_port_for(case: u16) -> u16 {
+    let port = port_for(case);
+    refuse_if_taken(port);
+    port
+}
+
+/// Refuse to start when something else already answers on `port`.
+///
+/// **Presence before verdict, one layer earlier than usual**: every assertion in
+/// this file reads a page from a port, and a page served by somebody else fails
+/// those assertions in ways that read exactly like a defect in the bridge.
+fn refuse_if_taken(port: u16) {
+    if let Ok(stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+        drop(stream);
+        panic!(
+            "something is already listening on 127.0.0.1:{port}, so this test would \
+             be reading somebody else's answers. Nothing here is broken; the port is \
+             taken ([#93])."
+        );
+    }
 }
 
 fn state_dir(name: &str) -> std::path::PathBuf {
@@ -161,6 +202,11 @@ fn with_no_configuration_the_ui_answers_and_says_so() {
     // the OTHER bridge, sees "Not configured yet", and reports green. A test for
     // "the server exists" passing while the server under test did not start.
     let _lock = port_lock::PortLock::acquire(UNCONFIGURED_PORT);
+    // **This one port stays fixed and cannot be chosen**: the test's premise is that
+    // a bridge with no file takes its port from the environment, so the test must
+    // name it in advance. The lock serialises this binary's own runs; it cannot
+    // evict another project, so the same guard applies here.
+    refuse_if_taken(UNCONFIGURED_PORT);
     let dir = state_dir("unconfigured");
     // No config.toml at all, so the port comes from the environment ([ADR 0037]):
     // there is no file to read one from, which is this test's whole premise.
@@ -220,7 +266,7 @@ fn with_no_configuration_the_ui_answers_and_says_so() {
 #[test]
 fn an_invalid_configuration_still_serves_the_screen_that_repairs_it() {
     let dir = state_dir("misconfigured");
-    let port = port_for(7);
+    let port = checked_port_for(7);
     // Parses and matches the schema, so `ui_port` is readable and this test does
     // not have to fall back to the shared default port. Refused by `validate`,
     // because the Sparkplug identity is empty.
@@ -290,7 +336,7 @@ fn an_invalid_configuration_still_serves_the_screen_that_repairs_it() {
 #[test]
 fn with_an_unconfirmed_mapping_the_ui_answers_differently() {
     let dir = state_dir("unconfirmed");
-    let port = port_for(1);
+    let port = checked_port_for(1);
     write_config(&dir, port, false);
     let mut child = spawn(&dir);
     let answer = wait_for_ui(port, &mut child);
@@ -315,7 +361,7 @@ fn with_an_unconfirmed_mapping_the_ui_answers_differently() {
 #[test]
 fn healthz_does_not_call_a_deliberate_silence_unhealthy() {
     let dir = state_dir("healthz");
-    let port = port_for(2);
+    let port = checked_port_for(2);
     write_config(&dir, port, false);
     let mut child = spawn(&dir);
 
@@ -384,6 +430,11 @@ fn healthz_does_not_call_a_deliberate_silence_unhealthy() {
 #[test]
 fn a_taken_port_does_not_cost_the_meters() {
     let dir = state_dir("port-taken");
+    // **`port_for`, not `checked_port_for`, and the difference is this test's whole
+    // premise**: every other case here refuses a port somebody already holds,
+    // because for them that is somebody else's answers. This one TAKES the port on
+    // purpose, one line below, to prove the meters keep publishing when the UI
+    // cannot bind. Guarding it would refuse the very state under test.
     let port = port_for(3);
     // Hold the port first, so the bridge cannot have it.
     let squatter = std::net::TcpListener::bind(("0.0.0.0", port)).expect("hold the port");
@@ -437,7 +488,7 @@ fn a_taken_port_does_not_cost_the_meters() {
 #[test]
 fn a_running_bridge_serves_its_page_and_an_honest_health_body() {
     let dir = state_dir("running");
-    let port = port_for(4);
+    let port = checked_port_for(4);
     write_config(&dir, port, true);
     let mut child = spawn(&dir);
 
