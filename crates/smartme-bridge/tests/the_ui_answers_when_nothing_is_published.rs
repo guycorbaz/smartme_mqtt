@@ -43,14 +43,20 @@ fn port_for(case: u16) -> u16 {
     // G4 arriving a third time — and [#93] is the standing record that a fixed port
     // on this machine is a collision waiting for an afternoon.
     //
-    // The `case` argument is kept so each test still names a port of its own in the
-    // reading; what it no longer does is decide which one.
-    let _ = case;
-    let listener =
-        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("the kernel has a spare port");
-    let port = listener.local_addr().expect("bound").port();
-    drop(listener);
-    port
+    // **The base moves with the process, the offset stays with the case.**
+    //
+    // Asking the kernel for a free port — bind 0, read it, drop — was tried first and
+    // is WORSE here: these six cases run in parallel, the kernel hands ephemeral
+    // ports out of a shared range, and the window between releasing one and the
+    // bridge binding it is long enough that two cases collided within one run. The
+    // guard below then reported a taken port, which was true and useless.
+    //
+    // A base derived from the process id cannot collide between two runs of this
+    // binary, keeps each case's port stable for the length of its own run, and sits
+    // far from both 8080 and the ephemeral range. What it cannot rule out is another
+    // project holding one of these — and that is exactly what the guard is for.
+    let base = 20_000 + (std::process::id() % 10_000) as u16;
+    base + case
 }
 
 /// A port of this test's own, proved free at the instant it is handed out.
