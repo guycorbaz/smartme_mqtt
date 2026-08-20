@@ -228,6 +228,7 @@ async fn a_hundred_thousand_iterations_do_not_grow_the_process() {
         },
         http_timeout: Duration::from_secs(10),
         meters: vec![smartme_bridge::app::config::MeterConfig {
+            priority: false,
             meter: meter.clone(),
             device_id: "a1a1a1a1-b2b2-c3c3-d4d4-000000000004".to_string(),
             serial: Serial::new(SERIAL),

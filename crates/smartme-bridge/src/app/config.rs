@@ -104,6 +104,12 @@ pub struct MeterConfig {
     pub serial: Serial,
     /// Whether this meter is published.
     pub enabled: bool,
+    /// Whether the operator counts this among the meters that matter (FR35,
+    /// [ADR 0039]). Read by the state screen's context line and by nothing else —
+    /// it changes nothing about what is published.
+    ///
+    /// [ADR 0039]: ../../../docs/adr/0039-the-configuration-remembers-when-it-was-written-and-which-meters-matter.md
+    pub priority: bool,
 }
 
 /// Configuration exactly as it arrived, from an environment or a form. Every
@@ -175,6 +181,11 @@ pub struct RawMeter {
     /// meant to publish. Disabling is the deliberate act, so it is the one that
     /// has to be written down.
     pub enabled: Option<bool>,
+    /// Absent means not a priority: the operator marks what matters, and silence
+    /// is not a claim (FR35, [ADR 0039]).
+    ///
+    /// [ADR 0039]: ../../../docs/adr/0039-the-configuration-remembers-when-it-was-written-and-which-meters-matter.md
+    pub priority: Option<bool>,
 }
 
 /// One thing wrong with the configuration.
@@ -577,6 +588,7 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
                 device_id: device_id.to_owned(),
                 serial: Serial::new(serial),
                 enabled: raw_meter.enabled.unwrap_or(true),
+                priority: raw_meter.priority.unwrap_or(false),
             });
         }
     }
@@ -849,6 +861,7 @@ mod tests {
             node_id: Some("Node".into()),
             broker_host: Some("broker".into()),
             meters: vec![RawMeter {
+                priority: None,
                 meter_id: Some("meter-a".into()),
                 device_id: Some("dev-a".into()),
                 serial: Some("9202685".into()),
@@ -987,6 +1000,7 @@ mod tests {
         raw.group_id = Some("Plant".into());
         raw.node_id = Some("Bridge01".into());
         raw.meters = vec![RawMeter {
+            priority: None,
             meter_id: Some("garage".into()),
             device_id: Some("a1a1a1a1-b2b2-c3c3-d4d4-000000000001".into()),
             serial: Some("9202685".into()),
@@ -1195,6 +1209,7 @@ mod tests {
     fn two_meters_sharing_a_serial_are_refused() {
         let mut raw = sound();
         raw.meters.push(RawMeter {
+            priority: None,
             meter_id: Some("meter-b".into()),
             device_id: Some("dev-b".into()),
             serial: Some("9202685".into()),
@@ -1242,6 +1257,7 @@ mod tests {
         let mut raw = sound();
         for (n, serial) in [(2, "9202686"), (3, "9202687"), (4, "9202688")] {
             raw.meters.push(RawMeter {
+                priority: None,
                 meter_id: Some(format!("meter-{n}")),
                 device_id: Some(format!("dev-{n}")),
                 serial: Some(serial.into()),
@@ -1266,6 +1282,7 @@ mod tests {
     fn a_disabled_meter_is_configured_without_being_served() {
         let mut raw = sound();
         raw.meters.push(RawMeter {
+            priority: None,
             meter_id: Some("not-connected-yet".into()),
             device_id: Some("dev-b".into()),
             serial: Some("9202686".into()),

@@ -398,6 +398,18 @@ pub struct UiState {
     /// AC1). The UI writes this and the UI reads it; nothing the loop reads is
     /// touched by a check.
     checks: check::Checks,
+    /// The clock this process started with, for the one thing a screen needs a
+    /// time for: stamping a configuration write ([ADR 0039], story 6.7).
+    ///
+    /// **Held, never handed out.** [`UiState::wall_now`] is the whole interface. A
+    /// caller holding the clock could read `monotonic()` from it, and a
+    /// `MonotonicMs` counts from an origin held INSIDE the clock — so one taken
+    /// here and one the poll loop recorded would be two different origins, which is
+    /// the defect `Control::clock`'s own documentation warns about. Wall time has
+    /// no such origin, which is why it is the half that may be exposed.
+    ///
+    /// [ADR 0039]: ../../../docs/adr/0039-the-configuration-remembers-when-it-was-written-and-which-meters-matter.md
+    clock: Arc<dyn crate::core::Clock + Send + Sync>,
     /// How a screen tells the lifecycle loop that the configuration became
     /// ready. **A nudge, never the configuration itself**: the loop re-reads the
     /// file, because the file is the configuration and a loop that trusted a
@@ -409,14 +421,24 @@ impl UiState {
     pub fn new(
         phase: PhaseHandle,
         state_dir: std::path::PathBuf,
+        clock: Arc<dyn crate::core::Clock + Send + Sync>,
         ready: Arc<tokio::sync::Notify>,
     ) -> Self {
         Self {
             phase,
             state_dir,
             checks: check::Checks::new(),
+            clock,
             ready,
         }
+    }
+
+    /// Wall-clock now, for stamping a configuration write and nothing else.
+    ///
+    /// See the `clock` field for why this is a method rather than a getter handing
+    /// the clock over.
+    pub(crate) fn wall_now(&self) -> crate::domain::UtcMillis {
+        self.clock.wall()
     }
 
     /// Every meter's last end-to-end check (story 6.6).
@@ -761,6 +783,33 @@ async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
             screens::sink_health_line(control.sink(), control.clock().wall())
         )
     });
+    // FR35's CONTEXT LINE — what this bridge knows about its own configuration
+    // ([ADR 0039], story 6.7).
+    //
+    // **It describes the FILE, and says so.** The file is the configuration
+    // (ADR 0023); a line built from the settings in force would answer a different
+    // question and would disagree with the dates beside it the moment a cold change
+    // was saved but not yet carried out.
+    //
+    // **Ages, not calendar dates.** The PRD asks for a human timestamp and gives
+    // the example itself — "3 min ago" / "6 days ago" — and `ago` is what every
+    // other screen here already speaks. A calendar date would need a calendar: this
+    // workspace has no date library in its direct dependencies, and pulling one in
+    // to render one line is not a trade this story is allowed to make quietly.
+    let context = screens::configuration_context(state.state_dir(), state.wall_now());
+    // AND THE WAY TO THE TWO PAGES THAT ANSWER "which meter, and which link".
+    //
+    // A screen nothing links to does not exist: story 6.6 shipped `/check`
+    // reachable from `/meters` only, so an operator who opened the bridge at its
+    // root had to know the path by heart. Present only where there is something to
+    // look at — in the silent phases the way out is `next_step`'s, and it is the
+    // configuration.
+    let ways = if phase.control().is_some() {
+        "<p><a href=/meters>What each meter is doing</a> · \
+         <a href=/check>Check one meter end to end</a></p>"
+    } else {
+        ""
+    };
     Html(format!(
         "<!doctype html><meta charset=utf-8>\
          <title>smartme_mqtt</title>\
@@ -771,12 +820,16 @@ async fn index(State(state): State<Arc<UiState>>) -> impl IntoResponse {
          {}\
          {}\
          {}\
+         {}\
+         {}\
          <hr><p>version {} · contract {}</p>",
         lifecycle.headline(),
         lifecycle.detail(),
+        context,
         sink_line,
         caveat,
         degraded_caveat,
+        ways,
         lifecycle.next_step(),
         env!("CARGO_PKG_VERSION"),
         crate::adapters::sparkplug_publisher::CONTRACT_VERSION,
@@ -1152,6 +1205,161 @@ mod tests {
         );
     }
 
+    /// **A screen nothing links to does not exist** — the review of story 6.6,
+    /// 2026-08-20.
+    ///
+    /// `/check` shipped reachable from `/meters` alone, so an operator opening the
+    /// bridge at its root had to know the path by heart. The same omission would
+    /// have hidden `/meters` itself if `/` had not linked it.
+    ///
+    /// **The silent half is asserted too**, and it is the half that makes the first
+    /// one mean something: in a phase with no poll loop there is nothing to look at,
+    /// the way out is the configuration, and offering "check one meter end to end"
+    /// to a bridge that has no meters would be a link to a page that can only say
+    /// so.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN: `let ways = "";` unconditionally goes
+    /// red with `the page an operator opens first must offer the two screens that
+    /// answer "which meter, and which link"`.
+    #[tokio::test]
+    async fn the_state_screen_offers_the_way_to_the_other_screens() {
+        use std::sync::Arc;
+
+        let clock = Arc::new(crate::core::clock::FakeClock::new(
+            crate::domain::UtcMillis(1_784_984_793_000),
+        ));
+        let beats = Heartbeats::for_meters([crate::domain::MeterId::new("appart-est")]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(config_with_a_meter()));
+        let running = ui(publishing(beats, clock, Arc::clone(&config)));
+
+        let html = body(index(State(Arc::clone(&running))).await.into_response()).await;
+        assert!(
+            html.contains("href=/meters") && html.contains("href=/check"),
+            "the page an operator opens first must offer the two screens that answer \
+             \"which meter, and which link\" — a page reachable only by typing its \
+             path is a page nobody opens at three in the morning:\n{html}"
+        );
+
+        let silent = ui(Phase::silent(Lifecycle::Unconfigured));
+        let html = body(index(State(Arc::clone(&silent))).await.into_response()).await;
+        assert!(
+            !html.contains("href=/check"),
+            "and a bridge with no poll loop must not offer an end-to-end check: there \
+             is nothing to check, and the way out is the configuration:\n{html}"
+        );
+    }
+
+    /// **Story 6.7 AC4 — FR35's context line, including the half that says it does
+    /// not know.**
+    ///
+    /// The unknown case is asserted FIRST and it is the one that matters: a
+    /// configuration written before [ADR 0039] has no creation date, and the
+    /// alternative the ADR refused — the file's mtime — would have rendered a
+    /// plausible date that no change of this bridge's ever produced. A test that
+    /// only checked the happy path would pass against that implementation too.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN, output copied: falling back to the
+    /// file's modification time goes red with
+    ///
+    /// ```text
+    /// a configuration whose creation nobody recorded must SAY so … found a date
+    /// where "unknown" belongs
+    /// ```
+    #[tokio::test]
+    async fn the_state_screen_says_what_it_knows_about_its_own_configuration() {
+        use std::sync::Arc;
+
+        let dir = std::env::temp_dir().join(format!("smartme_6_7_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+
+        let now = crate::domain::UtcMillis(1_784_984_793_000);
+        let clock: Arc<dyn crate::core::Clock + Send + Sync> =
+            Arc::new(crate::core::clock::FakeClock::new(now));
+
+        // A file from before ADR 0039: two meters, no dates, nothing marked.
+        let mut stored = crate::app::store::StoredConfig {
+            schema_version: crate::app::store::SCHEMA_VERSION,
+            created_ms: None,
+            last_change_ms: None,
+            group_id: "G".into(),
+            node_id: "N".into(),
+            broker_host: "b".into(),
+            broker_port: 1883,
+            publish_period_secs: 30,
+            api_base: None,
+            log_dir: None,
+            log_keep: None,
+            mapping_confirmed: true,
+            ui_port: None,
+            meters: vec![
+                crate::app::store::StoredMeter {
+                    meter_id: "appart-est".into(),
+                    device_id: "dev-0".into(),
+                    serial: "1112222".into(),
+                    enabled: true,
+                    priority: false,
+                },
+                crate::app::store::StoredMeter {
+                    meter_id: "atelier".into(),
+                    device_id: "dev-1".into(),
+                    serial: "3334444".into(),
+                    enabled: true,
+                    priority: false,
+                },
+            ],
+        };
+        crate::persist::persist_atomic(&crate::app::store::config_path(&dir), &stored)
+            .expect("plant the old file");
+
+        let state = Arc::new(UiState::new(
+            Phase::silent(Lifecycle::Unconfirmed).into_handle(),
+            dir.clone(),
+            Arc::clone(&clock),
+            Arc::new(tokio::sync::Notify::new()),
+        ));
+        let html = body(index(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            html.contains("created before this bridge recorded creation dates"),
+            "a configuration whose creation nobody recorded must SAY so: the file's \
+             mtime moves on a docker cp, a restore or a touch, so it would be a \
+             plausible date that is nobody's change ([ADR 0039]):\n{html}"
+        );
+        assert!(
+            html.contains("2 meters, 0 of them marked as mattering"),
+            "and it must count what it does know:\n{html}"
+        );
+
+        // AND A CONFIGURATION THIS BUILD CREATED, in a directory with no file: the
+        // only situation in which a creation date can be known. Writing over the
+        // old file above would NOT have produced one, which is the rule and not an
+        // oversight — this second directory exists because the first cannot answer.
+        let fresh = std::env::temp_dir().join(format!("smartme_6_7b_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&fresh);
+        stored.meters[1].priority = true;
+        crate::app::store::save(&fresh, &stored, crate::domain::UtcMillis(now.0 - 7_200_000))
+            .expect("write");
+        let state = Arc::new(UiState::new(
+            Phase::silent(Lifecycle::Unconfirmed).into_handle(),
+            fresh.clone(),
+            Arc::clone(&clock),
+            Arc::new(tokio::sync::Notify::new()),
+        ));
+        let html = body(index(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            html.contains("created 2 hours ago") && html.contains("last changed 2 hours ago"),
+            "a configuration this build created carries both dates, as ages — the \
+             human timestamp the PRD asks for:\n{html}"
+        );
+        assert!(
+            html.contains("1 of them marked as mattering"),
+            "and the priority count is the operator's own mark, which is the only \
+             place that fact exists:\n{html}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&fresh);
+    }
+
     /// A configuration carrying one meter, which the check needs and
     /// `running_config` deliberately does not have.
     ///
@@ -1167,6 +1375,7 @@ mod tests {
         let mut config = running_config();
         config.api_base = "http://127.0.0.1:1".to_string();
         config.meters.push(crate::app::config::MeterConfig {
+            priority: false,
             meter: crate::domain::MeterId::new("appart-est"),
             device_id: "dev-0".to_string(),
             serial: crate::domain::Serial::new("1112222"),
@@ -1504,6 +1713,9 @@ mod tests {
         Arc::new(UiState::new(
             phase.into_handle(),
             std::path::PathBuf::from("/nonexistent"),
+            std::sync::Arc::new(crate::core::clock::FakeClock::new(
+                crate::domain::UtcMillis(1_784_984_793_000),
+            )),
             Arc::new(tokio::sync::Notify::new()),
         ))
     }

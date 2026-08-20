@@ -2571,7 +2571,26 @@ development_status:
   # The three links therefore report three facts, each from its owner. AND NOTHING IS
   # PUBLISHED to light the third one: a DDATA carrying a test value is, in the
   # historian, indistinguishable from a measurement.
-  6-6-the-end-to-end-check: review  # implemented 2026-08-20; FR37 delivered, `SourceError::cause` extracted so the check and the loop share one table
+  # 2026-08-20, REVIEWED AND CLOSED. Every AC holds. ONE DEFECT: /check was reachable
+  # from /meters alone — a screen nothing links to does not exist, and `/` is the page
+  # an operator opens first. Repaired, both halves pinned (a silent phase offers no
+  # check, because there is nothing to check). AND ONE CLAIM IN THE IMPLEMENTATION
+  # REPORT WAS WRONG: the meta refresh is in the implicit head, not the body — the
+  # HTML5 parser closes the head at the first content element, and `{refresh}` precedes
+  # it. Corrected in the story rather than left standing.
+  6-6-the-end-to-end-check: done  # closed 2026-08-20 after review; FR37 delivered, one unreachable-screen defect repaired
+  # 2026-08-20, WRITTEN AND IMPLEMENTED. FR35 — the last requirement epic 6 owed.
+  # THREE OF ITS FOUR FACTS DID NOT EXIST: nothing recorded when the configuration was
+  # created or last changed, and "priority meters" had no referent at all — smart-me
+  # reports no make or model, so the bridge cannot deduce it. ADR 0039 (Guy's call):
+  # `priority` becomes the operator's own mark, the dates are written by `save` on the
+  # `mapping_confirmed` precedent, and the file's mtime is explicitly NOT the answer —
+  # a docker cp or a restore would move it.
+  # AND THE VERSION BUMP WOULD HAVE EMPTIED THE FORM: the schema check is in `read`,
+  # which is what pre-fills the configuration screen, so a version-4 file would have
+  # cost a full retype. ADR 0040 writes the first migration [#105]. ADR 0039 carried
+  # the false claim that serde defaults were enough; corrected in place.
+  6-7-the-configuration-context-line: review  # implemented 2026-08-20; FR35, ADR 0039 and ADR 0040
   epic-6-retrospective: required  # added 2026-08-10 — the line was absent entirely
 
   # ADDED 2026-08-08, previously absent from this file entirely.

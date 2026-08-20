@@ -137,6 +137,8 @@ mod tests {
 
     fn sound() -> StoredConfig {
         StoredConfig {
+            created_ms: None,
+            last_change_ms: None,
             schema_version: store::SCHEMA_VERSION,
             group_id: "Site".to_string(),
             node_id: "Bridge".to_string(),
@@ -149,6 +151,7 @@ mod tests {
             mapping_confirmed: false,
             ui_port: None,
             meters: vec![StoredMeter {
+                priority: false,
                 meter_id: "garage".to_string(),
                 device_id: "abc".to_string(),
                 serial: "9202685".to_string(),
@@ -170,7 +173,7 @@ mod tests {
     #[test]
     fn a_valid_unconfirmed_mapping_does_not_publish() {
         let dir = dir("unconfirmed");
-        store::save(&dir, &sound()).expect("write");
+        store::save(&dir, &sound(), crate::domain::UtcMillis(1_784_984_793_000)).expect("write");
         assert!(
             matches!(decide(&dir, credential()), Decision::Unconfirmed),
             "a mapping nobody has looked at must open no session at all — an \
@@ -181,7 +184,7 @@ mod tests {
     #[test]
     fn confirming_is_what_moves_the_phase_to_publishing() {
         let dir = dir("confirmed");
-        store::save(&dir, &sound()).expect("write");
+        store::save(&dir, &sound(), crate::domain::UtcMillis(1_784_984_793_000)).expect("write");
         assert!(matches!(decide(&dir, credential()), Decision::Unconfirmed));
 
         store::confirm(&dir).expect("confirm");
@@ -203,7 +206,7 @@ mod tests {
     #[test]
     fn a_confirmed_mapping_with_no_credential_is_invalid_not_unconfigured() {
         let dir = dir("no_credential");
-        store::save(&dir, &sound()).expect("write");
+        store::save(&dir, &sound(), crate::domain::UtcMillis(1_784_984_793_000)).expect("write");
         store::confirm(&dir).expect("confirm");
 
         let empty = Credential {

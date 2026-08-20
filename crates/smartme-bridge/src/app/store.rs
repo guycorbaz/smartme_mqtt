@@ -30,8 +30,9 @@
 //! Serde's defaults are the trap: unknown fields are ignored and missing ones take
 //! `Default`, so a renamed field would read as *absent*, take its default, and the
 //! bridge would start on a configuration nobody wrote — publishing at 30 s because
-//! the period silently reverted. Refusing is the only honest answer until a
-//! migration exists to be the other one.
+//! the period silently reverted. Refusing was the only honest answer until a
+//! migration existed to be the other one; since [ADR 0040] one does, for the steps
+//! it names, and everything else is still refused.
 //!
 //! [ADR 0023]: ../../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md
 //! [ADR 0022]: ../../../docs/adr/0022-secrets-rest-in-a-separate-0600-file.md
@@ -56,7 +57,7 @@ use crate::persist;
 /// default is the one that must not be got wrong: an unrecognised older file
 /// reads as **unconfirmed**, which costs one click, where the other direction
 /// would publish a mapping nobody had looked at.
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 pub fn config_path(dir: &Path) -> PathBuf {
     dir.join("config.toml")
@@ -141,6 +142,29 @@ pub struct StoredConfig {
     /// `app::reconfigure`, which will not compile until this is classified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_port: Option<u16>,
+    /// When this configuration was first written, in UTC epoch-ms ([ADR 0039]).
+    ///
+    /// **Stamped by [`save`] only when there was no readable file**, and carried
+    /// over on every later write. A file that predates ADR 0039 never acquires one:
+    /// there is nothing true to write, and the screen says "unknown" rather than
+    /// pretending.
+    ///
+    /// **NEVER the file's mtime.** A `docker cp`, a restore from backup, a `touch`
+    /// or an image update that rewrites the volume all move it — it would be a
+    /// plausible date that is not the date of anything this bridge did, on the one
+    /// screen whose job is to orient somebody at three in the morning.
+    ///
+    /// [ADR 0039]: ../../../docs/adr/0039-the-configuration-remembers-when-it-was-written-and-which-meters-matter.md
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_ms: Option<i64>,
+    /// When the settings last actually changed, in UTC epoch-ms ([ADR 0039]).
+    ///
+    /// **Moves only when the settings differ from the stored ones.** A Save that
+    /// changes nothing is not a change; the alternative would make this field mean
+    /// "last time somebody pressed a button", which is the distinction story 6.3
+    /// drew between `last_changed_at` and `last_published_at`, one layer down.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_change_ms: Option<i64>,
     pub meters: Vec<StoredMeter>,
 }
 
@@ -158,6 +182,21 @@ pub struct StoredMeter {
     pub device_id: String,
     pub serial: String,
     pub enabled: bool,
+    /// Whether this is one of the meters the operator actually cares about
+    /// ([ADR 0039], FR35).
+    ///
+    /// **The operator's statement, because nowhere else knows.** smart-me's
+    /// `Device` payload carries an id, a name, a serial and two numbers — no make
+    /// and no model — so the bridge cannot tell a Kamstrup from a Telstar, and a
+    /// flag deduced from a meter name would be an assertion about hardware with no
+    /// evidence behind it.
+    ///
+    /// **Absent means `false`**, which is the harmless direction: an older file
+    /// claims no priorities rather than inventing some.
+    ///
+    /// [ADR 0039]: ../../../docs/adr/0039-the-configuration-remembers-when-it-was-written-and-which-meters-matter.md
+    #[serde(default)]
+    pub priority: bool,
 }
 
 fn fault(field: &str, problem: String) -> Fault {
@@ -255,18 +294,26 @@ pub fn read(dir: &Path) -> Result<StoredConfig, ConfigErrors> {
         }
     };
 
-    if let Some(version) = config.as_ref().map(|c| c.schema_version)
-        && version != SCHEMA_VERSION
-    {
-        faults.push(fault(
-            "stored configuration",
-            format!(
-                "was written by schema version {version}, this build reads {SCHEMA_VERSION}. \
-                 There is no migration, so it is refused rather than read by guesswork — an \
-                 unrecognised field would otherwise take its default and the bridge would run \
-                 on settings nobody wrote"
-            ),
-        ));
+    // THE VERSION GATE, and since [ADR 0040] it has a door in it.
+    //
+    // A version this build can migrate is migrated in memory and read; anything
+    // else is still refused rather than read by guesswork, which is what the gate
+    // was built for. The file itself is not rewritten here — see `migrate`.
+    let mut config = config;
+    if let Some(stored) = config.as_mut() {
+        match migrate(stored) {
+            Ok(()) => {}
+            Err(version) => faults.push(fault(
+                "stored configuration",
+                format!(
+                    "was written by schema version {version}, this build reads \
+                     {SCHEMA_VERSION}, and no migration exists for that step — so it is \
+                     refused rather than read by guesswork. An unrecognised field would \
+                     otherwise take its default and the bridge would run on settings \
+                     nobody wrote"
+                ),
+            )),
+        }
     }
 
     if !faults.is_empty() {
@@ -311,6 +358,7 @@ pub fn into_raw(config: StoredConfig, credential: Credential, dir: &Path) -> Raw
                 device_id: Some(m.device_id),
                 serial: Some(m.serial),
                 enabled: Some(m.enabled),
+                priority: Some(m.priority),
             })
             .collect(),
     }
@@ -379,6 +427,11 @@ impl From<&BridgeConfig> for StoredConfig {
             log_dir: log_dir.clone(),
             log_keep: *log_keep,
             mapping_confirmed: false,
+            // NOT the caller's to supply, exactly like `mapping_confirmed` above:
+            // `save` computes both from the file it is about to overwrite. A
+            // conversion cannot know whether this configuration already exists.
+            created_ms: None,
+            last_change_ms: None,
             ui_port: *ui_port,
             meters: meters
                 .iter()
@@ -387,6 +440,7 @@ impl From<&BridgeConfig> for StoredConfig {
                     device_id: m.device_id.clone(),
                     serial: m.serial.as_str().to_string(),
                     enabled: m.enabled,
+                    priority: m.priority,
                 })
                 .collect(),
         }
@@ -508,6 +562,10 @@ pub(crate) fn mapping_projection(stored: &StoredConfig) -> MappingProjection {
         log_keep: _,
         mapping_confirmed: _,
         ui_port: _,
+        // Dates are not mapping: they say WHEN this file was written, never WHAT it
+        // publishes, so a stamp must not withdraw a confirmation.
+        created_ms: _,
+        last_change_ms: _,
         meters,
     } = stored;
     let mut rows: Vec<(String, String, String, bool)> = meters
@@ -518,6 +576,10 @@ pub(crate) fn mapping_projection(stored: &StoredConfig) -> MappingProjection {
                 device_id,
                 serial,
                 enabled,
+                // NOT part of the mapping: marking a meter as one that matters
+                // changes nothing about what is published for it, so it must not
+                // withdraw the mapping confirmation and cost a click.
+                priority: _,
             } = m;
             (
                 meter_id.clone(),
@@ -662,6 +724,135 @@ fn overwrite(dir: &Path) -> Overwrite {
     }
 }
 
+/// Bring a parsed configuration up to this build's schema, in memory ([ADR 0040]).
+///
+/// **Every migrated field takes the default its own ADR argued for**, which is why
+/// this can be a version stamp and nothing more: `serde` has already filled
+/// `created_ms`, `last_change_ms` and `priority` with the values ADR 0039 chose —
+/// no creation date, no change date, nothing marked as mattering. There is no
+/// guesswork here, which is the condition the module's refusal rule set.
+///
+/// **In memory, never on disk.** `read` is called by every screen render; rewriting
+/// the file here would make a page view a disk write and hand a read-only surface
+/// the power to change what is on disk — during, for instance, the incident the
+/// operator opened the page to diagnose. [`save`] stamps the constant, and that is
+/// where the file changes.
+///
+/// Returns the offending version when the step is one this build cannot make:
+/// anything from the future, and anything below the oldest migration written.
+///
+/// [ADR 0040]: ../../../docs/adr/0040-the-first-schema-migration.md
+fn migrate(config: &mut StoredConfig) -> Result<(), u32> {
+    /// The oldest version this build can still read. Below it, no migration was
+    /// ever written — and writing one for a file nobody has would be code with no
+    /// evidence behind it.
+    const OLDEST_MIGRATABLE: u32 = 4;
+
+    match config.schema_version {
+        v if v == SCHEMA_VERSION => Ok(()),
+        v if (OLDEST_MIGRATABLE..SCHEMA_VERSION).contains(&v) => {
+            // 4 -> 5 ([ADR 0039]): three fields added, all optional-with-default,
+            // and the defaults are the honest answers rather than convenient ones.
+            // Nothing to compute; the stamp is the migration.
+            config.schema_version = SCHEMA_VERSION;
+            Ok(())
+        }
+        // Above this build, or below the oldest migration.
+        v => Err(v),
+    }
+}
+
+/// Do these two configurations hold the same SETTINGS?
+///
+/// **Not `same_mapping`, and the difference is the point.** That one asks whether
+/// what is published changed, so that a confirmation can be withdrawn. This one
+/// asks whether anything the operator can set changed, so that a date can stay
+/// put: moving the broker port is not a mapping change and it is certainly a
+/// change.
+///
+/// Exhaustive on purpose — no `..`. A new setting breaks this line, and its author
+/// has to say whether editing it counts as changing the configuration.
+fn same_settings(a: &StoredConfig, b: &StoredConfig) -> bool {
+    settings(a) == settings(b)
+}
+
+/// The settings half of a stored configuration — everything an operator can edit,
+/// and nothing the bridge writes about it.
+///
+/// **A named type because clippy refused the tuple**, and the lint was right the way
+/// it was right about `record_at`'s eight arguments in story 6.4: a ten-element
+/// tuple of borrows is a shape nobody can read, and the fields have names already.
+#[derive(PartialEq, Eq)]
+struct SettingsView<'a> {
+    group_id: &'a str,
+    node_id: &'a str,
+    broker_host: &'a str,
+    broker_port: u16,
+    publish_period_secs: u64,
+    api_base: Option<&'a str>,
+    log_dir: Option<&'a str>,
+    log_keep: Option<usize>,
+    ui_port: Option<u16>,
+    meters: Vec<(&'a str, &'a str, &'a str, bool, bool)>,
+}
+
+/// Project a stored configuration onto what the operator can set.
+///
+/// Exhaustive on purpose — no `..`. A new setting breaks this line, and its author
+/// has to say whether editing it counts as changing the configuration.
+fn settings(c: &StoredConfig) -> SettingsView<'_> {
+    let StoredConfig {
+        // Stamped by `save`, so comparing it would make every schema bump a
+        // "change" — and it is not a setting anybody edits.
+        schema_version: _,
+        group_id,
+        node_id,
+        broker_host,
+        broker_port,
+        publish_period_secs,
+        api_base,
+        log_dir,
+        log_keep,
+        // A human act about an unchanged mapping, not a setting (story 5.3).
+        mapping_confirmed: _,
+        // The answers, not the question.
+        created_ms: _,
+        last_change_ms: _,
+        ui_port,
+        meters,
+    } = c;
+    SettingsView {
+        group_id,
+        node_id,
+        broker_host,
+        broker_port: *broker_port,
+        publish_period_secs: *publish_period_secs,
+        api_base: api_base.as_deref(),
+        log_dir: log_dir.as_deref(),
+        log_keep: *log_keep,
+        ui_port: *ui_port,
+        meters: meters
+            .iter()
+            .map(|m| {
+                let StoredMeter {
+                    meter_id,
+                    device_id,
+                    serial,
+                    enabled,
+                    priority,
+                } = m;
+                (
+                    meter_id.as_str(),
+                    device_id.as_str(),
+                    serial.as_str(),
+                    *enabled,
+                    *priority,
+                )
+            })
+            .collect(),
+    }
+}
+
 /// Write the configuration atomically — temp file, `fsync`, `rename`,
 /// `fsync(dir)`, all of it already in [`crate::persist::persist_atomic`].
 ///
@@ -673,9 +864,40 @@ fn overwrite(dir: &Path) -> Overwrite {
 /// the UI is trusted to clear is a boolean that survives the one edit somebody
 /// makes through a different path — a future API, a migration, a repair script.
 /// This is the boundary every writer passes.
-pub fn save(dir: &Path, config: &StoredConfig) -> std::io::Result<()> {
+pub fn save(
+    dir: &Path,
+    config: &StoredConfig,
+    now: crate::domain::UtcMillis,
+) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let mut to_write = config.clone();
+    // THE TWO DATES ARE COMPUTED HERE TOO, and the caller's are discarded — same
+    // boundary, same argument as `mapping_confirmed` below ([ADR 0039]).
+    //
+    // `now` is passed rather than read: this module has no clock, and giving it one
+    // would put a second time origin in the process (see `Control::clock`).
+    let existing = read(dir).ok();
+    to_write.created_ms = match &existing {
+        // A readable file keeps whatever it had — including nothing, for a file
+        // written before ADR 0039. It never acquires a creation date later, because
+        // there is no true one to write.
+        Some(stored) => stored.created_ms,
+        // No file at all: this write IS the creation, and that is the one moment
+        // the date can be known.
+        None if !config_path(dir).exists() => Some(now.0),
+        // A file exists and could not be read — a syntax error the form is
+        // repairing. It may well have had a creation date; inventing one now would
+        // claim this configuration was born at the moment somebody fixed a typo.
+        None => None,
+    };
+    to_write.last_change_ms = match &existing {
+        // A Save that changes nothing is not a change. Without this, "last change"
+        // would mean "last time somebody pressed a button" — the distinction story
+        // 6.3 drew between `last_changed_at` and `last_published_at`, one layer
+        // down and for the same reader.
+        Some(stored) if same_settings(stored, config) => stored.last_change_ms,
+        _ => Some(now.0),
+    };
     // THE CONSTANT IS STAMPED HERE, never taken from the caller.
     //
     // `save` wrote back whatever `schema_version` it was handed, so it was a
@@ -748,8 +970,247 @@ mod tests {
         path
     }
 
+    /// **[ADR 0040] — a version-4 file reads, and every setting survives.**
+    ///
+    /// The bump from 4 to 5 is required by this module's own rule; without a
+    /// migration it would cost the operator a full retype, because the version check
+    /// is in `read` and `read` is what pre-fills the configuration screen. This test
+    /// is the difference between "the version went up" and "the configuration
+    /// survived it" — which is FR27.
+    ///
+    /// **The refusals are asserted in the same test**, and they are what keep the
+    /// gate a gate: a file from the future, and one older than any migration
+    /// written, are still refused. Without them this would pass against a build that
+    /// simply stopped checking.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN, output copied: deleting the migration arm
+    /// (every non-current version refused, the state before [ADR 0040]) goes red with
+    ///
+    /// ```text
+    /// a version-4 file must READ: the version check is in `read`, so refusing it
+    /// empties the very form the operator would repair it in
+    ///   Err(ConfigErrors([Fault { field: "stored configuration", … "no migration
+    ///   exists for that step" …}]))
+    /// ```
+    #[test]
+    fn a_version_4_file_migrates_and_older_and_newer_ones_do_not() {
+        let home = dir("migrate_4_to_5");
+
+        // Written as TEXT, by hand: `save` stamps the constant, so it is
+        // structurally incapable of producing the file under test — which is
+        // written by ANOTHER BUILD, and that is the situation this test is about.
+        let mut four = sound();
+        four.schema_version = 4;
+        four.created_ms = None;
+        four.last_change_ms = None;
+        std::fs::write(
+            config_path(&home),
+            toml::to_string(&four).expect("serialize"),
+        )
+        .expect("plant a version-4 file");
+
+        let read_back = read(&home).expect(
+            "a version-4 file must READ: the version check is in `read`, so refusing \
+             it empties the very form the operator would repair it in",
+        );
+        assert_eq!(read_back.schema_version, SCHEMA_VERSION);
+        assert_eq!(
+            read_back.broker_host, four.broker_host,
+            "and every setting survives the step, or the migration is a data loss \
+             wearing a version number"
+        );
+        assert_eq!(read_back.meters.len(), four.meters.len());
+        assert_eq!(read_back.meters[0].serial, four.meters[0].serial);
+        assert!(
+            read_back.mapping_confirmed,
+            "the confirmation survives too: nothing about the mapping changed"
+        );
+        assert_eq!(
+            (read_back.created_ms, read_back.last_change_ms),
+            (None, None),
+            "and the two new dates are ABSENT rather than invented — the file was \
+             written before anything recorded them ([ADR 0039])"
+        );
+        assert!(
+            !read_back.meters[0].priority,
+            "and nothing is marked as mattering, because nobody marked it"
+        );
+
+        // A file from the future stays refused: this build cannot know what it says.
+        let mut future = sound();
+        future.schema_version = SCHEMA_VERSION + 1;
+        std::fs::write(
+            config_path(&home),
+            toml::to_string(&future).expect("serialize"),
+        )
+        .expect("write");
+        let errors = read(&home).expect_err("a future schema must be refused");
+        assert!(
+            format!("{errors}").contains("no migration exists for that step"),
+            "and the refusal must say why it is not read anyway: {errors}"
+        );
+
+        // So does one older than any migration written.
+        let mut ancient = sound();
+        ancient.schema_version = 2;
+        std::fs::write(
+            config_path(&home),
+            toml::to_string(&ancient).expect("serialize"),
+        )
+        .expect("write");
+        read(&home).expect_err(
+            "a version below the oldest migration is refused: writing one for a file \
+             nobody has would be code with no evidence behind it",
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// **Story 6.7 AC2 — the creation date is stamped once, by the writer, and
+    /// only when there was nothing to carry over.**
+    ///
+    /// The three cases are one test because the rule is one rule and its edges are
+    /// where it goes wrong: a first write knows it is the creation, a later write
+    /// must not re-stamp it, and a file that predates [ADR 0039] must never acquire
+    /// one — the only honest answer about a configuration whose birth nobody
+    /// recorded is that it is unknown.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN, output copied: stamping unconditionally
+    /// (`to_write.created_ms = Some(now.0)`, the obvious one-liner) goes red with
+    ///
+    /// ```text
+    /// a later write must not restamp the creation: this configuration was created
+    /// once, and every Save would move the date the screen shows
+    ///   left: Some(1784984793000)
+    ///  right: Some(1784984000000)
+    /// ```
+    #[test]
+    fn the_creation_date_is_stamped_once_and_never_invented() {
+        let home = dir("created_once");
+        let first = crate::domain::UtcMillis(1_784_984_000_000);
+        let later = crate::domain::UtcMillis(1_784_984_793_000);
+
+        save(&home, &sound(), first).expect("the first write");
+        assert_eq!(
+            read(&home).expect("reads").created_ms,
+            Some(first.0),
+            "a write with no file to carry over from IS the creation, and it is the \
+             one moment the date can be known"
+        );
+
+        let mut edited = sound();
+        edited.broker_port = 8883;
+        save(&home, &edited, later).expect("the edit");
+        assert_eq!(
+            read(&home).expect("reads").created_ms,
+            Some(first.0),
+            "a later write must not restamp the creation: this configuration was \
+             created once, and every Save would move the date the screen shows"
+        );
+
+        // A file from before ADR 0039: it reads, and it has no creation date.
+        let old = dir("created_never");
+        let mut without = sound();
+        without.created_ms = None;
+        crate::persist::persist_atomic(&config_path(&old), &without).expect("plant it");
+        save(&old, &sound(), later).expect("write over it");
+        assert_eq!(
+            read(&old).expect("reads").created_ms,
+            None,
+            "and a configuration whose birth nobody recorded stays unknown: a date \
+             invented at the moment somebody edited it would be a plausible lie, \
+             which is the one thing this bridge exists not to produce"
+        );
+    }
+
+    /// **Story 6.7 AC3 — a Save that changes nothing is not a change.**
+    ///
+    /// Without this, "last change" comes to mean "last time somebody pressed a
+    /// button", and the line on the state screen stops answering the question it
+    /// exists for. It is the same distinction story 6.3 drew between
+    /// `last_changed_at` and `last_published_at`, one layer down.
+    ///
+    /// **The confirmation is asserted too**, because it shares the comparison's
+    /// neighbourhood: a date that moved while `mapping_confirmed` survived would
+    /// mean the two comparisons had drifted apart.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN: stamping `last_change_ms` on every write
+    /// goes red with `a Save that changed nothing must not move the last change …
+    /// left: Some(1784984793000), right: Some(1784984000000)`.
+    #[test]
+    fn a_save_that_changes_nothing_does_not_move_the_last_change() {
+        let home = dir("unchanged_save");
+        let first = crate::domain::UtcMillis(1_784_984_000_000);
+        let later = crate::domain::UtcMillis(1_784_984_793_000);
+
+        save(&home, &sound(), first).expect("the first write");
+        let after_first = read(&home).expect("reads");
+        assert_eq!(after_first.last_change_ms, Some(first.0));
+
+        save(&home, &sound(), later).expect("the same settings again");
+        let after_second = read(&home).expect("reads");
+        assert_eq!(
+            after_second.last_change_ms,
+            Some(first.0),
+            "a Save that changed nothing must not move the last change: the line on \
+             the state screen would then report when somebody last pressed a button"
+        );
+
+        // And a real edit does move it — without this half the assertion above
+        // would pass against a field nothing ever writes.
+        let mut edited = sound();
+        edited.publish_period_secs = 60;
+        save(&home, &edited, later).expect("a real edit");
+        assert_eq!(
+            read(&home).expect("reads").last_change_ms,
+            Some(later.0),
+            "and a settings change moves it, or the field is decorative"
+        );
+    }
+
+    /// **Story 6.7 AC1 — marking a meter as one that matters is not a mapping
+    /// change.**
+    ///
+    /// `priority` says nothing about what is published for that meter, so it must
+    /// not withdraw a confirmation the operator has already given. It IS a settings
+    /// change, so `last_change_ms` moves. The two comparisons answer two different
+    /// questions, and this pins that they do.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN: adding `priority` to
+    /// `mapping_projection` goes red with `marking a meter as one that matters must
+    /// not cost a confirmation click`.
+    #[test]
+    fn priority_moves_the_change_date_and_not_the_confirmation() {
+        let home = dir("priority_not_mapping");
+        let first = crate::domain::UtcMillis(1_784_984_000_000);
+        let later = crate::domain::UtcMillis(1_784_984_793_000);
+
+        save(&home, &sound(), first).expect("write");
+        confirm(&home).expect("a human looks at the mapping and says it is right");
+
+        let mut starred = sound();
+        starred.meters[0].priority = true;
+        save(&home, &starred, later).expect("mark it");
+        let after = read(&home).expect("reads");
+        assert!(
+            after.mapping_confirmed,
+            "marking a meter as one that matters must not cost a confirmation \
+             click: nothing about what is published for it changed"
+        );
+        assert_eq!(
+            after.last_change_ms,
+            Some(later.0),
+            "and it IS a change to the configuration, so the date says so"
+        );
+        assert!(
+            after.meters[0].priority,
+            "and the mark itself survives the write"
+        );
+    }
+
     fn sound() -> StoredConfig {
         StoredConfig {
+            created_ms: None,
+            last_change_ms: None,
             schema_version: SCHEMA_VERSION,
             group_id: "Group".into(),
             node_id: "Node".into(),
@@ -762,6 +1223,7 @@ mod tests {
             mapping_confirmed: true,
             ui_port: None,
             meters: vec![StoredMeter {
+                priority: false,
                 meter_id: "meter-a".into(),
                 device_id: "dev-a".into(),
                 serial: "9202685".into(),
@@ -792,6 +1254,7 @@ mod tests {
             let mut c = sound();
             // Two rows, so reordering has something to reorder.
             c.meters.push(StoredMeter {
+                priority: false,
                 meter_id: "meter-b".into(),
                 device_id: "dev-b".into(),
                 serial: "6387987".into(),
@@ -912,6 +1375,7 @@ mod tests {
             format!("m\u{1f}d\u{1f}s\u{1f}true\u{1e}{}", left.meters[0].meter_id);
         let mut right = sound();
         right.meters.push(StoredMeter {
+            priority: false,
             meter_id: "m".into(),
             device_id: "d".into(),
             serial: "s".into(),
@@ -929,7 +1393,7 @@ mod tests {
     #[test]
     fn a_saved_configuration_round_trips_through_the_same_validation_as_the_environment() {
         let dir = dir("roundtrip");
-        save(&dir, &sound()).expect("save");
+        save(&dir, &sound(), crate::domain::UtcMillis(1_784_984_793_000)).expect("save");
         let raw = load(&dir, credential()).expect("load");
         let validated = crate::app::config::validate(raw).expect("validates");
         assert_eq!(validated.meters.len(), 1);
@@ -951,7 +1415,7 @@ mod tests {
     fn a_directory_without_a_config_file_is_absence_not_a_fault() {
         let dir = dir("absent");
         assert!(!exists(&dir), "an empty directory holds no configuration");
-        save(&dir, &sound()).expect("save");
+        save(&dir, &sound(), crate::domain::UtcMillis(1_784_984_793_000)).expect("save");
         assert!(exists(&dir), "and a written one does");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1045,12 +1509,17 @@ mod tests {
                 confirmed.mapping_confirmed,
                 "the premise: the stored file must be confirmed, or this proves nothing"
             );
-            save(&dir, &confirmed).expect("the first write");
+            save(
+                &dir,
+                &confirmed,
+                crate::domain::UtcMillis(1_784_984_793_000),
+            )
+            .expect("the first write");
             confirm(&dir).expect("confirm");
 
             let mut edited = sound();
             mutate(&mut edited);
-            save(&dir, &edited).expect("the edit");
+            save(&dir, &edited, crate::domain::UtcMillis(1_784_984_793_000)).expect("the edit");
 
             let back = read(&dir).expect("read back");
             assert!(
@@ -1100,7 +1569,7 @@ mod tests {
             group_id: "Repaired".into(),
             ..sound()
         };
-        save(&dir, &repaired).unwrap_or_else(|e| {
+        save(&dir, &repaired, crate::domain::UtcMillis(1_784_984_793_000)).unwrap_or_else(|e| {
             panic!(
                 "the Misconfigured screen renders this file into a form; the form must \
                  be able to write it back: {e:?}"
@@ -1155,7 +1624,7 @@ mod tests {
         );
         std::fs::write(config_path(&dir), &future).expect("write");
 
-        let error = save(&dir, &sound()).expect_err(
+        let error = save(&dir, &sound(), crate::domain::UtcMillis(1_784_984_793_000)).expect_err(
             "a newer image's file must be protected, and the refusal must name the version",
         );
         let said = error.to_string();
@@ -1239,7 +1708,7 @@ mod tests {
     #[test]
     fn the_secret_is_absent_from_the_file_because_it_never_had_a_path_to_it() {
         let dir = dir("no-secret-on-disk");
-        save(&dir, &sound()).expect("save");
+        save(&dir, &sound(), crate::domain::UtcMillis(1_784_984_793_000)).expect("save");
         let written = std::fs::read_to_string(config_path(&dir)).expect("read");
 
         assert!(
@@ -1269,7 +1738,7 @@ mod tests {
     #[test]
     fn changing_the_mapping_withdraws_the_confirmation_whatever_the_caller_says() {
         let dir = dir("withdraw");
-        save(&dir, &sound()).expect("save");
+        save(&dir, &sound(), crate::domain::UtcMillis(1_784_984_793_000)).expect("save");
         confirm(&dir).expect("a human confirms it");
         assert!(read(&dir).expect("read").mapping_confirmed);
 
@@ -1282,7 +1751,7 @@ mod tests {
             moved.mapping_confirmed,
             "the fixture must assert it, or this proves nothing"
         );
-        save(&dir, &moved).expect("save");
+        save(&dir, &moved, crate::domain::UtcMillis(1_784_984_793_000)).expect("save");
 
         assert!(
             !read(&dir).expect("read").mapping_confirmed,
@@ -1303,20 +1772,21 @@ mod tests {
         let dir = dir("dup");
         let mut doubled = sound();
         doubled.meters = vec![doubled.meters[0].clone(), doubled.meters[0].clone()];
-        save(&dir, &doubled).expect("save");
+        save(&dir, &doubled, crate::domain::UtcMillis(1_784_984_793_000)).expect("save");
         confirm(&dir).expect("confirm the doubled mapping");
 
         let mut changed = sound();
         changed.meters = vec![
             doubled.meters[0].clone(),
             StoredMeter {
+                priority: false,
                 meter_id: "cellar".into(),
                 device_id: "dev-new".into(),
                 serial: "9209999".into(),
                 enabled: true,
             },
         ];
-        save(&dir, &changed).expect("save");
+        save(&dir, &changed, crate::domain::UtcMillis(1_784_984_793_000)).expect("save");
 
         assert!(
             !read(&dir).expect("read").mapping_confirmed,
@@ -1332,12 +1802,12 @@ mod tests {
     #[test]
     fn changing_something_that_is_not_the_mapping_keeps_the_confirmation() {
         let dir = dir("keep");
-        save(&dir, &sound()).expect("save");
+        save(&dir, &sound(), crate::domain::UtcMillis(1_784_984_793_000)).expect("save");
         confirm(&dir).expect("confirm");
 
         let mut faster = sound();
         faster.publish_period_secs = 5;
-        save(&dir, &faster).expect("save");
+        save(&dir, &faster, crate::domain::UtcMillis(1_784_984_793_000)).expect("save");
 
         let back = read(&dir).expect("read");
         assert!(back.mapping_confirmed, "the period is not the mapping");
@@ -1351,16 +1821,17 @@ mod tests {
         let dir = dir("reorder");
         let mut two = sound();
         two.meters.push(StoredMeter {
+            priority: false,
             meter_id: "cellar".into(),
             device_id: "dev-b".into(),
             serial: "9202686".into(),
             enabled: false,
         });
-        save(&dir, &two).expect("save");
+        save(&dir, &two, crate::domain::UtcMillis(1_784_984_793_000)).expect("save");
         confirm(&dir).expect("confirm");
 
         two.meters.reverse();
-        save(&dir, &two).expect("save");
+        save(&dir, &two, crate::domain::UtcMillis(1_784_984_793_000)).expect("save");
 
         assert!(
             read(&dir).expect("read").mapping_confirmed,

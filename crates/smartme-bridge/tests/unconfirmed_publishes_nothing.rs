@@ -35,6 +35,8 @@ fn state_dir(name: &str) -> std::path::PathBuf {
 
 fn stored(port: u16, group: &str) -> StoredConfig {
     StoredConfig {
+        created_ms: None,
+        last_change_ms: None,
         schema_version: store::SCHEMA_VERSION,
         group_id: group.to_string(),
         node_id: group.to_string(),
@@ -51,6 +53,7 @@ fn stored(port: u16, group: &str) -> StoredConfig {
         mapping_confirmed: false,
         ui_port: None,
         meters: vec![StoredMeter {
+            priority: false,
             meter_id: "garage".to_string(),
             device_id: "a1a1a1a1-b2b2-c3c3-d4d4-000000000001".to_string(),
             serial: SERIAL.to_string(),
@@ -146,7 +149,12 @@ async fn a_confirmed_mapping_does_birth_on_this_very_harness() {
     let mut seen = common::independent_subscriber(port).await;
     let dir = state_dir("confirmed");
 
-    store::save(&dir, &stored(port, "ChaosConfirmed")).expect("save");
+    store::save(
+        &dir,
+        &stored(port, "ChaosConfirmed"),
+        smartme_bridge::domain::UtcMillis(1_784_984_793_000),
+    )
+    .expect("save");
     store::confirm(&dir).expect("a human confirms the mapping");
 
     let mut bridge = spawn(&dir);
@@ -187,7 +195,12 @@ async fn an_unconfirmed_mapping_never_reaches_the_broker() {
 
     // Saved and NOT confirmed. `save` computes the flag, so this is the state a
     // first save through the UI actually produces.
-    store::save(&dir, &stored(port, "ChaosUnconfirmed")).expect("save");
+    store::save(
+        &dir,
+        &stored(port, "ChaosUnconfirmed"),
+        smartme_bridge::domain::UtcMillis(1_784_984_793_000),
+    )
+    .expect("save");
     assert!(
         !store::read(&dir).expect("read").mapping_confirmed,
         "the premise of this test is that the mapping is unconfirmed"

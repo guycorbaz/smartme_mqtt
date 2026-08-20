@@ -69,6 +69,10 @@ log\_keep            & no  & Rotated files kept. Default \code{7}. Not a positiv
 \addlinespace
 ui\_port             & no  & Port the embedded web UI listens on \emph{inside} the container. Default \code{8080}. The container publishes no host port --- Traefik reaches it over a shared Docker network and is the only thing that can. Changing it takes effect at the next restart --- the listener is started once. It does \emph{not} disturb the Sparkplug session. \code{0} is refused, and so is anything below \code{1024}: the bridge runs unprivileged and could never listen there, and since this screen is the only place the value can be changed, accepting it would remove the only way to undo it. \\
 \addlinespace
+created\_ms          & no  & Written by the bridge, never by you: when this configuration was first saved, in UTC epoch milliseconds. \textbf{Absent means unknown}, and the state screen says so --- a file written before this field existed never acquires one, because there is no true value to write. The file's modification time is deliberately \emph{not} used: a \code{docker cp}, a restore or a \code{touch} would move it, and the screen would show a plausible date that is nobody's change. \\
+\addlinespace
+last\_change\_ms      & no  & Written by the bridge: when the settings last actually changed. A Save that changes nothing does not move it, so it never comes to mean ``last time somebody pressed a button''. \\
+\addlinespace
 mapping\_confirmed   & no  & \textbf{Set this by hand on a first run, or nothing is ever published.} Whether a human has checked the meter→topic mapping. \textbf{Absent means \code{false}}, and nothing is published until it is \code{true} --- no connection, no birth. Editing the mapping withdraws it automatically --- and so does editing \code{group\_id} or \code{node\_id}, which are in every topic; editing anything else does not. Writing the file by hand and setting it counts as confirming it. See section~\ref{sec:confirm}. \\
 \bottomrule
 \end{tabular}
@@ -85,6 +89,7 @@ meter\_id  & yes & Logical name. It becomes the metric path a SCADA host display
 device\_id & yes & The smart-me device UUID behind it. \\
 serial     & yes & The meter's serial. It becomes the Sparkplug device topic level, so a value that cannot be a topic level is refused. \\
 enabled    & yes & Whether this meter is published. Disabling one publishes a \code{DDEATH}; enabling one publishes a \code{DBIRTH}. \\
+priority   & no  & Whether this is one of the meters you actually care about. \textbf{Absent means \code{false}.} It changes nothing about what is published --- it is counted on the state screen, so that during an incident you can see at a glance whether the meters that matter are among the affected ones. The bridge cannot deduce it: smart-me reports an id, a name, a serial and two numbers, and no make or model. Marking a meter does \emph{not} withdraw the mapping confirmation. \\
 \bottomrule
 \end{tabular}
 \end{center}

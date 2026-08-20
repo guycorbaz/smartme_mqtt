@@ -121,6 +121,9 @@ fn meters(fields: &Fields) -> Vec<RawMeter> {
             // disabled, and that is the safe direction: a meter is published
             // because somebody ticked it, never because a value went missing.
             enabled: Some(field(fields, &format!("meter.{i}.enabled")).is_some()),
+            // Same rule, same reason: an unticked box posts nothing, and silence
+            // is not a claim that this meter matters (FR35, [ADR 0039]).
+            priority: Some(field(fields, &format!("meter.{i}.priority")).is_some()),
         })
         .filter(|m| {
             m.meter_id.is_some()
@@ -189,6 +192,11 @@ fn as_typed(fields: &Fields, raw: &RawConfig) -> StoredConfig {
         log_dir: raw.log_dir.clone(),
         log_keep: raw.log_keep.as_deref().and_then(|v| v.parse().ok()),
         mapping_confirmed: false,
+        // The form carries no dates and must not: they are `save`'s, computed from
+        // the file being overwritten ([ADR 0039]). This struct exists to re-render
+        // what was typed, and nobody typed these.
+        created_ms: None,
+        last_change_ms: None,
         ui_port: raw.ui_port.as_deref().and_then(|v| v.parse().ok()),
         meters: meters(fields)
             .into_iter()
@@ -197,6 +205,7 @@ fn as_typed(fields: &Fields, raw: &RawConfig) -> StoredConfig {
                 device_id: m.device_id.unwrap_or_default(),
                 serial: m.serial.unwrap_or_default(),
                 enabled: m.enabled.unwrap_or(false),
+                priority: m.priority.unwrap_or(false),
             })
             .collect(),
     }
@@ -472,12 +481,19 @@ fn form(
                  <label for=m{i}s>Serial (becomes the device level of the topic)</label>\
                  <input type=text id=m{i}s name=\"meter.{i}.serial\" value=\"{serial}\">{f_ser}\
                  <label><input type=checkbox name=\"meter.{i}.enabled\" value=1 {checked}> \
-                 Published</label></fieldset>",
+                 Published</label>\
+                 <label><input type=checkbox name=\"meter.{i}.priority\" value=1 {starred}> \
+                 One of the meters that matter</label></fieldset>",
                 n = i + 1,
                 name = escape(&m.meter_id),
                 device = escape(&m.device_id),
                 serial = escape(&m.serial),
                 checked = if m.enabled { "checked" } else { "" },
+                // FR35's priority half ([ADR 0039]). **Rendered as well as read**:
+                // `posted` takes this field, so a form that did not render it would
+                // clear the tick on the next Save — the round-trip defect story 3.4
+                // repaired once already, arriving through a new field.
+                starred = if m.priority { "checked" } else { "" },
                 f_name = faults_for(errors, &format!("meters[{i}].meter_id")),
                 f_dev = faults_for(errors, &format!("meters[{i}].device_id")),
                 f_ser = faults_for(errors, &format!("meters[{i}].serial")),
@@ -533,6 +549,8 @@ fn form(
          <label for=db>smart-me device id</label><input type=text id=db name=\"meter.{blank}.device_id\" value=\"\">\
          <label for=sb>Serial</label><input type=text id=sb name=\"meter.{blank}.serial\" value=\"\">\
          <label><input type=checkbox name=\"meter.{blank}.enabled\" value=1> Published</label>\
+         <label><input type=checkbox name=\"meter.{blank}.priority\" value=1> One of the \
+         meters that matter</label>\
          </fieldset>{discover}</fieldset>\
          <fieldset><legend>Optional</legend>{api}{logdir}{logkeep}{uiport}</fieldset>\
          <button type=submit>Save</button></form>",
@@ -589,6 +607,10 @@ fn form(
 fn current_or_blank(state_dir: &std::path::Path) -> StoredConfig {
     store::read(state_dir).unwrap_or_else(|_| StoredConfig {
         schema_version: store::SCHEMA_VERSION,
+        // A blank slate has no history, and `save` will stamp the creation the
+        // first time this is written ([ADR 0039]).
+        created_ms: None,
+        last_change_ms: None,
         group_id: String::new(),
         node_id: String::new(),
         broker_host: String::new(),
@@ -754,6 +776,10 @@ pub(super) async fn discover(
                                 device_id: device_id.to_string(),
                                 serial: serial.to_string(),
                                 enabled: false,
+                                // A picked row is a transcription, not a judgement
+                                // about what matters: the operator ticks both boxes
+                                // deliberately or neither is claimed.
+                                priority: false,
                             });
                             Discovery::Picked {
                                 serial: serial.to_string(),
@@ -934,7 +960,11 @@ pub(super) async fn save_config(
     // Built from the VALIDATED struct, never from the raw strings — see
     // `as_typed`'s docs for the container-bricking defect that came of the
     // latter.
-    if let Err(error) = store::save(state.state_dir(), &StoredConfig::from(&validated)) {
+    if let Err(error) = store::save(
+        state.state_dir(),
+        &StoredConfig::from(&validated),
+        state.wall_now(),
+    ) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             page(
@@ -1439,6 +1469,48 @@ pub(super) async fn meter_view(State(state): State<Arc<UiState>>) -> impl IntoRe
 ///
 /// **Derived, never stored**: story 6.3 AC4 keeps `String`s out of the fleet state,
 /// which is written under a lock every poll task waits on.
+/// FR35's context line: what the bridge knows about its own configuration.
+///
+/// **Reads the FILE**, because the file is the configuration ([ADR 0023]) and the
+/// dates beside the counts are that file's own. A line built from the settings in
+/// force would disagree with its own timestamps the moment a cold change was saved
+/// and not yet carried out.
+///
+/// **A date the file does not carry is said to be unknown, with the reason.** The
+/// alternative was the file's mtime, and [ADR 0039] refused it: a `docker cp`, a
+/// restore, a `touch` or an image update rewriting the volume all move it, so the
+/// line would carry a plausible date that is not the date of anything this bridge
+/// did — on the one screen whose job is to orient somebody at three in the morning.
+///
+/// [ADR 0023]: ../../../docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md
+/// [ADR 0039]: ../../../docs/adr/0039-the-configuration-remembers-when-it-was-written-and-which-meters-matter.md
+pub(super) fn configuration_context(
+    state_dir: &std::path::Path,
+    now: crate::domain::UtcMillis,
+) -> String {
+    let Ok(stored) = store::read(state_dir) else {
+        // Unconfigured, or a file this build cannot read. Both are already named
+        // by the lifecycle line above; repeating a guess here would add nothing
+        // and could contradict it.
+        return String::new();
+    };
+    let meters = stored.meters.len();
+    let priority = stored.meters.iter().filter(|m| m.priority).count();
+    let created = stored.created_ms.map_or_else(
+        || "created before this bridge recorded creation dates, so that is unknown".to_string(),
+        |ms| format!("created {}", ago(now, crate::domain::UtcMillis(ms))),
+    );
+    let changed = stored.last_change_ms.map_or_else(
+        || "last change unknown for the same reason".to_string(),
+        |ms| format!("last changed {}", ago(now, crate::domain::UtcMillis(ms))),
+    );
+    format!(
+        "<p>This configuration was {created}, {changed}. It carries {meters} \
+         {meter_word}, {priority} of them marked as mattering.</p>",
+        meter_word = if meters == 1 { "meter" } else { "meters" },
+    )
+}
+
 /// The broker's own health, in the words an operator reads (FR29, story 6.5).
 ///
 /// **Shared by the meter page and the state screen**, because the review of story
@@ -1646,6 +1718,9 @@ mod tests {
         let state = Arc::new(UiState::new(
             crate::ui::Phase::silent(crate::ui::Lifecycle::Unconfigured).into_handle(),
             dir.clone(),
+            std::sync::Arc::new(crate::core::clock::FakeClock::new(
+                crate::domain::UtcMillis(1_784_984_793_000),
+            )),
             Arc::new(tokio::sync::Notify::new()),
         ));
         // The operator had typed half a form; those values must survive the trip.
@@ -1726,7 +1801,7 @@ mod tests {
 
         let mut stored = store_fixture();
         stored.api_base = Some("https://mirror.example".into());
-        store::save(&dir, &stored).expect("save");
+        store::save(&dir, &stored, crate::domain::UtcMillis(1_784_984_793_000)).expect("save");
         assert_eq!(
             discovery_base(&dir).expect("a sound file reads"),
             "https://mirror.example",
@@ -1752,6 +1827,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **Story 6.7 AC1 — the mark makes the round trip, in both directions.**
+    ///
+    /// A field the form READS but does not RENDER is worse than one it ignores: the
+    /// tick survives one Save and disappears at the next, and nothing tells the
+    /// operator. Story 3.4 repaired exactly that defect for the other fields, and
+    /// this asserts the new one cannot reintroduce it.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN: dropping `{starred}` from the rendered
+    /// checkbox goes red with `a meter marked as mattering must come back TICKED`.
+    #[test]
+    fn a_meter_marked_as_mattering_survives_the_round_trip() {
+        // Inbound: an unticked box posts nothing, a ticked one posts a value.
+        let ticked: Fields = vec![
+            ("meter.0.meter_id".into(), "appart-est".into()),
+            ("meter.0.device_id".into(), "dev-0".into()),
+            ("meter.0.serial".into(), "1112222".into()),
+            ("meter.0.enabled".into(), "1".into()),
+            ("meter.0.priority".into(), "1".into()),
+        ];
+        let raw = posted(&ticked, std::path::Path::new("/nonexistent"));
+        let values = as_typed(&ticked, &raw);
+        assert!(
+            values.meters[0].priority,
+            "a ticked box must reach the value the screen re-renders from"
+        );
+
+        // Outbound: it comes back ticked.
+        let html = form(&values, None, None);
+        assert!(
+            html.contains("name=\"meter.0.priority\" value=1 checked"),
+            "a meter marked as mattering must come back TICKED, or the next Save \
+             silently clears a mark the operator made — the round-trip defect story \
+             3.4 already repaired once, arriving through a new field:\n{html}"
+        );
+
+        // And an unmarked meter comes back unticked, or the assertion above would
+        // pass against a checkbox that is always on.
+        let plain: Fields = vec![
+            ("meter.0.meter_id".into(), "appart-est".into()),
+            ("meter.0.device_id".into(), "dev-0".into()),
+            ("meter.0.serial".into(), "1112222".into()),
+            ("meter.0.enabled".into(), "1".into()),
+        ];
+        let raw = posted(&plain, std::path::Path::new("/nonexistent"));
+        let values = as_typed(&plain, &raw);
+        assert!(!values.meters[0].priority);
+        let html = form(&values, None, None);
+        assert!(
+            !html.contains("name=\"meter.0.priority\" value=1 checked"),
+            "and silence is not a claim that a meter matters:\n{html}"
+        );
+    }
+
     /// **Review-of-the-repair repair — a half-matched pick CORRECTS, one lie
     /// removed and one use restored.** The first dedup refused any half-match
     /// with "already among the rows" — false when no row carries that serial —
@@ -1763,6 +1891,9 @@ mod tests {
         let state = Arc::new(UiState::new(
             crate::ui::Phase::silent(crate::ui::Lifecycle::Unconfigured).into_handle(),
             std::path::PathBuf::from("/nonexistent"),
+            std::sync::Arc::new(crate::core::clock::FakeClock::new(
+                crate::domain::UtcMillis(1_784_984_793_000),
+            )),
             Arc::new(tokio::sync::Notify::new()),
         ));
         // The device id is right, the serial was mistyped by hand.
@@ -1822,6 +1953,9 @@ mod tests {
         let state = Arc::new(UiState::new(
             crate::ui::Phase::silent(crate::ui::Lifecycle::Unconfigured).into_handle(),
             std::path::PathBuf::from("/nonexistent"),
+            std::sync::Arc::new(crate::core::clock::FakeClock::new(
+                crate::domain::UtcMillis(1_784_984_793_000),
+            )),
             Arc::new(tokio::sync::Notify::new()),
         ));
         let fields: Fields = vec![("pick".into(), "9202685|aaa-1".into())];
@@ -1849,6 +1983,9 @@ mod tests {
         let state = Arc::new(UiState::new(
             crate::ui::Phase::silent(crate::ui::Lifecycle::Unconfigured).into_handle(),
             dir.clone(),
+            std::sync::Arc::new(crate::core::clock::FakeClock::new(
+                crate::domain::UtcMillis(1_784_984_793_000),
+            )),
             Arc::new(tokio::sync::Notify::new()),
         ));
         let fields: Fields = vec![
@@ -1879,6 +2016,9 @@ mod tests {
         let state = Arc::new(UiState::new(
             crate::ui::Phase::silent(crate::ui::Lifecycle::Unconfigured).into_handle(),
             std::path::PathBuf::from("/nonexistent"),
+            std::sync::Arc::new(crate::core::clock::FakeClock::new(
+                crate::domain::UtcMillis(1_784_984_793_000),
+            )),
             Arc::new(tokio::sync::Notify::new()),
         ));
         // The pair is already row 0 — the operator picked it a moment ago.
@@ -1905,6 +2045,8 @@ mod tests {
     /// A minimal stored configuration for the tests above.
     fn store_fixture() -> StoredConfig {
         StoredConfig {
+            created_ms: None,
+            last_change_ms: None,
             schema_version: store::SCHEMA_VERSION,
             group_id: "Group".into(),
             node_id: "Node".into(),
@@ -1917,6 +2059,7 @@ mod tests {
             mapping_confirmed: false,
             ui_port: None,
             meters: vec![StoredMeter {
+                priority: false,
                 meter_id: "meter-a".into(),
                 device_id: "dev-a".into(),
                 serial: "9202685".into(),
@@ -2106,6 +2249,8 @@ mod tests {
     #[test]
     fn the_withdrawal_rule_and_the_fingerprint_answer_the_same_question() {
         let base = StoredConfig {
+            created_ms: None,
+            last_change_ms: None,
             schema_version: store::SCHEMA_VERSION,
             group_id: "Site".into(),
             node_id: "Bridge".into(),
@@ -2119,12 +2264,14 @@ mod tests {
             ui_port: None,
             meters: vec![
                 StoredMeter {
+                    priority: false,
                     meter_id: "garage".into(),
                     device_id: "dev-a".into(),
                     serial: "111".into(),
                     enabled: true,
                 },
                 StoredMeter {
+                    priority: false,
                     meter_id: "cellar".into(),
                     device_id: "dev-b".into(),
                     serial: "222".into(),
@@ -2174,6 +2321,8 @@ mod tests {
     #[test]
     fn the_fingerprint_moves_when_the_mapping_does_and_not_when_the_order_does() {
         let mut a = StoredConfig {
+            created_ms: None,
+            last_change_ms: None,
             schema_version: store::SCHEMA_VERSION,
             group_id: "Site".into(),
             node_id: "Bridge".into(),
@@ -2187,12 +2336,14 @@ mod tests {
             ui_port: None,
             meters: vec![
                 StoredMeter {
+                    priority: false,
                     meter_id: "garage".into(),
                     device_id: "dev-a".into(),
                     serial: "111".into(),
                     enabled: true,
                 },
                 StoredMeter {
+                    priority: false,
                     meter_id: "cellar".into(),
                     device_id: "dev-b".into(),
                     serial: "222".into(),

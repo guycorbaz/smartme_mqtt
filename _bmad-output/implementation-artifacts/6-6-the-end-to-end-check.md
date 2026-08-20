@@ -1,6 +1,6 @@
 # Story 6.6: The end-to-end check — three links, one screen, and nothing published to make them light up
 
-Status: review
+Status: done
 
 > **Story 6.5 is what made this story writable, and it said so.** Until the sink's state was
 > observed, an end-to-end validation whose third light was lit by an *intention* — the bridge
@@ -254,3 +254,30 @@ the network whatever the environment holds. Verified by running it with
 - **2026-08-20** — Story 6.6. FR37, as three facts from three owners rather than one
   re-judgement. Six mutations run. `CONTRACT_VERSION` stays at 10 — nothing here reaches the
   wire, which is the point.
+
+### Review — 2026-08-20
+
+**Every acceptance criterion holds.** AC1 is proven on the whole snapshot rather than on the
+fields a test remembered to look at; AC3 is structural, which is the only form of "publishes
+nothing" that a test can actually hold; AC4's mapping goes through `SourceError::cause`, so
+the check and the poll loop cannot drift apart.
+
+**One defect found and repaired: `/check` was reachable from `/meters` alone.** A screen
+nothing links to does not exist, and the page an operator opens first is `/`. Repaired, with
+both halves pinned — the running phase offers the two screens, and a silent phase offers
+neither, because a bridge with no poll loop has nothing to check and the way out is the
+configuration. Falsified.
+
+**One claim in the implementation report was wrong, and it is corrected here rather than left
+standing.** The report flagged the `meta http-equiv=refresh` as living in the body and
+therefore non-conformant. It does not: `page()` emits `<!doctype>`, the two metas, the title
+and the style, and this module's `{refresh}` is inserted before the first content element, so
+the HTML5 parser keeps it in the implicit `head`. Nothing to repair, and the doubt is recorded
+so the next reader does not re-open it.
+
+**Two residues, both named and neither this story's:**
+
+- **[#103]** — the repair gesture derives from the culprit alone, so the check's failure
+  wording is the three-sentence table rather than a per-cause one. FR31's subject.
+- **[#77]** — a 429 on the token endpoint still arms no wait. AC5's rate rule keeps the button
+  from being the cause of one; it does not fix the underlying gap, and it does not claim to.

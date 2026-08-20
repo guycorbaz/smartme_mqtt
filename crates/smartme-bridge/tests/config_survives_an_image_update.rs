@@ -156,24 +156,56 @@ fn optional_keys_a_previous_build_never_wrote_take_their_documented_defaults() {
 #[test]
 fn a_file_from_a_different_schema_is_refused_and_says_why() {
     let dir = state_dir("older");
+
+    // **AMENDED 2026-08-20 by [ADR 0040], and the amendment is the point.**
+    //
+    // This test used to plant `SCHEMA_VERSION - 1` and assert a refusal. Since the
+    // first migration exists, that file READS — which is the requirement, not a
+    // weakening of it: the version check lives in `read`, and `read` is what
+    // pre-fills the configuration screen, so refusing the previous version would
+    // have made a version bump cost the operator a full retype. FR40 says a
+    // configuration survives an image update.
+    //
+    // What this test now asserts is the gate that remains: **a version this build
+    // cannot account for**. A file from the FUTURE is the case the rule was written
+    // for — it carries keys this build has no representation for — and it is the one
+    // that must never be read by guesswork.
+    std::fs::write(
+        store::config_path(&dir),
+        hand_written(SCHEMA_VERSION + 1, ""),
+    )
+    .expect("write");
+
+    let errors = store::load(&dir, credential())
+        .expect_err("a file from a schema this build cannot account for must be refused");
+    let rendered = format!("{errors}");
+
+    assert!(
+        rendered.contains(&format!("schema version {}", SCHEMA_VERSION + 1)),
+        "the refusal must name the version it FOUND, or an operator cannot tell \
+         which image wrote the file: {rendered}"
+    );
+    assert!(
+        rendered.contains("no migration exists for that step"),
+        "and it must say why it is not simply read anyway: {rendered}"
+    );
+
+    // AND THE MIGRATED STEP READS, in the same test, because the two halves only
+    // mean something together: a build that had simply stopped checking versions
+    // would pass either one alone.
     std::fs::write(
         store::config_path(&dir),
         hand_written(SCHEMA_VERSION - 1, ""),
     )
     .expect("write");
-
-    let errors = store::load(&dir, credential())
-        .expect_err("a file from another schema must be refused, not read by guesswork");
-    let rendered = format!("{errors}");
-
-    assert!(
-        rendered.contains(&format!("schema version {}", SCHEMA_VERSION - 1)),
-        "the refusal must name the version it FOUND, or an operator cannot tell \
-         which image wrote the file: {rendered}"
+    let migrated = store::read(&dir).expect(
+        "the previous schema migrates: refusing it would empty the configuration \
+         screen, which is where the operator would repair it",
     );
-    assert!(
-        rendered.contains("no migration"),
-        "and it must say why it is not simply read anyway: {rendered}"
+    assert_eq!(
+        migrated.broker_host, "mqtt.example.lan",
+        "and every setting survives the step, or the migration is a data loss \
+         wearing a version number"
     );
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -203,7 +235,12 @@ fn a_configuration_this_build_wrote_survives_being_read_again() {
     edited.publish_period_secs = 45;
     edited.ui_port = Some(9091);
     edited.meters[0].device_id = "a-different-device".to_string();
-    store::save(&dir, &edited).expect("rewrite it as this build would");
+    store::save(
+        &dir,
+        &edited,
+        smartme_bridge::domain::UtcMillis(1_784_984_793_000),
+    )
+    .expect("rewrite it as this build would");
     let second = store::read(&dir).expect("read back");
 
     assert_ne!(

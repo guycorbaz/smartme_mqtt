@@ -70,6 +70,7 @@ fn fleet_config_at(enabled: bool, interval: Duration) -> BridgeConfig {
         },
         http_timeout: Duration::from_secs(10),
         meters: vec![MeterConfig {
+            priority: false,
             meter: MeterId::new("garage"),
             device_id: "dev-garage".to_string(),
             serial: Serial::new("9202685"),

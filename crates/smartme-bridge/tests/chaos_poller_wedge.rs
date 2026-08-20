@@ -169,6 +169,7 @@ fn config(
         },
         http_timeout: Duration::from_secs(30),
         meters: vec![smartme_bridge::app::config::MeterConfig {
+            priority: false,
             meter: MeterId::new(METER),
             device_id: "a1a1a1a1-b2b2-c3c3-d4d4-000000000003".to_string(),
             serial: Serial::new(SERIAL),
@@ -203,6 +204,7 @@ async fn bridge_with_ui(
         ui::UiState::new(
             Arc::clone(&phase),
             state_dir,
+            Arc::new(smartme_bridge::core::SystemClock::new()),
             Arc::new(tokio::sync::Notify::new()),
         ),
     ));

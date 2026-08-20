@@ -37,6 +37,7 @@ async fn chaos_stale_on_death() {
         },
         http_timeout: Duration::from_secs(30),
         meters: vec![smartme_bridge::app::config::MeterConfig {
+            priority: false,
             meter: MeterId::new("garage"),
             device_id: "a1a1a1a1-b2b2-c3c3-d4d4-000000000001".to_string(),
             serial: Serial::new(SERIAL),

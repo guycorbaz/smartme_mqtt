@@ -238,7 +238,16 @@ async fn lifecycle(state_dir: PathBuf, ui_port: u16) -> Result<(), Box<dyn std::
         if !serving {
             tokio::spawn(ui::serve(
                 ui_port,
-                ui::UiState::new(Arc::clone(&phase), state_dir.clone(), Arc::clone(&ready)),
+                ui::UiState::new(
+                    Arc::clone(&phase),
+                    state_dir.clone(),
+                    // A wall clock for stamping configuration writes ([ADR 0039]).
+                    // The UI exposes only `wall_now()`, so this being a second
+                    // `SystemClock` costs nothing: wall time has no per-instance
+                    // origin, and no `MonotonicMs` is ever taken from it.
+                    Arc::new(smartme_bridge::core::SystemClock::new()),
+                    Arc::clone(&ready),
+                ),
             ));
             serving = true;
         }

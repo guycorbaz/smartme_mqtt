@@ -366,6 +366,12 @@ fn classify_meters(
                     device_id,
                     serial,
                     enabled,
+                    // HOT, and it costs nothing: `priority` is read by the state
+                    // screen's context line and by no publishing path at all
+                    // ([ADR 0039]). Marking a meter as one that matters must not
+                    // cost a session, let alone a restart — it changes what the
+                    // operator is told, never what the host receives.
+                    priority: _,
                 } = after;
                 if *device_id != before.device_id {
                     restart(plan, "meters (device_id)");
@@ -448,6 +454,7 @@ mod tests {
 
     fn meter(id: &str, serial: &str, enabled: bool) -> MeterConfig {
         MeterConfig {
+            priority: false,
             meter: MeterId::new(id),
             device_id: format!("device-{id}"),
             serial: Serial::new(serial),

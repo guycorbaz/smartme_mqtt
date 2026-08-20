@@ -43,7 +43,7 @@ in it, so it can be read for diagnosis without privileges: checking which topic 
 maps to has never needed \code{sudo}, and now provably cannot.
 
 \begin{lstlisting}
-schema_version      = 4
+schema_version      = 5
 
 group_id            = "Plant"
 node_id             = "Bridge01"
@@ -63,7 +63,16 @@ meter_id  = "garage"
 device_id = "a1a1a1a1-b2b2-c3c3-d4d4-000000000001"
 serial    = "9202685"
 enabled   = true
+priority  = true   # one of the meters you actually care about
 \end{lstlisting}
+
+\begin{note}
+\code{created\_ms} and \code{last\_change\_ms} are absent above because \prog writes them,
+not you --- they appear the first time it saves this file. They are what the state screen's
+context line reads: \emph{``created three weeks ago, last changed two days ago, 4 meters, 2
+of them marked as mattering''}. A file that has no dates says so rather than showing the
+file's modification time, which a \code{docker cp} or a restore would move.
+\end{note}
 
 \subsection{Nothing is published until you confirm the mapping}
 \label{sec:confirm}
@@ -142,17 +151,25 @@ directory, set the credential in \code{.env}, and start the container. Remember
 \code{mapping\_confirmed = true} --- typing the mapping out \emph{is} having looked at it,
 and without the key the bridge comes up, serves its page, and stays silent.
 
-\subsection{The schema version, and why an old file is refused}
+\subsection{The schema version, what migrates, and what is refused}
 
 \code{schema\_version} exists so that ``this build does not understand this file'' is
-\emph{detectable}. A file written by another version is refused --- there is no migration
---- and any key \prog does not recognise is refused too.
+\emph{detectable}. Any key \prog does not recognise is refused, and so is any version it
+cannot account for.
 
-That second rule matters more than it looks. The library default is to ignore unknown keys
+That first rule matters more than it looks. The library default is to ignore unknown keys
 and let missing ones take a default value, so a renamed key would read as \emph{absent},
 quietly take its default, and \prog would run happily on a configuration nobody wrote ---
-publishing every 30 seconds because the period had silently reverted. Refusing is the only
-honest answer until a migration exists to be the other one.
+publishing every 30 seconds because the period had silently reverted.
+
+\textbf{Since version 5 there is one migration, and its shape says what a migration may be.}
+A version-4 file reads: the three keys version 5 added --- \code{created\_ms},
+\code{last\_change\_ms} and \code{priority} --- take the values that are true of a file
+written before they existed, which is \emph{unknown}, \emph{unknown}, and \emph{not
+marked}. Nothing is guessed at, which is the condition. The file is not rewritten when it is
+read; it becomes a version-5 file the next time you save. Anything older than 4 is still
+refused, and so is anything from a later build --- that file carries keys this one has no
+representation for.
 
 Refusing to \emph{read} such a file is not the same as refusing to \emph{replace} it, and the
 two are decided separately. The configuration screen may overwrite a file whose version is
