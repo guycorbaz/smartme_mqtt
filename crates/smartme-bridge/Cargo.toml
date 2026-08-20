@@ -26,6 +26,12 @@ tracing-appender = { workspace = true }
 thiserror = { workspace = true }
 arc-swap = { workspace = true }
 axum = { workspace = true }
+# For `--healthcheck` alone ([ADR 0041], story 7.1): one GET against this bridge's
+# own `/healthz`. **This adds nothing to the image** — `smart-me-client` already
+# links it, so the crate is compiled into this binary either way; what changes is
+# that the dependency is now declared where it is used rather than borrowed
+# through another crate's public surface.
+reqwest = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

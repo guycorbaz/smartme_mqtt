@@ -377,6 +377,92 @@ async fn lifecycle(state_dir: PathBuf, ui_port: u16) -> Result<(), Box<dyn std::
 ///
 /// [ADR 0023]: ../../docs/adr/0023-the-file-is-the-configuration.md
 /// [ADR 0037]: ../../docs/adr/0037-the-first-run-port-is-bootstrap-not-configuration.md
+/// The port the server binds, resolved as [ADR 0037] orders it: the file's
+/// `ui_port` when there is one, then `SMARTME_UI_PORT`, then [`ui::DEFAULT_PORT`].
+///
+/// **Extracted so the healthcheck probes the same rule** (story 7.1 AC1). A probe
+/// with its own copy would keep working right up to the day somebody sets a port,
+/// and then probe the wrong one — reporting a healthy bridge at 8080 while the
+/// bridge listens elsewhere, which is the exact species of lie this project
+/// exists to refuse, arriving through the door marked "monitoring".
+///
+/// [ADR 0037]: ../../docs/adr/0037-the-first-run-port-is-bootstrap-not-configuration.md
+fn ui_port_for(stored: Option<&StoredConfig>) -> u16 {
+    stored
+        .and_then(|c| c.ui_port)
+        .unwrap_or_else(first_run_port)
+}
+
+/// `--healthcheck`: one GET against this bridge's own `/healthz`, then exit
+/// ([ADR 0041], story 7.1).
+///
+/// # What it deliberately does NOT decide
+///
+/// **It adds no opinion to `/healthz`.** That endpoint returns non-200 in exactly
+/// one state — a publishing bridge whose poll loop has not ticked in three periods
+/// — and that rule was argued in ADR 0027 §2 and defended twice since. An
+/// unreachable broker, a failed source and a degraded meter are all *healthy* here,
+/// because a restart repairs none of them and destroys every meter's Sparkplug
+/// session on the way past.
+///
+/// **Unreachable counts as unhealthy**, and that is not an opinion but the absence
+/// of an answer: a bridge whose own UI does not respond cannot be asked anything,
+/// and it is the state a restart most plausibly clears.
+///
+/// The reason is printed to stderr, which is where `docker inspect`'s health log
+/// keeps it — a probe that failed silently would tell an operator that something is
+/// wrong and nothing about what.
+///
+/// [ADR 0041]: ../../docs/adr/0041-the-healthcheck-is-the-binary-probing-itself.md
+fn healthcheck() -> ! {
+    let state_dir = PathBuf::from(
+        std::env::var("SMARTME_STATE_DIR").unwrap_or_else(|_| DEFAULT_STATE_DIR.to_string()),
+    );
+    let stored = store::exists(&state_dir)
+        .then(|| store::read(&state_dir))
+        .and_then(Result::ok);
+    let port = ui_port_for(stored.as_ref());
+    let url = format!("http://127.0.0.1:{port}/healthz");
+
+    // A current-thread runtime for one request: this process does nothing else,
+    // and the worker pool the bridge builds would be waste.
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("healthcheck: no runtime: {error}");
+            std::process::exit(1);
+        }
+    };
+    let outcome = runtime.block_on(async {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()?;
+        let response = client.get(&url).send().await?;
+        Ok::<_, reqwest::Error>(response.status())
+    });
+    match outcome {
+        Ok(status) if status.is_success() => std::process::exit(0),
+        Ok(status) => {
+            eprintln!(
+                "healthcheck: {url} answered {status}. `/healthz` says non-200 only for a \
+                 publishing bridge whose poll loop has not ticked in three periods (AR12), \
+                 which is the one fault a restart repairs."
+            );
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!(
+                "healthcheck: {url} could not be reached: {error}. The bridge's own web \
+                 server is not answering, so nothing can be asked of it."
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
 fn first_run_port() -> u16 {
     let Ok(raw) = std::env::var("SMARTME_UI_PORT") else {
         return ui::DEFAULT_PORT;
@@ -396,6 +482,26 @@ fn first_run_port() -> u16 {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // ONE ARGUMENT, AND ANYTHING ELSE IS REFUSED (story 7.1 AC3).
+    //
+    // A typo in a `HEALTHCHECK` line must not fall through to starting a bridge:
+    // a second one inside the same container would compete for the state
+    // directory and open a second Sparkplug session under the same edge node,
+    // which is the one thing a monitoring probe must never be able to cause.
+    let mut args = std::env::args().skip(1);
+    match (args.next().as_deref(), args.next()) {
+        (None, _) => {}
+        (Some("--healthcheck"), None) => healthcheck(),
+        (Some(other), _) => {
+            eprintln!(
+                "smartme-bridge takes no arguments, or exactly `--healthcheck`. \
+                 Got {other:?}. Refusing rather than starting a bridge, which is what \
+                 an unrecognised argument used to do."
+            );
+            std::process::exit(2);
+        }
+    }
+
     // INFO by default, and NOT `fmt::init()`.
     //
     // `tracing_subscriber::fmt::init()` resolves to `EnvFilter::from_default_env()`,
@@ -438,11 +544,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The UI's port comes from the file when there is one, and from a default
     // when there is not — because the run with no file is the run that needs the
     // UI most, and it has nowhere to read a port from.
-    let ui_port = stored
-        .as_ref()
-        .and_then(|r| r.as_ref().ok())
-        .and_then(|c| c.ui_port)
-        .unwrap_or_else(first_run_port);
+    let ui_port = ui_port_for(stored.as_ref().and_then(|r| r.as_ref().ok()));
 
     let (file_layer, file_log) = file_log_layer(stored.as_ref().and_then(|r| r.as_ref().ok()));
     tracing_subscriber::registry()

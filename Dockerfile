@@ -94,19 +94,37 @@ COPY --from=builder /build/target/release/smartme-bridge /usr/local/bin/smartme-
 USER 10002:10002
 WORKDIR /data
 
-# NO HEALTHCHECK, and its absence is a decision rather than an omission.
+# THE HEALTHCHECK, and every number in it is derived rather than guessed
+# ([ADR 0041], story 7.1).
 #
-# Architecture open item 7 is explicit: the healthcheck must reflect real poll
-# state rather than mere process liveness, and **must not restart the container
-# where an honest STALE is the better answer** — a restart destroys the very
-# continuity the STALE is protecting. A process-liveness probe added now would
-# do precisely the wrong thing: the bridge stays alive and correct through a
-# cloud outage, so liveness is always true and the probe would be decoration;
-# and any probe that DID fail on a stale reading would restart the container in
-# the one case where restarting is harmful.
+# **Why it took until Epic 7.** The comment that stood here since Epic 0 said the
+# `HEALTHCHECK` line "belongs in the same change as the endpoint it probes". That
+# endpoint — `/healthz` with `last_loop_tick`, the wedge allowance and, since story
+# 6.5, the sink's own state — arrived in Epic 6. And [#56] found what made this
+# more than one line: this image has no `curl`, no `wget`, and a shell that is not
+# bash, so nothing inside the container could consume `/healthz` at all. ADR 0041
+# decides: the binary probes itself, which adds no package and cannot drift from
+# the port the server binds.
 #
-# The `/healthz` endpoint with the `last_loop_tick` heartbeat (AR12, FR33) is
-# Epic 6. The HEALTHCHECK line belongs in the same change as the endpoint it
-# probes, not before it.
+# **What it fails on, and what it deliberately does not.** `/healthz` returns
+# non-200 in exactly one state: a publishing bridge whose poll loop has not ticked
+# in three poll periods. A restart repairs that. An unreachable broker, a refused
+# credential and a degraded meter are all HEALTHY here — restarting repairs none of
+# them and destroys every meter's Sparkplug session on the way past (ADR 0027 §2).
+#
+#   --interval=30s     Detection latency, not the wedge rule: `/healthz` computes
+#                      the wedge itself against the observed cadence (AR12), so
+#                      this only decides how soon a wedge already declared is
+#                      noticed. 30 s is small against a 30 s poll period's
+#                      three-period allowance.
+#   --timeout=5s       The probe's own request timeout is 3 s; this is its ceiling,
+#                      not a second deadline that could fire first.
+#   --retries=3        ~90 s of continuous wedge before a restart. One missed
+#                      answer during a reconfiguration must not kill a session.
+#   --start-period=60s Startup only. A bridge with no configuration is silent BY
+#                      DESIGN and answers 200, so this covers building the runtime
+#                      and binding the port, nothing more.
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=60s \
+    CMD ["/usr/local/bin/smartme-bridge", "--healthcheck"]
 
 ENTRYPOINT ["/usr/local/bin/smartme-bridge"]

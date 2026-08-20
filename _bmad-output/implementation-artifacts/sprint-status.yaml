@@ -2637,7 +2637,16 @@ development_status:
   #     keeps non-200 codes for a WEDGED POLLER only, because this epic wires them
   #     to a container restart and a restart kills the Sparkplug session for every
   #     meter. A panic in a DISPLAY handler must not restart the bridge.
-  epic-7: backlog
+  epic-7: in-progress
+  # 2026-08-20, WRITTEN AND IMPLEMENTED. AR12's restart could not fire in a real
+  # deployment: the image has no curl, no wget and a shell that is not bash, so
+  # NOTHING INSIDE THE CONTAINER could consume /healthz ([#56], open since 5 August).
+  # ADR 0041: the binary probes itself — no package added, and it cannot drift from
+  # the port the server binds, because both now call `ui_port_for`.
+  # AC3 IS THE ONE THAT WOULD HAVE BEEN FOUND IN PRODUCTION: a typo in the
+  # HEALTHCHECK line used to fall through to a normal start — a second bridge inside
+  # the container, every thirty seconds, under the same edge node.
+  7-1-the-healthcheck-the-image-can-actually-run: review  # implemented 2026-08-20; [#56] closes
   epic-7-retrospective: required  # added 2026-08-10 — the line was absent entirely
 
   # ADDED 2026-08-08, previously absent from this file entirely.

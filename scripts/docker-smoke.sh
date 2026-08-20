@@ -87,6 +87,46 @@ echo "$out" | grep -qE 'EXIT:(124|137)' \
     || { echo "$out"; fail "the image exited on an invalid configuration; ADR 0026 keeps it up so the configuration screen can repair the file, and on a deployment with no shell that screen is the only repair there is"; }
 ok "refuses to publish an invalid configuration, names the key, and stays up to be repaired"
 
+# --- the HEALTHCHECK runs INSIDE the image, and reports healthy -------------
+#
+# **This is what [#56] said could not be done.** The image has no `curl`, no
+# `wget` and a shell that is not bash, so nothing in it could consume `/healthz`
+# — which meant AR12's restart could never fire in a real deployment. ADR 0041
+# answers it: the binary probes itself, and this is the only place that claim can
+# be checked against the actual image rather than against a unit test's idea of
+# it (which is the defect [#56] recorded in the first place).
+#
+# **An unconfigured bridge must report HEALTHY.** It publishes nothing by design;
+# a probe that called that unhealthy would put a first run into a restart loop
+# and destroy the very screen the operator needs to configure it.
+mkdir -p "$TMP/health"
+hc="smartme_smoke_health_$$"
+docker rm -f "$hc" >/dev/null 2>&1 || true
+docker run -d --name "$hc" \
+    -e SMARTME_CLIENT_ID=x -e SMARTME_CLIENT_SECRET=x \
+    -e SMARTME_STATE_DIR=/state \
+    -v "$TMP/health:/state" \
+    "$IMAGE" >/dev/null
+# PRESENCE FIRST: an image with no HEALTHCHECK reports `<no value>` here, and
+# "not unhealthy" would be true of it too.
+status=""
+for _ in $(seq 1 60); do
+    status=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}NONE{{end}}' "$hc" 2>/dev/null || echo NONE)
+    [[ "$status" == "starting" || "$status" == "NONE" ]] || break
+    sleep 2
+done
+if [[ "$status" == "NONE" ]]; then
+    docker rm -f "$hc" >/dev/null 2>&1 || true
+    fail "the image declares no HEALTHCHECK: AR12's restart cannot fire in a deployment, which is [#56] unfixed"
+fi
+if [[ "$status" != "healthy" ]]; then
+    docker inspect --format '{{json .State.Health}}' "$hc" || true
+    docker rm -f "$hc" >/dev/null 2>&1 || true
+    fail "an unconfigured bridge reported '$status': it publishes nothing BY DESIGN, and restarting it would destroy the screen that configures it"
+fi
+docker rm -f "$hc" >/dev/null 2>&1 || true
+ok "the healthcheck runs inside the image, and a deliberately silent bridge is healthy"
+
 # --- with NO configuration it comes up and STAYS up ------------------------
 #
 # The other half of the same seam. A bridge that exited here could never be
