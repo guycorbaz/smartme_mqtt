@@ -2571,7 +2571,7 @@ development_status:
   # The three links therefore report three facts, each from its owner. AND NOTHING IS
   # PUBLISHED to light the third one: a DDATA carrying a test value is, in the
   # historian, indistinguishable from a measurement.
-  6-6-the-end-to-end-check: ready-for-dev  # written 2026-08-20; FR37, no judgement and no publication
+  6-6-the-end-to-end-check: review  # implemented 2026-08-20; FR37 delivered, `SourceError::cause` extracted so the check and the loop share one table
   epic-6-retrospective: required  # added 2026-08-10 — the line was absent entirely
 
   # ADDED 2026-08-08, previously absent from this file entirely.

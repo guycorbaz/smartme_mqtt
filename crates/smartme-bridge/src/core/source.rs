@@ -172,6 +172,31 @@ impl Refusal {
     }
 }
 
+impl SourceError {
+    /// The cause a failed fetch is published under.
+    ///
+    /// **Extracted from `Policy::step_remembering` by story 6.6**, which needed the
+    /// same answer outside the poll loop and must not have a second copy of it. The
+    /// mapping is unchanged, and the state machine now reads it here: a fatal names
+    /// its refusal, a rate limit is NOT unreachability (story 2.6 — the source
+    /// answered and said come back later, and an operator sent to look at the
+    /// network would find nothing wrong with it), and a timeout is the same fact as
+    /// a transient failure seen from the near end.
+    ///
+    /// **This is a fact about the FETCH, not a judgement of a reading.** Nothing
+    /// here looks at a value, a timestamp or a counter — those are the oracles', and
+    /// they need the per-meter memory this function does not take. That distinction
+    /// is what lets story 6.6's check use this and stop.
+    pub fn cause(&self) -> crate::core::oracle::Cause {
+        use crate::core::oracle::Cause;
+        match self {
+            Self::Fatal { refusal, .. } => refusal.cause(),
+            Self::RateLimited { .. } => Cause::SourceRateLimited,
+            Self::Timeout | Self::Transient { .. } => Cause::SourceUnreachable,
+        }
+    }
+}
+
 impl fmt::Display for SourceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

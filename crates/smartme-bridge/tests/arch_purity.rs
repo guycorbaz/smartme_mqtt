@@ -244,3 +244,56 @@ fn measurement_to_sparkplug_mapping_is_confined_to_the_publisher() {
         violations.join("\n")
     );
 }
+
+/// **Story 6.6 AC3 — the end-to-end check publishes nothing, enforced mechanically.**
+///
+/// The criterion says *"no MQTT message of any kind is produced by the check"*, and
+/// the honest way to hold that is structurally: the module has no handle that could
+/// produce one, and this test makes acquiring one visible. A runtime assertion could
+/// only observe the messages a particular test path did not send.
+///
+/// **Why it is worth a guard rather than a comment.** The obvious way to prove a
+/// sink works is to publish to it, and the next person to touch this screen will
+/// think of it. A DDATA carrying a test value is, in the historian, indistinguishable
+/// from a measurement — the button would manufacture the exact lie this bridge
+/// exists to refuse — so the third link is the driver's OBSERVED state (story 6.5)
+/// and must stay that.
+///
+/// FALSIFIED 2026-08-20 — mutation RUN, output copied: adding
+/// `use crate::app::poll_publish::Publication;` to `ui/check.rs` goes red with
+///
+/// ```text
+/// thread 'the_end_to_end_check_cannot_publish' panicked at
+/// crates/smartme-bridge/tests/arch_purity.rs:288:5:
+/// the end-to-end check must not be able to publish (story 6.6 AC3): the third link
+/// is the driver's observed state, and a test value on the wire is indistinguishable
+/// from a measurement in the historian:
+/// …/src/ui/check.rs: use crate::app::poll_publish::Publication;
+/// ```
+#[test]
+fn the_end_to_end_check_cannot_publish() {
+    let file = src("ui/check.rs");
+    let text = fs::read_to_string(&file).expect("story 6.6 ships this module");
+    let banned = ["Outbox", "outbox", "Publisher", "publish(", "Publication"];
+    let mut violations = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        // Doc comments SAY what this module refuses to do; the refusal is what is
+        // checked, not the word.
+        if t.starts_with("//") {
+            continue;
+        }
+        for word in banned {
+            if t.contains(word) {
+                violations.push(format!("{}: {}", file.display(), t));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "the end-to-end check must not be able to publish (story 6.6 AC3): the third \
+         link is the driver's observed state, and a test value on the wire is \
+         indistinguishable from a measurement in the historian:\n{}",
+        violations.join("\n")
+    );
+}

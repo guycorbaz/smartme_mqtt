@@ -1,6 +1,6 @@
 # Story 6.6: The end-to-end check — three links, one screen, and nothing published to make them light up
 
-Status: ready-for-dev
+Status: review
 
 > **Story 6.5 is what made this story writable, and it said so.** Until the sink's state was
 > observed, an end-to-end validation whose third light was lit by an *intention* — the bridge
@@ -166,3 +166,91 @@ and a check that answered.
 - [Source: `docs/adr/0023-the-file-is-the-configuration-the-credential-stays-in-the-environment.md`] — no credential on any screen
 - [Source: `docs/adr/0024-the-config-ui-refuses-submissions-from-other-origins.md`] — the origin guard on POST routes
 - [Source: `CLAUDE.md`] — falsify before trusting; decide at drafting, never defer to an artifact that does not exist
+
+## Dev Agent Record
+
+### Agent Model Used
+
+Claude Opus 5 (1M context) — `claude-opus-5[1m]`, 2026-08-20.
+
+### Completion Notes List
+
+**AC1 — met, and the proof is the whole snapshot.** `run_check` writes one thing: the check
+registry, which lives on `UiState` and which nothing outside `ui` can read. The test compares
+`FleetState` before and after a full check — `generation` included, because that counter moves
+on every `send_modify`, so a write that happened to store the same value is still visible.
+
+**AC2 — met.** The middle link reads `published`, `culprit` and `last_published_at` from the
+fleet state, and the page says in words that the check did not re-judge, and that the two links
+disagreeing is the useful part rather than a contradiction.
+
+**AC3 — met, and held structurally rather than by observation.** `arch_purity` gains
+`the_end_to_end_check_cannot_publish`: `ui/check.rs` may not mention `Outbox`, `outbox`,
+`Publisher`, `publish(` or `Publication` outside comments. A runtime assertion could only ever
+say that the paths a test happened to walk sent nothing; this says the module has no way to.
+
+**AC4 — met, and it produced the story's one refactor.** `SourceError::cause` is extracted from
+`Policy::step_remembering` into `core/source.rs`, and the state machine now reads it. The check
+needed the same mapping outside the poll loop; a copy would have been a second place the truth
+lives, which is the very thing this story's shape exists to avoid. What stayed in the state
+machine is which *state* each error lands in — `Fatal` latches `Failed`, everything else is
+`Stale` — because that is the machine's own business and not the table's.
+
+**AC5 — met.** One check in flight per meter, and no second inside the poll period, refused in
+words that name when it may be run again. The rule is a pure function so a test can walk all
+four of its cases.
+
+**AC6 — met.** `POST` starts the check and redirects; `GET` reports it. So the three states are
+rendered by the server, the running one carries a two-second `meta refresh`, and a reload
+re-reads the answer rather than re-asking smart-me. The bound is `CHECK_TIMEOUT`, five seconds,
+the same as discovery's.
+
+**A defect this implementation avoided by measuring rather than assuming.** `axum`'s `Query`
+extractor is behind a feature this workspace does not enable — the build said so. The query
+string is read from the `Uri` with a six-line decoder rather than by turning on a feature and
+enlarging the dependency surface for one parameter.
+
+**The base is the RUNNING configuration's, not the saved file's.** Discovery reads the file
+because it runs before any configuration is in force; a check only exists once there is a poll
+loop, and the base it must exercise is the one that loop is using. There is therefore no
+unreadable-file case here, and the variant that would have carried it was removed rather than
+left unconstructed.
+
+### The trap these tests could have fallen into, named
+
+`a_check_writes_nothing_the_poll_loop_reads` runs a real `run_check`, and **would have passed
+for two different reasons**: with no credential in the environment the check never builds a
+client, and with one — other tests in this binary set `SMARTME_CLIENT_*`, and environment
+variables are per-process — it would have sent a real request to smart-me and blocked on the
+timeout. The fixture's `api_base` is therefore `http://127.0.0.1:1`: `SmartMeClient::new`
+refuses any scheme but `https` before opening a socket, so the test is deterministic and off
+the network whatever the environment holds. Verified by running it with
+`SMARTME_CLIENT_ID`/`SMARTME_CLIENT_SECRET` set: 0.00 s.
+
+### Falsification record
+
+| # | Mutation | Went red with |
+|---|---|---|
+| 1 | `control.heartbeats().retire(&meter)` before asking — the "clean slate" edit | `a check must not move the fleet state: generation 1 became 2 … left: 1, right: 2` |
+| 2 | the `TooSoon` arm deleted (a finished check always re-runs) | `a second check inside the poll period must be refused: the button would out-poll the poll loop` |
+| 3 | link 2 rendered without the verdict's cause | `the page must report the verdict IN FORCE, cause included` — with the page dumped beside it |
+| 4 | the `meta refresh` dropped from the running branch | `a page that says "asking" must come back for the answer` — and the dump showed the page still *saying* it refreshes itself |
+| 5 | `is_fatal()` forced false (a refused credential treated as passing trouble) | `left: SourceUnreachable, right: CredentialRejected` |
+| 6 | `use crate::app::poll_publish::Publication;` added to the module | `the end-to-end check must not be able to publish (story 6.6 AC3)` |
+
+### File List
+
+- `crates/smartme-bridge/src/core/source.rs` — modified (`SourceError::cause`, extracted)
+- `crates/smartme-bridge/src/core/state_machine.rs` — modified (reads the table instead of repeating it)
+- `crates/smartme-bridge/src/ui/check.rs` — **new** (the module, its rate rule, its one call, its page)
+- `crates/smartme-bridge/src/ui/mod.rs` — modified (`checks` on `UiState`, the two routes, five tests)
+- `crates/smartme-bridge/src/ui/screens.rs` — modified (`page`, `repair`, `ago` opened to the module next door; the link from `/meters`)
+- `crates/smartme-bridge/tests/arch_purity.rs` — modified (the guard AC3 asks for)
+- `_bmad-output/implementation-artifacts/6-6-the-end-to-end-check.md` — modified
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — modified
+
+### Change Log
+
+- **2026-08-20** — Story 6.6. FR37, as three facts from three owners rather than one
+  re-judgement. Six mutations run. `CONTRACT_VERSION` stays at 10 — nothing here reaches the
+  wire, which is the point.

@@ -39,6 +39,7 @@ use axum::routing::{get, post};
 
 use crate::app::supervisor::Control;
 
+mod check;
 mod origin;
 mod screens;
 
@@ -390,6 +391,13 @@ pub struct UiState {
     /// configuration — and in the unconfigured phase there is no parsed
     /// configuration to carry it.
     state_dir: std::path::PathBuf,
+    /// Every meter's last end-to-end check (story 6.6).
+    ///
+    /// **Not in the fleet state, deliberately**: `FleetState` records what the poll
+    /// loop published, and a fact about a button does not belong inside it (6.6
+    /// AC1). The UI writes this and the UI reads it; nothing the loop reads is
+    /// touched by a check.
+    checks: check::Checks,
     /// How a screen tells the lifecycle loop that the configuration became
     /// ready. **A nudge, never the configuration itself**: the loop re-reads the
     /// file, because the file is the configuration and a loop that trusted a
@@ -406,8 +414,17 @@ impl UiState {
         Self {
             phase,
             state_dir,
+            checks: check::Checks::new(),
             ready,
         }
+    }
+
+    /// Every meter's last end-to-end check (story 6.6).
+    ///
+    /// Private to `ui`: the check registry is a screen's memory, and nothing
+    /// outside these screens has any business reading it.
+    fn checks(&self) -> &check::Checks {
+        &self.checks
     }
 
     /// The phase as it is right now.
@@ -451,6 +468,9 @@ pub fn router(state: UiState) -> Router {
         // because the two answer different questions — `/` says whether the bridge
         // is publishing at all, this says what each meter is doing.
         .route("/meters", get(screens::meter_view))
+        // Story 6.6: the end-to-end check. GET reports, POST asks — so a reload
+        // re-reads the answer instead of re-asking smart-me for it.
+        .route("/check", get(check::check_view).post(check::run_check))
         .route(
             "/config",
             get(screens::config_form).post(screens::save_config),
@@ -1130,6 +1150,354 @@ mod tests {
             "the faults are on /config; promising them here sends the reader \
              scrolling past a horizontal rule: {page}"
         );
+    }
+
+    /// A configuration carrying one meter, which the check needs and
+    /// `running_config` deliberately does not have.
+    ///
+    /// **`api_base` is `http://` on purpose, and it is what keeps these tests off
+    /// the network.** `SmartMeClient::new` refuses any scheme but `https` before it
+    /// opens a socket, so a check run here fails locally whatever the environment
+    /// holds. Without it the test would pass for two different reasons: with no
+    /// credential in the environment it never builds a client, and WITH one — other
+    /// tests in this binary set `SMARTME_CLIENT_*`, and environment variables are
+    /// per-process — it would have sent a real request to smart-me and hung on the
+    /// timeout. The one it must not have is the second.
+    fn config_with_a_meter() -> crate::app::supervisor::BridgeConfig {
+        let mut config = running_config();
+        config.api_base = "http://127.0.0.1:1".to_string();
+        config.meters.push(crate::app::config::MeterConfig {
+            meter: crate::domain::MeterId::new("appart-est"),
+            device_id: "dev-0".to_string(),
+            serial: crate::domain::Serial::new("1112222"),
+            enabled: true,
+        });
+        config
+    }
+
+    /// **Story 6.6 AC1 and AC3 — a check writes NOTHING the poll loop reads.**
+    ///
+    /// This is the criterion the whole story is shaped around. `step_once` judges
+    /// against a per-meter memory — `energy_reference`, `last_http_date`,
+    /// `last_value_date` — and the fleet state is what `/healthz` reports; a check
+    /// that touched either would make a button change what the host is told.
+    ///
+    /// The proof is the whole snapshot, `generation` included: that counter moves on
+    /// every `send_modify`, so any write at all is visible here even if the field it
+    /// wrote happened to hold the same value.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN, output copied: clearing the meter's
+    /// opinion before asking (`control.heartbeats().retire(&meter)` in `run_check`,
+    /// the plausible "start from a clean slate" edit) goes red with
+    ///
+    /// ```text
+    /// a check must not move the fleet state: generation 1 became 2, and the verdict
+    /// the host is being told changed because somebody pressed a button
+    /// ```
+    #[tokio::test]
+    async fn a_check_writes_nothing_the_poll_loop_reads() {
+        use crate::core::oracle::Verdict;
+        use crate::core::state_machine::State as OracleState;
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let now = UtcMillis(1_784_984_793_000);
+        let clock = Arc::new(crate::core::clock::FakeClock::new(now));
+        let meter = crate::domain::MeterId::new("appart-est");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(config_with_a_meter()));
+        let state = ui(publishing(
+            beats.clone(),
+            clock.clone(),
+            Arc::clone(&config),
+        ));
+
+        beats.record_at(
+            &meter,
+            OracleState::Fresh,
+            Verdict::good(),
+            Some(crate::app::poll_publish::Publication {
+                at: UtcMillis(now.0 - 1_000),
+                threshold_ms: 90_000,
+                value_date: Some(UtcMillis(now.0 - 2_000)),
+                power_kw: Some(0.018),
+                energy_kwh: Some(4_843.822),
+            }),
+        );
+        let before = beats.snapshot();
+
+        // No credential in the environment is the fastest honest path: the check
+        // refuses to send an unauthenticated request, so this exercises everything
+        // up to and including the write of the result — which is the part under test.
+        let response = check::run_check(
+            State(Arc::clone(&state)),
+            axum::http::HeaderMap::new(),
+            axum::extract::Form(vec![("meter".to_string(), "appart-est".to_string())]),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::SEE_OTHER,
+            "the POST redirects to the page that reports it, so a reload re-reads \
+             the answer instead of re-asking smart-me"
+        );
+        for _ in 0..1_000 {
+            if !matches!(
+                state.checks().get(&meter),
+                Some(check::Check::Running { .. })
+            ) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        let after = beats.snapshot();
+        assert_eq!(
+            before.generation, after.generation,
+            "a check must not move the fleet state: generation {} became {}, and the \
+             verdict the host is being told would change because somebody pressed a \
+             button",
+            before.generation, after.generation
+        );
+        assert_eq!(
+            before.meters[0].published, after.meters[0].published,
+            "and the published verdict in particular is the poll loop's alone"
+        );
+    }
+
+    /// **Story 6.6 AC5 — the button cannot become a way to hammer smart-me.**
+    ///
+    /// [#77] found that a 429 on the token endpoint arms no wait, so this bridge's
+    /// own restraint is the only restraint there is. The rule is walked as a pure
+    /// function, then seen in the page's words — a refusal that were silent, or that
+    /// re-rendered the previous result without saying it was old, would pass a test
+    /// that only checked no request went out.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN: deleting the `TooSoon` arm (letting a
+    /// finished check always re-run) goes red with `a second check inside the poll
+    /// period must be refused: the button would out-poll the poll loop`.
+    #[test]
+    fn a_second_check_inside_the_poll_period_is_refused() {
+        use crate::domain::UtcMillis;
+        let now = UtcMillis(1_784_984_793_000);
+        let period = 30_000;
+
+        assert!(
+            check::refusal_for(None, now, period).is_none(),
+            "a meter never checked is checkable"
+        );
+        assert!(
+            check::refusal_for(Some(&check::Check::Running { started: now }), now, period)
+                .is_some(),
+            "one in flight is one in flight"
+        );
+        assert!(
+            check::refusal_for(
+                Some(&check::Check::Done {
+                    at: UtcMillis(now.0 - 5_000),
+                    source: check::SourceLink::NoCredential,
+                }),
+                now,
+                period
+            )
+            .is_some(),
+            "a second check inside the poll period must be refused: the button would \
+             out-poll the poll loop, against an API that answers a 429 this bridge \
+             does not yet wait out ([#77])"
+        );
+        assert!(
+            check::refusal_for(
+                Some(&check::Check::Done {
+                    at: UtcMillis(now.0 - 31_000),
+                    source: check::SourceLink::NoCredential,
+                }),
+                now,
+                period
+            )
+            .is_none(),
+            "and one poll period later it is checkable again, or the feature is a \
+             button that works once"
+        );
+    }
+
+    /// **Story 6.6 AC2 — the middle link is the PUBLISHED verdict, and the page says
+    /// so.**
+    ///
+    /// The state is `Bad (credential-rejected)`, latched. A check that re-judged
+    /// would light this link from whatever the source just answered and tell an
+    /// operator the meter was fine while the host is being told it is not.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN: rendering link 2 from the source answer
+    /// instead of `FleetState` goes red with `the page must report the verdict IN
+    /// FORCE … "credential-rejected" absent`.
+    #[tokio::test]
+    async fn the_middle_link_is_what_the_host_is_being_told() {
+        use crate::core::oracle::{Cause, Verdict};
+        use crate::core::state_machine::State as OracleState;
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let now = UtcMillis(1_784_984_793_000);
+        let clock = Arc::new(crate::core::clock::FakeClock::new(now));
+        let meter = crate::domain::MeterId::new("appart-est");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(config_with_a_meter()));
+        let state = ui(publishing(beats.clone(), clock, Arc::clone(&config)));
+
+        beats.record_at(
+            &meter,
+            OracleState::Failed,
+            Verdict::bad(Cause::CredentialRejected),
+            Some(crate::app::poll_publish::Publication {
+                at: UtcMillis(now.0 - 4_000),
+                threshold_ms: 90_000,
+                value_date: None,
+                power_kw: None,
+                energy_kwh: None,
+            }),
+        );
+
+        let html = body(
+            check::check_view(
+                State(Arc::clone(&state)),
+                "/check?meter=appart-est".parse().expect("a uri"),
+            )
+            .await,
+        )
+        .await;
+
+        assert!(
+            html.contains("credential-rejected"),
+            "the page must report the verdict IN FORCE, cause included — it is what \
+             the host is being told while the operator reads this:\n{html}"
+        );
+        assert!(
+            html.contains("you") && html.contains("open the configuration"),
+            "with the culprit and the gesture, derived at render time \
+             (story 6.3 AC4):\n{html}"
+        );
+        assert!(
+            html.contains("did not re-judge"),
+            "and it must SAY that the check did not re-judge, or the two links read \
+             as one measurement seen twice — which is the confusion this story was \
+             shaped to avoid:\n{html}"
+        );
+    }
+
+    /// **Story 6.6 AC6 — never run, running, and answered are three states the page
+    /// RENDERS.**
+    ///
+    /// FR32's distinction, on this page. The running state carries the refresh that
+    /// makes it resolve; without it the page would be honest and useless — an
+    /// operator staring at "asking" forever.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN: dropping the `meta refresh` from the
+    /// running branch goes red with `a page that says "asking" must come back for
+    /// the answer`.
+    #[tokio::test]
+    async fn the_three_states_of_a_check_are_told_apart() {
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let now = UtcMillis(1_784_984_793_000);
+        let clock = Arc::new(crate::core::clock::FakeClock::new(now));
+        let meter = crate::domain::MeterId::new("appart-est");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(config_with_a_meter()));
+        let state = ui(publishing(beats, clock, Arc::clone(&config)));
+        let uri: axum::http::Uri = "/check?meter=appart-est".parse().expect("a uri");
+
+        let html = body(check::check_view(State(Arc::clone(&state)), uri.clone()).await).await;
+        assert!(
+            html.contains("Not checked since this bridge started"),
+            "never run is its own state, and an empty result must not read as a \
+             passing one:\n{html}"
+        );
+
+        state
+            .checks()
+            .set(&meter, check::Check::Running { started: now });
+        let html = body(check::check_view(State(Arc::clone(&state)), uri.clone()).await).await;
+        assert!(
+            html.contains("Asking smart-me"),
+            "running says it is running:\n{html}"
+        );
+        assert!(
+            html.contains("http-equiv=refresh"),
+            "a page that says \"asking\" must come back for the answer, or the \
+             operator waits on a page that will never change:\n{html}"
+        );
+
+        state.checks().set(
+            &meter,
+            check::Check::Done {
+                at: now,
+                source: check::SourceLink::NoCredential,
+            },
+        );
+        let html = body(check::check_view(State(Arc::clone(&state)), uri).await).await;
+        assert!(
+            html.contains("no credential in the environment")
+                && !html.contains("http-equiv=refresh"),
+            "answered says what it found and stops refreshing:\n{html}"
+        );
+    }
+
+    /// **Story 6.6 AC4 — a refused source is classified by the table the poll loop
+    /// reads, not by a second one.**
+    ///
+    /// `SourceError::cause` was extracted from `Policy::step_remembering` for exactly
+    /// this: the check needed the mapping outside the loop, and a copy would have
+    /// been a second place the truth lives.
+    ///
+    /// FALSIFIED 2026-08-20 — mutation RUN: classifying `AuthRejected` as transient
+    /// (the wildcard's answer) goes red with `a refused credential is the operator's
+    /// to repair … left: source-unreachable, right: credential-rejected`.
+    #[test]
+    fn a_refused_source_carries_the_cause_the_loop_would_publish() {
+        use crate::core::oracle::{Cause, Culprit};
+        use smart_me_client::SmartMeError;
+
+        let cases = [
+            (
+                SmartMeError::AuthRejected { status: 401 },
+                Cause::CredentialRejected,
+                Culprit::You,
+            ),
+            (
+                SmartMeError::UnknownDevice {
+                    device_id: "dev-0".to_string(),
+                },
+                Cause::DeviceNotInAccount,
+                Culprit::You,
+            ),
+            (
+                SmartMeError::Timeout,
+                Cause::SourceUnreachable,
+                Culprit::World,
+            ),
+            (
+                SmartMeError::HttpStatus { status: 503 },
+                Cause::SourceUnreachable,
+                Culprit::World,
+            ),
+        ];
+        for (error, expected, culprit) in cases {
+            let named = check::cause_of(&error);
+            assert_eq!(
+                named,
+                expected,
+                "a refused credential is the operator's to repair and an unreachable \
+                 host is not: {error} must be published as {}, and this page must \
+                 name what the loop would name",
+                expected.as_str()
+            );
+            assert_eq!(
+                named.culprit(),
+                culprit,
+                "and the culprit follows the cause"
+            );
+        }
     }
 
     fn ui(phase: Phase) -> Arc<UiState> {

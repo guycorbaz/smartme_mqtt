@@ -217,7 +217,7 @@ code{word-break:break-all}\
 button{font:inherit;padding:.5rem 1rem;margin-top:1rem}\
 </style>";
 
-fn page(title: &str, body: &str) -> Html<String> {
+pub(super) fn page(title: &str, body: &str) -> Html<String> {
     Html(format!(
         "<!doctype html><meta charset=utf-8><meta name=viewport \
          content=\"width=device-width,initial-scale=1\"><title>{}</title>{STYLE}{body}",
@@ -1429,7 +1429,8 @@ pub(super) async fn meter_view(State(state): State<Arc<UiState>>) -> impl IntoRe
              when the meter last measured something new. A gap between the last two \
              is a meter that has stopped moving — not a bridge that has stopped \
              publishing.</p>\
-             <p><a href=/>State of the bridge</a> · <a href=/config>Configuration</a></p>"
+             <p><a href=/check>Check one meter end to end</a> · \
+             <a href=/>State of the bridge</a> · <a href=/config>Configuration</a></p>"
         ),
     )
 }
@@ -1471,7 +1472,7 @@ pub(super) fn sink_health_line(
     }
 }
 
-fn repair(culprit: crate::core::oracle::Culprit) -> &'static str {
+pub(super) fn repair(culprit: crate::core::oracle::Culprit) -> &'static str {
     use crate::core::oracle::Culprit;
     match culprit {
         Culprit::World => "nothing to do here; the source or the broker has to come back",
@@ -1482,7 +1483,7 @@ fn repair(culprit: crate::core::oracle::Culprit) -> &'static str {
 
 /// A human-readable age. Absolute instants belong in the log; a screen read at
 /// three in the morning wants "four minutes ago" (FR36).
-fn ago(now: crate::domain::UtcMillis, then: crate::domain::UtcMillis) -> String {
+pub(super) fn ago(now: crate::domain::UtcMillis, then: crate::domain::UtcMillis) -> String {
     let seconds = (now.0 - then.0).max(0) / 1_000;
     match seconds {
         0 => "just now".to_string(),

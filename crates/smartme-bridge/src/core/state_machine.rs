@@ -229,18 +229,14 @@ impl Policy {
             return (State::Stale, Verdict::stale(Cause::HostClockUnsynced));
         }
         match tick {
-            Err(SourceError::Fatal { refusal, .. }) => {
-                (State::Failed, Verdict::bad(refusal.cause()))
-            }
-            // Story 2.6: a rate limit is not unreachability. The source answered
-            // and told us to come back later — an operator sent to look at the
-            // network would find nothing wrong with it.
-            Err(SourceError::RateLimited { .. }) => {
-                (State::Stale, Verdict::stale(Cause::SourceRateLimited))
-            }
-            Err(SourceError::Timeout) | Err(SourceError::Transient { .. }) => {
-                (State::Stale, Verdict::stale(Cause::SourceUnreachable))
-            }
+            // WHICH cause is `SourceError::cause`'s, since story 6.6 — the same
+            // table, read from one place, because the end-to-end check needs the
+            // answer outside this loop. What stays HERE is which STATE each error
+            // lands in, which is this machine's own business: a fatal latches
+            // `Failed`, everything else is `Stale` and retried. Story 2.6's rule
+            // that a rate limit is not unreachability lives in the table.
+            Err(error @ SourceError::Fatal { .. }) => (State::Failed, Verdict::bad(error.cause())),
+            Err(error) => (State::Stale, Verdict::stale(error.cause())),
             Ok(reading) => self.judge_reading(reading, previous_value_date),
         }
     }
