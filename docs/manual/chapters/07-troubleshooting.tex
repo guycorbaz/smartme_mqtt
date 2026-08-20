@@ -39,6 +39,165 @@ Clear the topic in the SCADA host's tag tree as well if it has already persisted
 The host's tag either disappears with the folder clean-up or stops being re-created after a
 host restart.
 
-\stub{at least eight failure modes — meter silent, auth 401, rate-limit 429, broker
-unreachable, single-meter vs global, priority-Kamstrup partial, stale-but-alive,
-clock/DST, Docker restart/retain — authored as the corresponding behaviour is implemented.}
+\section{One meter is silent while the others publish}
+\label{sec:trouble-one-meter}
+
+\paragraph{Symptom.} The host shows every meter updating but one. That one is either dead
+(\code{DDEATH}) or publishing a quality that is not \emph{Good}.
+
+\paragraph{Cause.} Per-meter isolation, working as designed: each meter has its own poll task,
+so one failing source cannot silence the fleet. \code{/meters} names which meter and why.
+
+\paragraph{Action.} Open \code{/meters} and read that row's \emph{Published as} and
+\emph{Whose fault} columns. The gesture printed there is the repair, and it is written per
+cause: a rejected credential, a device the account does not have, and a serial that does not
+match are three different repairs. If the row says \emph{world}, there is nothing here to fix
+--- see \S\ref{sec:trouble-stale-alive}.
+
+\paragraph{Confirmation.} The row's \emph{Published as} returns to \code{Good} and
+\emph{Last changed} starts moving again. On the host, the device publishes a \code{DBIRTH} and
+resumes.
+
+\section{Every meter fails at once, with \emph{credential-rejected}}
+\label{sec:trouble-401}
+
+\paragraph{Symptom.} All meters go to \code{Bad}, the cause on every one is
+\code{credential-rejected}, and nothing recovers on its own.
+
+\paragraph{Cause.} smart-me answered 401. The credential is wrong, expired or revoked. This is
+a \emph{latching} fault: \prog does not retry it, because retrying an authentication that was
+refused is how an account gets locked --- and because a value published after a refusal would
+have no reading behind it.
+
+\paragraph{Action.} Set \code{SMARTME\_CLIENT\_ID} and \code{SMARTME\_CLIENT\_SECRET} where
+the container reads them --- the \code{.env} beside \code{docker-compose.yml} --- and restart:
+\code{docker compose up -d}. \textbf{There is no field for this on any screen}, and the
+absence is deliberate.
+
+\paragraph{Confirmation.} \code{/healthz} shows an empty \code{failed\_sources}, and
+\code{/meters} shows values with \code{Good} beside them. \code{/check} on any meter reports
+the source answering, with a time.
+
+\section{\emph{source-rate-limited}: smart-me asked us to wait}
+\label{sec:trouble-429}
+
+\paragraph{Symptom.} Meters go \code{Stale} with the cause \code{source-rate-limited}, and
+recover by themselves after a while.
+
+\paragraph{Cause.} smart-me answered 429 and, usually, said for how long. \prog waits that
+long before asking again --- capped, so a hostile or mistaken value cannot park a meter for
+hours.
+
+\paragraph{Action.} Nothing, if it clears. If it repeats: raise \code{publish\_period\_secs}.
+Four meters at 30\,s is eight requests a minute against one account, and the period is the only
+knob that changes that. Do not use the end-to-end check as a monitoring loop; it asks smart-me
+too, and refuses to run more than once a poll period per meter for this reason.
+
+\paragraph{Confirmation.} The cause disappears from \code{/meters} and from
+\code{degraded\_meters} in \code{/healthz}, and \emph{Last changed} moves again.
+
+\section{The broker is unreachable}
+\label{sec:trouble-broker}
+
+\paragraph{Symptom.} The host stops receiving anything --- every device eventually shows as
+dead --- while \prog's own screens keep showing fresh readings.
+
+\paragraph{Cause.} The sink, not the source. \prog is reading the meters and judging them
+normally; what has stopped is delivery. The broker line at the top of \code{/meters} and on the
+state screen says \emph{unreachable since} a named instant.
+
+\paragraph{Action.} Check the broker itself, then \code{broker\_host} and
+\code{broker\_port} in the configuration. \textbf{Do not restart the bridge to fix this}: it
+repairs nothing and it destroys every meter's Sparkplug session, which the host then has to
+rediscover.
+
+\paragraph{Confirmation.} The broker line reads \emph{connected}, and \code{sink\_connected}
+is \code{true} in \code{/healthz}. On the host, every device publishes a \code{DBIRTH} and
+resumes. \code{dropped\_readings} in \code{/healthz} tells you how many readings the outage
+cost --- they are counted, never invented.
+
+\begin{note}
+\textbf{The container stays \emph{healthy} throughout, on purpose.} The health status turns
+unhealthy for one fault only: a publishing bridge whose poll loop has stopped ticking. An
+unreachable broker is an honest silence, and restarting the container would make it worse.
+\end{note}
+
+\section{The value is old, and everything says it is running}
+\label{sec:trouble-stale-alive}
+
+\paragraph{Symptom.} The host shows a value that has not changed for a long time, and \prog
+reports itself as running. Nothing is obviously broken.
+
+\paragraph{Cause.} This is the failure this whole project exists to make visible, and there are
+two kinds. Either the \textbf{source} has stopped producing new readings --- the account
+answers, with the same measurement every time --- or the reading is now older than the
+staleness threshold and \prog is publishing it \emph{marked} rather than as current.
+
+\paragraph{Action.} Open \code{/meters} and compare two columns: \emph{Reading age} and
+\emph{Last published}. A recent publication beside an old reading age is a meter that has
+stopped measuring --- the meter or its smart-me module, not this bridge and not the broker.
+\emph{Last changed} says when it last moved.
+
+\paragraph{Confirmation.} There is nothing here to repair from this side, and the confirmation
+is negative: the quality on the wire is \emph{not} \code{Good}, so the host is being told the
+value is not current. \textbf{That is the bridge working.} A meter reporting a stale value as
+fresh would be the defect.
+
+\section{Restarting the container, and what the host sees}
+\label{sec:trouble-restart}
+
+\paragraph{Symptom.} After a restart or an update, the host briefly shows every device as
+dead, then rediscovers them.
+
+\paragraph{Cause.} Sparkplug's own lifecycle. \prog opens a new session, which means a new
+birth sequence; the will registered with the broker announces the old session's death. The
+host is doing exactly what the protocol asks of it.
+
+\paragraph{Action.} Wait one poll period. If devices stay dead: the birth did not arrive, so
+look at the broker rather than at the bridge --- \S\ref{sec:trouble-broker}.
+
+\paragraph{Confirmation.} Each device shows a \code{DBIRTH} and then values with \code{Good}
+beside them. \prog's state screen shows the version and contract at the foot: \textbf{that is
+where you confirm which image is actually running} after an update.
+
+\begin{note}
+\textbf{\prog publishes nothing retained}, so a restart leaves no stale value behind on the
+broker. A value that survives a restart on a topic nothing publishes is a ghost from something
+else --- \S\ref{sec:trouble-retained-ghost}.
+\end{note}
+
+\section{Clocks, time zones and the hour that repeats}
+\label{sec:trouble-clock}
+
+\paragraph{Symptom.} Readings are refused with \code{host-clock-unsynced},
+\code{timestamps-disagree} or \code{source-clock-implausible}; or a value's timestamp in the
+historian is an hour away from where you expect it.
+
+\paragraph{Cause.} \prog is UTC end to end and has no time zone at all: every timestamp on the
+wire is the measurement's own instant, in UTC. A displayed hour that looks wrong is the host's
+time zone, not the bridge's. What \prog \emph{does} judge is agreement: if this host's clock
+and the account's disagree beyond tolerance, no freshness judgement means anything, so the
+reading is refused rather than published with a plausible age.
+
+\paragraph{Action.} Fix the clock on the machine running the container --- NTP on the host,
+not anything in here. For a display that is an hour out, check the SCADA host's time zone
+settings; nothing in this bridge can produce a local time.
+
+\paragraph{Confirmation.} The cause disappears from \code{/meters}. A daylight-saving
+transition changes nothing at all: UTC has no such transition, which is why it was chosen.
+
+\section{The meters that matter are the affected ones}
+\label{sec:trouble-priority}
+
+\paragraph{Symptom.} Several meters are in trouble at once, and the question is whether the
+ones you care about are among them.
+
+\paragraph{Cause.} Not a fault of its own --- an orientation problem during one.
+
+\paragraph{Action.} The state screen's context line counts how many meters are marked as
+mattering, and \code{/meters} shows every row's state on one page. If none of your meters is
+marked, mark them: \S\ref{sec:confirmscreen}'s screen carries the tick, and marking one
+changes nothing about what is published.
+
+\paragraph{Confirmation.} The context line reads, for example, \emph{4 meters, 2 of them
+marked as mattering}, and the rows for those two show \code{Good}.

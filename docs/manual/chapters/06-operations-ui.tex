@@ -140,14 +140,105 @@ test --- is allowed: it is not a browser, and refusing it would break the headle
 while stopping no attack. See
 \code{docs/adr/0024-the-config-ui-refuses-submissions-from-other-origins.md}.
 
-\section{What is not here yet}
+\section{The meter view: what each meter is doing}
 
-\stub{per-meter live values, dual source/sink health, the ``state of the bridge''
-orientation screen, culprit classification and on-demand end-to-end validation are later
-stories in this epic. Today the interface configures the bridge and reports which state it
-is in; it does not yet show what the meters are reading.}
+\code{/meters} is one row per meter and nine columns, and it is the page to open when
+something is wrong with a meter rather than with the bridge. The columns are, in order:
+
+\begin{center}
+\begin{tabular}{@{}>{\bfseries}l p{9.2cm}@{}}
+\toprule
+\normalfont\textbf{Column} & \textbf{What it says} \\
+\midrule
+Meter & the logical name, the one that appears in the Sparkplug metric path \\
+Serial & the serial from your configuration --- and \emph{no topic is shown without one} \\
+Topic & built by the publisher's own code path, so it is the topic the bridge would really
+publish on; never spelled out by the page \\
+Power, Energy & the last values published, or \code{---}. \textbf{A dash is not a zero}: a
+value nobody has published is absent, and a \code{0.000 kW} would be a measurement \\
+Reading age & how old the \emph{measurement} is, with the staleness threshold it was judged
+against --- e.g.\ \emph{4 minutes ago (stale past 90 s)} \\
+Published as & the quality on the wire, with its cause: \code{Bad (credential-rejected)} \\
+Last published & every cycle, because \prog publishes a verdict every cycle \\
+Last changed & when the meter last measured something \emph{new} \\
+Whose fault & \emph{world}, \emph{you} or \emph{bridge}, and the one thing to do about it \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{note}
+\textbf{The pair to read together is \emph{last published} and \emph{last changed}.} A meter
+that publishes every ten seconds and last changed an hour ago has stopped measuring; the
+bridge has not stopped publishing. Without the pair the two are indistinguishable, because
+\prog republishes a verdict on every cycle by design.
+\end{note}
+
+\section{Two healths, and which end to look at}
+
+Above the table, one line reports the \textbf{broker}: connected, never connected since this
+bridge started, or unreachable since a named instant. It appears on the state screen as well,
+in the same words --- a broker that is unreachable and a source that answers nothing produce
+the same silence on the wire and call for opposite gestures.
+
+\begin{note}
+\textbf{An unreachable broker is not a bridge fault, and the page says so.} Readings are still
+judged and their verdicts still stand; what stops is delivery. Restarting \prog repairs nothing
+--- which is also why the health endpoint stays \code{200} through it (\S\ref{sec:healthz}).
+\end{note}
+
+\section{Whose fault, and what to do about it}
+
+Every fault carries a \textbf{culprit} --- \emph{world}, \emph{you}, \emph{bridge} --- and
+the gesture that cause asks for. The three culprits answer \emph{who can repair this}; the
+gesture answers \emph{what to do}, and it is written per cause rather than per culprit. A
+rejected credential says to set \code{SMARTME\_CLIENT\_ID} and
+\code{SMARTME\_CLIENT\_SECRET} and restart; a serial that does not match says to open the
+configuration and compare that row against the account. They are different repairs and they
+read differently.
+
+\begin{note}
+\textbf{No cause ever accuses the bridge.} The oracles judge \emph{readings}, and a reading is
+never \prog's fault. \emph{bridge} appears only when \prog lost a reading it had already
+accepted --- a full outbox, a refused publish --- and then the gesture is to read the log and
+report it.
+\end{note}
+
+\section{Checking one meter end to end}
+
+\code{/check} asks smart-me for one meter \emph{now} and shows three links beside each other:
+
+\begin{enumerate}
+  \item \textbf{the source} --- a real request, with how long it took, and the numbers the
+        account returned. They are shown unconverted and unjudged, and the page says so.
+  \item \textbf{the value} --- what \prog is publishing for that meter right now, judged at
+        its own last tick.
+  \item \textbf{the sink} --- whether the broker is reachable, and what this meter has lost.
+\end{enumerate}
+
+\begin{warning}
+\textbf{The check publishes nothing, and this is deliberate.} A test value on the wire would be
+indistinguishable, in your historian, from a measurement. The third link therefore reports the
+broker's \emph{observed} state rather than proving it with a message nobody asked for.
+\end{warning}
+
+\begin{note}
+\textbf{The first two links can disagree, and the disagreement is the useful part.} A source
+that answers while \prog still publishes a fault is a meter latched by something that already
+happened --- and the fault names what clears it. The check does not re-judge the reading it
+fetches: the freshness and counter oracles judge against a per-meter memory, and a button that
+moved it would change what the \emph{next} real cycle publishes.
+\end{note}
+
+\section{The configuration context line}
+
+The state screen carries one auto-written line: when this configuration was created, when it
+last changed, how many meters it serves and how many of them you marked as mattering. A
+configuration written before \prog recorded those dates says \emph{unknown} rather than
+showing the file's modification time --- which a \code{docker cp}, a restore or a \code{touch}
+would move, and which would then be a plausible date that is nobody's change.
 
 \section{The health endpoint}
+\label{sec:healthz}
 
 \code{GET /healthz} is the machine-facing answer and is described with the rest of
 diagnosis in chapter~\ref{ch:trouble}. The short version: the \emph{status code} answers

@@ -2683,5 +2683,12 @@ development_status:
   # the ADR trail is at 28 rather than the 8 this epic's description still names.
   # An epic whose work is happening without stories cannot be said to be at
   # `backlog` honestly — but it can be said to be listed.
-  epic-8: backlog
+  epic-8: in-progress
+  # 2026-08-20, WRITTEN AND IMPLEMENTED. EIGHT `\stub{}` MARKS STOOD IN THE MANUAL AND
+  # FOUR WERE OVERDUE: three said "once Epic 6 exists" and one "authored in Epic 7", and
+  # both epics closed the same day without paying them. No retrospective saw it, because
+  # nobody re-reads the manual when an epic closes. All eight are now written — none
+  # re-dated — and a test reads every route the manual names against every `.route(` the
+  # UI registers, because a manual is the one artefact whose defects no compiler catches.
+  8-1-the-manual-honours-its-promises: review  # implemented 2026-08-20; FR41, FR42, NFR23, AR20
   epic-8-retrospective: required  # added 2026-08-10 — the line was absent entirely

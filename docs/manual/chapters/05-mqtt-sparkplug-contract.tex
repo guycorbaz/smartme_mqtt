@@ -646,5 +646,75 @@ The two mechanisms are complementary rather than alternative: the will remains t
         and remains TLS-only.
 \end{itemize}
 
-\stub{the closed meter/metric lists and the formal \code{CONTRACT\_VERSION} governance
-procedure, once multi-meter support lands in a later epic.}
+\section{The closed metric list}
+\label{sec:metriclist}
+
+\textbf{Two metrics, per device, and no others.} \prog publishes exactly:
+
+\begin{center}
+\begin{tabular}{@{}>{\ttfamily}l l l@{}}
+\toprule
+\normalfont\textbf{Metric} & \textbf{Type} & \textbf{Unit, declared in the BIRTH} \\
+\midrule
+Power  & \code{Double} & kW \\
+Energy & \code{Double} & kWh \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The list is closed in the strong sense: it is two constants in the publisher, and adding a
+third would change what a host discovers at birth --- a contract change, governed by the
+section below. \textbf{Both are 64-bit doubles}, including the cumulative energy counter: a
+32-bit float loses whole kilowatt-hours once a counter passes a few million, silently.
+
+\textbf{The device list is your configuration}, one Sparkplug device per enabled meter, keyed
+by serial (\S\ref{sec:mappingscheme}). Disabling a meter publishes a \code{DDEATH} for it;
+enabling one publishes a \code{DBIRTH}. Nothing appears on the wire that is not a meter you
+configured and confirmed.
+
+\begin{note}
+\textbf{A metric whose quality is not \emph{Good} carries its cause}, from a closed vocabulary
+of twenty-one. That vocabulary is \emph{part of the contract}: a consumer reads it off the
+metric, so adding a cause is a contract change and the golden test refuses one that arrives
+without a version bump.
+\end{note}
+
+\section{How \code{CONTRACT\_VERSION} is governed}
+\label{sec:contractgovernance}
+
+\code{CONTRACT\_VERSION} is a single integer published in every BIRTH. It answers one question
+for a consumer: \emph{may what I stored yesterday be compared with what arrives today?}
+
+\textbf{It is bumped whenever the answer is no.} In practice:
+
+\begin{center}
+\begin{tabular}{@{}p{5.6cm} l p{4.6cm}@{}}
+\toprule
+\textbf{Change} & \textbf{Bump?} & \textbf{Why} \\
+\midrule
+A metric added or removed & \textbf{yes} & what a host discovers at birth changes \\
+A unit changed & \textbf{yes} & every stored point means something else \\
+A cause added to the vocabulary & \textbf{yes} & a consumer reads causes off degraded metrics \\
+The meaning of a published value changed --- including a \emph{correction} & \textbf{yes} & a
+correction that alters what a stored point means is still breaking. Calling it additive
+because the new behaviour is better is how a consumer gets surprised \\
+A new optional field a consumer can ignore & no & nothing already stored changes meaning \\
+Anything that never reaches the wire --- screens, logs, the configuration file & no & the
+contract is what is published \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{note}
+\textbf{The rule is enforced by a test, not by discipline.} \code{contract\_golden} holds a
+recorded shape of the published contract, cause vocabulary included, and fails when the live
+one differs from the golden for the declared version. It has caught a bump that was owed
+before any human noticed --- which is the only reason to write a governance section at all: a
+procedure nothing enforces is a paragraph.
+\end{note}
+
+\begin{warning}
+\textbf{The version is not the software's version.} \prog's release number moves with every
+change; \code{CONTRACT\_VERSION} moves only when what is on the wire stops being comparable.
+Several releases share one contract version, and that is the point of having two numbers.
+\end{warning}

@@ -11,6 +11,32 @@
   \item[STALE] A quality flag telling the SCADA a value can no longer be trusted as fresh.
   \item[\texttt{bdSeq}] The Sparkplug birth/death sequence number, persisted across restarts.
   \item[CONTRACT\_VERSION] The version of the MQTT/Sparkplug contract embedded in the payload.
-\end{description}
+\item[Traced drop] A reading \prog accepted and then could not deliver --- a full outbox, a
+  refused publish, a broker that went away mid-flight. It is \textbf{counted, by meter and by
+  reason}, and reported on \code{/healthz} and on the meter page. The name is the rule: \prog
+  may lose a reading, and may never lose one silently.
 
-\stub{additional terms (traced-drop, re-arm, culprit classification) as they appear.}
+\item[Culprit] Whose fault a fault is: \textbf{world}, \textbf{you} or \textbf{bridge}. It
+  answers \emph{who can repair this} and travels with the gesture that \emph{this} cause asks
+  for. No cause the oracles produce ever accuses the bridge --- they judge readings, and a
+  reading is never \prog's fault; \emph{bridge} appears only for a traced drop.
+
+\item[Latched fault] A fault \prog does not retry, because retrying would lie: a refused
+  credential, a device the account does not have, a serial that is not the one the device
+  reports. The meter stays refused until the configuration or the credential changes and the
+  bridge restarts. The alternative --- retrying quietly --- publishes nothing while looking
+  like a transient outage.
+
+\item[Re-arm] Restoring a guard to its ready state after it has fired, so that the next
+  occurrence is caught rather than swallowed by the first. Used of the staleness watch and of
+  the rate-limit wait.
+
+\item[Reading age] How old a \emph{measurement} is, as against how long ago \prog last
+  published it. \prog publishes a verdict every cycle, so a fresh publication instant beside an
+  old reading age is a meter that has stopped measuring --- the pair is what makes the two
+  distinguishable at all.
+
+\item[Priority meter] A meter you marked as one that matters. It changes nothing about what is
+  published; it is counted on the state screen so that, during an incident, whether the meters
+  you mind about are affected is one glance rather than an inventory.
+\end{description}

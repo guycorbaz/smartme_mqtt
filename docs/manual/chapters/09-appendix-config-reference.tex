@@ -114,5 +114,54 @@ section~\ref{sec:configfile}.
 Whether a setting can be adopted without restarting anything, and what a SCADA host sees
 when it is: table~\ref{tab:changecost}, section~\ref{sec:changecost}.
 
-\stub{the UI bind address and the meter-to-topic mapping scheme, once Epic~6 documents
-them.}
+\section{Where the web UI listens}
+
+\prog binds \textbf{all interfaces} on \code{ui\_port} inside the container, and the container
+publishes \emph{no host port}: Traefik reaches it over a shared Docker network and is the only
+thing that can. There is no authentication on the interface, deliberately --- see
+\code{docs/adr/0019-no-auth-on-the-config-ui-secrets-are-write-only.md} --- which is exactly
+why the port is not exposed to the host by default.
+
+Resolution order, and it is the same order the container's own healthcheck uses:
+
+\begin{enumerate}
+  \item \code{ui\_port} in \code{config.toml}, when there is a file --- your choice, and it
+        always wins;
+  \item otherwise \code{SMARTME\_UI\_PORT} from the environment, for the first run, which has
+        no file to read a port from;
+  \item otherwise \code{8080}.
+\end{enumerate}
+
+A value below 1024 is refused rather than silently replaced: \prog runs unprivileged and could
+never bind it, and since this screen is the only place the value can be changed, accepting it
+would remove the only way to undo it.
+
+\section{How a meter becomes a topic}
+\label{sec:mappingscheme}
+
+Three settings decide every topic \prog publishes, and none of them is invented at publish
+time:
+
+\begin{center}
+\begin{tabular}{@{}>{\ttfamily}l l@{}}
+\toprule
+\normalfont\textbf{Setting} & \textbf{Where it lands} \\
+\midrule
+group\_id & the Sparkplug group --- second level of every topic \\
+node\_id & this bridge, as one edge node --- fourth level \\
+meters[].serial & the \emph{device} level, one per meter \\
+meters[].meter\_id & the metric path a SCADA host displays \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+So a meter reads \code{spBv1.0/\textit{group}/DDATA/\textit{node}/\textit{serial}}, and the values
+inside it are named by \code{meter\_id}. \textbf{The serial is the device identity on the
+wire, and the meter id is the human name} --- which is why changing a serial costs a restart
+and changing a meter id does not change what device the value came from.
+
+\begin{note}
+A serial that cannot be a topic level is refused at validation, not at publish time: a topic
+the grammar forbids would otherwise silence that meter with the configuration screen still
+reporting it as saved.
+\end{note}

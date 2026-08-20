@@ -599,7 +599,55 @@ correcting a serial requires a restart anyway (see the change-cost table above),
 refusal and the repair ask for the same thing.
 \end{note}
 
-\stub{the editing screen and the first-run mapping confirmation, once Epic~6 exists.}
+\section{Editing it in the browser}
+
+Everything above can be typed into the file by hand, and everything above is also a field on
+\code{/config}. The screen writes the same file, through the same validation: a submission that
+would produce a configuration \prog cannot use is refused \emph{with every fault named beside
+its own field}, and nothing is written.
+
+\begin{note}
+\textbf{There is no credential field, and its absence is the design.} \code{SMARTME\_CLIENT\_ID}
+and \code{SMARTME\_CLIENT\_SECRET} live in the environment; a field that never renders is a
+field that can still be posted to, and the strongest form of \emph{never rendered} is
+\emph{never present}.
+\end{note}
+
+\textbf{The account's meters can be loaded into the form.} \emph{Load the account's meters}
+asks smart-me at the \textbf{saved} API base --- not one typed above and not yet saved --- and
+lists what the account has. Picking one fills the device id \emph{and} the serial together,
+because those two are the pair \prog verifies on every fetch, and a transcription error in
+either is the commonest way to point a meter at the wrong device. Picking saves nothing and
+publishes nothing.
+
+\textbf{Meters you care about can be marked.} A tick beside a meter records that it is one of
+yours that matters; it changes nothing about what is published, and it is counted on the state
+screen so that during an incident you can see at a glance whether the affected meters are the
+ones you mind about. \prog cannot deduce this: smart-me reports an id, a name, a serial and two
+numbers --- no make, no model.
+
+\section{The first run: nothing is published until you confirm}
+\label{sec:confirmscreen}
+
+A configuration that is merely valid is not one a human has looked at. On a first run --- and
+after any edit that changes what would be published --- \prog opens \textbf{no MQTT session at
+all} until the mapping is confirmed: no connection, no birth, nothing on the broker.
+
+The confirmation screen shows, for every meter, \textbf{the exact topic it would publish on},
+built by the publisher's own code rather than spelled out by the page. What you are confirming
+is that each logical name points at the device you think it does.
+
+\begin{note}
+\textbf{The click carries a fingerprint of the mapping it saw.} If the file changes between the
+screen rendering and your clicking --- another window, a hand edit --- the confirmation is
+refused rather than applied to a mapping nobody reviewed.
+\end{note}
+
+\begin{note}
+\textbf{Editing the mapping withdraws the confirmation automatically}, and so does editing
+\code{group\_id} or \code{node\_id}, which appear in every topic. Editing anything else does
+not: changing the broker port or the log retention is not a claim about which meter is which.
+\end{note}
 
 \section{Poll interval, logging, and retention}
 

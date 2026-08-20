@@ -68,5 +68,59 @@ The MQTT event loop is polled in a task of its own rather than as a branch of a
 connect can abandon a half-finished CONNECT \emph{after} the broker has registered the
 will, which then fires against a node that never birthed.
 
-\stub{the rendered data-flow figure (currently described in prose above), once the
-diagram toolchain is settled.}
+\section{The data flow, and where it can fail}
+\label{sec:dataflow}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=6mm,
+  box/.style={draw, rounded corners=2pt, align=center, inner sep=4pt, minimum height=8mm,
+              font=\small},
+  ext/.style={box, fill=black!4},
+  flow/.style={-{Latex[length=2mm]}, thick},
+  fail/.style={font=\scriptsize\itshape, align=left, text=black!65},
+]
+  \node[ext] (meter)  {the meter\\\scriptsize(Kamstrup, Telstar)};
+  \node[ext, right=10mm of meter] (cloud) {smart-me\\cloud};
+  \node[box, right=10mm of cloud] (poll)  {poll task\\\scriptsize one per meter};
+  \node[box, below=8mm of poll] (oracle) {oracles\\\scriptsize pure judgement};
+  \node[box, right=10mm of poll] (pub)   {publisher\\\scriptsize Sparkplug B};
+  \node[ext, below=8mm of pub] (broker) {broker};
+  \node[ext, below=8mm of broker] (scada) {Ignition};
+
+  \draw[flow] (meter) -- (cloud);
+  \draw[flow] (cloud) -- (poll);
+  \draw[flow] (poll)  -- (oracle);
+  \draw[flow] (oracle.east) -- ++(6mm,0) |- (pub.west);
+  \draw[flow] (pub)   -- (broker);
+  \draw[flow] (broker) -- (scada);
+
+  \node[fail, below=2mm of meter.south] {stops measuring\\$\rightarrow$ \textsc{stale},\\
+    \emph{feed-not-advancing}};
+  \node[fail, below=2mm of cloud.south] {401 $\rightarrow$ latched\\429 $\rightarrow$ waits\\
+    5xx/timeout $\rightarrow$ \textsc{stale}};
+  \node[fail, right=2mm of oracle.east, yshift=-7mm] {refuses a reading\\it cannot vouch for};
+  \node[fail, right=3mm of broker.east] {unreachable $\rightarrow$\\traced drop, never\\
+    a silent loss};
+\end{tikzpicture}
+\caption{From meter to SCADA, with what each link does when it fails. Nothing that fails is
+allowed to look like something that worked.}
+\label{fig:dataflow}
+\end{figure}
+
+\textbf{Read the figure by its failure captions rather than its arrows.} The arrows are what
+every such diagram has; what distinguishes this bridge is the second row --- each link, when it
+breaks, produces a \emph{marked} outcome rather than a missing one. A meter that stops
+measuring produces a stale value carrying its cause, not a gap. A cloud that refuses the
+credential latches instead of retrying quietly. A broker that goes away produces a counted drop
+rather than a reading nobody knows was lost.
+
+\begin{note}
+\textbf{The oracles sit off the main line on purpose.} They are pure: no clock of their own, no
+network, no \code{async}. Everything they need arrives as an argument, which is what makes a
+freshness verdict reproducible from a test rather than dependent on when it ran. The rule is enforced
+mechanically: an architecture test refuses any \code{tokio}, \code{axum}, \code{reqwest} or
+\code{rumqttc} import inside \code{core/} and \code{domain/}, so no truth can be decided
+inside an \code{async fn}.
+\end{note}

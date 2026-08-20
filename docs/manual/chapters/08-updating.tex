@@ -1,5 +1,101 @@
 \chapter{Updating the bridge}
 \label{ch:update}
 
-\stub{the image-based update procedure (\code{docker compose pull \&\& up -d}), the
-rollback point, and the post-update verification signal — authored in Epic~7.}
+An update is one gesture: a new image on the same volume. \prog keeps everything it needs in
+the state directory --- \code{config.toml} and \code{bdseq.toml} --- and the container itself
+holds nothing you would miss. What follows is the procedure, the point you can go back to, and
+what to look at afterwards to know it worked.
+
+\section{The procedure}
+
+\code{docker-compose.yml} pins an exact image, deliberately: \code{latest} would swap the
+bridge at whatever hour a pull happened to run. Updating is therefore \emph{editing that line},
+not merely pulling.
+
+\begin{lstlisting}
+# 1. Note where you are. This is the rollback point.
+docker compose config | grep image:
+
+# 2. Edit docker-compose.yml: image: docker.io/gcorbaz/smartme_mqtt:<new tag>
+
+# 3. Pull and restart. `up -d` recreates the container; the volume is untouched.
+docker compose pull
+docker compose up -d
+
+# 4. Watch it come back.
+docker compose logs -f --tail=50
+\end{lstlisting}
+
+\begin{note}
+\textbf{The volume is what carries your configuration across the update}, and nothing else. A
+new container reads the same \code{config.toml}, finds the mapping already confirmed, and
+starts publishing without asking you anything. That is asserted against the real image on every
+CI run: a container is configured through its own screens, removed, and a \emph{second}
+container is started on the same volume --- it must come up publishing and must not rewrite the
+file.
+\end{note}
+
+\section{The rollback point, and its one trap}
+
+The rollback point is \textbf{the image tag you were running}, which step~1 above writes down.
+Going back is the same gesture with the old tag:
+
+\begin{lstlisting}
+# Put the previous tag back in docker-compose.yml, then:
+docker compose pull
+docker compose up -d
+\end{lstlisting}
+
+\begin{warning}
+\textbf{A configuration written by a newer \prog is refused by an older one, and this is the
+trap to know before you need it.} \code{config.toml} carries a \code{schema\_version}. A newer
+build may add keys; an older build refuses a file whose version it does not recognise, rather
+than reading it by guesswork and starting on settings nobody wrote. So a rollback \emph{across
+a schema change} leaves you with a bridge that starts, serves its web UI, and refuses to
+publish until the configuration is re-entered.
+
+\textbf{What to do about it:} before an update that changes the schema, copy the state
+directory. \code{cp -a ./data ./data.bak} costs nothing and is the only thing that makes the
+rollback complete rather than partial.
+
+The schema version is printed in the file itself, and \S\ref{sec:changecost} lists which
+versions this build reads.
+\end{warning}
+
+\section{Verifying the update}
+
+Three signals, in the order they become available. \textbf{Each says something different}, and
+the first two can be true while the third is not.
+
+\begin{center}
+\begin{tabular}{@{}>{\bfseries}l p{8.6cm}@{}}
+\toprule
+\normalfont\textbf{Signal} & \textbf{What it proves, and what it does not} \\
+\midrule
+\code{docker ps} & the container is up and its health is \emph{healthy}. This proves the
+process runs and its poll loop is ticking --- \emph{not} that anything reaches your broker \\
+\code{/healthz} & \code{"status":"running"}, plus \code{sink\_connected}, the failed sources,
+the degraded meters and the dropped readings. This is the machine-facing answer, and the
+sink line is the one the health status deliberately ignores \\
+The state screen & the version and contract at the foot of the page --- \textbf{this is where
+you confirm the new image is the one running} --- and the per-meter table showing fresh
+publications \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{note}
+\textbf{An unreachable broker will not make the container unhealthy, and that is on purpose.}
+The health status turns unhealthy for exactly one fault: a publishing bridge whose poll loop
+has stopped ticking, which a restart repairs. A broker outage, a refused credential and a
+frozen meter are all reported in the body of \code{/healthz} and on the screens, and none of
+them restarts the container --- restarting would destroy every meter's Sparkplug session and
+repair nothing.
+\end{note}
+
+\begin{note}
+\textbf{The one thing to check on the SCADA side} is that each device came back with a
+\code{DBIRTH} and is publishing again. \prog opens a new session on every start, so the host
+sees a death and a birth; a host that shows a device still dead a minute after the update has
+not received the birth, and the broker is where to look.
+\end{note}
