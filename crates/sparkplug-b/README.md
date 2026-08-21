@@ -8,18 +8,43 @@ republishes smart-me energy meters to a SCADA host, and it is kept separate for 
 lifecycle rules are the specification's, not that bridge's.
 
 ```rust
-use sparkplug_b::{EdgeNode, MessageType, Metric, MetricValue, NodeSession, Quality};
+use sparkplug_b::{
+    BdSeq, EdgeNode, MessageType, Metric, MetricValue, NodeSession, Quality, encode,
+};
 
-let node = EdgeNode::new("Plant", "Bridge01")?;
-let topic = node.device_topic(MessageType::DData, "9202685")?;
+fn main() -> Result<(), sparkplug_b::TopicError> {
+    let node = EdgeNode::new("Plant", "Bridge01")?;
+    let topic = node.device_topic(MessageType::DBirth, "9202685")?;
+    assert_eq!(topic, "spBv1.0/Plant/DBIRTH/Bridge01/9202685");
 
-let session = NodeSession::new(/* bdSeq */ 0.into());
-let (mut live, birth) = session.birth(1_724_000_000_000, vec![
-    Metric::new("Power", MetricValue::Double(0.42)).with_quality(Quality::Good),
-]);
-let bytes = sparkplug_b::encode(&birth);
-# Ok::<(), sparkplug_b::TopicError>(())
+    // A node that has never connected starts from the sentinel. After a restart it
+    // passes back the bdSeq it persisted, so the sequence continues instead of
+    // replaying a number the host has already seen.
+    let session = NodeSession::start(BdSeq::before_first());
+
+    // The will is built FIRST: it is registered with the broker before connecting,
+    // and it carries no seq — the broker publishes it at a moment this node cannot
+    // number.
+    let will = session.will(1_700_000_000_000);
+    assert_eq!(will.seq, None);
+
+    let energy = Metric::new("Energy", MetricValue::Double(4_843.822), 1_700_000_000_000)
+        .with_quality(Quality::Good)
+        .with_engineering_unit("kWh");
+    let (mut live, birth) = session.birth(1_700_000_000_000, vec![energy]);
+    assert_eq!(birth.seq, Some(0));
+
+    let bytes = encode(&birth);
+    assert!(!bytes.is_empty());
+
+    // Later readings go out on the open session, which carries the seq forward.
+    let _reading = live.data(1_700_000_060_000, vec![]);
+    Ok(())
+}
 ```
+
+*This example is compiled and run by the crate's test suite — see `src/lib.rs`. It was not,
+until 2026-08-21, and it did not compile.*
 
 ## What it does
 

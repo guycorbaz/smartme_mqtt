@@ -24,6 +24,10 @@ semantic versioning as far as the shared version number allows.
 
 - `README.md` and this file, and the crate metadata crates.io requires — the publication bar
   NFR19 describes. Publication itself remains deferred (issue #3).
+- **The README's example is compiled and run by `cargo test`**, through a `cfg(doctest)` hook in
+  `src/lib.rs`. Its first draft did not compile — it named a constructor this crate does not
+  have — and nothing read it, a README being a file rather than a module. The example on the
+  front page is now the one piece of documentation that cannot go stale in silence.
 
 ## Earlier versions
 

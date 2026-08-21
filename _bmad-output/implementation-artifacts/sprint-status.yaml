@@ -62,7 +62,7 @@
 #   Ignition contract test (human action required — stays backlog until Guy runs it).
 
 generated: 2026-07-25
-last_updated: 2026-08-20
+last_updated: 2026-08-21
 project: smartme_mqtt
 project_key: NOKEY
 tracking_system: file-system
@@ -2705,7 +2705,7 @@ development_status:
   # declared public dependency there and the README says so rather than leaving it to
   # be discovered from a compiler error. `cargo publish --dry-run` is the arbiter of
   # AC2, not my reading of crates.io's rules. Publication itself stays deferred [#3].
-  8-2-the-crate-publication-bar: review  # implemented 2026-08-20; NFR19, AR21
+  8-2-the-crate-publication-bar: done  # closed 2026-08-21 after review; AC2 and AC4 held, AC1/AC3/AC5 did not — the guard caught one shape and the README example did not compile, both repaired at the mechanism
   # 2026-08-20, WRITTEN AND WAITING FOR A LIVE IGNITION. The last thing the project
   # owes and the only one that cannot be done alone: the contract has been attested
   # ONCE, on 2026-08-03, at CONTRACT_VERSION 3, and the bridge emits 10. Four epics

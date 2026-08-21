@@ -91,3 +91,18 @@ pub use topic::{EdgeNode, MessageType, NAMESPACE, TopicError};
 pub mod protobuf {
     include!(concat!(env!("OUT_DIR"), "/org.eclipse.tahu.protobuf.rs"));
 }
+
+/// The README's example, compiled and run with the crate's doctests.
+///
+/// **Story 8.2's review, 2026-08-21.** The README shipped an example that called a
+/// constructor this crate does not have (`NodeSession::new`) and passed two of
+/// `Metric::new`'s three arguments. It was the crate's front page on crates.io and
+/// the one piece of code here that nothing compiled — the README is a file, not a
+/// module, so `cargo test` never saw it.
+///
+/// `cfg(doctest)` means this item exists only while the doctests are being
+/// collected, so the README's prose is not also duplicated into the rendered
+/// documentation above.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct Readme;
