@@ -57,13 +57,18 @@ attests to an artifact state that no longer exists — see the drift note under 
 
 ```bash
 SPARKPLUG_CONTRACT_BROKER=<host>:1883 \
-SPARKPLUG_CONTRACT_GROUP=ContractV6 \
+SPARKPLUG_CONTRACT_GROUP=ContractV10 \
   cargo test -p smartme-bridge --test ignition_contract -- --ignored --nocapture
 ```
 
-> **Name the group after the contract you are attesting to.** `ContractV3` was the 2026-08-03 run;
-> reusing it would put two contracts' evidence in one Ignition folder, and the tag tree outlives
-> the test.
+> **Name the group after the contract you are attesting to, and NEVER REUSE ONE.** `ContractV3`
+> was the 2026-08-03 run, `ContractV10` the 2026-08-21 one; reusing a name puts two attestations'
+> evidence in one Ignition folder, and the tag tree outlives the test.
+>
+> **A second pass on the same day needs a second name.** On 2026-08-21 the session ran twice on
+> `ContractV10`, and the second pass therefore began against tags Ignition had already garnished
+> from the first — which left a residual in the session's own finding about the `Cause` property
+> ([#107]). A host persists what it discovers; a fresh question needs a folder it has never seen.
 
 Six steps. Steps 1–4 and 6 mirror the crate gate's; **step 5 is new and cannot be automated at
 all** — you trigger a rebirth *from the Ignition Designer*, and the gate reads the `bdSeq` off the
@@ -222,6 +227,16 @@ Deliberately awkward numbers: nothing round, nothing that could be a default or 
 Check them **exactly**. A unit-scaling bug (W vs kW, Wh vs kWh) shows up here as a factor of
 1000 and nowhere else.
 
+> **The browser rounds, so "exactly" is not what you are reading.** Ignition's `FormatString`
+> defaults to `#,##0.##`: `1.234` displays as `1,23` and `2.345` as `2,35`. The factor of 1000
+> still shows; a third-decimal discrepancy does not. On 2026-08-21 a `Power` display one refresh
+> behind read as a metric that had not updated at all, and cost ten minutes of the session.
+>
+> **And `EngHigh` defaults to `100`**, which `Energy = 5678.9` exceeds fifty-six times. A tag with
+> scaling enabled would clamp it to `100` and look exactly like a unit bug in the bridge. `Power`
+> stays under 100 and does not run that risk — comparing the two tells you which you are looking
+> at.
+
 Check the tag timestamps too: they must be the values' own acquisition time, not the moment
 Ignition received them. Freshness travelling in the payload is what makes a lost message read
 as *old data* rather than as *current data*.
@@ -260,7 +275,16 @@ quality property.
 Whichever gate you are running, this step is the one worth being slow and suspicious about —
 and it is the step that came closest to a false pass on the v2 run, because a tag can read
 "not good" for reasons that have nothing to do with the quality property. Check the node is
-still **online** before believing it.
+still **online**, and `Death Count = 0`, before believing it.
+
+**Where to look for the frozen value, added 2026-08-21.** The step asks you to confirm the values
+are *unchanged* rather than blanked — the bridge publishes the last known reading and marks it
+untrustworthy, because a stale reading is true history while a blank is not. **The browser's Value
+column cannot answer that question**: it renders the quality string for any non-good tag, so a
+frozen value and a blanked one look identical there, and at step 1 that same column reads
+`Bad_Stale` precisely because there is no value. The number survives in the tag's own **`value`
+row**. On 2026-08-21 it showed `2,35` and `5 679,1` in red italics beside `Quality = Bad_Stale`.
+The item is answerable; it was simply asked in the wrong place ([#108]).
 
 ### Step 5 (bridge gate only) — a rebirth issued BY IGNITION ← the one nothing else can do
 
@@ -486,6 +510,8 @@ this is the same fact observed on the wire during a Tier-3 session.
 
 [#44]: https://github.com/guycorbaz/smartme_mqtt/issues/44
 [#100]: https://github.com/guycorbaz/smartme_mqtt/issues/100
+[#107]: https://github.com/guycorbaz/smartme_mqtt/issues/107
+[#108]: https://github.com/guycorbaz/smartme_mqtt/issues/108
 
 ### What the 2026-08-03 run established — the run that closes NFR17
 

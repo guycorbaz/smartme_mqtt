@@ -64,6 +64,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
+use smartme_bridge::adapters::sparkplug_publisher::CONTRACT_VERSION;
 use smartme_bridge::app::mqtt_driver::{self, MqttConfig};
 use smartme_bridge::core::channel::MeterUpdate;
 use smartme_bridge::core::clock::{Clock, SystemClock};
@@ -326,22 +327,41 @@ async fn ignition_contract_gate() {
     let (n, bd_at_birth) = births(&transcript);
     println!("\n  [wire] NBIRTHs seen so far: {n}; bdSeq = {bd_at_birth:?}");
 
+    // PRINTED FROM THE BRIDGE'S OWN CONSTANT, never from a literal. This line said
+    // "reads 3" until 2026-08-21, seven contract versions after it stopped being
+    // true, and the Tier-3 session of that day nearly recorded a failure where there
+    // was a success — the operator read 10, which is correct, against a checklist
+    // that called for 3. Writing "10" here would only reset the clock on the same
+    // defect; formatting the constant makes the drift impossible. [#108]
+    let version_expected = format!(
+        "Contract/Version is present and reads {CONTRACT_VERSION} — this line is printed \
+         from the bridge's own CONTRACT_VERSION, so it cannot go stale"
+    );
     checkpoint(
         "STEP 1 — cold start: the node appears, and its tags are honestly STALE",
         &[
             "The tag folder Edge Nodes/<group>/BridgeContractNode exists",
-            "Contract/Version is present and reads 3 (NOT 2 — v3 added the rebirth metric)",
+            version_expected.as_str(),
             "Node Control/Rebirth is present, Boolean, and reads false",
             "Power and Energy exist for device 30000001",
             "Their quality is NOT good — nothing has been read yet, and the bridge says so",
+            "Power and Energy have NO VALUE — the `value` row is empty, not 0. A fabricated \
+             zero is indistinguishable from a meter genuinely reading zero, and refusing to \
+             fabricate one is what the cold start is for",
         ],
         &[
             "the folder is left over from an EARLIER run — check the timestamps, and that \
-             you deleted it last time",
+             you deleted it last time. NEVER REUSE A GROUP: on 2026-08-21 a reused group left \
+             a residual in the session's own finding, because the tags had already been \
+             garnished by the previous pass",
             "the tags read stale because Ignition has not connected yet, rather than because \
              the bridge said so — confirm the node shows as online",
-            "Contract/Version reads 2 because you are looking at a node published by the \
-             OLD crate-level gate, which declares no rebirth metric at all",
+            "★ you record the Bad_Stale quality as EVIDENCE — it is not. A tag Ignition has \
+             just created and never received a value for reads Bad_Stale on its own, so at \
+             this step 'the host honoured our STALE' and 'the host defaults a valueless tag' \
+             are indistinguishable. Only the step 2 -> 4 transition separates them",
+            "the version reads something else entirely because you are looking at a node \
+             published by the CRATE-level gate, which declares no rebirth metric at all",
         ],
     );
 
@@ -367,6 +387,15 @@ async fn ignition_contract_gate() {
             "you are reading the values from STEP 1 — those were null, so a number here is \
              genuinely new, but check the timestamp moved",
             "Ignition is showing its own 'last known good' rather than a fresh value",
+            "★ THE BROWSER ROUNDS. Ignition's FormatString defaults to `#,##0.##`, so 1.234 \
+             displays as 1.23 and 2.345 as 2.35. This step asks you to check the values \
+             EXACTLY: a factor of 1000 still shows, a third-decimal discrepancy does not. On \
+             2026-08-21 a display one refresh behind read as a metric that had not updated, \
+             and cost ten minutes",
+            "★ Energy is CLAMPED rather than wrong. EngHigh defaults to 100 and 5678.9 is \
+             fifty-six times it, so a tag with scaling enabled would show 100 and look \
+             exactly like a unit bug in the bridge. Power stays under 100 and does not run \
+             that risk — comparing the two tells you which you are looking at",
         ],
     );
 
@@ -440,7 +469,12 @@ async fn ignition_contract_gate() {
         &[
             "Both tags now show a NON-GOOD quality — Ignition renders it as Bad_Stale",
             "The VALUES are unchanged (2.345 / 5679.1): the bridge reports the last known \
-             reading and marks it untrustworthy, rather than blanking it",
+             reading and marks it untrustworthy, rather than blanking it. LOOK IN THE TAG'S \
+             `value` ROW, not the browser's Value column — the column renders the quality \
+             string for any non-good tag, so frozen and blanked look identical there. At \
+             step 1 that same column read Bad_Stale precisely because there was no value. \
+             Observed 2026-08-21: the `value` row showed 2,35 and 5 679,1 in red italics \
+             beside Quality = Bad_Stale, so the question IS answerable [#108]",
             "The quality overlay is visible in the tag browser without hovering",
             "CONTRACT v4, FIRST OBSERVATION: each tag carries a second property, \
              `Cause = reading-too-old`, beside `Quality`. RECORD WHETHER IGNITION SHOWS IT \
