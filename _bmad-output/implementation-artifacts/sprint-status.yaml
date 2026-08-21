@@ -2713,5 +2713,5 @@ development_status:
   # Sparkplug host ACCEPTS them. Step 5 is why a person must be there — the rebirth is
   # triggered from the Designer, and a rebirth we publish ourselves proves only that
   # the bridge answers us. Guy has the session planned for 2026-08-21.
-  8-3-the-tier-3-session: ready-for-dev  # NFR17, R3, milestone 3
+  8-3-the-tier-3-session: in-progress  # session run 2026-08-21 (Ignition 8.3.7 Maker, contract v10): steps 1-5 PASS, step 6 NOT PERFORMED, so NFR17 is not re-attested and milestone 3 stays unreached. [#107] found: v4 Cause does not cross the host unless a BIRTH declares it
   epic-8-retrospective: required  # added 2026-08-10 — the line was absent entirely

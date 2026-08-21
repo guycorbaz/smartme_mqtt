@@ -92,15 +92,21 @@ like it has hung when it is in fact waiting for you.
 The broker address is deployment-specific: keep it in your shell or your local `.env`, never
 in a committed file.
 
-**Neither gate installs a `tracing` subscriber, so the bridge prints no log at all.** The
-subscriber is built in `main.rs`, which these tests do not run; without one, `tracing` discards
-every event and `RUST_LOG` changes nothing. Any checklist item phrased as *"the bridge's log
+**The bridge gate installs a `tracing` subscriber and its log reaches you** — INFO by default,
+`RUST_LOG` overriding. This paragraph said the opposite until 2026-08-21, and the correction is
+worth keeping in view: for the whole of August the checklist items phrased *"the bridge's log
 shows…"* — `Rebirth Request accepted`, `node re-announced on a Rebirth Request`,
-`reason=Retained`, `reason=NameOnlyNearly`, `reason=ValueNotTrue` — **cannot fire**, and the
-operator sees silence rather than a failure. Discovered during the 2026-08-03 run;
-[#44](https://github.com/guycorbaz/smartme_mqtt/issues/44). Until it is fixed, treat those items as
-absent, not as passed: silence is not evidence. It is the same shape as the Epic 4 acceptance
-criteria written in terms of trace levels that sat below the default filter.
+`reason=Retained`, `reason=NameOnlyNearly`, `reason=ValueNotTrue` — **could not fire at all**,
+because the only subscriber in the crate is built in `main.rs`, which an integration test does
+not run, and `tracing` with no subscriber discards every event regardless of `RUST_LOG`. The
+operator saw silence and had no way to tell it from a failure. Found during the 2026-08-03 run
+([#44](https://github.com/guycorbaz/smartme_mqtt/issues/44)), repaired in the gate, and
+**observed working on 2026-08-21**: both rebirth events printed, as distinct lines, during a real
+session.
+
+It was the same shape as the Epic 4 acceptance criteria written in terms of trace levels that sat
+below the default filter. The rule it leaves behind: **silence is not evidence**, so before
+trusting any log-shaped checklist item, confirm the log speaks at all.
 
 Each gate prints a checklist and waits for **Enter** at each step. Take as long as you need —
 nothing times out. **Every checklist item is followed by what else could make that step pass
@@ -365,6 +371,7 @@ list; this one needs the opposite discipline — **ask, then look, then compare.
 
 | Date | Ignition | MQTT Engine | Contract | Artifact | Result |
 | --- | --- | --- | --- | --- | --- |
+| 2026-08-21 | 8.3.7 **Maker Edition** | *(not recorded — third time)* | **v10** | **the bridge binary** | **Partial — five steps of six. STEP 6 WAS NOT PERFORMED**, so NFR17 is *not* re-attested at v10. Steps 1–5 passed, and the session's own finding is that contract v4's `Cause` does not reach the operator at all unless a BIRTH declares it. Below |
 | 2026-08-03 | 8.3.7 | 5.0.0-rc1 | v3 | **the bridge binary** | **Pass — all six steps.** The first complete run of the bridge gate that exists, and the run that closes NFR17. What it establishes, and the two guards that were inert, are below |
 | 2026-07-31 | 8.3.7 | 5.0.0-rc1 | v3 | **the bridge binary** | **Partial — targeted probe, NOT the five-step gate.** Steps 2–4 were never exercised: the run published no `Good` value at all. What it did establish is below |
 | 2026-07-26 | 8.3.7 | *(not recorded)* | v2 | `sparkplug-b` scripted session | **Pass**, all five steps. ⚠️ **This row attests to an artifact state that no longer exists** — see the drift note below |
@@ -374,6 +381,111 @@ A pass is only meaningful against a stated version, so add a row rather than edi
 **MQTT Engine module** column was added 2026-07-31: it is the component that decodes Sparkplug, so it
 governs conformance more directly than the Ignition platform version, and the note below had been
 asking for it since the table was written.
+
+### What the 2026-08-21 session established, and what it left owed
+
+Ignition **8.3.7 Maker Edition**, MQTT Engine version **not recorded**, contract **v10**, group
+`ContractV10`, node `BridgeContractNode`, single meter `30000001`. **Two passes of the bridge gate
+on the same group**, an hour apart; neither reached step 6.
+
+**Read the negative first.** Step 6 was never performed, so the two death certificates were not
+observed and **NFR17 is not re-attested at v10**. The 2026-08-03 row remains the only complete
+run in this table, and it attests to v3. R3 stays *avérée* and milestone 3 stays unreached.
+
+The MQTT Engine version was asked for twice during the session and not supplied. **That is the
+third row in this table carrying `(not recorded)` for the column whose own note says it governs
+conformance more directly than the platform version.** A version asked for and not obtained is
+not the same failure as a column nobody thought of, and it is the one worth naming.
+
+#### What passed
+
+- **The guarantee held, and this is the point of the exercise.** Steps 2–3 published `Good`
+  (`1.234` / `5678.9`, then `2.345` / `5679.1`); step 4 republished the same values as `Stale`
+  with the node still **online** and `Death Count = 0`. Ignition displayed **`Bad_Stale`** on
+  both metrics. The transition is the evidence, not the state: a tag Ignition has just created
+  reads `Bad_Stale` on its own, which is why step 1 proves nothing about quality and step 4
+  proves everything.
+- **The values FROZE rather than blanking**, and this is now observable where it was thought not
+  to be: the tag's `value` row showed `2,35` and `5 679,1` in red italics beside
+  `Quality = Bad_Stale`. At step 1 the same row showed `Bad_Stale` because there was no value at
+  all. The two states are distinguishable — the runbook should say where to look, which it did
+  not.
+- **The cold start survived contact**: null metrics accepted with their datatype, no invented
+  `0`, `EngUnit` = `kW` / `kWh`, device folder named by the serial `30000001`.
+- **`Contract/Version = 10` was read by a real host** for the first time.
+- **The bridge answered IGNITION**, in both passes: NCMD received on
+  `spBv1.0/ContractV10/NCMD/BridgeContractNode`, metric `Node Control/Rebirth`, written from the
+  Designer. Exactly one NBIRTH and one DBIRTH gained, `bdSeq unchanged at 1 ✓`.
+- **[#44]'s two log guards fired**, which settles by observation what had been settled by reading
+  the code: `Rebirth Request accepted` and `node re-announced on a Rebirth Request` both reached
+  the operator, as distinct events. No `reason=Retained`, no near-miss WARN.
+- **The Rebirth control lives at** `Edge Nodes/<group>/BridgeContractNode/Node Control/Rebirth` —
+  a metric name containing `/` becomes a folder, as this document already noted for
+  `Contract/Version`.
+
+#### The finding: contract v4's `Cause` does not cross the host unless a BIRTH declares it
+
+| When | On the wire | In the tag browser |
+|---|---|---|
+| step 1, cold-start DBIRTH | `cold_start_metrics` attaches **no property** | — |
+| step 4, DDATA `Stale` | `metrics_for` attaches `Cause = reading-too-old` (`sparkplug_publisher.rs:721`, pinned by its own unit tests) | **no `Cause` row at all** |
+| step 5, rebirth DBIRTH | metrics re-announced **with** their properties | **`Cause = reading-too-old`** |
+
+Observed twice, and the second time within a single pass: absent at 15:59 after step 4, present
+at 17:14 after the rebirth, with the wire showing exactly one NBIRTH and one DBIRTH gained in
+between. `Power`'s `Timestamp` stayed at 15:56:39 across the rebirth, which is consistent — a
+`Stale` metric is republished with its own `ValueDate`.
+
+**What it costs.** Contract v4 exists so that an operator sees *why* a value is not trustworthy.
+A meter that is healthy at its BIRTH and degrades later publishes its cause in DDATA only, so
+**nobody will ever see it** — unless a rebirth happens to intervene. The property is on the wire
+and stops at the host.
+
+**This answers [#68]**, and it unblocks the arbitration story 2.1's task 3 has been waiting on
+since 2026-08-10: whether to declare `Cause` at BIRTH with a neutral value, at the cost of
+contradicting *"a good metric carries no cause"*. That decision now has its measurement.
+
+**The residual, named rather than buried.** The group was **reused** across the two passes rather
+than being fresh, so the second pass began against tags Ignition had already garnished — and the
+sound experiment has one variable, not two. Against it: at 15:59 the pane had rendered step 4's
+quality, value and timestamp, so it was not stale as a whole; for it: `Node Control/Rebirth` kept
+its 15:56:26 timestamp across a NBIRTH that re-declared it, which shows this pane does not
+refresh everything. **To seal it**: one pass on a group Ignition has never seen, collapsing and
+re-expanding the tag at step 4 before reading. Ten minutes, and it should be done before any
+contract change is decided on this basis.
+
+#### Two defects in the gate itself, found by running it
+
+- **Step 1's printed checklist still says `Contract/Version is present and reads 3`**, and the
+  line below it explains a `2`. The bridge emits **10**. An operator following the list to the
+  letter records a failure where there is a success — the same shape as [#44]'s reconnect
+  wording: a printed instruction left false by a contract bump.
+- **Step 4's item *"the value blanked instead of freezing"* is not checkable where it is asked.**
+  The Value column renders the quality string for any non-good tag, so frozen and blanked look
+  identical there. The `value` sub-row is where the number survives, and the checklist should say
+  so.
+
+#### One observation about the instrument, for whoever runs this next
+
+Ignition's `FormatString` defaults to `#,##0.##`, so the tag browser **rounds to two decimals**:
+`1.234` reads `1,23` and `2.345` reads `2,35`. Step 2 and step 3 ask the operator to check the
+values *exactly*. A factor of 1000 still shows; a discrepancy in the third decimal does not.
+Mid-session this produced a false alarm — a `Power` display one refresh behind read as a metric
+that had not updated — which cost ten minutes and nearly cost the step.
+
+And `EngHigh = 100` / `EngLow = 0` are Ignition's defaults: `Energy = 5678.9` is fifty-six times
+`EngHigh`, so a tag with scaling enabled would clamp it to `100` and look exactly like a unit bug
+in the bridge. It did not happen here; it is one refresh setting away from happening.
+
+#### `bdSeq` starts at 1, on the wire, against a real host
+
+The gate runs on a fresh state directory, so its first published `bdSeq` is the first this node
+has ever published — and both passes printed `bdSeq = Some(1)`. That is [#100]: chapter 4
+requires the first session to be numbered zero. The issue was opened 2026-08-19 from the code;
+this is the same fact observed on the wire during a Tier-3 session.
+
+[#44]: https://github.com/guycorbaz/smartme_mqtt/issues/44
+[#100]: https://github.com/guycorbaz/smartme_mqtt/issues/100
 
 ### What the 2026-08-03 run established — the run that closes NFR17
 
