@@ -54,6 +54,20 @@ Four tests in Epic 1 passed for the wrong reason — a fake clock that never adv
 comparison of a constant against itself, a drain that ran where nothing could fail, and a
 discriminator spanning two clocks. Falsification caught all four.
 
+**And the mutation must be the fault's ordinary shape, not the shape it had the day you found
+it.** A mutation that re-types the original defect measures your memory of that defect, not the
+guard. Story 8.2 shipped a guard against third-party types in the public API, falsified once by
+restoring the exact line it was written from — `pub fn decode(…) -> Result<Payload,
+prost::DecodeError>`. Its review put two mutations past it with the suite green: the same type
+imported under an alias and named bare, which is how a Rust author *normally* writes it, and a
+signature wrapped across lines, which is what rustfmt does to any signature past the line width.
+The guard was blind to the ordinary case and awake only to the accidental one.
+
+**Keep the mutations, do not just record them.** A falsification performed once by hand proves
+the guard for the day it was performed. Where the mutations can live in a fixture the guard is
+run against — including one it must *not* flag, so it proves discrimination and not noise —
+they are re-falsified on every CI pass instead.
+
 ## Manual test steps: state how they could pass wrongly
 
 For a human-run gate, every step must say what *else* could make it pass. The Tier-3 contract
