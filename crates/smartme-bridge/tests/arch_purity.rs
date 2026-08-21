@@ -5,11 +5,51 @@
 //! `Measurement` -> Sparkplug metric mapping must live only in
 //! `adapters/sparkplug_publisher.rs`. The test scans whatever exists today and becomes
 //! active automatically as those modules land — a violation goes red before merge.
+//!
+//! # What this guard did not see until 2026-08-21
+//!
+//! It banned four crate names — `tokio`, `rumqttc`, `axum`, `reqwest` — in `core/` and
+//! `domain/`. **But the invariant it exists to hold needs no import at all.** `async fn`
+//! is a language feature: `pub async fn decide_over_the_network(…)` was added to
+//! `core/oracle.rs` — the module whose whole purpose is that no verdict is reached
+//! inside a future — and all five tests in this file stayed green.
+//!
+//! It was the same class of miss as story 8.2's public-API guard, found the same week:
+//! a deny-list of the shapes somebody had thought of, blind to the shape the fault
+//! ordinarily takes. Both are now allow-lists of what is ours, and the mutations that
+//! went past them are kept as fixtures so the guard is re-falsified on every CI pass
+//! rather than once by hand.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const BANNED_IN_PURE: &[&str] = &["tokio", "rumqttc", "axum", "reqwest"];
+/// Roots a pure module may import from.
+///
+/// An allow-list of what is ours and the language's, rather than a list of the async
+/// crates somebody thought to ban: a dependency added tomorrow is refused here without
+/// anyone remembering to add a row.
+const PURE_IMPORT_ROOTS: &[&str] = &["crate", "self", "super", "std", "core", "alloc"];
+
+/// Workspace crates a pure module may reach for, and there is exactly one.
+///
+/// `sparkplug-b` is itself pure — it holds no transport, and `tests/no_context_leak.rs`
+/// is what keeps that true — so `domain/quality.rs` re-exporting `sparkplug_b::Quality`
+/// is the domain naming the wire's own quality rather than inventing a second one.
+/// `smart-me-client` is deliberately absent: it carries `reqwest`, and a pure module
+/// reaching for it is exactly the defect this file exists to catch.
+const PURE_WORKSPACE_CRATES: &[&str] = &["sparkplug_b"];
+
+/// The one pure module that may name a future, and why it is not a loophole.
+///
+/// The invariant is **not** that `core/` is synchronous — it is that no *truth* is
+/// decided inside a future. `Source` is a port reporting raw facts and deciding
+/// nothing, and it is async by native RPITIT, a language feature carrying no runtime.
+/// `core/mod.rs` has said exactly this since story 1.4. Everywhere else in `core/` and
+/// `domain/`, a decision reached in a future is the defect this file exists to catch.
+const ASYNC_PORT_HOME: &str = "core/source.rs";
+
+/// How a decision comes to sit inside a future. No import is needed for any of them.
+const ASYNC_TOKENS: &[&str] = &["async fn", "async move", "async {", ".await", "Future"];
 
 fn rs_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -34,29 +74,151 @@ fn src(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(rel)
 }
 
-#[test]
-fn pure_modules_are_free_of_async_and_transport() {
-    let mut violations = Vec::new();
-    for dir in ["core", "domain"] {
-        for file in rs_files(&src(dir)) {
-            let text = fs::read_to_string(&file).unwrap();
-            for line in text.lines() {
-                let t = line.trim();
-                if t.starts_with("//") {
-                    continue;
-                }
-                for banned in BANNED_IN_PURE {
-                    if t.contains(&format!("use {banned}")) || t.contains(&format!("{banned}::")) {
-                        violations.push(format!("{}: {}", file.display(), t));
-                    }
+/// The crate or module a `use` line reaches into, if the line is one.
+fn import_root(trimmed: &str) -> Option<String> {
+    let rest = trimmed.strip_prefix("pub ").unwrap_or(trimmed);
+    let rest = rest.strip_prefix("use ")?;
+    Some(
+        rest.trim()
+            .split("::")
+            .next()?
+            .trim()
+            .trim_start_matches('{')
+            .trim()
+            .to_string(),
+    )
+}
+
+/// Judges one pure module. Separate from the walk so the fixture below can be put
+/// through the same code the real files go through.
+fn purity_violations(relative: &str, text: &str, our_modules: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        // Doc comments SAY what these modules refuse to do; the refusal is checked,
+        // not the word.
+        if t.starts_with("//") {
+            continue;
+        }
+        if let Some(root) = import_root(t) {
+            // A sibling module is named without a `crate::` prefix inside `mod.rs`.
+            let ours = PURE_IMPORT_ROOTS.contains(&root.as_str())
+                || PURE_WORKSPACE_CRATES.contains(&root.as_str())
+                || our_modules.contains(&root);
+            if !ours {
+                out.push(format!(
+                    "{relative}: `{root}` is neither ours nor the language's, so this \
+                     module is no longer pure: {t}"
+                ));
+            }
+        }
+        if relative != ASYNC_PORT_HOME {
+            for token in ASYNC_TOKENS {
+                if t.contains(token) {
+                    out.push(format!(
+                        "{relative}: a verdict may not be reached inside a future — \
+                         that is what `core/` and `domain/` are for: {t}"
+                    ));
                 }
             }
         }
     }
+    out
+}
+
+#[test]
+fn pure_modules_are_free_of_async_and_transport() {
+    // The crate's own module names, read rather than listed, so a new module needs no
+    // edit here.
+    let mut our_modules: Vec<String> = rs_files(&src(""))
+        .iter()
+        .map(|f| f.file_stem().expect("named").to_string_lossy().into_owned())
+        .collect();
+    our_modules.sort();
+    our_modules.dedup();
+
+    let mut violations = Vec::new();
+    let mut scanned = 0;
+    for dir in ["core", "domain"] {
+        for file in rs_files(&src(dir)) {
+            let text = fs::read_to_string(&file).unwrap();
+            let relative = format!(
+                "{dir}/{}",
+                file.file_name().expect("named").to_string_lossy()
+            );
+            scanned += 1;
+            violations.extend(purity_violations(&relative, &text, &our_modules));
+        }
+    }
+    assert!(
+        scanned >= 5,
+        "only {scanned} pure modules were read; the walk is broken and this test's \
+         silence would mean nothing"
+    );
     assert!(
         violations.is_empty(),
-        "pure modules import banned async/transport crates:\n{}",
+        "the functional core is no longer pure:\n{}",
         violations.join("\n")
+    );
+}
+
+/// What went past this guard on 2026-08-21, kept so it cannot go past it again.
+///
+/// The last two lines matter as much as the first four: a guard that flags everything
+/// proves nothing. `use std::fmt` and the crate's own modules must pass.
+const IMPURE: &str = r#"
+use tokio::time::sleep;
+use futures::stream::StreamExt;
+use std::fmt;
+use crate::domain::Quality;
+
+pub async fn decide(reading: u8) -> u8 {
+    fetch().await
+}
+"#;
+
+#[test]
+fn the_purity_scan_still_catches_what_it_was_blind_to() {
+    let found = purity_violations("core/oracle.rs", IMPURE, &[]);
+    let joined = found.join("\n");
+
+    assert!(
+        joined.contains("`tokio`"),
+        "an async runtime import went unseen:\n{joined}"
+    );
+    assert!(
+        joined.contains("`futures`"),
+        "a crate no deny-list had thought of went unseen — that is the whole point of \
+         an allow-list:\n{joined}"
+    );
+    assert!(
+        joined.contains("async fn"),
+        "an `async fn` in the deciding module went unseen; it needs no import, which \
+         is exactly why the first version of this guard missed it:\n{joined}"
+    );
+    assert!(
+        joined.contains(".await"),
+        "an `.await` in the deciding module went unseen:\n{joined}"
+    );
+    assert!(
+        !joined.contains("use std::fmt"),
+        "the standard library is not somebody else's crate:\n{joined}"
+    );
+    assert!(
+        !joined.contains("use crate::domain"),
+        "a pure module may reach for our own domain:\n{joined}"
+    );
+
+    // And the port is exempt by name, not by luck: the same text in `core/source.rs`
+    // is judged only on its imports.
+    let at_the_port = purity_violations(ASYNC_PORT_HOME, IMPURE, &[]).join("\n");
+    assert!(
+        !at_the_port.contains("async fn"),
+        "the async port must keep its future; it decides nothing:\n{at_the_port}"
+    );
+    assert!(
+        at_the_port.contains("`tokio`"),
+        "the port is exempt from the future, not from purity:\n{at_the_port}"
     );
 }
 
