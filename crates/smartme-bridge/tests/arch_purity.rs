@@ -51,6 +51,76 @@ const ASYNC_PORT_HOME: &str = "core/source.rs";
 /// How a decision comes to sit inside a future. No import is needed for any of them.
 const ASYNC_TOKENS: &[&str] = &["async fn", "async move", "async {", ".await", "Future"];
 
+/// Every dependency each crate declares, and the claim that goes with the list:
+/// **each one has been looked at and cannot move a timestamp into a local zone.**
+///
+/// `utc_is_the_only_time_domain` used to ban `chrono` and `time` by name. A calendar
+/// crate nobody had heard of — `jiff`, `chrono-tz`, `time-tz`, `hifitime` — passed it
+/// without a word. Listing what IS declared makes the addition itself the event: the
+/// test goes red on any dependency change until somebody adds the row, which is the
+/// moment to ask the question.
+///
+/// `testcontainers` is here as a dev-dependency, and it is precisely the one that
+/// drags `chrono` into `Cargo.lock` through `serde_with`'s feature union — recorded in
+/// this test's own notes, and harmless because `cargo tree -i chrono` prints nothing.
+const DECLARED_DEPENDENCIES: &[(&str, &[&str])] = &[
+    (
+        "smartme-bridge",
+        &[
+            "arc-swap",
+            "axum",
+            "reqwest",
+            "rumqttc",
+            "serde",
+            "serde_json",
+            "smart-me-client",
+            "sparkplug-b",
+            "testcontainers",
+            "thiserror",
+            "tokio",
+            "toml",
+            "tracing",
+            "tracing-appender",
+            "tracing-subscriber",
+        ],
+    ),
+    (
+        "smart-me-client",
+        &["reqwest", "serde", "serde_json", "thiserror"],
+    ),
+    ("sparkplug-b", &["prost", "prost-build", "rumqttc", "tokio"]),
+];
+
+/// The dependency names one manifest declares, in any of its three dependency tables.
+fn declared_dependencies(manifest: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_dependencies = false;
+    for line in manifest.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            in_dependencies = matches!(
+                t,
+                "[dependencies]" | "[dev-dependencies]" | "[build-dependencies]"
+            );
+            continue;
+        }
+        if !in_dependencies || t.starts_with('#') {
+            continue;
+        }
+        if let Some((name, _)) = t.split_once('=') {
+            let name = name.trim();
+            // `tokio.workspace = true` declares `tokio`, not `tokio.workspace`.
+            let name = name.split('.').next().unwrap_or(name).trim();
+            if !name.is_empty() && !name.contains(' ') {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 fn rs_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if !dir.exists() {
@@ -240,6 +310,14 @@ fn raw_time_sources_and_fakes_are_confined_to_their_home_modules() {
         ("SystemTime::now(", "core/clock.rs", true),
         ("use std::time::Instant", "core/clock.rs", true),
         ("use std::time::SystemTime", "core/clock.rs", true),
+        // Added 2026-08-21 (issue #106). The four tokens above name the two
+        // constructors; these two name the way a raw clock is read WITHOUT
+        // constructing anything — `UNIX_EPOCH.elapsed()` is a wall-clock read that
+        // mentions neither `SystemTime::now` nor `Instant::now`, and `.elapsed()` on
+        // a stored instant is a duration nobody injected. Both live in
+        // `core/clock.rs` today and nowhere else, which is what makes the rule free.
+        ("UNIX_EPOCH", "core/clock.rs", true),
+        (".elapsed(", "core/clock.rs", true),
         ("FakeClock", "core/clock.rs", false),
         ("FakeSource", "core/source.rs", false),
         ("poll_now(", "core/source.rs", false),
@@ -367,11 +445,35 @@ fn utc_is_the_only_time_domain() {
             }
         }
         // And the manifest: a dependency nobody imports yet is still a door.
-        let manifest = fs::read_to_string(workspace.join(krate).join("Cargo.toml")).unwrap();
-        for line in manifest.lines() {
-            let t = line.trim();
-            if t.starts_with("chrono") || t.starts_with("time =") || t.starts_with("time.") {
-                violations.push(format!("{krate}/Cargo.toml declares a time-zone door: {t}"));
+        //
+        // **An allow-list since 2026-08-21 (issue #106).** It used to name `chrono`
+        // and `time` — the two doors somebody had thought of — so `jiff`, `chrono-tz`,
+        // `time-tz` or `hifitime` would all have walked straight past it. Naming the
+        // dependencies that ARE declared instead turns "did anyone remember to ban
+        // it?" into "was this one looked at?", which is a question a diff answers.
+        let declared = declared_dependencies(
+            &fs::read_to_string(workspace.join(krate).join("Cargo.toml")).unwrap(),
+        );
+        let allowed: &[&str] = DECLARED_DEPENDENCIES
+            .iter()
+            .find(|(name, _)| *name == krate)
+            .map(|(_, list)| *list)
+            .expect("every crate of the workspace is listed");
+        for name in &declared {
+            if !allowed.contains(&name.as_str()) {
+                violations.push(format!(
+                    "{krate}/Cargo.toml declares `{name}`, which nobody has looked at \
+                     for a time-zone door. If it cannot move a timestamp into a local \
+                     zone, add it to DECLARED_DEPENDENCIES and say so there."
+                ));
+            }
+        }
+        for name in allowed {
+            if !declared.iter().any(|d| d == name) {
+                violations.push(format!(
+                    "{krate}/Cargo.toml no longer declares `{name}`; the list in this \
+                     test is stale, and a stale allow-list is how one stops being read."
+                ));
             }
         }
     }
@@ -432,11 +534,41 @@ fn measurement_to_sparkplug_mapping_is_confined_to_the_publisher() {
 /// from a measurement in the historian:
 /// …/src/ui/check.rs: use crate::app::poll_publish::Publication;
 /// ```
+/// What `ui/check.rs` may reach for, as whole path prefixes.
+///
+/// **Added 2026-08-21 (issue #106).** The word list below it was blind to the shape
+/// this fault ordinarily takes: nobody writes `Publication` into a UI handler, they
+/// reach a handle through the state the handler already holds. `UiState` carries an
+/// `Arc<tokio::sync::Notify>` today — a nudge, deliberately — and the day it carries a
+/// sender called `tx` or `sink`, not one banned word appears anywhere.
+///
+/// So the module's imports are an allow-list instead. `crate::app::` is where the
+/// publisher lives and is absent from this list on purpose; `smart_me_client` is
+/// present because fetching from the meter is the whole point of the second link.
+const CHECK_MAY_IMPORT: &[&str] = &[
+    "super::",
+    "std::",
+    "core::",
+    "axum::",
+    "smart_me_client::",
+    "crate::core::",
+    "crate::domain::",
+];
+
 #[test]
 fn the_end_to_end_check_cannot_publish() {
     let file = src("ui/check.rs");
     let text = fs::read_to_string(&file).expect("story 6.6 ships this module");
-    let banned = ["Outbox", "outbox", "Publisher", "publish(", "Publication"];
+    // `.send(` joins the word list: a channel send is how a handle acquired through
+    // the shared state is actually used, whatever the field is called.
+    let banned = [
+        "Outbox",
+        "outbox",
+        "Publisher",
+        "publish(",
+        "Publication",
+        ".send(",
+    ];
     let mut violations = Vec::new();
     for line in text.lines() {
         let t = line.trim();
@@ -444,6 +576,16 @@ fn the_end_to_end_check_cannot_publish() {
         // checked, not the word.
         if t.starts_with("//") {
             continue;
+        }
+        if let Some(rest) = t.strip_prefix("use ") {
+            let path = rest.trim();
+            if !CHECK_MAY_IMPORT.iter().any(|ok| path.starts_with(ok)) {
+                violations.push(format!(
+                    "{}: reaches outside what the check may hold: {}",
+                    file.display(),
+                    t
+                ));
+            }
         }
         for word in banned {
             if t.contains(word) {

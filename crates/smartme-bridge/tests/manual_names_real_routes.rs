@@ -78,6 +78,80 @@ fn looks_like_our_route(candidate: &str) -> bool {
         && !candidate.contains('{')
 }
 
+/// Every route-shaped word in a chapter, `\code{}` or not.
+///
+/// **Added 2026-08-21 (issue #106).** The scan below read only the bodies of
+/// `\code{…}`, which is the manual's convention — and a convention is not a
+/// mechanism. `06-operations-ui.tex` already names `/healthz` in running prose, so
+/// the ordinary way this guard goes blind is not exotic: somebody writes "ouvrez
+/// /status" in a sentence and no macro is involved.
+///
+/// **What makes this cheap is a shape narrow enough to need no exception list.** A
+/// candidate is a SINGLE lower-case segment introduced by a slash that nothing
+/// alphanumeric precedes. That rules out, without naming anything: `fresh/stale` and
+/// `and/or` (a letter before the slash), `https://api.smart-me.com/actions` and
+/// `docs/adr/0009-….md` (a slash or a letter before it), `spBv1.0/Site/NDATA/Bridge`
+/// (upper case), `\code{seq}/\code{bdSeq}/rebirth` (a closing brace before it), and
+/// `/data/logs` (a second segment). Over the manual as it stands it yields exactly the
+/// routes the `\code{}` scan already found, and nothing else.
+///
+/// **What it therefore cannot see, said plainly**: the two multi-segment routes,
+/// `/config/discover` and `/debug/panic`. A sentence inventing `/config/refresh` would
+/// go unnoticed here. Widening the shape to reach them means readmitting every
+/// filesystem path and every Sparkplug topic in the manual, and paying for it with the
+/// exception list this scan exists to avoid — so the narrow shape is the deliberate
+/// choice, and this paragraph is the record of what it costs.
+fn prose_route_candidates(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '/' {
+            i += 1;
+            continue;
+        }
+        let before = if i == 0 { ' ' } else { chars[i - 1] };
+        // A slash inside a word, a path, a URL or a topic — not the start of a route.
+        // `}` too: `\code{seq}/\code{bdSeq}/rebirth` is an enumeration written with
+        // macros, which is how the first run of this scan read `/rebirth` as a route.
+        if before.is_alphanumeric()
+            || before == '/'
+            || before == '.'
+            || before == '\\'
+            || before == '}'
+        {
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        let mut end = start;
+        while end < chars.len() && chars[end].is_ascii_lowercase() {
+            end += 1;
+        }
+        if end > start {
+            let after = chars.get(end).copied();
+            let ends_cleanly = match after {
+                // End of file.
+                None => true,
+                // A second segment, a longer word, a file extension: not our route.
+                Some(c) if c.is_alphanumeric() || c == '/' || c == '-' || c == '_' => false,
+                // A full stop ENDS A SENTENCE unless a word follows it, in which case
+                // it is `config.toml` rather than "…ouvrez /config."
+                Some('.') => !chars
+                    .get(end + 1)
+                    .copied()
+                    .is_some_and(|c| c.is_alphanumeric()),
+                Some(_) => true,
+            };
+            if ends_cleanly {
+                out.push(format!("/{}", chars[start..end].iter().collect::<String>()));
+            }
+        }
+        i = end.max(i + 1);
+    }
+    out
+}
+
 #[test]
 fn every_route_the_manual_names_is_one_the_bridge_serves() {
     let served = routes_served();
@@ -109,6 +183,16 @@ fn every_route_the_manual_names_is_one_the_bridge_serves() {
             }
             offenders.push(format!(
                 "{}: names {candidate}",
+                path.file_name().expect("named").to_string_lossy()
+            ));
+        }
+        // And the same question of the prose, where no macro marks the claim.
+        for candidate in prose_route_candidates(&text) {
+            if NOT_ROUTES.contains(&candidate.as_str()) || served.contains(&candidate) {
+                continue;
+            }
+            offenders.push(format!(
+                "{}: names {candidate} in prose",
                 path.file_name().expect("named").to_string_lossy()
             ));
         }
@@ -208,4 +292,45 @@ fn every_cause_the_manual_names_is_one_the_oracles_can_produce() {
          404 to tell them:\n{}\n\nLive vocabulary: {live:?}",
         offenders.join("\n")
     );
+}
+
+/// What the prose scan must see, and — as much of the point — what it must not.
+///
+/// Kept as a fixture rather than a mutation performed once: a scanner this narrow is
+/// only worth having if it still discriminates after the next edit to it.
+const PROSE: &str = r"
+Ouvrez /status pour voir l'état, puis \code{/healthz} pour la sonde.
+Une lecture est fresh/stale, et l'opérateur lit and/or selon le cas.
+Le journal vit dans /data/logs et l'API est https://api.smart-me.com/actions.
+Le sujet est spBv1.0/Site/NDATA/Bridge01, et \code{seq}/\code{bdSeq}/rebirth.
+Le fichier s'appelle config.toml et se trouve sous /data.
+";
+
+#[test]
+fn the_prose_scan_sees_a_route_in_a_sentence_and_nothing_else() {
+    let found = prose_route_candidates(PROSE);
+
+    for expected in ["/status", "/healthz", "/data"] {
+        assert!(
+            found.iter().any(|c| c == expected),
+            "the prose scan missed {expected}: {found:?}"
+        );
+    }
+    // `/status` is the whole reason this scan exists: a route named in a sentence,
+    // with no macro to mark it.
+    for noise in [
+        "/stale",   // fresh/stale
+        "/or",      // and/or
+        "/logs",    // a second segment
+        "/actions", // inside a URL
+        "/rebirth", // an enumeration of \code{} macros
+        "/toml",    // a file extension
+        "/site",    // a Sparkplug topic level
+    ] {
+        assert!(
+            !found.iter().any(|c| c == noise),
+            "the prose scan cried wolf over {noise}, and a guard that flags everything \
+             is worth as little as one that flags nothing: {found:?}"
+        );
+    }
 }
