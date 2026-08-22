@@ -2713,5 +2713,27 @@ development_status:
   # Sparkplug host ACCEPTS them. Step 5 is why a person must be there — the rebirth is
   # triggered from the Designer, and a rebirth we publish ourselves proves only that
   # the bridge answers us. Guy has the session planned for 2026-08-21.
-  8-3-the-tier-3-session: in-progress  # session run 2026-08-21 (Ignition 8.3.7 Maker, contract v10): steps 1-5 PASS, step 6 NOT PERFORMED, so NFR17 is not re-attested and milestone 3 stays unreached. [#107] found: v4 Cause does not cross the host unless a BIRTH declares it
+  # 2026-08-22 — THE COMPLETE PASS. Six steps of six against Ignition 8.3.7 Maker /
+  # MQTT Engine 5.0.0-rc1 at contract v10, group ContractV10b. NFR17 IS RE-ATTESTED,
+  # R3 falls, MILESTONE 3 IS REACHED — the last thing the project owed and the only one
+  # that could not be done alone. Step 6, missing since 2026-08-21, was measured in
+  # Ignition's own log rather than its browser: two death certificates 2.001 s apart,
+  # both INFO, and NOT ONE WARN OR ERROR from the Engine module in a 3 h 10 export. The
+  # step's question — does the host complain about the second death — had never had a
+  # direct answer, only an inference from a counter.
+  # THREE THINGS THE SESSION FOUND THAT NOBODY WAS LOOKING FOR. (1) `Offline DateTime`
+  # tracks the WILL, not the explicit certificate, confirming the 2026-07-31 probe: ADR
+  # 0011's "the explicit certificate is immediate" is real on the wire and invisible on
+  # that field. (2) `Death Count` read between the two deaths gives 1 and manufactures a
+  # divergence with every other run — it happened here and was caught. (3) TWO STEPS
+  # CANNOT MEASURE WHAT THEY ASK: step 1's datatype is not readable from the Tag Browser
+  # OR the Tag Editor (Script Console answers: Float8), and step 2's acquisition-vs-
+  # reception clause passes identically either way because the gate stamps readings with
+  # `now`. The second is recorded as UNATTESTED, not passed, with the repair named.
+  # [#107] MEASURED CLEANLY on a virgin group: no `Cause`, `Custom` empty — the operator
+  # cannot see why a value is not good. But the measurement HAS NO POSITIVE CONTROL, so
+  # (a) "Engine materialises only what a BIRTH declared" and (b) "Engine never surfaces
+  # custom metric properties" both still fit, and they call for different repairs. One
+  # manoeuvre settles it, and it is the arbitration story 2.1's task 3 has been blocking.
+  8-3-the-tier-3-session: done  # closed 2026-08-22 — all five ACs met; AC3's list of what is NOT attested grew rather than shrank, which is the point of it
   epic-8-retrospective: required  # added 2026-08-10 — the line was absent entirely

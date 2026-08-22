@@ -219,6 +219,14 @@ contact with the host.
 
 Also verify the device folder is named by the **serial** (`30000001`), not by a friendly name.
 
+> **Where to read the datatype, added 2026-08-22.** Nowhere an operator would look. The Tag Browser
+> lists tag *properties* and `DataType` is not one of them; the **Tag Editor does not show it either**
+> for an MQTT Engine tag, because the module owns the type. Use the Designer's **Script Console**:
+> `system.tag.browse("[MQTT Engine]", {"recursive": True, "tagType": "AtomicTag", "name": "Power"})`
+> and print each result's `dataType` — expected **`Float8`**. Without scripting, the Tag Editor's
+> **`Numeric`** category is weaker evidence of the same thing: Ignition composes it only for a
+> numeric tag, so its presence rules out a typeless or string tag.
+
 ### Step 2 — first reading
 
 `Power = 1.234 kW`, `Energy = 5678.9 kWh`, both `GOOD`.
@@ -237,9 +245,16 @@ Check them **exactly**. A unit-scaling bug (W vs kW, Wh vs kWh) shows up here as
 > stays under 100 and does not run that risk — comparing the two tells you which you are looking
 > at.
 
-Check the tag timestamps too: they must be the values' own acquisition time, not the moment
-Ignition received them. Freshness travelling in the payload is what makes a lost message read
-as *old data* rather than as *current data*.
+Check that the tag timestamps **moved**. That is all this gate can establish.
+
+> **The acquisition-versus-reception clause is NOT measurable here, and said so on 2026-08-22.**
+> This paragraph used to ask the operator to confirm the timestamp was the value's own acquisition
+> time rather than the moment Ignition received it. The gate stamps its readings with
+> `clock.wall()` (`ignition_contract.rs:373` → `value_date: now`), so the two are the same second
+> and the check passes identically either way — a step that can only pass measures nothing. The
+> property still matters: freshness travelling in the payload is what makes a lost message read as
+> *old data* rather than as *current data*. **The repair, not yet made: stamp step 2's reading ~90 s
+> in the past**, and the tag timestamp must then read visibly behind the wall clock.
 
 ### Step 3 — the values update
 
@@ -340,7 +355,10 @@ Check the Ignition logs, not just the tag values.
 
 **Record, from `Node Info`, without reading ahead:**
 
-- `Death Count`, before and after;
+- `Death Count`, before and after — **and then read it a second time a few seconds later.** The two
+  certificates are ~2 s apart and this field is read in between more easily than it looks: on
+  2026-08-22 it gave `1`, which was about to be recorded as a divergence from the 0 → 2 of every
+  other run. It settled at `2`;
 - the **date and time** carried by `Offline DateTime` — both, not the time alone.
 
 **Write those down before reading the next paragraph or the findings below.** The two deaths are
@@ -395,7 +413,8 @@ list; this one needs the opposite discipline — **ask, then look, then compare.
 
 | Date | Ignition | MQTT Engine | Contract | Artifact | Result |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-21 | 8.3.7 **Maker Edition** | *(not recorded — third time)* | **v10** | **the bridge binary** | **Partial — five steps of six. STEP 6 WAS NOT PERFORMED**, so NFR17 is *not* re-attested at v10. Steps 1–5 passed, and the session's own finding is that contract v4's `Cause` does not reach the operator at all unless a BIRTH declares it. Below |
+| 2026-08-22 | 8.3.7 **Maker Edition** | 5.0.0-rc1 | **v10** | **the bridge binary** | **Pass — all six steps.** The second complete run in this table, and the one that **re-attests NFR17 at v10**. `Offline DateTime` tracks the **will**, confirming the 2026-07-31 probe; [#107] measured on a virgin group and found `Cause` absent. Below |
+| 2026-08-21 | 8.3.7 **Maker Edition** | 5.0.0-rc1 | **v10** | **the bridge binary** | **Partial — five steps of six. STEP 6 WAS NOT PERFORMED**, so NFR17 is *not* re-attested at v10. Steps 1–5 passed, and the session's own finding is that contract v4's `Cause` does not reach the operator at all unless a BIRTH declares it. Below |
 | 2026-08-03 | 8.3.7 | 5.0.0-rc1 | v3 | **the bridge binary** | **Pass — all six steps.** The first complete run of the bridge gate that exists, and the run that closes NFR17. What it establishes, and the two guards that were inert, are below |
 | 2026-07-31 | 8.3.7 | 5.0.0-rc1 | v3 | **the bridge binary** | **Partial — targeted probe, NOT the five-step gate.** Steps 2–4 were never exercised: the run published no `Good` value at all. What it did establish is below |
 | 2026-07-26 | 8.3.7 | *(not recorded)* | v2 | `sparkplug-b` scripted session | **Pass**, all five steps. ⚠️ **This row attests to an artifact state that no longer exists** — see the drift note below |
@@ -406,9 +425,123 @@ A pass is only meaningful against a stated version, so add a row rather than edi
 governs conformance more directly than the Ignition platform version, and the note below had been
 asking for it since the table was written.
 
+### What the 2026-08-22 session established
+
+Ignition **8.3.7 Maker Edition**, MQTT Engine **5.0.0-rc1**, contract **v10**, group
+`ContractV10b`, node `BridgeContractNode`, single meter `30000001`. **One pass, six steps, all
+passed.** NFR17 is re-attested at v10; R3 falls and milestone 3 is reached.
+
+The group was new, which is what the 2026-08-21 session's own finding asked for. Clean-up done.
+
+#### The deaths, measured in Ignition's log rather than in its browser
+
+The Gateway log was exported and queried — 3 h 10 of it, 13:50 to 17:00. The **whole export
+contains exactly two lines from the Engine module**, and both are `INFO`:
+
+```
+16:59:29.187  INFO  SparkplugPayloadHandler  Handling LWT message for Edge Node
+                                             ContractV10b/BridgeContractNode
+16:59:31.188  INFO  (idem)
+```
+
+**2.001 s apart** — the explicit NDEATH, then the will. Three things follow, and none of them was
+available from the tag browser:
+
+- **Both certificates were processed**, matching `Death Count` 0 → 2 and the 2026-08-03 run.
+- **Ignition did not complain.** Not a `WARN`, not an `ERROR`, nothing about a duplicate session,
+  in three hours of log. The second death is treated as a harmless repeat — which is the question
+  this step exists to ask, and it now has a direct answer rather than an inference from a counter.
+- **`Offline DateTime` = 16:59:31, the SECOND death — the will.** This **confirms the 2026-07-31
+  probe** and settles what the 2026-08-03 run left unobserved: ADR 0011's claimed benefit, *"the
+  explicit certificate is immediate"*, is **not observable from the host side on this field**. The
+  host keeps the last certificate, not the first.
+
+Both of the step's false-pass paths were closed by the same query rather than by eye: a keep-alive
+timeout takes ~30 s and these are instant and paired to a certificate; and the log names
+`ContractV10b/BridgeContractNode`, so it is not another node going offline.
+
+**And the noise justifies the method, measured this time rather than asserted.** In the window
+16:59:20–16:59:45 the log carries **109 lines — 9 `ERROR` and 32 `WARN`** — all from a
+`TransmissionClient` that cannot reach `tcp://localhost` and from Modbus timeouts. **The two lines
+that matter are 2 of 109.** An operator scrolling would have seen nine `ERROR`s at exactly the
+right moment and reported a failure that has nothing to do with the death.
+
+#### A trap this session found: `Death Count` read between the two deaths
+
+The first reading taken was **`Death Count` = 1**, and it was about to be recorded as a divergence
+from the 2026-08-03 run's 0 → 2. It was not a divergence: the field had been read in the two-second
+gap between the explicit certificate and the will. **Read it, then read it again a few seconds
+later.** A single early reading of this field manufactures a discrepancy with the only other
+complete run in this table.
+
+#### [#107], measured on a virgin group — and what the measurement still cannot say
+
+Step 4, after folding and unfolding the tag: **no `Cause` line**, and the tag editor's `Custom`
+category carries nothing. The 2026-08-21 observation is confirmed without the confound of a reused
+group, so **the operator does not see why a value is not good**. That is the fact, and it is firm.
+
+**The measurement has no positive control, and that limits what it proves.** `Cause` is the only
+custom metric property this bridge publishes (`METRIC_PROPERTY_CAUSE`,
+`sparkplug_publisher.rs:194`); `EngUnit` and the quality are properties Engine maps onto native tag
+properties, so they prove nothing about the custom path. Two mechanisms remain compatible with the
+observation:
+
+- **(a)** Engine materialises a property only when a BIRTH declared it — what [#107]'s title asserts;
+- **(b)** Engine never surfaces custom metric properties to the Designer at all.
+
+The distinction decides the repair: under (a) the fix is to declare `Cause` at BIRTH; under (b)
+declaring changes nothing and the cause must travel as a **metric**. One manoeuvre answers both —
+publish a BIRTH declaring `Cause` with a neutral value and look — and it is the same manoeuvre as
+the arbitration story 2.1's task 3 has been blocking.
+
+#### Two steps that cannot measure what they ask, both found by trying
+
+- **Step 1's datatype is not readable where an operator would look.** The Tag Browser lists tag
+  properties and `DataType` is not one; the **Tag Editor does not carry it either** for an Engine
+  tag, because the module owns the type and does not offer it for editing. What answers is the
+  Designer's **Script Console**:
+
+  ```python
+  for r in system.tag.browse("[MQTT Engine]", {"recursive": True, "tagType": "AtomicTag",
+                                               "name": "Power"}).getResults():
+      print(r['fullPath'], "->", r['dataType'])
+  ```
+
+  It returned **`Float8`**, so the null metric was accepted with its declared datatype. The editor's
+  presence of a **`Numeric`** category is a weaker form of the same evidence, available without
+  scripting.
+
+- **Step 2's timestamp clause is not measurable by this gate at all.** The prose asks the operator
+  to confirm the timestamp is the value's acquisition time rather than the moment Ignition received
+  it — but the gate stamps its readings with `clock.wall()`, the current instant
+  (`ignition_contract.rs:373` → `value_date: now`). Acquisition, publication and reception fall in
+  the same second, so the check passes identically whether the bridge stamps at acquisition or at
+  reception. **A step that can only pass measures nothing.** The repair is small and is not yet
+  made: publish step 2's reading stamped ~90 s in the past, and the tag timestamp must then read
+  visibly behind the wall clock. Until then this clause is **not attested** and the gate's own
+  printed checklist is the honest one — it asks only that the timestamp *moved*.
+
+#### The rest of the run, in one line each
+
+- **Step 1** — folder named by the serial `30000001`, both metrics created null with `Float8`,
+  `EngUnit` = `kW` / `kWh`, no invented `0`.
+- **Step 2** — `1.234` / `5678.9`, both `Good`. **The `EngHigh = 100` clamp trap was not armed on
+  this installation**: the tags carry `Scale Mode = Off` and `No_Clamp`, so `Energy` displayed
+  `5 678,9` in full. Worth knowing before treating a clamped `100` as a unit bug elsewhere.
+- **Step 3** — `2.345` / `5679.1`, counter up, no rebirth and no reconnect needed.
+- **Step 4** — `Bad_Stale` on both with the node **online** and `Death Count = 0`, and **the values
+  frozen rather than blanked**: the `value` row showed `2,35` and `5 679,1`. The [#108] repair works
+  — the question is now asked where it can be answered.
+- **Step 5** — the operator wrote `true` **twice**. Both requests were accepted from
+  `spBv1.0/ContractV10b/NCMD/BridgeContractNode`, each answered by its own re-announcement (57 ms
+  and 0.4 ms later), and the gate counted **2 NBIRTHs and 2 DBIRTHs gained** — one of each per
+  request, so the ratio is what the step asks for even though the absolute count is not.
+  `bdSeq unchanged at 1 ✓`, which on its own excludes a reconnect. No `reason=Retained`, no
+  near-miss `WARN`.
+
 ### What the 2026-08-21 session established, and what it left owed
 
-Ignition **8.3.7 Maker Edition**, MQTT Engine version **not recorded**, contract **v10**, group
+Ignition **8.3.7 Maker Edition**, MQTT Engine **5.0.0-rc1**, contract **v10**, group
 `ContractV10`, node `BridgeContractNode`, single meter `30000001`. **Two passes of the bridge gate
 on the same group**, an hour apart; neither reached step 6.
 
@@ -416,10 +549,23 @@ on the same group**, an hour apart; neither reached step 6.
 observed and **NFR17 is not re-attested at v10**. The 2026-08-03 row remains the only complete
 run in this table, and it attests to v3. R3 stays *avérée* and milestone 3 stays unreached.
 
-The MQTT Engine version was asked for twice during the session and not supplied. **That is the
-third row in this table carrying `(not recorded)` for the column whose own note says it governs
-conformance more directly than the platform version.** A version asked for and not obtained is
-not the same failure as a column nobody thought of, and it is the one worth naming.
+The MQTT Engine version was asked for twice during the session and not supplied on the day —
+but **it was already on record, and this document is where it is recorded**: `5.0.0-rc1`, given
+by Guy on 2026-07-28 during story 4.4's task 4, and carried by the **2026-08-03 row of this very
+table, two lines above**. It is also in `docs/primary-host-state-observation.md` and in ADR 0011.
+
+Nothing was owed here. The cell is filled from the record, and **the question is closed** —
+arbitrated by Guy on 2026-08-22, who had supplied the version and pointed out that it was held.
+The *Maker Edition* wording on this row and not on the 2026-08-03 one describes the same
+installation, and is not evidence the module moved.
+
+> **Corrected 2026-08-22.** Until this date the paragraph read *"that is the third row in this
+> table carrying `(not recorded)`"* and named the gap the finding worth keeping. That was false:
+> the first two runs recorded the module version, and the correction is Guy's — he had supplied it
+> and said so. The lapse is instructive in its own right, and it is the one `CLAUDE.md` already
+> names for the smart-me specification: **the claim was carried over from the session's own notes
+> instead of being checked against the register printed directly beneath it.** A document that
+> holds the answer is not consulted merely by being open.
 
 #### What passed
 
@@ -584,6 +730,10 @@ artifact that no longer exists**, so these are first measurements, not confirmat
 `Offline DateTime` retained — the explicit certificate's, or the will's two seconds later — was not
 established. The 2026-07-31 probe found it tracked the **will**, which would make ADR 0011's claimed
 benefit (*"the explicit certificate is immediate"*) unobservable from the host side.
+
+> **Settled on 2026-08-22, and it tracks the will.** The 16:59:31 reading is the second of two
+> certificates 2.001 s apart, timed against Ignition's own log. Two independent runs now agree, so
+> ADR 0011's benefit is real on the wire and invisible on this field. See the 2026-08-22 section.
 
 The step-6 briefing **stated that prior finding before asking for the reading**. The operator then
 reported *"it's the will"* with the timestamp `8:34:58 PM` — which is verbatim the 2026-07-31 value

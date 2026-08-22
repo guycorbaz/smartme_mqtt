@@ -110,7 +110,7 @@ precisely because this attestation is seven versions stale.
 
 ## Session Record — 2026-08-21
 
-**Ignition 8.3.7 Maker Edition, MQTT Engine version not recorded, contract v10, broker
+**Ignition 8.3.7 Maker Edition, MQTT Engine 5.0.0-rc1, contract v10, broker
 192.168.1.30:1883, group `ContractV10`, node `BridgeContractNode`, meter `30000001`.** Two passes
 of the bridge gate an hour apart, on the same group. Conducted with the operator at the Designer;
 the full account is in `docs/ignition-contract-runbook.md` under *What the 2026-08-21 session
@@ -166,9 +166,10 @@ first write-up.
   reading, so `Verdicts::uniform` is what reached the wire and the v6 path never diverged from the
   v5 one. **A pass here says nothing about v6's headline change.**
 - **The clean form of [#107]'s measurement**, for the reason given above.
-- **The MQTT Engine version.** Asked for twice, not supplied. Third row in the table carrying
-  `(not recorded)` for the column whose own note says it governs conformance more directly than
-  the platform version.
+- ~~**The MQTT Engine version.**~~ **Not a gap — struck 2026-08-22.** The version is
+  `5.0.0-rc1`, given on 2026-07-28 (story 4.4, task 4) and carried by the run register's
+  2026-08-03 row. This bullet claimed it had never been recorded; it had been recorded twice, and
+  the register was two lines from the claim. Nothing is owed.
 
 ### AC4 — clean-up
 
@@ -199,8 +200,74 @@ Issues: [#44] closed on observation, [#100] confirmed on the wire, [#107] and [#
 - **`EngHigh = 100` is an Ignition default**, and `Energy = 5678.9` is fifty-six times it. A tag
   with scaling enabled would clamp to `100` and look exactly like a unit bug in the bridge.
 
-### What is still owed before this story closes
+### What was still owed before this story closes — ALL PAID 2026-08-22
 
-1. **Step 6**, in a full pass — the only outstanding piece of NFR17.
-2. **[#107]'s clean measurement** on a virgin group, if the arbitration is to rest on it.
-3. **The MQTT Engine version**, recorded.
+1. ~~**Step 6**, in a full pass.~~ **Done.** See the 2026-08-22 record below.
+2. ~~**[#107]'s clean measurement** on a virgin group.~~ **Done**, on `ContractV10b`.
+3. ~~The MQTT Engine version.~~ **Struck 2026-08-22 — it was never missing.** `5.0.0-rc1`.
+
+## Session Record — 2026-08-22 — THE COMPLETE PASS
+
+**Ignition 8.3.7 Maker Edition, MQTT Engine 5.0.0-rc1, contract v10, broker 192.168.1.30:1883,
+group `ContractV10b`, node `BridgeContractNode`, meter `30000001`. Six steps, all passed.**
+The full account, including the log queries and the two steps found unmeasurable, is in
+`docs/ignition-contract-runbook.md` under *What the 2026-08-22 session established*.
+
+**NFR17 is re-attested at contract v10. R3 falls. Milestone 3 is reached.**
+
+### AC1 — the six steps, with their result
+
+| Step | Result | What else could have produced the same screen, and how it was excluded |
+| --- | --- | --- |
+| 1 — cold start | **Pass** | A typeless or string tag would also read `Bad_Stale` with no value. Excluded by reading the datatype in the Script Console: `Float8`. The Tag Editor cannot answer this — see the runbook's new note |
+| 2 — first reading | **Pass on values and qualities; the timestamp clause NOT attested** | A clamped `Energy` would look like a unit bug: excluded, the tags carry `Scale Mode = Off` / `No_Clamp`. The acquisition-vs-reception clause cannot be measured by this gate at all — it stamps readings with `now`, so the check passes either way |
+| 3 — values update | **Pass** | A display one refresh behind reads as a metric that never moved (it cost ten minutes on 2026-08-21). Excluded by refreshing before concluding |
+| 4 — STALE, node online | **Pass** | A tag reads not-good for reasons unrelated to quality. Excluded by node `online` and `Death Count = 0` before believing it. Values **frozen not blanked**, read in the `value` row: `2,35` / `5 679,1` |
+| 5 — rebirth from the Designer | **Pass** | A reconnect would mint a **new** `bdSeq` since story 4.10; the gate printed `bdSeq unchanged at 1 ✓`. A retained NCMD would log `reason=Retained`; none. The operator wrote `true` twice, so the counts are 2/2 — one birth of each kind per request, the ratio the step asks for |
+| 6 — the two death certificates | **Pass** | A keep-alive timeout takes ~30 s: excluded, the deaths are instant and paired to certificates in Ignition's log. Another node going offline: excluded, the log names `ContractV10b/BridgeContractNode` |
+
+### AC2 — the v4→v10 additions, looked for rather than assumed
+
+**`Cause` is absent**, on a virgin group, after folding and unfolding the tag, and the Tag Editor's
+`Custom` category is empty. So the observation is no longer explicable by the reused group that
+confounded 2026-08-21. **The operator cannot see why a value is not good** — the whole purpose of
+contract v4 does not reach them.
+
+`Contract/Version = 10` was read by the host, as on 2026-08-21.
+
+### AC3 — what this session does NOT attest
+
+- **The per-metric verdict (v6).** Unchanged from 2026-08-21: every step publishes one verdict for
+  the whole reading, so `Verdicts::uniform` is what reached the wire and the v6 path never diverged
+  from the v5 one. A pass here says nothing about v6's headline change.
+- **[#68]'s question — what Ignition does with a property it does not know — is answered only in
+  its negative half.** `Cause` does not surface. **The measurement has no positive control**: it is
+  the only custom metric property this bridge publishes, so nothing proves Engine *could* have
+  surfaced one. Two mechanisms remain compatible, and they call for different repairs — declaring
+  `Cause` at BIRTH, or carrying the cause as a metric. Detailed in the runbook.
+- **Step 2's acquisition-vs-reception timestamp clause.** Not measurable by this gate; recorded as
+  unattested rather than passed, with the repair named.
+
+### AC4 — clean-up
+
+`Edge Nodes/ContractV10b/BridgeContractNode` deleted, and only that folder.
+
+### AC5 — the record
+
+Written to `docs/ignition-contract-runbook.md`: a new row in the run register and a full section.
+Milestone 3 and R3 to be updated in the project sheet outside the repository.
+
+### What this session found that nobody was looking for
+
+- **`Offline DateTime` tracks the WILL**, not the explicit certificate — 16:59:31, the second of two
+  deaths 2.001 s apart. This confirms the 2026-07-31 probe and settles what 2026-08-03 left
+  unobserved: ADR 0011's *"the explicit certificate is immediate"* is real on the wire and
+  **invisible from the host side on this field**.
+- **Ignition does not complain about the second death.** Its Engine module logged exactly two lines
+  in a 3 h 10 export, both `INFO`. The step's question had never had a direct answer before — only
+  an inference from a counter.
+- **`Death Count` read between the two deaths gives `1`**, and manufactures a divergence with every
+  other run. It happened here and was caught. The runbook now says to read it twice.
+- **The log noise is measured, not asserted**: 109 lines in the 25 s around the deaths, 9 `ERROR`
+  and 32 `WARN`, none of them ours. **The two lines that matter are 2 of 109** — scrolling would
+  have produced a confident false failure.
