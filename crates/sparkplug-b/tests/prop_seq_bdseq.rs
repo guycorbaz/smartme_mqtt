@@ -42,7 +42,7 @@ fn prop_seq_successor_is_modular_from_every_start() {
 /// counter — this is the form the acceptance criterion is written in.
 #[test]
 fn prop_published_messages_wrap_255_to_0() {
-    let (mut live, birth) = NodeSession::start(BdSeq::before_first()).birth(0, vec![]);
+    let (mut live, birth) = NodeSession::start(None).birth(0, vec![]);
     assert_eq!(birth.seq, Some(0), "the BIRTH opens the numbering at 0");
     // Messages 1..=255 fill the lap...
     for expected in 1..=255_u64 {
@@ -62,7 +62,7 @@ fn prop_published_messages_wrap_255_to_0() {
 #[test]
 fn prop_rebirth_always_restarts_numbering_at_zero() {
     for messages_before in [0_u32, 1, 42, 255, 256, 300] {
-        let (mut live, _) = NodeSession::start(BdSeq::before_first()).birth(0, vec![]);
+        let (mut live, _) = NodeSession::start(None).birth(0, vec![]);
         for _ in 0..messages_before {
             let _ = live.data(0, vec![]);
         }
@@ -80,11 +80,14 @@ fn prop_rebirth_always_restarts_numbering_at_zero() {
 /// that reconnects 256 times returns to where it started, with no gap.
 #[test]
 fn prop_bdseq_is_continuous_across_sessions() {
-    let mut bd = BdSeq::before_first();
+    // The first session of a node that has never connected: there is no previous
+    // number to follow, and the clause requires this one to be zero.
+    let mut bd = NodeSession::start(None).bd_seq();
+    assert_eq!(bd.value(), 0, "a first session starts at zero");
     for step in 0..=600_u32 {
         let expected = (step % 256) as u8;
         assert_eq!(bd.value(), expected, "session {step}");
-        let session = NodeSession::start(bd);
+        let session = NodeSession::start(Some(bd));
         assert_eq!(
             session.bd_seq().value(),
             ((step + 1) % 256) as u8,
@@ -100,7 +103,7 @@ fn prop_bdseq_is_continuous_across_sessions() {
 #[test]
 fn prop_will_birth_and_death_agree_on_bdseq_for_every_session_number() {
     for start in 0..=255_u8 {
-        let session = NodeSession::start(BdSeq::new(start));
+        let session = NodeSession::start(Some(BdSeq::new(start)));
         let will = session.will(500);
         let (live, birth) = session.birth(1_000, vec![sample_metric()]);
         let death = live.death(2_000);
@@ -125,11 +128,11 @@ fn prop_will_birth_and_death_agree_on_bdseq_for_every_session_number() {
 #[test]
 fn prop_bdseq_survives_a_restart_without_replaying_a_number() {
     for start in 0..=255_u8 {
-        let live = NodeSession::start(BdSeq::new(start));
+        let live = NodeSession::start(Some(BdSeq::new(start)));
         let persisted = live.bd_seq().value();
 
         // A restart reads the persisted number and starts the NEXT session.
-        let after_restart = NodeSession::start(BdSeq::new(persisted));
+        let after_restart = NodeSession::start(Some(BdSeq::new(persisted)));
         assert_ne!(
             after_restart.bd_seq().value(),
             persisted,
@@ -146,7 +149,7 @@ fn prop_bdseq_survives_a_restart_without_replaying_a_number() {
 /// Whatever the numbering, the payload stays wire-valid and decodes back.
 #[test]
 fn prop_every_numbered_payload_round_trips() {
-    let (mut live, _) = NodeSession::start(BdSeq::before_first()).birth(0, vec![sample_metric()]);
+    let (mut live, _) = NodeSession::start(None).birth(0, vec![sample_metric()]);
     for i in 0..300_u64 {
         let p = live.data(i, vec![sample_metric()]);
         let bytes = sparkplug_b::encode(&p);

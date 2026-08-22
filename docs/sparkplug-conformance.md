@@ -297,7 +297,7 @@ constraint; ideally the bridge refuses to start on a detectable collision. Issue
 | `topics-nbirth-timestamp` | MUST | *"a timestamp denoting the date and time the message was sent"* — `clock.wall()` at the CONNACK call site (`mqtt_driver.rs:1223`) and the rebirth one (`:1292`) | `chaos_no_replay_at_reconnect` bounds the stamp on the wire between two readings of the driver's own clock. **Falsified against [#30]'s own prescription** — both arguments replaced by `UtcMillis(42)` goes red with `published somewhere in [1787132581436, 1787132581477] and carries 42`; before that assertion existed (2026-08-19) the same mutation left the whole suite green | conformant |
 | `topics-nbirth-templates` | MUST | conditional — *"if Template instances will be published"*. None are: `MetricValue` has no template variant and `encode_metric` cannot emit one | — the condition never holds, so there is nothing to prove | n/a — consistent with the scope-limit block, which rules the same way on chapter 6's template clauses |
 | `topics-nbirth-bdseq-included` | MUST | `build_birth` prepends the `bdSeq` metric before anything else (`encode.rs:181`) | `birth_carries_seq_zero_and_the_session_number`, `prop_will_birth_and_death_agree_on_bdseq_for_every_session_number` | conformant |
-| `topics-nbirth-bdseq-increment` | MUST | **Two obligations in one clause, and only one of them holds.** *Increment by one on every new MQTT CONNECT*: delivered by Story 4.10 — the driver owns its reconnect loop and registers a fresh will per CONNECT. *Start at zero*: **it does not.** `load_bd_seq` returns `BdSeq::before_first()` = 0 on a first run, and `SparkplugPublisher::new` advances past it (`NodeSession::start` → `next_session()`), so a brand-new bridge publishes **1** as its first `bdSeq` | `chaos_bd_seq_advances_on_every_connect` proves the increment. The zero-start is refuted by measurement rather than reading: story 4.13's `new_session()` mutation printed `born 1, reborn 1` — the first session number observed on the wire is 1 | **deviation** ([#100](https://github.com/guycorbaz/smartme_mqtt/issues/100)) — **the increment half cites Story 4.10 rather than opening a fresh gap**, as the chapter-5 note asks; the zero-start half is new, and chapter 6 states no equivalent, which is why reading chapter 4's own wording was the point |
+| `topics-nbirth-bdseq-increment` | MUST | **Two obligations in one clause, and BOTH now hold (2026-08-22).** *Increment by one on every new MQTT CONNECT*: delivered by Story 4.10 — the driver owns its reconnect loop and registers a fresh will per CONNECT. *Start at zero*: repaired by ADR 0042. `load_bd_seq` answers `None` when there is no state file, and `NodeSession::start(None)` numbers the first session **0** instead of advancing past a sentinel | `chaos_bd_seq_advances_on_every_connect` proves the increment. The zero-start is proved by `a_bridge_that_has_never_connected_births_under_bd_seq_zero`, which asserts on the number the WILL carries rather than on a constructor argument, and by `prop_bdseq_is_continuous_across_sessions`; both were falsified against the sentinel's restoration | **conformant** — was **deviation** ([#100](https://github.com/guycorbaz/smartme_mqtt/issues/100)) from 2026-08-21 to 2026-08-22. **The finding stands as a lesson even though the row now passes**: the deviation was found only by reading chapter 4's own wording, because chapter 6 states no equivalent and a row built from it alone is silent on half the clause |
 | `topics-nbirth-bdseq-matching` | MUST | the NBIRTH's `bdSeq` and the registered will's are the same value — both read one `publisher.bd_seq()` | `the_will_matches_the_session_before_and_after_the_birth`, `prop_will_birth_and_death_agree_on_bdseq_for_every_session_number`, and `chaos_bd_seq_advances_on_every_connect` observes the pairing across a real reconnect | conformant |
 | `topics-nbirth-rebirth-metric` | MUST | a metric named exactly `Node Control/Rebirth`, `Boolean(false)` — `rebirth_metric` (`sparkplug_publisher.rs`, `fn rebirth_metric`), built into `node_metrics` which BOTH session arms use | `every_node_birth_declares_the_rebirth_command` locates it by name, asserts datatype 11 and `BooleanValue(false)`, and is mutation-tested against `Null(Boolean)` and `Boolean(true)`; `chaos_ncmd_rebirth` reads it off a real broker | conformant |
 | `topics-ndata-payload` | MUST | NDATA is never emitted | — | n/a — the same reading as `topics-ndata-topic` and `-mqtt` above |
@@ -1470,11 +1470,15 @@ rather than added, because adding a single row of another story's 29 would leave
 `42` with no account of the rest; but it is now a clause the bridge SATISFIES and does not claim,
 which is the less common direction for this document to be wrong in.
 
-**31 conformant · 4 deviations · 3 gaps · 32 n/a** (19 Host Application, 6 messages we do not emit,
+**32 conformant · 3 deviations · 3 gaps · 32 n/a** (19 Host Application, 6 messages we do not emit,
 6 command clauses that bind a Host Application publisher, 1 template clause whose condition never
 holds)
 
-`31 + 4 + 3 + 32 = 70` clauses — **the whole chapter, with no remainder, since Story 4.19**
+**It read `31 · 4 · 3 · 32` from 2026-08-19 to 2026-08-22**, when ADR 0042 repaired the zero-start
+half of `topics-nbirth-bdseq-increment` ([#100]) and moved one row from `deviation` to
+`conformant`. No row was added or removed.
+
+`32 + 3 + 3 + 32 = 70` clauses — **the whole chapter, with no remainder, since Story 4.19**
 (2026-08-19). It read `17 · 0 · 3 · 21` over 41 rows until then. **This corrects a miscount**: the tally read `17 · 0 · 8 · 21` until the
 code review of Story 4.2 recounted the rows mechanically — the conformant and n/a figures were
 over-stated, and two of the gaps (`topics-ncmd-mqtt`, `topics-dcmd-mqtt`) then became `n/a`.
@@ -1807,11 +1811,16 @@ conformance scope".
 | 1 — Introduction | 3 | 0 | 4 | 1 | 8 |
 | 2 — Principles | 1 | 1 | 1 | 1 | 4 |
 | 3 — Components | 0 | 0 | 0 | 1 | 1 |
-| 4 — Topics | 31 | 4 | 3 | 32 | 70 |
+| 4 — Topics | 32 | 3 | 3 | 32 | 70 |
 | 5 — Operational behaviour | 32 | 1 | 17 | 49 | 99 |
 | 6 — Payloads | 39 | 4 | 7 | 59 | 109 |
 | 10 — Conformance | 0 | 0 | 0 | 12 | 12 |
-| **Total** | **106** | **10** | **32** | **155** | **303** |
+| **Total** | **107** | **9** | **32** | **155** | **303** |
+
+**Chapter 4 moved `31 · 4` → `32 · 3` on 2026-08-22**: ADR 0042 repaired
+`topics-nbirth-bdseq-increment`'s zero-start half ([#100]), so one row went from `deviation` to
+`conformant`. No row was added or removed — 70 clauses before and after, and the whole-file total
+holds at 303.
 
 **The total was `72 · 8 · 50 · 144` until Story 4.7**, which moved seven rows from
 `gap (unimplemented)` to `conformant` — six in chapter 5, one in chapter 6. `72 + 7 = 79`,

@@ -55,17 +55,18 @@ impl Default for SeqCounter {
 /// It must SURVIVE a process restart (it is the only thing distinguishing "the
 /// same node reconnecting" from "a stale death"), so it is plain `Copy` data
 /// that the caller persists — this crate does no I/O.
+///
+/// **There is no "before the first session" value, and there was one until
+/// 2026-08-22.** `BdSeq::before_first()` returned 0 and
+/// [`NodeSession::start`](crate::NodeSession::start) advanced past it, so a node
+/// that had never connected published **1** in its first BIRTH — while
+/// `tck-id-topics-nbirth-bdseq-increment` requires the number to *start at
+/// zero*. The absence of a previous session is not a number; it is now
+/// [`Option::None`] at the one place that can know it ([#100], ADR 0042).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BdSeq(u8);
 
 impl BdSeq {
-    /// The sentinel a node that has never connected passes to its first
-    /// session. It is NOT the first published number: the session advances past
-    /// it, so a brand-new node's first BIRTH carries 1.
-    pub const fn before_first() -> Self {
-        Self(0)
-    }
-
     /// Restores a persisted value. Values outside 0–255 cannot be represented,
     /// so a corrupt persisted number is truncated by the caller's own parsing
     /// rather than silently accepted here.
@@ -129,7 +130,7 @@ mod tests {
 
     #[test]
     fn bdseq_increments_per_session_and_wraps() {
-        let a = BdSeq::before_first();
+        let a = BdSeq::new(0);
         assert_eq!(a.value(), 0);
         let b = a.next_session();
         assert_eq!(b.value(), 1);

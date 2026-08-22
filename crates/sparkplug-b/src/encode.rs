@@ -14,7 +14,7 @@
 //! ```
 //! use sparkplug_b::{BdSeq, Metric, MetricValue, NodeSession, Quality};
 //!
-//! let session = NodeSession::start(BdSeq::new(7));
+//! let session = NodeSession::start(Some(BdSeq::new(7)));
 //! // The will is registered with the broker BEFORE connecting...
 //! let will = session.will(1_000);
 //! // ...then the BIRTH opens the session and unlocks DATA.
@@ -51,15 +51,28 @@ pub struct LiveSession {
 }
 
 impl NodeSession {
-    /// Opens the session that follows `previous`.
+    /// Opens the session that follows `previous`, or the node's FIRST session
+    /// when there is none.
     ///
-    /// `previous` is the number the last session used — persist it before
+    /// `Some(previous)` is the number the last session used — persist it before
     /// connecting and pass it back here, so a restart continues the sequence
-    /// instead of replaying a number a consumer has already seen. A brand-new
-    /// node passes [`BdSeq::before_first`].
-    pub const fn start(previous: BdSeq) -> Self {
+    /// instead of replaying a number a consumer has already seen.
+    ///
+    /// **`None` means this node has never connected, and its first session is
+    /// numbered 0.** `tck-id-topics-nbirth-bdseq-increment`
+    /// (`Sparkplug_4_Topics.adoc`) states two obligations — *"The bdSeq number
+    /// MUST **start at zero** and increment by one on every new MQTT CONNECT
+    /// packet"* — and until 2026-08-22 this crate honoured only the second: the
+    /// caller passed a `BdSeq::before_first()` sentinel of 0 and this function
+    /// advanced past it, so a brand-new node published 1. The absence of a
+    /// previous session cannot be spelled as a number without replaying one, so
+    /// it is spelled as the absence it is ([#100], ADR 0042).
+    pub const fn start(previous: Option<BdSeq>) -> Self {
         Self {
-            bd_seq: previous.next_session(),
+            bd_seq: match previous {
+                Some(previous) => previous.next_session(),
+                None => BdSeq::new(0),
+            },
         }
     }
 
@@ -351,7 +364,7 @@ mod tests {
     }
 
     fn live_from(bd: u8) -> (LiveSession, Payload) {
-        NodeSession::start(BdSeq::new(bd)).birth(1_000, vec![energy(1.5, 1_000)])
+        NodeSession::start(Some(BdSeq::new(bd))).birth(1_000, vec![energy(1.5, 1_000)])
     }
 
     #[test]
@@ -386,7 +399,7 @@ mod tests {
 
     #[test]
     fn the_will_matches_the_birth_and_carries_no_sequence() {
-        let session = NodeSession::start(BdSeq::new(3));
+        let session = NodeSession::start(Some(BdSeq::new(3)));
         let will = session.will(500);
         let (live, birth) = session.birth(1_000, vec![]);
         let death = live.death(2_000);
@@ -637,7 +650,7 @@ mod tests {
 
     #[test]
     fn payloads_round_trip_through_protobuf() {
-        let session = NodeSession::start(BdSeq::new(11));
+        let session = NodeSession::start(Some(BdSeq::new(11)));
         let (_, p) = session.birth(
             1_700_000_000_000,
             vec![energy(4_843.822, 1_700_000_000_000)],

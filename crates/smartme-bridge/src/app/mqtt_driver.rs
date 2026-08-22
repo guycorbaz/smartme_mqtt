@@ -144,15 +144,34 @@ struct PersistedBdSeq {
 }
 
 /// Reads the last session number, or the before-first sentinel.
-pub fn load_bd_seq(path: &std::path::Path) -> BdSeq {
+/// The session number the last run used, or `None` when this node has never
+/// connected.
+///
+/// **Absent and corrupt are not the same answer, and until 2026-08-22 this
+/// function gave them the same one.** Both produced a `before_first()` sentinel
+/// of 0 that the session then advanced past, so a brand-new bridge published
+/// `bdSeq = 1` — while `tck-id-topics-nbirth-bdseq-increment` requires the
+/// number to *start at zero* ([#100], ADR 0042).
+///
+/// - **No file** — this node has never connected. `None`, and the first session
+///   is numbered 0. Nothing can be replayed, because nothing was ever published.
+/// - **Unreadable file** — this node HAS connected and we cannot tell under
+///   which number. Answering 0 here would claim a first session that was not
+///   one. The behaviour is deliberately left exactly as it was: continue from 0,
+///   so the session opens at 1, and warn. It is a poor answer, it replays
+///   numbers a long-lived consumer may have seen, and **refusing to start would
+///   be safer** — that decision belongs to configuration validation and is not
+///   this change's to take.
+pub fn load_bd_seq(path: &std::path::Path) -> Option<BdSeq> {
     match crate::persist::load::<PersistedBdSeq>(path) {
-        Ok(persisted) => BdSeq::new(persisted.bd_seq),
+        Ok(persisted) => Some(BdSeq::new(persisted.bd_seq)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!("no bdSeq state yet; this node's first session is numbered 0");
+            None
+        }
         Err(error) => {
-            // Missing or corrupt. Starting from the sentinel replays numbers a
-            // long-lived consumer may have seen; refusing to start would be
-            // safer still, and Epic 3's config validation is where that belongs.
-            tracing::warn!(%error, "no readable bdSeq state; starting from the sentinel");
-            BdSeq::before_first()
+            tracing::warn!(%error, "unreadable bdSeq state; continuing from 0 as before");
+            Some(BdSeq::new(0))
         }
     }
 }
@@ -3123,19 +3142,29 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         assert_eq!(
             load_bd_seq(&path),
-            BdSeq::before_first(),
-            "a missing file means we start from the sentinel, not a guess"
+            None,
+            "a missing file means this node has never connected — not a number"
         );
         store_bd_seq(&path, BdSeq::new(42)).expect("persist");
-        assert_eq!(load_bd_seq(&path), BdSeq::new(42));
+        assert_eq!(load_bd_seq(&path), Some(BdSeq::new(42)));
         let _ = std::fs::remove_file(&path);
     }
 
+    /// A corrupt file is NOT a first session, and the distinction is the whole
+    /// of [#100]'s repair: an absent file answers `None` and opens session 0, an
+    /// unreadable one answers `Some(0)` and opens session 1 exactly as before.
+    /// Collapsing the two — which is what the old sentinel did — either replays a
+    /// number a consumer has seen, or misses the clause. Falsified by making the
+    /// `NotFound` arm answer for both kinds of error.
     #[test]
-    fn a_corrupt_bd_seq_file_falls_back_to_the_sentinel() {
+    fn a_corrupt_bd_seq_file_is_not_read_as_a_node_that_never_connected() {
         let path = temp("corrupt.toml");
         std::fs::write(&path, "this is not toml {{{").expect("write");
-        assert_eq!(load_bd_seq(&path), BdSeq::before_first());
+        assert_eq!(
+            load_bd_seq(&path),
+            Some(BdSeq::new(0)),
+            "unreadable means we cannot tell, not that there was nothing"
+        );
         let _ = std::fs::remove_file(&path);
     }
 

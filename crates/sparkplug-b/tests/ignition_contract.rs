@@ -151,7 +151,7 @@ async fn ignition_contract() {
     // The session, and its death certificate built BEFORE connecting — the same
     // boot order the bridge uses, because that ordering is part of what is
     // being validated.
-    let session = NodeSession::start(BdSeq::new(7));
+    let session = NodeSession::start(Some(BdSeq::new(7)));
     let will = session.will(now_ms());
 
     let mut options = MqttOptions::new("sparkplug-contract-test", host, port);
@@ -393,7 +393,7 @@ async fn quality_code_probe() {
         .device_topic(MessageType::DBirth, DEVICE)
         .expect("topic");
 
-    let session = NodeSession::start(BdSeq::new(9));
+    let session = NodeSession::start(Some(BdSeq::new(9)));
     let will = session.will(now_ms());
     let mut options = MqttOptions::new("sparkplug-quality-probe", host, port);
     options.set_keep_alive(Duration::from_secs(30));

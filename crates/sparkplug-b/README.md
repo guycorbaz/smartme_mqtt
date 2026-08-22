@@ -17,10 +17,12 @@ fn main() -> Result<(), sparkplug_b::TopicError> {
     let topic = node.device_topic(MessageType::DBirth, "9202685")?;
     assert_eq!(topic, "spBv1.0/Plant/DBIRTH/Bridge01/9202685");
 
-    // A node that has never connected starts from the sentinel. After a restart it
-    // passes back the bdSeq it persisted, so the sequence continues instead of
-    // replaying a number the host has already seen.
-    let session = NodeSession::start(BdSeq::before_first());
+    // A node that has never connected has NO previous session, and its first one is
+    // numbered 0 — `tck-id-topics-nbirth-bdseq-increment` requires the number to
+    // start at zero. After a restart it passes back the bdSeq it persisted, so the
+    // sequence continues instead of replaying a number the host has already seen.
+    let session = NodeSession::start(None);
+    assert_eq!(session.bd_seq(), BdSeq::new(0), "a first session starts at zero");
 
     // The will is built FIRST: it is registered with the broker before connecting,
     // and it carries no seq — the broker publishes it at a moment this node cannot

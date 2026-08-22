@@ -56,7 +56,7 @@
 //! use sparkplug_b::{encode, BdSeq, Metric, MetricValue, NodeSession, Quality};
 //!
 //! // Continue the numbering from whatever was persisted before the restart.
-//! let session = NodeSession::start(BdSeq::new(7));
+//! let session = NodeSession::start(Some(BdSeq::new(7)));
 //!
 //! // The death is built FIRST: it is registered as the connection's last will.
 //! let will = session.will(1_700_000_000_000);

@@ -65,6 +65,24 @@ use crate::domain::{Measurement, Serial, UtcMillis};
 ///   0012.
 /// - **1** — initial contract, with the specification's quality codes.
 ///
+/// # ADR 0042 does NOT bump this either, and the reasoning follows Story 5.2's
+///
+/// From 2026-08-22 a bridge with no persisted state numbers its first session
+/// **0** instead of 1 ([#100]) — the *start at zero* half of
+/// `tck-id-topics-nbirth-bdseq-increment`, which this repository had not
+/// honoured. It looks like a wire change, and it is one.
+///
+/// It does not move this number, by the rule below. No metric name, unit,
+/// datatype or quality code changes, and `bdSeq` is present in NBIRTH and NDEATH
+/// exactly as before: **the tag set is untouched**, which is the property this
+/// constant exists to protect. What changes is the VALUE one metric carries, in
+/// one session, on a node that has never connected — and [#100] records what
+/// that costs a consumer, which is nothing: a DEATH is paired to a BIRTH by
+/// matching `bdSeq` values, and that works from any starting number.
+///
+/// An existing deployment sees no change at all: its state file is present and
+/// readable, so it takes the path it always took.
+///
 /// # Story 5.2 does NOT bump this, and the reasoning is recorded because the
 /// # question will be asked again
 ///
@@ -275,8 +293,13 @@ pub struct SparkplugPublisher {
 }
 
 impl SparkplugPublisher {
-    /// Opens the session that follows `previous_bd_seq` (restored from storage).
-    pub fn new(node: EdgeNode, previous_bd_seq: BdSeq) -> Self {
+    /// Opens the session that follows `previous_bd_seq` (restored from storage),
+    /// or this node's FIRST session when storage holds nothing.
+    ///
+    /// `None` is not "start from zero and advance": it is the absence of a
+    /// previous session, and it produces `bdSeq = 0` — the *start at zero* half
+    /// of `tck-id-topics-nbirth-bdseq-increment` ([#100], ADR 0042).
+    pub fn new(node: EdgeNode, previous_bd_seq: Option<BdSeq>) -> Self {
         Self {
             node,
             session: Session::Pending(NodeSession::start(previous_bd_seq)),
@@ -300,7 +323,9 @@ impl SparkplugPublisher {
     /// while it is publishing.
     pub fn new_session(&mut self) {
         let previous = self.bd_seq();
-        self.session = Session::Pending(NodeSession::start(previous));
+        // Always `Some`: a session that is being replaced IS the previous one.
+        // Only a node with no persisted state has none.
+        self.session = Session::Pending(NodeSession::start(Some(previous)));
     }
 
     /// The node DEATH to register as the connection's last will, built BEFORE
@@ -1081,7 +1106,7 @@ mod tests {
     }
 
     fn publisher() -> SparkplugPublisher {
-        SparkplugPublisher::new(node(), BdSeq::before_first())
+        SparkplugPublisher::new(node(), None)
     }
 
     const SERIAL: &str = "30000001";
@@ -1701,6 +1726,39 @@ mod tests {
         assert_eq!(
             decode(&will_before).metrics[0].value,
             nbirth.metrics[0].value
+        );
+    }
+
+    /// `tck-id-topics-nbirth-bdseq-increment` states TWO obligations — *"The
+    /// bdSeq number MUST start at zero and increment by one on every new MQTT
+    /// CONNECT packet"* — and this repository honoured only the second until
+    /// 2026-08-22 ([#100]). A bridge with an empty state directory published 1.
+    ///
+    /// **What makes this a test rather than a restatement**: it is written from
+    /// the state that produces the fault — no persisted number at all — and it
+    /// asserts on the number the WIRE carries, not on the constructor's
+    /// argument. Falsified by restoring the sentinel: `SparkplugPublisher::new`
+    /// taking `Some(BdSeq::new(0))` here makes the BIRTH carry 1 and this test
+    /// go red naming the value it saw.
+    #[test]
+    fn a_bridge_that_has_never_connected_births_under_bd_seq_zero() {
+        let p = SparkplugPublisher::new(node(), None);
+        assert_eq!(
+            p.bd_seq().value(),
+            0,
+            "a node with no previous session starts at zero, not past it"
+        );
+
+        let will = decode(&p.will(UtcMillis(1_000)));
+        let bd_seq_metric = will
+            .metrics
+            .iter()
+            .find(|m| m.name.as_deref() == Some(sparkplug_b::BD_SEQ_METRIC))
+            .expect("the will carries bdSeq");
+        assert_eq!(
+            bd_seq_metric.value,
+            Some(payload::metric::Value::LongValue(0)),
+            "the number on the wire is the one the clause governs"
         );
     }
 
