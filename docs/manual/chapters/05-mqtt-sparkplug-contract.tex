@@ -14,7 +14,9 @@ is listed in section~\ref{sec:contract-limits} rather than described as though i
 \section{Contract version}
 
 The node BIRTH carries a metric \code{Contract/Version} (\code{Int64}), currently
-\textbf{8}. It is incremented on \emph{any} change to the topic grammar, to a metric name or
+\textbf{11}. \emph{(This sentence said \textbf{8} until 2026-08-22, while the bridge emitted
+10 --- a stale constant in a document, which the chapter's own mechanical guard does not check
+because it reads routes and cause slugs, not numbers.)} It is incremented on \emph{any} change to the topic grammar, to a metric name or
 unit, or to the meaning of a published quality code. Publishing it means a consumer can
 \emph{see} the contract change instead of having to notice it from broken tags.
 
@@ -23,7 +25,16 @@ quality codes and the cause vocabulary to the version they belong to, and fails 
 moves without this number moving. Before that, the number was maintained by whoever
 remembered.
 
-The number does not say what \emph{kind} of change it was, so it is worth stating. Version~10
+The number does not say what \emph{kind} of change it was, so it is worth stating. Version~11
+is \textbf{breaking}, and it is the first version whose reason is a \emph{host} behaviour rather
+than a change of judgement. Ignition materialises a metric property only when a BIRTH declares
+it: a property that first appears in a \textsc{ddata} is discarded. So contract~4's \code{Cause}
+--- the whole point of which is that an operator can see \emph{why} a value is not good --- never
+reached anyone, because a meter that is healthy at its birth and degrades later publishes its
+cause in \textsc{ddata} only. Measured against a live Ignition on 2026-08-21 and confirmed on
+2026-08-22 on a group the host had never seen. From this version the property is declared in
+every BIRTH and published in \emph{every} message, a \textsc{good} metric included, where it
+carries the explicit value \code{no-cause}. Version~10
 is \textbf{additive}: one new cause, \code{device-not-in-account}, says the account itself
 pronounced the configured device id absent --- smart-me's own \code{404}, which until this
 version travelled under \code{configuration-contradicted}. It is split out the way version~8
@@ -76,6 +87,11 @@ history.
 \toprule
 \textbf{Version} & \textbf{Kind} & \textbf{Change} \\
 \midrule
+11 & breaking & Every metric carries \code{Cause}, a \textsc{good} one included, where it
+    reads \code{no-cause}. A property Ignition has not seen in a BIRTH is never
+    materialised, so before this version the cause did not reach the operator at all
+    unless a rebirth happened to intervene. The cold-start BIRTH declares
+    \code{no-reading-yet}, a new cause. See section~\ref{sec:quality}. \\
 10 & additive & \code{device-not-in-account} joins, split out of
     \code{configuration-contradicted}: the account pronounced the configured device id absent
     (smart-me's \code{404}), and the device ends with a DDEATH. Latches, like every refusal. \\
@@ -212,9 +228,25 @@ The code is a 32-bit pattern in which the \textbf{level lives in the top bits} a
 
 Since contract~4, a metric whose quality is \emph{not} \textsc{good} carries a second
 property, \code{Cause}, typed \code{String}, naming the check that refused it ---
-\code{reading-too-old}, \code{source-unreachable}, \code{counter-went-backwards} and so on. A
-\textsc{good} metric carries no \code{Cause} at all: a reason published beside every good
-value is noise a consumer learns to ignore, and then misses the day it means something.
+\code{reading-too-old}, \code{source-unreachable}, \code{counter-went-backwards} and so on.
+
+\textbf{Since contract~11, a \textsc{good} metric carries it too, reading \code{no-cause}.}
+Until then it carried nothing, on the reasoning that a reason published beside every good value
+is noise a consumer learns to ignore. That reasoning still holds --- and it lost to a host
+behaviour. Ignition materialises a metric property only when a \textsc{birth} declares it, so
+the property has to be declared before anything is wrong; and once a host holds a tag property,
+it holds the \emph{last value it was sent}. A bridge that fell silent on the tick a meter
+recovered would leave \code{reading-too-old} standing beside a healthy number, indefinitely.
+\code{no-cause} is louder than silence and it is the only one of the two that cannot become a
+lie.
+
+\begin{note}
+\textbf{The cold start says \code{no-reading-yet}, not \code{no-cause}.} The two metrics a
+device declares before its first poll are \textsc{stale}, so answering \emph{no cause} there
+would be false. Until contract~11 they were the only non-good pair this bridge published that
+named no reason at all --- an operator seeing \code{Bad\_Stale} seconds after a start could not
+tell a fresh bridge from a broken feed. Now they say which it is.
+\end{note}
 
 \begin{note}
 \textbf{Since contract~7, a cause names the field it is about.} A payload can fail in four

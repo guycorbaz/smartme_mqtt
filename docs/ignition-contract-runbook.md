@@ -411,6 +411,29 @@ list; this one needs the opposite discipline — **ask, then look, then compare.
 
 ## Record of runs
 
+> ### ⚠ THE 2026-08-22 ATTESTATION NO LONGER COVERS WHAT THE BRIDGE EMITS
+>
+> **ADR 0043 moved `CONTRACT_VERSION` to 11, breaking, on the afternoon of the same day.** Every
+> metric now carries the `Cause` property — a `Good` one included, where it reads `no-cause` —
+> and the cold-start BIRTH declares a new cause, `no-reading-yet`. This table's promise is that
+> *two runs sharing a version number attest to the same tag set*, and the v10 row cannot speak
+> for v11.
+>
+> **A Tier-3 session is owed before production.** It is short, and it is not only a re-attestation:
+> **it is the experiment that says whether the repair worked.** Two additions to the six steps:
+>
+> - **Step 1** — the cold-start DBIRTH must now show a **`Cause` row reading `no-reading-yet`**
+>   on both metrics. Its presence is what proves Ignition materialised the property at all; every
+>   later step depends on it. If it is absent here, nothing after it can be believed.
+> - **Step 4** — the `Cause` row must now read **`reading-too-old`**, without folding and
+>   unfolding the tag and without a rebirth. That is the whole of [#107]: the property changing
+>   value in a DDATA, on a property the BIRTH declared.
+> - **Step 2/3** — the same row must read **`no-cause`** while the values are `Good`. This is the
+>   half that is easy to skip and it is not decoration: it is what says the property does not go
+>   on displaying a fault the meter has recovered from.
+>
+> And `Contract/Version` reads **11**, not 10.
+
 | Date | Ignition | MQTT Engine | Contract | Artifact | Result |
 | --- | --- | --- | --- | --- | --- |
 | 2026-08-22 | 8.3.7 **Maker Edition** | 5.0.0-rc1 | **v10** | **the bridge binary** | **Pass — all six steps.** The second complete run in this table, and the one that **re-attests NFR17 at v10**. `Offline DateTime` tracks the **will**, confirming the 2026-07-31 probe; [#107] measured on a virgin group and found `Cause` absent. Below |

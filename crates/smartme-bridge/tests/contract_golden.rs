@@ -65,7 +65,7 @@
 //! together in one edit. Nothing in a repository can; that is what review is for.
 
 use smartme_bridge::adapters::sparkplug_publisher::{
-    CONTRACT_VERSION, METRIC_ENERGY, METRIC_NODE_CONTROL_REBIRTH, METRIC_POWER,
+    CAUSE_NONE, CONTRACT_VERSION, METRIC_ENERGY, METRIC_NODE_CONTROL_REBIRTH, METRIC_POWER,
     METRIC_PROPERTY_CAUSE, UNIT_ENERGY, UNIT_POWER, ignition_quality_code,
 };
 use smartme_bridge::core::oracle::Cause;
@@ -120,6 +120,59 @@ const GOLDEN_CAUSES_V4: CauseGolden = &[
 /// The quality codes, as of contract v10. Its own copy — a golden is a
 /// historical record, and sharing an array means editing v9 rewrites what v9
 /// attested to.
+/// The quality codes, as of contract v11. Unchanged from v10 — the bump is about
+/// which metrics carry the `Cause` property, not about what a quality means.
+const GOLDEN_QUALITY_V11: QualityGolden = &[
+    (Quality::Good, 192),
+    (Quality::Stale, 0x8000_0000 | 516),
+    (Quality::Bad, 0x8000_0000 | 512),
+];
+
+/// The cause vocabulary, as of contract v11: v10 plus the one ADR 0043 forced.
+///
+/// **`no-reading-yet` is not a new diagnosis, it is a state that had no name.**
+/// From v11 the cold-start BIRTH declares the `Cause` property — it has to, since
+/// Ignition materialises a property only when a BIRTH declares it ([#107]) — and
+/// those metrics are `Stale`. Publishing the neutral `no-cause` on a non-good
+/// metric would be false, so the state names itself. It degrades and never
+/// latches: the first successful poll ends it.
+const GOLDEN_CAUSES_V11: CauseGolden = &[
+    ("source-unreachable", false, Quality::Stale),
+    ("source-refused", true, Quality::Bad),
+    ("host-clock-unsynced", false, Quality::Stale),
+    ("no-freshness-proof", false, Quality::Stale),
+    ("source-clock-implausible", false, Quality::Stale),
+    ("timestamps-disagree", false, Quality::Stale),
+    ("reading-too-old", false, Quality::Stale),
+    ("value-unusable", false, Quality::Bad),
+    ("source-marked-stale", false, Quality::Stale),
+    ("not-revalidated", false, Quality::Stale),
+    ("counter-went-backwards", false, Quality::Bad),
+    ("unit-not-recognised", false, Quality::Bad),
+    ("value-not-finite", false, Quality::Bad),
+    ("value-overflowed", false, Quality::Bad),
+    ("source-timestamp-unparseable", false, Quality::Bad),
+    ("credential-rejected", true, Quality::Bad),
+    ("configuration-contradicted", true, Quality::Bad),
+    ("identity-mismatch", true, Quality::Bad),
+    ("source-rate-limited", false, Quality::Stale),
+    ("feed-not-advancing", false, Quality::Stale),
+    ("device-not-in-account", true, Quality::Bad),
+    ("no-reading-yet", false, Quality::Stale),
+];
+
+/// The names, as of contract v11: v10 plus the neutral cause value, which becomes
+/// part of the contract the moment a good metric carries the property.
+const GOLDEN_NAMES_V11: NameGolden = &[
+    ("metric.power", "Power"),
+    ("metric.energy", "Energy"),
+    ("metric.rebirth", "Node Control/Rebirth"),
+    ("unit.power", "kW"),
+    ("unit.energy", "kWh"),
+    ("property.cause", "Cause"),
+    ("property.cause.none", "no-cause"),
+];
+
 const GOLDEN_QUALITY_V10: QualityGolden = &[
     (Quality::Good, 192),
     (Quality::Stale, 0x8000_0000 | 516),
@@ -418,8 +471,25 @@ fn live_names() -> Vec<(&'static str, &'static str)> {
         ("unit.power", UNIT_POWER),
         ("unit.energy", UNIT_ENERGY),
         ("property.cause", METRIC_PROPERTY_CAUSE),
+        // The neutral value is part of the contract from v11: a consumer reading
+        // the property off a GOOD metric reads this string, and renaming it is
+        // the same silent breakage as renaming the key.
+        ("property.cause.none", CAUSE_NONE),
     ]
 }
+
+/// The versions at which the contract's NAME SET legitimately changes, with the
+/// reason. Any other change of size is the silent breakage the guard catches.
+///
+/// A version listed here must actually differ from its predecessor — a
+/// declaration nobody can check is worth no more than no declaration — so this
+/// list cannot be padded to quieten the guard.
+const NAME_SET_CHANGES: &[(i64, &str)] = &[(
+    11,
+    "ADR 0043: every metric carries the `Cause` property, a good one included, so the \
+     neutral value `no-cause` becomes a string consumers read and therefore part of the \
+     contract",
+)];
 
 /// What one version of the contract promises a consumer.
 struct Golden {
@@ -432,6 +502,11 @@ struct Golden {
 /// golden is what the `None` arm refuses.
 fn golden_for(version: i64) -> Option<Golden> {
     match version {
+        11 => Some(Golden {
+            quality: GOLDEN_QUALITY_V11,
+            causes: GOLDEN_CAUSES_V11,
+            names: GOLDEN_NAMES_V11,
+        }),
         10 => Some(Golden {
             quality: GOLDEN_QUALITY_V10,
             causes: GOLDEN_CAUSES_V10,
@@ -585,7 +660,10 @@ fn the_published_contract_matches_its_version() {
 /// file reads, which is exactly the blind spot this test exists for.
 #[test]
 fn every_written_version_has_its_own_complete_golden() {
-    let shipped = golden_for(CONTRACT_VERSION).expect("the shipped version must have a golden");
+    assert!(
+        golden_for(CONTRACT_VERSION).is_some(),
+        "the shipped version must have a golden"
+    );
     assert!(
         golden_for(CONTRACT_VERSION + 1).is_none(),
         "an unwritten version must be refused rather than silently accepted"
@@ -612,15 +690,57 @@ fn every_written_version_has_its_own_complete_golden() {
             "v{version}: every quality must have a code, or a metric publishes one \
              the golden never saw"
         );
-        assert_eq!(
-            golden.names.len(),
-            shipped.names.len(),
-            "v{version}: a name was added or dropped between versions without the \
-             golden saying so"
+        assert!(
+            !golden.names.is_empty(),
+            "v{version}: a contract with no names binds nothing"
         );
         assert!(
             !golden.causes.is_empty(),
             "v{version}: a contract with no causes cannot describe a degraded metric"
+        );
+    }
+
+    // --- and where the NAME SET is allowed to change ------------------------
+    // This replaces an assertion that every version's name list had the same
+    // length as the shipped one. That check could only ever pass while the
+    // contract's names never changed — the day one was legitimately added, it
+    // failed and said "without the golden saying so" about a golden that said so
+    // perfectly well. **It forbade change where it meant to require a
+    // declaration**, which is this repository's recurring guard defect (Epic 8
+    // retrospective, action H1). What follows requires the declaration instead.
+    for pair in written.windows(2) {
+        let (before, after) = (pair[0], pair[1]);
+        let a = golden_for(before).expect("checked above");
+        let b = golden_for(after).expect("checked above");
+        if a.names.len() != b.names.len() {
+            let declared = NAME_SET_CHANGES.iter().find(|(v, _)| *v == after);
+            let Some((_, why)) = declared else {
+                panic!(
+                    "the contract's name set changed at v{after} ({} names, was {}) and \
+                     NAME_SET_CHANGES does not say so.\n\
+                     Every consumer binds its tags by these strings. A name appearing or \
+                     vanishing between two versions is either a deliberate contract change \
+                     — declare it here with its reason — or the silent breakage this \
+                     guard exists to catch.",
+                    b.names.len(),
+                    a.names.len()
+                );
+            };
+            assert!(
+                !why.trim().is_empty(),
+                "v{after}'s name-set change is listed with no reason, which declares nothing"
+            );
+        }
+    }
+    for (version, _) in NAME_SET_CHANGES {
+        let (Some(a), Some(b)) = (golden_for(version - 1), golden_for(*version)) else {
+            panic!("NAME_SET_CHANGES names v{version}, which has no golden or no predecessor");
+        };
+        assert_ne!(
+            a.names.len(),
+            b.names.len(),
+            "NAME_SET_CHANGES claims the name set changed at v{version} and it did not. \
+             A declaration nobody can check is worth no more than no declaration"
         );
     }
 

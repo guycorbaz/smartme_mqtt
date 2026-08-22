@@ -65,6 +65,26 @@ use crate::domain::{Measurement, Serial, UtcMillis};
 ///   0012.
 /// - **1** — initial contract, with the specification's quality codes.
 ///
+/// # ADR 0043 bumps it to 11, and it is BREAKING
+///
+/// **Every metric now carries the `Cause` property, including a good one**, with
+/// the explicit value `no-cause` ([`CAUSE_NONE`]); and the cold-start BIRTH
+/// declares `no-reading-yet`, a cause that did not exist under v10.
+///
+/// The reason is a host behaviour rather than a change of mind: Ignition
+/// materialises a metric property **only when a BIRTH declares it** ([#107],
+/// measured twice against a live host). A property first appearing in DDATA is
+/// ignored, so contract v4's whole operator-facing purpose — see WHY a value is
+/// not trustworthy — never crossed. Declaring it at BIRTH forces publishing it
+/// on every DDATA too, because a host holds the last value of a property it was
+/// sent: omitting it on recovery would leave a stale cause beside a good value.
+///
+/// **Breaking by the rule below, on both counts.** The tag set changes — a
+/// consumer browsing a `Good` metric now sees a property that did not exist
+/// there under v10 — and the cause vocabulary grows by one, which is what
+/// bumped v5. Two runs sharing a version number attest to the same tag set, and
+/// that promise would be false across this boundary.
+///
 /// # ADR 0042 does NOT bump this either, and the reasoning follows Story 5.2's
 ///
 /// From 2026-08-22 a bridge with no persisted state numbers its first session
@@ -141,7 +161,7 @@ use crate::domain::{Measurement, Serial, UtcMillis};
 /// vocabulary changed size (11 live, 10 in the v4 golden) without
 /// CONTRACT_VERSION moving"* — which is the first time that test caught a real
 /// change rather than a mutation written to try it.
-pub const CONTRACT_VERSION: i64 = 10;
+pub const CONTRACT_VERSION: i64 = 11;
 
 /// The quality code this bridge publishes for `quality`.
 ///
@@ -210,6 +230,26 @@ pub const METRIC_ENERGY: &str = "Energy";
 /// Present ONLY on a non-good metric. A cause beside a good value is noise a
 /// consumer would learn to ignore, and then miss the day it meant something.
 pub const METRIC_PROPERTY_CAUSE: &str = "Cause";
+
+/// The value [`METRIC_PROPERTY_CAUSE`] carries when a metric is `Good` — the
+/// explicit spelling of *no cause*.
+///
+/// **It exists because a property that stops being published does not stop being
+/// displayed.** Ignition materialises a metric property only when a BIRTH
+/// declares it ([#107], measured on 2026-08-21 and again on a virgin group on
+/// 2026-08-22), so from contract v11 the property is declared at BIRTH — and
+/// once a host holds a tag property, it holds the LAST value it was sent.
+/// Omitting the property on the tick a metric recovers would leave
+/// `reading-too-old` standing beside a `Good` value, indefinitely. That is worse
+/// than the silence it replaces: silence is uninformative, a stale cause is
+/// false.
+///
+/// It is deliberately NOT a [`Cause`](crate::core::oracle::Cause). *"A good
+/// metric carries no cause"* still holds in the domain — `Verdict::cause()`
+/// remains an `Option` and the vocabulary names only reasons. What pays for the
+/// host's behaviour is the wire, at this one boundary, which is where a
+/// host-shaped concession belongs.
+pub const CAUSE_NONE: &str = "no-cause";
 /// Engineering unit published with [`METRIC_ENERGY`].
 pub const UNIT_ENERGY: &str = "kWh";
 
@@ -660,6 +700,14 @@ fn contract_metric(timestamp_ms: u64) -> Metric {
 
 /// The tag set declared for a device with no reading yet: named, unit-carrying,
 /// valueless and stale.
+///
+/// **This BIRTH is what makes the `Cause` property exist on the host at all**
+/// (ADR 0043), so the property is declared here, and it names
+/// [`Cause::NoReadingYet`] rather than [`CAUSE_NONE`]. These metrics are `Stale`;
+/// answering *no cause* for a non-good metric would be the lie this whole
+/// property exists to prevent. Until v11 they were the one non-good pair in this
+/// bridge that named no reason at all, so an operator seeing `Bad_Stale` seconds
+/// after a start could not tell a fresh bridge from a broken feed.
 fn cold_start_metrics(timestamp_ms: u64) -> Vec<Metric> {
     vec![
         Metric::new(
@@ -668,14 +716,16 @@ fn cold_start_metrics(timestamp_ms: u64) -> Vec<Metric> {
             timestamp_ms,
         )
         .with_quality_code(ignition_quality_code(Quality::Stale))
-        .with_engineering_unit(UNIT_POWER),
+        .with_engineering_unit(UNIT_POWER)
+        .with_property(METRIC_PROPERTY_CAUSE, Cause::NoReadingYet.as_str()),
         Metric::new(
             METRIC_ENERGY,
             MetricValue::Null(DataType::Double),
             timestamp_ms,
         )
         .with_quality_code(ignition_quality_code(Quality::Stale))
-        .with_engineering_unit(UNIT_ENERGY),
+        .with_engineering_unit(UNIT_ENERGY)
+        .with_property(METRIC_PROPERTY_CAUSE, Cause::NoReadingYet.as_str()),
     ]
 }
 
@@ -742,12 +792,13 @@ fn metrics_for(measurement: &Measurement, verdicts: Verdicts) -> Vec<Metric> {
         let built = Metric::new(name, carried, timestamp)
             .with_quality_code(ignition_quality_code(published))
             .with_engineering_unit(unit);
+        // EVERY metric carries the property, from contract v11. Not because a
+        // good metric has a cause — it has none, and `CAUSE_NONE` says exactly
+        // that — but because a property this bridge stops sending is a property
+        // the host goes on displaying at its last value ([#107], ADR 0043).
         match verdict.cause() {
             Some(cause) => built.with_property(METRIC_PROPERTY_CAUSE, cause.as_str()),
-            // A good metric carries no cause, by construction. Publishing an
-            // empty one would be noise a consumer must learn to ignore, and the
-            // day it meant something nobody would notice.
-            None => built,
+            None => built.with_property(METRIC_PROPERTY_CAUSE, CAUSE_NONE),
         }
     };
 
@@ -907,7 +958,7 @@ mod tests {
     /// `cause.unwrap_or(Cause::NotRevalidated)` — turns the good-metric assertion
     /// red while the two degraded ones stay green.
     #[test]
-    fn a_non_good_metric_names_its_cause_and_a_good_one_does_not() {
+    fn a_non_good_metric_names_its_cause_and_a_good_one_says_it_has_none() {
         let m = super::super::sparkplug_publisher::tests::measurement(super::Quality::Good);
 
         let degraded =
@@ -939,11 +990,19 @@ mod tests {
             )]
         );
 
+        // From contract v11 a good metric carries the property with the neutral
+        // value, and NOT nothing (ADR 0043). A property this bridge stops sending
+        // is one the host goes on displaying at its last value, so silence on
+        // recovery would leave the previous cause standing beside a good number.
         let good = super::metrics_for(&m, Verdicts::uniform(Verdict::good()));
         for metric in &good {
-            assert!(
-                metric.properties.is_empty(),
-                "{} is good and must carry no cause",
+            assert_eq!(
+                metric.properties,
+                vec![(
+                    super::METRIC_PROPERTY_CAUSE.to_string(),
+                    super::CAUSE_NONE.to_string()
+                )],
+                "{} is good and must say so explicitly, not fall silent",
                 metric.name
             );
         }
@@ -1060,9 +1119,17 @@ mod tests {
             power.quality_code,
             Some(super::ignition_quality_code(super::Quality::Good))
         );
-        assert!(
-            power.properties.is_empty(),
-            "a good metric carries no cause — least of all its neighbour's, which              is what the pre-2.3 wire did: `Power = null`, cause              `counter-went-backwards`, for a number the bridge had no complaint              about"
+        assert_eq!(
+            power.properties,
+            vec![(
+                super::METRIC_PROPERTY_CAUSE.to_string(),
+                super::CAUSE_NONE.to_string()
+            )],
+            "a good metric names NO cause — and since v11 it says so explicitly \
+             rather than falling silent. What it must never carry is its \
+             neighbour's, which is what the pre-2.3 wire did: `Power = null`, \
+             cause `counter-went-backwards`, for a number the bridge had no \
+             complaint about"
         );
     }
 
@@ -1202,6 +1269,61 @@ mod tests {
         match &props.values[idx].value {
             Some(payload::property_value::Value::StringValue(v)) => v.clone(),
             _ => panic!("engUnit is a string property"),
+        }
+    }
+
+    /// **The load-bearing half of [#107]'s repair.** Ignition materialises a
+    /// metric property only when a BIRTH declares it — measured against a live
+    /// host on 2026-08-21, and again on 2026-08-22 on a group the host had never
+    /// seen. So if the cold-start BIRTH stops declaring `Cause`, the property
+    /// never exists on the host, every later DDATA carrying it is ignored, and
+    /// **contract v4's whole operator-facing purpose silently stops working
+    /// again** — with the wire still perfectly conformant and every other test
+    /// still green. That is why this is asserted at the BIRTH and not only in
+    /// `metrics_for`.
+    ///
+    /// It also pins the VALUE. A cold-start metric is `Stale`, so declaring the
+    /// neutral `no-cause` here would be false — and false in the one direction
+    /// this project exists to prevent.
+    ///
+    /// FALSIFIED 2026-08-22, both ways: dropping the `with_property` from
+    /// `cold_start_metrics` goes red with *"the cold-start BIRTH must DECLARE
+    /// Cause"*; publishing `CAUSE_NONE` there instead goes red naming
+    /// `"no-cause"` where `"no-reading-yet"` belongs.
+    #[test]
+    fn the_cold_start_birth_declares_the_cause_property_and_does_not_lie_about_it() {
+        let mut p = publisher();
+        let mut sink = RecordingSink::default();
+        p.birth(UtcMillis(1_000), &[Serial::new(SERIAL)], &mut sink)
+            .expect("valid topics");
+
+        let dbirth = decode(&sink.emitted[1]);
+        for name in [METRIC_POWER, METRIC_ENERGY] {
+            let m = metric(&dbirth, name);
+            let cause = m
+                .properties
+                .as_ref()
+                .and_then(|props| {
+                    let idx = props.keys.iter().position(|k| k == METRIC_PROPERTY_CAUSE)?;
+                    match props.values[idx].value.as_ref() {
+                        Some(payload::property_value::Value::StringValue(v)) => Some(v.clone()),
+                        _ => None,
+                    }
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "the cold-start BIRTH must DECLARE Cause on {name}: a property a \
+                         BIRTH does not declare is one Ignition never materialises, so \
+                         every later DDATA carrying it is discarded and the operator \
+                         never learns why a value is not good"
+                    )
+                });
+            assert_eq!(
+                cause,
+                Cause::NoReadingYet.as_str(),
+                "{name} is STALE at cold start, so the declared cause must say why — \
+                 the neutral value would be a lie about a non-good metric"
+            );
         }
     }
 

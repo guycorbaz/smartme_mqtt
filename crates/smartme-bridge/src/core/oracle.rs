@@ -229,6 +229,22 @@ pub enum Cause {
     /// that is evidence ABOUT THE DEVICE, so the fleet topology answers it
     /// with a DDEATH (ADR 0034) where its siblings say nothing about theirs.
     DeviceNotInAccount,
+    /// No reading has been taken yet: the device is declared and its first poll
+    /// has not answered.
+    ///
+    /// **Added by ADR 0043, and it exists because the repair for [#107] forced
+    /// the question.** From contract v11 every metric carries a `Cause`
+    /// property, because Ignition materialises a property only when a BIRTH
+    /// declares it — so the cold-start BIRTH has to declare one, and the
+    /// neutral value would be a lie: those metrics ARE `Stale`, and until now
+    /// they were the one non-good pair in this bridge that named no reason at
+    /// all. An operator seeing `Bad_Stale` seconds after a start could not tell
+    /// a fresh bridge from a broken feed.
+    ///
+    /// **Nothing repairs it and nothing should**: it resolves itself the moment
+    /// the first poll answers, which is why its culprit is the world rather
+    /// than the operator, and why it degrades rather than latching.
+    NoReadingYet,
 }
 
 /// Whose fault a fault is, as an operator would apportion it (AR19).
@@ -322,6 +338,9 @@ impl Cause {
             // ADR 0034: the account no longer has this device. Either it was removed
             // there or the id is wrong here — both end at the configuration screen.
             | Self::DeviceNotInAccount => Culprit::You,
+            // Nobody's fault and nobody's repair: the first poll has not come back
+            // yet. It clears itself, which is why it sits with the world.
+            Self::NoReadingYet => Culprit::World,
         }
     }
 }
@@ -413,6 +432,9 @@ impl Cause {
                  reads them, then restart: smart-me rejected the credential this bridge \
                  is using. There is no field for it on any screen, deliberately"
             }
+            Self::NoReadingYet => {
+                "wait: the meter is declared and its first reading has not come back yet.                  If it does not clear within a poll period or two, the cause will change                  to one that names the fault"
+            }
             Self::DeviceNotInAccount => {
                 "open the configuration, load the account's meters and pick this meter \
                  again: the account does not have this device id, and the pick fills the \
@@ -482,6 +504,7 @@ impl Cause {
         Cause::SourceRateLimited,
         Cause::FeedNotAdvancing,
         Cause::DeviceNotInAccount,
+        Cause::NoReadingYet,
     ];
 
     /// The next cause in [`Cause::ALL`]'s order, or `None` for the last one.
@@ -526,10 +549,12 @@ impl Cause {
             Cause::IdentityMismatch => Some(Cause::SourceRateLimited),
             Cause::SourceRateLimited => Some(Cause::FeedNotAdvancing),
             Cause::FeedNotAdvancing => Some(Cause::DeviceNotInAccount),
+            Cause::DeviceNotInAccount => Some(Cause::NoReadingYet),
             // The end of the chain. A new cause appended to `ALL` replaces this
             // arm's `None` with a `Some`, which is the edit the old positional
-            // `discriminant` never demanded.
-            Cause::DeviceNotInAccount => None,
+            // `discriminant` never demanded — and it did exactly that when ADR
+            // 0043 appended `NoReadingYet`.
+            Cause::NoReadingYet => None,
         }
     }
 
@@ -604,6 +629,9 @@ impl Cause {
             // A refusal of the device itself: the number must not be handed
             // over, like every latch's.
             Cause::DeviceNotInAccount => Quality::Bad,
+            // Nothing has been read, so nothing can be vouched for — but no
+            // number is being withheld either, because there is none. `Stale`.
+            Cause::NoReadingYet => Quality::Stale,
             // Freshness refusals: the value was true, and may be old. The
             // difference from the three above is the whole reason a consumer is
             // told which of the two it is holding.
@@ -642,6 +670,7 @@ impl Cause {
             Cause::SourceRateLimited => "source-rate-limited",
             Cause::FeedNotAdvancing => "feed-not-advancing",
             Cause::DeviceNotInAccount => "device-not-in-account",
+            Cause::NoReadingYet => "no-reading-yet",
         }
     }
 
@@ -1227,6 +1256,7 @@ mod culprit_tests {
             Cause::ValueNotFinite,
             Cause::ValueOverflowed,
             Cause::NotRevalidated,
+            Cause::NoReadingYet,
         ];
         for cause in world {
             assert_eq!(

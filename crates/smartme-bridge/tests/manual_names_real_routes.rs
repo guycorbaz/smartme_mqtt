@@ -233,6 +233,13 @@ fn every_cause_the_manual_names_is_one_the_oracles_can_produce() {
     // They are different enums and they appear side by side on `/healthz` and on the
     // screens — a test that knew only the first would have called five real slugs
     // inventions, which is what its first run did.
+    //
+    // **And the neutral value, which is a slug and belongs to neither enum.** From
+    // contract v11 a good metric publishes `Cause = no-cause` (ADR 0043), so the
+    // manual names a string the oracles cannot produce and never will. It is read
+    // from the constant the publisher actually sends rather than written out here:
+    // a vocabulary this test spells for itself is a vocabulary that drifts from the
+    // wire in silence, which is the whole defect this test exists to prevent.
     let live: BTreeSet<&str> = smartme_bridge::core::oracle::Cause::ALL
         .iter()
         .map(|c| c.as_str())
@@ -241,6 +248,9 @@ fn every_cause_the_manual_names_is_one_the_oracles_can_produce() {
                 .iter()
                 .map(|r| r.as_str()),
         )
+        .chain(std::iter::once(
+            smartme_bridge::adapters::sparkplug_publisher::CAUSE_NONE,
+        ))
         .collect();
     assert!(
         live.len() >= 26 && live.contains("credential-rejected") && live.contains("outbox-full"),

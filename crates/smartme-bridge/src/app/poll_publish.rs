@@ -1860,9 +1860,11 @@ mod tests {
             "the sound index reaches the consumer at full value. Got {:?}",
             energy.value
         );
-        assert!(
-            energy.properties.is_empty(),
-            "and carries no cause — least of all its neighbour's"
+        assert_eq!(
+            energy.properties,
+            vec![("Cause".to_string(), "no-cause".to_string())],
+            "and names no cause — explicitly, since contract v11 — least of all \
+             its neighbour's"
         );
     }
 
