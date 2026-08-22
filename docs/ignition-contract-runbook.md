@@ -411,16 +411,23 @@ list; this one needs the opposite discipline — **ask, then look, then compare.
 
 ## Record of runs
 
-> ### ⚠ SUPERSEDED THE SAME EVENING — the v11 session ran, and its headline change FAILED
+> ### ✅ THE ATTESTATION IS CURRENT — v12, 2026-08-22 at 20:53
+>
+> **Registre and binary coincide for the first time since 2026-08-03.** Three sessions ran that
+> day, at v10, v11 and v12, and the third is the one that stands: `CONTRACT_VERSION` is 12 and
+> v12 is attested on all six steps.
+>
+> The two boxes below are kept because they are the record of how that took three passes — a
+> version attested while its own headline change did not work (v11), and a remedy chosen from the
+> half of a measurement that had not been taken (ADR 0043). Neither is a live instruction.
+>
+> ### ~~⚠ SUPERSEDED — the v11 session ran, and its headline change FAILED~~ *(historical)*
 >
 > The box below asked for a v11 session and listed what it should check. **It was run at 20:22 and
-> it answered: the property is written by a BIRTH and by nothing else.** See *What the 2026-08-22
-> evening session established*. v11 is attested on the wire and its own reason for existing does
-> not work; ADR 0044 moves the cause to a metric and `CONTRACT_VERSION` to 12, so **the box below
-> now applies to v12** — with `Cause/Power` and `Cause/Energy` read as TAGS rather than as a
-> property row.
+> it answered: the property is written by a BIRTH and by nothing else.** ADR 0044 moved the cause
+> to a metric and `CONTRACT_VERSION` to 12, and the v12 session at 20:53 confirmed the repair.
 >
-> ### ⚠ THE 2026-08-22 (MORNING) ATTESTATION NO LONGER COVERS WHAT THE BRIDGE EMITS
+> ### ~~⚠ THE 2026-08-22 (MORNING) ATTESTATION NO LONGER COVERS WHAT THE BRIDGE EMITS~~ *(historical)*
 >
 > **ADR 0043 moved `CONTRACT_VERSION` to 11, breaking, on the afternoon of the same day.** Every
 > metric now carries the `Cause` property — a `Good` one included, where it reads `no-cause` —
@@ -445,7 +452,8 @@ list; this one needs the opposite discipline — **ask, then look, then compare.
 
 | Date | Ignition | MQTT Engine | Contract | Artifact | Result |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-22 (evening) | 8.3.7 **Maker Edition** | 5.0.0-rc1 | **v11** | **the bridge binary** | **Pass — all six steps — AND THE VERSION'S OWN HEADLINE CHANGE DOES NOT REACH THE OPERATOR.** Read both halves of that sentence. The guarantee holds and the contract is conformant on the wire; the `Cause` property that v11 was cut for is written by a BIRTH and never updated by a DDATA, so it stands frozen at `no-reading-yet` on healthy metrics. [#100] confirmed on the wire the same evening: `bd_seq=0`. Below |
+| 2026-08-22 (20:53) | 8.3.7 **Maker Edition** | 5.0.0-rc1 | **v12** | **the bridge binary** | **Pass — all six steps, and the repair CONFIRMED rather than assumed.** The cause reached the operator for the first time since contract v4 invented it, eight versions ago: `no-reading-yet` at birth, `no-cause` when the values went good, `reading-too-old` when they degraded — **three transitions in DDATA, not one rebirth**. [#100] confirmed on the wire a second time. Below |
+| 2026-08-22 (20:22) | 8.3.7 **Maker Edition** | 5.0.0-rc1 | **v11** | **the bridge binary** | **Pass — all six steps — AND THE VERSION'S OWN HEADLINE CHANGE DOES NOT REACH THE OPERATOR.** Read both halves of that sentence. The guarantee holds and the contract is conformant on the wire; the `Cause` property that v11 was cut for is written by a BIRTH and never updated by a DDATA, so it stands frozen at `no-reading-yet` on healthy metrics. [#100] confirmed on the wire the same evening: `bd_seq=0`. Below |
 | 2026-08-22 (morning) | 8.3.7 **Maker Edition** | 5.0.0-rc1 | **v10** | **the bridge binary** | **Pass — all six steps.** The second complete run in this table, and the one that **re-attests NFR17 at v10**. `Offline DateTime` tracks the **will**, confirming the 2026-07-31 probe; [#107] measured on a virgin group and found `Cause` absent. Below |
 | 2026-08-21 | 8.3.7 **Maker Edition** | 5.0.0-rc1 | **v10** | **the bridge binary** | **Partial — five steps of six. STEP 6 WAS NOT PERFORMED**, so NFR17 is *not* re-attested at v10. Steps 1–5 passed, and the session's own finding is that contract v4's `Cause` does not reach the operator at all unless a BIRTH declares it. Below |
 | 2026-08-03 | 8.3.7 | 5.0.0-rc1 | v3 | **the bridge binary** | **Pass — all six steps.** The first complete run of the bridge gate that exists, and the run that closes NFR17. What it establishes, and the two guards that were inert, are below |
@@ -458,7 +466,56 @@ A pass is only meaningful against a stated version, so add a row rather than edi
 governs conformance more directly than the Ignition platform version, and the note below had been
 asking for it since the table was written.
 
-### What the 2026-08-22 evening session established
+### What the 2026-08-22 20:53 session established — the repair, measured
+
+Ignition **8.3.7 Maker Edition**, MQTT Engine **5.0.0-rc1**, contract **v12**, group
+`ContractV12`. **Six steps, all passed.** NFR17 is attested at the version the bridge actually
+emits, which had not been true since 2026-08-03.
+
+#### The three transitions, and why step 2 was the decisive one
+
+The cause travels as two metrics from v12 (ADR 0044), and what had to be shown was not that a
+BIRTH can declare them — v11 already showed a BIRTH can declare anything — but that **a DDATA can
+change one**.
+
+| Step | `Cause/Power` and `Cause/Energy` read | What it proved |
+| --- | --- | --- |
+| 1 — cold start | `no-reading-yet` | the tags exist; the BIRTH declared them |
+| 2 — first good reading | **`no-cause`** | **a DDATA changes the value** — the one thing v11 could not do |
+| 3 — values update | `no-cause`, unchanged | a tag that updates does not update *arbitrarily* |
+| 4 — STALE, node online | **`reading-too-old`** | [#107] repaired |
+| 5 — after a rebirth | `reading-too-old`, **unchanged** | the repair does not depend on a rebirth any more |
+
+**Step 5's line is the one worth keeping.** Under v11 a rebirth was the *only* way to move the
+property; under v12 it changes nothing, because the DDATA had already done it. A rebirth that
+still mattered would have said the dependency was not gone.
+
+**And the cause tag is `Good` while its measurement is `Bad_Stale`** — checked at step 4, and it is
+the check nobody thinks to make, because one reads the value of a tag one has just found. A tag
+that explains a fault must not be marked untrustworthy during the fault.
+
+#### The rest of the run
+
+- **`Contract/Version` = 12** read by the host.
+- **Step 4** — `Bad_Stale` on both, node **online**, `Death Count = 0`, values **frozen** at `2,35`
+  and `5 679,1`.
+- **Step 5** — one write, **one NBIRTH and one DBIRTH**, `bdSeq unchanged at 0 ✓`. **[#100]
+  confirmed on the wire for the second time that evening**: this bridge had no persisted state and
+  was born under zero.
+- **Step 6** — two certificates **2.002 s apart** (20:53:04.128 and 20:53:06.130), both `INFO`, and
+  the Engine module logged **four lines in the whole export** — the two death pairs of the evening
+  and nothing else, no `WARN`, no `ERROR`, for the third session running. `Death Count` 0 → 2.
+  `Offline DateTime = 20:53:06`, **the will**, which is now the fourth run to agree. Window noise:
+  **121 lines, 38 `WARN`, 9 `ERROR`**, none ours.
+- The cause tags **keep `reading-too-old` through the node's death**, which is the honest answer:
+  it is the last thing known, and nothing new is being asserted.
+
+> **A query can pair the wrong two deaths.** The first pass over this export reported *1848 s*
+> between the certificates — it had matched v11's 20:22 death with v12's 20:53 one, because the
+> filter named the node and not the group, and three groups ran that evening. Recomputed on the
+> v12 pair alone: 2.002 s. **Filter by group, not by node**, when a day has carried more than one.
+
+### What the 2026-08-22 20:22 session established
 
 Ignition **8.3.7 Maker Edition**, MQTT Engine **5.0.0-rc1**, contract **v11**, group
 `ContractV11`, node `BridgeContractNode`, meter `30000001`. **Six steps, all passed** — and the
