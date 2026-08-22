@@ -62,7 +62,7 @@
 #   Ignition contract test (human action required — stays backlog until Guy runs it).
 
 generated: 2026-07-25
-last_updated: 2026-08-21
+last_updated: 2026-08-22
 project: smartme_mqtt
 project_key: NOKEY
 tracking_system: file-system
@@ -2683,7 +2683,9 @@ development_status:
   # the ADR trail is at 28 rather than the 8 this epic's description still names.
   # An epic whose work is happening without stories cannot be said to be at
   # `backlog` honestly — but it can be said to be listed.
-  epic-8: in-progress
+  # CLOSED 2026-08-22 — three stories done and the retrospective run, which is the
+  # condition of closing. THE LAST EPIC IN epics.md: closing it closes the roadmap.
+  epic-8: done
   # 2026-08-20, WRITTEN AND IMPLEMENTED. EIGHT `\stub{}` MARKS STOOD IN THE MANUAL AND
   # FOUR WERE OVERDUE: three said "once Epic 6 exists" and one "authored in Epic 7", and
   # both epics closed the same day without paying them. No retrospective saw it, because
@@ -2736,4 +2738,22 @@ development_status:
   # custom metric properties" both still fit, and they call for different repairs. One
   # manoeuvre settles it, and it is the arbitration story 2.1's task 3 has been blocking.
   8-3-the-tier-3-session: done  # closed 2026-08-22 — all five ACs met; AC3's list of what is NOT attested grew rather than shrank, which is the point of it
-  epic-8-retrospective: required  # added 2026-08-10 — the line was absent entirely
+  # DONE 2026-08-22 — epic-8-retro-2026-08-22.md. Its signature defect: EVERY STORY IN
+  # THIS EPIC SHIPPED A GUARD, AND EVERY GUARD MEASURED THE SHAPE ITS AUTHOR REMEMBERED —
+  # a line-by-line route scan that accused a correct manual, a slug check that knew one of
+  # two vocabularies, a purity guard blind to an aliased import and to rustfmt's own line
+  # wrapping, a README written as a doctest and included nowhere, a printed checklist
+  # quoting CONTRACT_VERSION 3 while the binary emits 10, and two runbook steps that could
+  # not measure what they asked. [#106] then found five of six repository guards blind the
+  # same way. None shipped a defect; each had to be found twice.
+  # AND AR16/AR20 ARE MET IN SUBSTANCE, NOT IN THE CONTAINER THEY NAME: nine standalone
+  # markdown documents and 8 ADRs on paper, eleven LaTeX chapters and 34 ADRs in fact, and
+  # NO ADR RECORDED THE SUBSTITUTION — second occurrence of [#89]'s shape.
+  # GUY'S READING, RECORDED: "l'impression de tourner un peu en rond avec Sparkplug." It
+  # has a measurable shape — CONTRACT_VERSION 10, attested twice (v3 on 2026-08-03, v10
+  # today), so SEVEN VERSIONS SHIPPED WITHOUT MEETING A HOST.
+  # DECISION TAKEN AT THIS RETROSPECTIVE: production now. That closes the window in which
+  # wire-breaking changes are cheap, and [#100] (first bdSeq is 1, the norm requires 0) and
+  # [#107] (v4's Cause never reaches the operator; both repairs change the wire) are the two
+  # items that need it. Seven action items H1-H7.
+  epic-8-retrospective: done  # 2026-08-22
