@@ -15,6 +15,13 @@ semantic versioning as far as the shared version number allows.
 
 ### Changed
 
+- **`NodeSession::start` takes an `Option<BdSeq>`, and `BdSeq::before_first` is gone.**
+  *Breaking.* `None` means this node has never connected, and its first session is numbered **0**
+  — the *start at zero* half of `tck-id-topics-nbirth-bdseq-increment`, which this crate did not
+  honour: the sentinel returned 0 and `start` advanced past it, so a brand-new node published 1.
+  The absence of a previous session cannot be spelled as a number without replaying one, so it is
+  now spelled as the absence it is. `Some(previous)` behaves exactly as before. ADR 0042, issue
+  [#100]. Confirmed against a live Ignition on 2026-08-22.
 - **`decode` returns this crate's own `DecodeError`** instead of `prost::DecodeError`.
   *Breaking for anyone matching on the error type.* The reason: a borrowed error type made every
   consumer a `prost` consumer, at the version this crate pins, and a `prost` major release broke
@@ -23,7 +30,11 @@ semantic versioning as far as the shared version number allows.
 ### Added
 
 - `README.md` and this file, and the crate metadata crates.io requires — the publication bar
-  NFR19 describes. Publication itself remains deferred (issue #3).
+  NFR19 describes. **Publication itself is decided against** — not deferred — by ADR 0045 on
+  2026-08-22: a crates.io version cannot be withdrawn, only yanked; nothing yet feeds `decode`
+  hostile bytes, which is where a stranger arrives; and the conformance scope this README states
+  rests on a matrix with citations that no longer point at code. The bar stands on its own merits:
+  it closed a real leak and made the README something `cargo test` fails on.
 - **The README's example is compiled and run by `cargo test`**, through a `cfg(doctest)` hook in
   `src/lib.rs`. Its first draft did not compile — it named a constructor this crate does not
   have — and nothing read it, a README being a file rather than a module. The example on the
