@@ -1,6 +1,23 @@
 # ADR 0043 — The cause is declared at BIRTH, or it does not exist
 
-- **Status:** accepted
+- **Status:** **SUPERSEDED by [ADR 0044](0044-the-cause-is-a-metric-because-a-property-is-written-once.md)** — the same evening, by measurement. Accepted 2026-08-22 afternoon.
+
+> **What this ADR got right, and what it merely inferred.** It measured that Ignition
+> materialises a metric property only when a BIRTH declares it — true, and confirmed again
+> that evening — and then **inferred that declaring it would be enough**. Nothing established
+> that. The evening Tier-3 session measured the other half: a DDATA carrying a new value for
+> an already-declared property is **ignored**, while the very same message's quality update
+> is applied. **A metric property is written by a BIRTH and by nothing else**, so the cause
+> cannot travel as one at all.
+>
+> The reasoning below about *declare and always publish, or neither* still holds, and it is
+> what turns the property from useless into harmful: v11 leaves `no-reading-yet` standing
+> beside a healthy meter for ever. ADR 0044 carries the cause as a **metric**, whose value is
+> the thing a DDATA exists to change.
+>
+> **Kept rather than rewritten, because the shape of the mistake is the lesson**: a
+> measurement was taken, the half that was measured was reported accurately, and the remedy
+> was chosen from the half that was not.
 - **Date:** 2026-08-22
 - **Decides:** the arbitration story 2.1's task 3 deferred on 2026-08-10, now that it has its measurement. Bumps `CONTRACT_VERSION` to **11**, breaking.
 - **Issue:** [#107](https://github.com/guycorbaz/smartme_mqtt/issues/107), and it answers [#68](https://github.com/guycorbaz/smartme_mqtt/issues/68)

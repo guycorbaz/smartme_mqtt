@@ -65,8 +65,8 @@
 //! together in one edit. Nothing in a repository can; that is what review is for.
 
 use smartme_bridge::adapters::sparkplug_publisher::{
-    CAUSE_NONE, CONTRACT_VERSION, METRIC_ENERGY, METRIC_NODE_CONTROL_REBIRTH, METRIC_POWER,
-    METRIC_PROPERTY_CAUSE, UNIT_ENERGY, UNIT_POWER, ignition_quality_code,
+    CAUSE_NONE, CONTRACT_VERSION, METRIC_CAUSE_ENERGY, METRIC_CAUSE_POWER, METRIC_ENERGY,
+    METRIC_NODE_CONTROL_REBIRTH, METRIC_POWER, UNIT_ENERGY, UNIT_POWER, ignition_quality_code,
 };
 use smartme_bridge::core::oracle::Cause;
 use smartme_bridge::domain::Quality;
@@ -120,6 +120,34 @@ const GOLDEN_CAUSES_V4: CauseGolden = &[
 /// The quality codes, as of contract v10. Its own copy — a golden is a
 /// historical record, and sharing an array means editing v9 rewrites what v9
 /// attested to.
+/// The quality codes, as of contract v12. Unchanged since v9.
+const GOLDEN_QUALITY_V12: QualityGolden = &[
+    (Quality::Good, 192),
+    (Quality::Stale, 0x8000_0000 | 516),
+    (Quality::Bad, 0x8000_0000 | 512),
+];
+
+/// The cause vocabulary, as of contract v12: unchanged from v11. What moved is
+/// where a cause TRAVELS, not what one can say.
+const GOLDEN_CAUSES_V12: CauseGolden = GOLDEN_CAUSES_V11;
+
+/// The names, as of contract v12. **`property.cause` is GONE and two metrics take
+/// its place** — the only version so far in which a contract name disappears.
+///
+/// A consumer that learned to read the `Cause` property under v11 finds nothing
+/// there under v12. That is precisely the silent breakage `CONTRACT_VERSION`
+/// exists to make visible, and it is why v12 is breaking rather than additive.
+const GOLDEN_NAMES_V12: NameGolden = &[
+    ("metric.power", "Power"),
+    ("metric.energy", "Energy"),
+    ("metric.rebirth", "Node Control/Rebirth"),
+    ("unit.power", "kW"),
+    ("unit.energy", "kWh"),
+    ("metric.cause.power", "Cause/Power"),
+    ("metric.cause.energy", "Cause/Energy"),
+    ("value.cause.none", "no-cause"),
+];
+
 /// The quality codes, as of contract v11. Unchanged from v10 — the bump is about
 /// which metrics carry the `Cause` property, not about what a quality means.
 const GOLDEN_QUALITY_V11: QualityGolden = &[
@@ -470,11 +498,15 @@ fn live_names() -> Vec<(&'static str, &'static str)> {
         ("metric.rebirth", METRIC_NODE_CONTROL_REBIRTH),
         ("unit.power", UNIT_POWER),
         ("unit.energy", UNIT_ENERGY),
-        ("property.cause", METRIC_PROPERTY_CAUSE),
-        // The neutral value is part of the contract from v11: a consumer reading
-        // the property off a GOOD metric reads this string, and renaming it is
-        // the same silent breakage as renaming the key.
-        ("property.cause.none", CAUSE_NONE),
+        // The cause travels as two METRICS from v12 (ADR 0044) — it was a
+        // property, `Cause`, from v4 to v11, and a property is written by a BIRTH
+        // and never updated by a DDATA, which a live host settled on 2026-08-22.
+        ("metric.cause.power", METRIC_CAUSE_POWER),
+        ("metric.cause.energy", METRIC_CAUSE_ENERGY),
+        // The neutral value: a consumer reading the cause tag of a GOOD
+        // measurement reads this string, and renaming it is the same silent
+        // breakage as renaming the tag.
+        ("value.cause.none", CAUSE_NONE),
     ]
 }
 
@@ -484,12 +516,21 @@ fn live_names() -> Vec<(&'static str, &'static str)> {
 /// A version listed here must actually differ from its predecessor — a
 /// declaration nobody can check is worth no more than no declaration — so this
 /// list cannot be padded to quieten the guard.
-const NAME_SET_CHANGES: &[(i64, &str)] = &[(
-    11,
-    "ADR 0043: every metric carries the `Cause` property, a good one included, so the \
-     neutral value `no-cause` becomes a string consumers read and therefore part of the \
-     contract",
-)];
+const NAME_SET_CHANGES: &[(i64, &str)] = &[
+    (
+        11,
+        "ADR 0043: every metric carries the `Cause` property, a good one included, so the \
+         neutral value `no-cause` becomes a string consumers read and therefore part of the \
+         contract",
+    ),
+    (
+        12,
+        "ADR 0044: the `Cause` PROPERTY is replaced by two metrics, `Cause/Power` and \
+         `Cause/Energy`. A property is written by a BIRTH and never updated by a DDATA — \
+         measured against a live host — so a cause carried as one stood frozen at its birth \
+         value. This is the first version in which a contract name DISAPPEARS",
+    ),
+];
 
 /// What one version of the contract promises a consumer.
 struct Golden {
@@ -502,6 +543,11 @@ struct Golden {
 /// golden is what the `None` arm refuses.
 fn golden_for(version: i64) -> Option<Golden> {
     match version {
+        12 => Some(Golden {
+            quality: GOLDEN_QUALITY_V12,
+            causes: GOLDEN_CAUSES_V12,
+            names: GOLDEN_NAMES_V12,
+        }),
         11 => Some(Golden {
             quality: GOLDEN_QUALITY_V11,
             causes: GOLDEN_CAUSES_V11,

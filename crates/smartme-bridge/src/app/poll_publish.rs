@@ -1851,9 +1851,23 @@ mod tests {
              one left to publish. Got {:?}",
             power.value
         );
-        assert_eq!(
-            power.properties,
-            vec![("Cause".to_string(), "unit-not-recognised".to_string())]
+        // From contract v12 the cause is a metric of its own (ADR 0044): a
+        // property is written by a BIRTH and never updated by a DDATA, measured
+        // against a live host, so a cause carried as one stands frozen for ever.
+        let cause = |name: &str| {
+            metrics
+                .iter()
+                .find(|m| m.name == name)
+                .map(|m| match &m.value {
+                    sparkplug_b::model::MetricValue::String(v) => v.clone(),
+                    other => panic!("a cause is a string, got {other:?}"),
+                })
+                .unwrap_or_else(|| panic!("{name} is published"))
+        };
+        assert_eq!(cause("Cause/Power"), "unit-not-recognised");
+        assert!(
+            power.properties.is_empty(),
+            "and the metric itself carries no property at all now"
         );
         assert!(
             matches!(energy.value, sparkplug_b::model::MetricValue::Double(v) if v == 4_843.822),
@@ -1861,10 +1875,10 @@ mod tests {
             energy.value
         );
         assert_eq!(
-            energy.properties,
-            vec![("Cause".to_string(), "no-cause".to_string())],
-            "and names no cause — explicitly, since contract v11 — least of all \
-             its neighbour's"
+            cause("Cause/Energy"),
+            "no-cause",
+            "and names no cause — explicitly, since contract v11, and on its own \
+             tag since v12 — least of all its neighbour's"
         );
     }
 

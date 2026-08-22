@@ -56,7 +56,7 @@
 //! [#68]: https://github.com/guycorbaz/smartme_mqtt/issues/68
 
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
-use smartme_bridge::adapters::sparkplug_publisher::{METRIC_PROPERTY_CAUSE, ignition_quality_code};
+use smartme_bridge::adapters::sparkplug_publisher::ignition_quality_code;
 use smartme_bridge::domain::Quality;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -82,14 +82,32 @@ struct MetricSeen {
     is_null: bool,
     quality: Option<u32>,
     properties: Vec<(String, String)>,
+    /// The metric's value when it is a string — which is what a cause metric is.
+    string_value: Option<String>,
+}
+
+/// The cause published for the measurement metric `name`, read from its SIBLING
+/// metric in the same payload.
+///
+/// **It read a `Cause` property until contract v12.** The cause is a metric now
+/// (ADR 0044): a property is written by a BIRTH and never updated by a DDATA,
+/// which this very instrument helped settle on 2026-08-22 by reading the wire
+/// while an operator watched the screen. A metric named `Cause/Power` is what a
+/// host renders as a tag whose value moves.
+///
+/// A cause metric is not itself a measurement, so it never counts as one: the
+/// counters below skip any metric whose name starts with `Cause/`.
+fn cause_for<'a>(metrics: &'a [MetricSeen], name: &str) -> Option<&'a str> {
+    let wanted = format!("Cause/{name}");
+    metrics
+        .iter()
+        .find(|m| m.name == wanted)
+        .and_then(|m| m.string_value.as_deref())
 }
 
 impl MetricSeen {
-    fn cause(&self) -> Option<&str> {
-        self.properties
-            .iter()
-            .find(|(k, _)| k == METRIC_PROPERTY_CAUSE)
-            .map(|(_, v)| v.as_str())
+    fn is_a_cause(&self) -> bool {
+        self.name.starts_with("Cause/")
     }
 
     /// Ignition's encoding, read back. `None` when the metric carries no quality
@@ -151,6 +169,12 @@ fn metrics_of(payload: &sparkplug_b::protobuf::Payload) -> Vec<MetricSeen> {
                 is_null: m.value.is_none(),
                 quality,
                 properties,
+                string_value: match &m.value {
+                    Some(sparkplug_b::protobuf::payload::metric::Value::StringValue(v)) => {
+                        Some(v.clone())
+                    }
+                    _ => None,
+                },
             }
         })
         .collect()
@@ -321,13 +345,17 @@ async fn observe_cause_property() {
                     println!("       · {k} = {v}");
                 }
             }
-            // The counters that decide what this run may conclude.
-            if m.is_good() == Some(false) {
+            // The counters that decide what this run may conclude. A cause metric
+            // is not a measurement and must not be counted as one — it is Good by
+            // design, so it would never reach this branch, but saying so keeps the
+            // next reader from wondering.
+            if !m.is_a_cause() && m.is_good() == Some(false) {
                 non_good += 1;
-                if m.cause().is_some() {
+                let has_cause = cause_for(&metrics, &m.name).is_some();
+                if has_cause {
                     non_good_with_cause += 1;
                 }
-                if is_birth && m.cause().is_some() {
+                if is_birth && has_cause {
                     births_declaring_cause += 1;
                 }
             }

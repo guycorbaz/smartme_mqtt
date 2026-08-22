@@ -14,7 +14,7 @@ is listed in section~\ref{sec:contract-limits} rather than described as though i
 \section{Contract version}
 
 The node BIRTH carries a metric \code{Contract/Version} (\code{Int64}), currently
-\textbf{11}. \emph{(This sentence said \textbf{8} until 2026-08-22, while the bridge emitted
+\textbf{12}. \emph{(This sentence said \textbf{8} until 2026-08-22, while the bridge emitted
 10 --- a stale constant in a document, which the chapter's own mechanical guard does not check
 because it reads routes and cause slugs, not numbers.)} It is incremented on \emph{any} change to the topic grammar, to a metric name or
 unit, or to the meaning of a published quality code. Publishing it means a consumer can
@@ -25,7 +25,17 @@ quality codes and the cause vocabulary to the version they belong to, and fails 
 moves without this number moving. Before that, the number was maintained by whoever
 remembered.
 
-The number does not say what \emph{kind} of change it was, so it is worth stating. Version~11
+The number does not say what \emph{kind} of change it was, so it is worth stating. Version~12
+is \textbf{breaking}, and it replaces version~11 rather than extending it. Version~11 declared a
+\code{Cause} \emph{property} in every BIRTH so that Ignition would materialise it, which it did
+--- and the evening's measurement showed the other half: \textbf{a metric property is written by
+a BIRTH and by nothing else}. A \textsc{ddata} carrying a new value for it is ignored, while the
+same message's quality update is applied. So the property stood frozen at its birth value, which
+meant \code{no-reading-yet} beside a healthy meter, for as long as the session lived. Under
+version~10 an operator saw nothing, which is uninformative; under version~11 they saw something
+untrue. From version~12 the cause travels as \emph{two metrics}, \code{Cause/Power} and
+\code{Cause/Energy} --- a \code{Cause} folder holding two string tags, whose values are what a
+\textsc{ddata} exists to change --- and the property is gone. Version~11
 is \textbf{breaking}, and it is the first version whose reason is a \emph{host} behaviour rather
 than a change of judgement. Ignition materialises a metric property only when a BIRTH declares
 it: a property that first appears in a \textsc{ddata} is discarded. So contract~4's \code{Cause}
@@ -87,6 +97,12 @@ history.
 \toprule
 \textbf{Version} & \textbf{Kind} & \textbf{Change} \\
 \midrule
+12 & breaking & The cause becomes two metrics, \code{Cause/Power} and \code{Cause/Energy}
+    (a \code{Cause} folder holding two string tags), and the \code{Cause} \emph{property}
+    is removed. A property is written by a BIRTH and never updated, so a cause carried as
+    one stood frozen; a metric's value is what a \textsc{ddata} changes. The cause tag is
+    \textsc{good} even when the measurement it describes is not --- it states our own
+    judgement, which is always known. See section~\ref{sec:quality}. \\
 11 & breaking & Every metric carries \code{Cause}, a \textsc{good} one included, where it
     reads \code{no-cause}. A property Ignition has not seen in a BIRTH is never
     materialised, so before this version the cause did not reach the operator at all
@@ -230,7 +246,16 @@ Since contract~4, a metric whose quality is \emph{not} \textsc{good} carries a s
 property, \code{Cause}, typed \code{String}, naming the check that refused it ---
 \code{reading-too-old}, \code{source-unreachable}, \code{counter-went-backwards} and so on.
 
-\textbf{Since contract~11, a \textsc{good} metric carries it too, reading \code{no-cause}.}
+\textbf{Since contract~12 the cause is a TAG of its own}, \code{Cause/Power} or
+\code{Cause/Energy}, beside the measurement it describes --- not a property on it. A property is
+written by a BIRTH and never updated afterwards, measured against a live Ignition, so a cause
+carried as one froze at its birth value and went on asserting a fault the meter had recovered
+from. The tag reads \code{no-cause} when the measurement is good, and it is itself
+\textsc{good} even when the measurement is not: it states what the bridge judged, which is
+always known, and a tag that explains a fault must not become unreadable exactly when it matters.
+
+\textbf{Since contract~11, a \textsc{good} metric names its absence of cause too, reading
+\code{no-cause}.}
 Until then it carried nothing, on the reasoning that a reason published beside every good value
 is noise a consumer learns to ignore. That reasoning still holds --- and it lost to a host
 behaviour. Ignition materialises a metric property only when a \textsc{birth} declares it, so
