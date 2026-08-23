@@ -10,6 +10,8 @@ pub mod app;
 pub mod core;
 pub mod domain;
 pub mod persist;
+#[cfg(test)]
+mod test_capture;
 pub mod ui;
 
 /// Why a phase ended.

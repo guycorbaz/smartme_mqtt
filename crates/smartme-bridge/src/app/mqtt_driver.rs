@@ -2186,44 +2186,12 @@ mod tests {
         );
     }
 
-    /// Captures what a trace macro actually wrote, so a log line can be an
-    /// assertion rather than a hope.
-    #[derive(Clone, Default)]
-    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl Captured {
-        fn text(&self) -> String {
-            String::from_utf8(self.0.lock().expect("not poisoned").clone()).expect("utf-8")
-        }
-    }
-
-    impl std::io::Write for Captured {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().expect("not poisoned").extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
-        type Writer = Captured;
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
     /// Runs `body` with every trace captured, and returns what was written.
+    ///
+    /// THROUGH THE SHARED HARNESS since [#94]: a capture built by hand here is one
+    /// a thread with no subscriber can switch off for the whole process.
     fn captured(body: impl FnOnce()) -> String {
-        let sink = Captured::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(sink.clone())
-            .with_max_level(tracing::Level::TRACE)
-            .with_ansi(false)
-            .finish();
-        tracing::subscriber::with_default(subscriber, body);
-        sink.text()
+        crate::test_capture::capture(body)
     }
 
     /// Story 4.6 / AC2 — the SEVERITY and the CONTENT of the answer, not just

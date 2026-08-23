@@ -2004,12 +2004,9 @@ mod tests {
     /// rate-limited, no delay given\""*.
     #[tokio::test]
     async fn an_honoured_wait_does_not_deny_that_a_delay_was_given() {
-        let sink = Captured::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(sink.clone())
-            .with_max_level(tracing::Level::TRACE)
-            .with_ansi(false)
-            .finish();
+        // THROUGH THE SHARED HARNESS ([#94]): a capture built by hand here is one
+        // a thread with no subscriber can switch off for the whole process.
+        let (sink, _capture_guard) = crate::test_capture::capture_guard(tracing::Level::TRACE);
         let clock = FakeClock::new(UtcMillis(SANE_NOW));
         let mut source = FakeSource::new()
             .then(Ok(reading(Quality::Good, 950)))
@@ -2031,14 +2028,13 @@ mod tests {
         };
         let mut mem = MeterMemory::default();
 
-        let guard = tracing::subscriber::set_default(subscriber);
         let (state, _) = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
         // The 429 itself: a real refusal, logged as one.
         let (_, _) = step_once(&ctx, &mut source, state, &mut mem).await;
         let after_refusal = sink.text();
         // And now the tick that is merely WAITING, which is the subject.
         let (_, _) = step_once(&ctx, &mut source, State::Stale, &mut mem).await;
-        drop(guard);
+        drop(_capture_guard);
         let while_waiting = sink.text()[after_refusal.len()..].to_string();
 
         assert!(
@@ -3451,36 +3447,6 @@ mod tests {
     /// Captures what a trace macro actually wrote, so a log line can be an
     /// assertion rather than a hope.
     ///
-    /// A second copy of `mqtt_driver`'s helper, deliberately: sharing it means
-    /// editing Epic 4 test code from an Epic 2 story, and the duplication is
-    /// twenty lines that no production path depends on. Worth folding into one
-    /// `#[cfg(test)]` module the next time a third caller wants it.
-    #[derive(Clone, Default)]
-    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl Captured {
-        fn text(&self) -> String {
-            String::from_utf8(self.0.lock().expect("not poisoned").clone()).expect("utf-8")
-        }
-    }
-
-    impl std::io::Write for Captured {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().expect("not poisoned").extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
-        type Writer = Captured;
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
     /// **Story 2.6 AC5's second half, and the half that was missing entirely.**
     ///
     /// Every `SourceError` carries a sentence written to tell an operator what to
@@ -3503,13 +3469,9 @@ mod tests {
     ///   response decode failed: missing field \`ActivePower\` at line 2 column 76`.
     #[tokio::test]
     async fn a_payload_the_bridge_could_not_read_names_its_field_to_the_operator() {
-        let sink = Captured::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(sink.clone())
-            .with_max_level(tracing::Level::TRACE)
-            .with_ansi(false)
-            .finish();
-        let guard = tracing::subscriber::set_default(subscriber);
+        // THROUGH THE SHARED HARNESS ([#94]): a capture built by hand here is one
+        // a thread with no subscriber can switch off for the whole process.
+        let (sink, _capture_guard) = crate::test_capture::capture_guard(tracing::Level::TRACE);
         let (state, sent) = drive(
             FakeSource::new().then(Err(SourceError::Transient {
                 reason: "response decode failed: missing field `ActivePower` at line 2 column 76"
@@ -3517,7 +3479,7 @@ mod tests {
             })),
         )
         .await;
-        drop(guard);
+        drop(_capture_guard);
 
         assert_eq!(state, State::Stale, "a payload anomaly is retried");
         assert!(sent.is_empty(), "there is no reading to carry");
@@ -3573,13 +3535,9 @@ mod tests {
     /// identity message names the repair, and it reached nobody either.
     #[tokio::test]
     async fn a_refusal_reaches_the_operator_with_the_repair_it_names() {
-        let sink = Captured::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(sink.clone())
-            .with_max_level(tracing::Level::TRACE)
-            .with_ansi(false)
-            .finish();
-        let guard = tracing::subscriber::set_default(subscriber);
+        // THROUGH THE SHARED HARNESS ([#94]): a capture built by hand here is one
+        // a thread with no subscriber can switch off for the whole process.
+        let (sink, _capture_guard) = crate::test_capture::capture_guard(tracing::Level::TRACE);
         // The refusal matches what `map_error` actually produces for this
         // reason since story 3.5's split — the review caught the fixture
         // staging a pairing (`Configuration` + a 404's message) that no code
@@ -3589,7 +3547,7 @@ mod tests {
             reason: "smart-me does not know device 9202685".to_string(),
         })))
         .await;
-        drop(guard);
+        drop(_capture_guard);
 
         assert_eq!(state, State::Failed);
         let line = unreadable_line(&sink.text());
@@ -4369,12 +4327,9 @@ mod tests {
     /// instant standing where `1784984700000` belongs.
     #[tokio::test]
     async fn a_lost_reading_is_traced_with_its_own_timestamp() {
-        let sink = Captured::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(sink.clone())
-            .with_max_level(tracing::Level::TRACE)
-            .with_ansi(false)
-            .finish();
+        // THROUGH THE SHARED HARNESS ([#94]): a capture built by hand here is one
+        // a thread with no subscriber can switch off for the whole process.
+        let (sink, _capture_guard) = crate::test_capture::capture_guard(tracing::Level::TRACE);
         let clock = FakeClock::new(UtcMillis(SANE_NOW));
         let mut source = FakeSource::new().then(Ok(reading(Quality::Good, 950)));
         let (tx, _rx) = mpsc::channel(1);
@@ -4397,9 +4352,8 @@ mod tests {
         };
         let mut mem = MeterMemory::default();
 
-        let guard = tracing::subscriber::set_default(subscriber);
         let _ = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
-        drop(guard);
+        drop(_capture_guard);
         let logged = sink.text();
 
         assert!(
