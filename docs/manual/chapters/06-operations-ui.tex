@@ -328,8 +328,14 @@ difference is stated at the end of this section:
         connection dropped, not that anything is wrong with the birth. Only a \emph{continuous}
         stream of them, with no reconnection in the log, points at a birth that is not
         completing.
-  \item \code{undeclared-device} --- a reading for a device the last birth did not declare,
-        typically a serial that changed underneath a running bridge.
+  \item \code{undeclared-device} --- a reading for a device the last birth did not declare.
+        Two ways to get here. The ordinary one is a serial that changed underneath a running
+        bridge. The other is a birth certificate the outbound queue refused: \prog then
+        \emph{withdraws} that device's declaration, precisely so its readings are counted here
+        rather than reported as delivered to a host that was never told the device exists. The
+        log line naming the partly published birth is what tells the two apart, and the next
+        birth --- a reconnection, or the rebirth a host requests when it sees data for a device
+        it does not know --- restores the declaration on its own.
   \item \code{unpublishable} --- the reading could not be encoded or addressed at all. This
         one is a defect, not a weather report; the log carries the reason.
 \end{itemize}

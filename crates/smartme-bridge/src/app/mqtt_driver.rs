@@ -1433,10 +1433,25 @@ pub async fn run(
                     };
                     match outcome {
                         Ok(true) => {
-                            let dropped = publish_all(&client, &mut queue);
-                            if dropped > 0 {
+                            let refused = publish_all(&client, &mut queue);
+                            if !refused.is_empty() {
+                                // Same defect as [#88] one level down: a DBIRTH
+                                // this branch emitted for a newly enabled meter
+                                // leaves the device declared here while the host
+                                // never heard of it. A DDEATH is not withdrawn —
+                                // `device_death` has already removed the device,
+                                // and a burial the transport refused leaves the
+                                // host holding a device we no longer publish for,
+                                // which no local state can repair.
+                                let devices: Vec<Serial> = refused
+                                    .iter()
+                                    .filter(|m| m.message == MessageType::DBirth)
+                                    .filter_map(|m| m.device.clone())
+                                    .collect();
+                                publisher.withdraw(&devices);
                                 tracing::error!(
                                     ?command,
+                                    ?devices,
                                     "the device certificate was NOT published: the \
                                      outbound queue rejected it. The host still holds \
                                      the previous view of this device"
@@ -1504,7 +1519,7 @@ pub async fn run(
                         // reading half-published is still ONE reading the host did
                         // not receive.
                         None => {
-                            if publish_all(&client, &mut queue) > 0 {
+                            if !publish_all(&client, &mut queue).is_empty() {
                                 lost(DropReason::TransportQueueFull, None);
                             }
                         }
@@ -1747,17 +1762,26 @@ fn announce(
     match publisher.birth(now, meters, &mut queue) {
         Ok(()) => {
             let queued = queue.pending.len();
-            let dropped = publish_all(client, &mut queue);
-            if dropped > 0 {
+            let refused = publish_all(client, &mut queue);
+            if !refused.is_empty() {
+                // Undo the half of the declaration the host never received,
+                // BEFORE the log line — so a panic in formatting could not leave
+                // the publisher counting readings it is not delivering ([#88]).
+                let withdrawal = withdrawal_for(&refused);
+                match &withdrawal {
+                    Withdrawal::EveryDevice => publisher.withdraw_all(),
+                    Withdrawal::These(devices) => publisher.withdraw(devices),
+                }
                 tracing::error!(
-                    dropped,
+                    dropped = refused.len(),
                     queued,
+                    ?withdrawal,
                     ?reason,
                     "the BIRTH sequence was only PARTLY published: the outbound \
-                     queue rejected part of it. The host may have reset its view of \
-                     this node on an NBIRTH without receiving the DBIRTH that \
-                     re-declares its device, so it will treat subsequent DDATA as \
-                     belonging to an undeclared device until it requests a rebirth"
+                     queue rejected part of it. The host has NOT been told about \
+                     these devices, so their readings are now counted as dropped \
+                     rather than published, and stay so until a rebirth declares \
+                     them"
                 );
                 return;
             }
@@ -1871,16 +1895,58 @@ fn publish(client: &AsyncClient, message: Outbound) -> bool {
     }
 }
 
-/// Drains a queue to the client and returns how many messages were DROPPED.
+/// Which device declarations a partly-published BIRTH sequence invalidates.
+#[derive(Debug, PartialEq, Eq)]
+enum Withdrawal {
+    /// The node certificate itself did not go out, so nothing under it stands.
+    EveryDevice,
+    /// These devices' certificates did not go out; the rest were declared.
+    These(Vec<Serial>),
+}
+
+/// Reads a refused BIRTH sequence and says what the host was NOT told ([#88]).
+///
+/// # Why this is a function and not two lines inside `announce`
+///
+/// `announce` needs a broker socket to reach, so a test of it needs a client
+/// whose request channel is full — which pins how MANY messages are refused but
+/// not WHICH, because a bounded queue fills in order and the node certificate is
+/// always first. The rule that matters most here is the one that case cannot
+/// reach: *a lost NBIRTH takes every device with it, including the ones whose own
+/// certificate went out fine*. As a function it is decided on a list, so a test
+/// hands it the list a transport could not be made to produce.
+fn withdrawal_for(refused: &[Outbound]) -> Withdrawal {
+    // A DBIRTH means nothing under a session the host never opened: whatever got
+    // through is discarded on arrival, so the devices that succeeded are in
+    // exactly the same position as the ones that did not.
+    if refused
+        .iter()
+        .any(|message| message.message == MessageType::NBirth)
+    {
+        return Withdrawal::EveryDevice;
+    }
+    Withdrawal::These(refused.iter().filter_map(|m| m.device.clone()).collect())
+}
+
+/// Drains a queue to the client and returns the messages that were DROPPED.
 ///
 /// Every message is attempted: stopping at the first failure would leave the rest
-/// in the sink with nothing said about them, and the count is what lets the caller
-/// distinguish a complete sequence from a partial one.
-fn publish_all(client: &AsyncClient, queue: &mut Queue) -> usize {
-    let mut dropped = 0;
+/// in the sink with nothing said about them, and what comes back is what lets the
+/// caller distinguish a complete sequence from a partial one.
+///
+/// **It returns the messages and not a count** since [#88]. A caller that only
+/// needs to know *whether* the sequence was complete asks `is_empty()`; a caller
+/// that has to undo a refused declaration needs to know WHICH device it was, and
+/// deriving that from a count is not possible at all.
+fn publish_all(client: &AsyncClient, queue: &mut Queue) -> Vec<Outbound> {
+    let mut dropped = Vec::new();
     for message in queue.pending.drain(..) {
+        // `publish` consumes the message, so the copy for the caller is taken
+        // first. It costs one clone per REFUSED message, on a path that is
+        // already the abnormal one.
+        let refused = message.clone();
         if !publish(client, message) {
-            dropped += 1;
+            dropped.push(refused);
         }
     }
     dropped
@@ -2965,6 +3031,152 @@ mod tests {
     /// `let _ = publish(client, message);` — dropping the count, which is what
     /// shipped — turns this red. Before this test the same mutation left the whole
     /// suite green, which is why `announce`'s misreport survived review-by-reading.
+    /// [#88], end to end — the wiring `withdrawal_for` alone cannot prove.
+    ///
+    /// The two decision tests above pin what SHOULD be withdrawn; nothing yet
+    /// pins that `announce` acts on the answer. Deleting the `match withdrawal`
+    /// arm leaves both of them green, and it is the whole repair.
+    ///
+    /// A capacity-2 request channel that nothing drains is what splits the
+    /// sequence where it has to be split: the NBIRTH and the FIRST device
+    /// certificate take the two slots, and the second device's is refused. So one
+    /// device is genuinely declared and one genuinely is not, in a single birth.
+    ///
+    /// **Falsification, 2026-08-23:**
+    ///
+    /// 1. Deleting the `match withdrawal` arm in `announce` — the state before
+    ///    this repair: RED (`30000002` publishes as `Emitted`).
+    /// 2. `Withdrawal::EveryDevice` for every refusal: RED on `30000001`, which
+    ///    the host DID receive.
+    #[test]
+    fn announce_undeclares_the_device_whose_certificate_the_transport_refused() {
+        use crate::core::oracle::Verdict;
+        use crate::domain::{Kw, Kwh, Measurement, MeterId, Quality, UtcMillis};
+
+        let declared = Serial::new("30000001");
+        let refused = Serial::new("30000002");
+
+        let options = MqttOptions::new("falsify", "127.0.0.1", 1883);
+        // Two slots, and the EventLoop is dropped on the floor: they are the only
+        // two there will ever be. NBIRTH and the first DBIRTH take them.
+        let (client, _never_polled) = AsyncClient::new(options, 2);
+
+        let node = sparkplug_b::EdgeNode::new("Site", "Bridge").expect("valid ids");
+        let mut publisher = SparkplugPublisher::new(node, None);
+        announce(
+            &client,
+            &mut publisher,
+            UtcMillis(1_000),
+            &[declared.clone(), refused.clone()],
+            BirthReason::Connected,
+        );
+
+        let reading = |serial: &Serial| {
+            MeterUpdate::uniform(
+                MeterId::new("meter"),
+                Measurement {
+                    meter: MeterId::new("meter"),
+                    serial: serial.clone(),
+                    power: Some(Kw(0.018)),
+                    energy: Some(Kwh(4_843.822)),
+                    value_date: UtcMillis(1_784_984_792_050),
+                    quality: Quality::Good,
+                },
+                Verdict::good(),
+            )
+        };
+
+        let mut sink = Queue::default();
+        assert_eq!(
+            publisher.publish(&reading(&declared), &mut sink).unwrap(),
+            Published::Emitted,
+            "this device's certificate took the second slot: the host has it, and \
+             reporting its readings as lost would be the opposite error"
+        );
+        assert_eq!(
+            publisher.publish(&reading(&refused), &mut sink).unwrap(),
+            Published::DroppedUndeclaredDevice {
+                serial: refused.clone()
+            },
+            "this device's certificate never left: every reading for it is thrown \
+             away by the host, and [#88] is the bridge counting them as published"
+        );
+    }
+
+    /// [#88] — a device whose BIRTH the transport refused is UNDECLARED, so its
+    /// readings are counted as lost instead of as published.
+    ///
+    /// This is the discrimination half: `s2`'s certificate was refused and `s1`'s
+    /// was not, and a repair that withdrew both would be as wrong as one that
+    /// withdrew neither — it would turn readings the host does receive into
+    /// reported losses.
+    ///
+    /// **Falsification, 2026-08-23** (mutations run against this test):
+    ///
+    /// 1. `Withdrawal::These(vec![])` regardless of input — the shape the defect
+    ///    shipped in, where a refusal changes nothing: RED on `s2`.
+    /// 2. `These` built from EVERY refused message's device without filtering,
+    ///    i.e. returning `s1` too: RED on `s1` — the control has a subject.
+    /// 3. Returning `EveryDevice` here: RED on `s1`.
+    #[test]
+    fn a_refused_device_birth_withdraws_that_device_and_not_the_others() {
+        let s1 = Serial::new("30000001");
+        let s2 = Serial::new("30000002");
+        let refused = vec![Outbound {
+            topic: "spBv1.0/Site/DBIRTH/Bridge/30000002".to_string(),
+            payload: vec![],
+            message: MessageType::DBirth,
+            device: Some(s2.clone()),
+        }];
+
+        let Withdrawal::These(devices) = withdrawal_for(&refused) else {
+            panic!("no node certificate was refused, so the session still stands");
+        };
+        assert!(
+            devices.contains(&s2),
+            "the host was never told about this device; counting its readings as \
+             published is the defect"
+        );
+        assert!(
+            !devices.contains(&s1),
+            "this device's certificate DID go out — withdrawing it would report \
+             losses the host is not suffering"
+        );
+    }
+
+    /// [#88] — a BIRTH whose NODE certificate was refused takes every device with
+    /// it, including the ones whose own certificate went out.
+    ///
+    /// **This is the case a transport-level test cannot reach**: a bounded request
+    /// channel fills in order and the NBIRTH is always first, so no queue capacity
+    /// produces "node refused, device accepted". It is nonetheless the ordinary
+    /// case rather than an exotic one — the host discards a DBIRTH for a node it
+    /// holds no session for, so a bridge that withdrew only the refused DBIRTHs
+    /// would go on counting readings as published for devices the host is throwing
+    /// away.
+    ///
+    /// **Falsification, 2026-08-23:** deleting the `NBirth` arm — the ordinary way
+    /// to write this, one `filter_map` over the refused list — leaves the DBIRTH
+    /// that DID go out declared, and turns this RED.
+    #[test]
+    fn a_refused_node_birth_withdraws_every_device_including_the_ones_that_went_out() {
+        let refused = vec![Outbound {
+            topic: "spBv1.0/Site/NBIRTH/Bridge".to_string(),
+            payload: vec![],
+            message: MessageType::NBirth,
+            // A node message speaks for no device: the list of refused SERIALS is
+            // empty here, which is exactly why a `filter_map` over it is not
+            // enough.
+            device: None,
+        }];
+
+        assert_eq!(
+            withdrawal_for(&refused),
+            Withdrawal::EveryDevice,
+            "a DBIRTH means nothing under a session the host never opened"
+        );
+    }
+
     #[test]
     fn a_partly_published_birth_is_counted_and_never_reported_complete() {
         let options = MqttOptions::new("falsify", "127.0.0.1", 1883);
@@ -2976,6 +3188,7 @@ mod tests {
             topic: topic.to_string(),
             payload: vec![1, 2, 3],
             message: MessageType::NBirth,
+            device: None,
         };
         let mut queue = Queue {
             pending: vec![message("a"), message("b"), message("c")],
@@ -2983,9 +3196,21 @@ mod tests {
 
         let dropped = publish_all(&client, &mut queue);
         assert_eq!(
-            dropped, 2,
+            dropped.len(),
+            2,
             "one slot means one message queued and two dropped; a caller that \
              cannot see the two has no way to know the sequence was broken"
+        );
+        // WHICH ones, not just how many: `announce` has to undo the declaration
+        // of the devices whose BIRTH was refused, and it can only do that if the
+        // refusal names them ([#88]). Pinned on the topics because this queue
+        // carries no devices — `a_refused_device_birth_undeclares_that_device`
+        // pins the serial itself.
+        assert_eq!(
+            dropped.iter().map(|m| m.topic.as_str()).collect::<Vec<_>>(),
+            vec!["b", "c"],
+            "the single slot takes the FIRST message; the caller must learn which \
+             of the three did not go out, in order"
         );
         assert!(
             queue.pending.is_empty(),

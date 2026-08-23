@@ -304,6 +304,15 @@ pub struct Outbound {
     /// What kind of message this is, so the transport can apply the right
     /// delivery semantics without re-parsing the topic.
     pub message: MessageType,
+    /// The device this message speaks for, `None` for a node message.
+    ///
+    /// Carried for the same reason as `message`: so the transport knows what it
+    /// is holding **without re-parsing the topic**. It earns its place because a
+    /// refused DBIRTH has to be undone by serial ([#88]), and a driver that had
+    /// to split the topic on `/` to find out which device it just failed to
+    /// declare would be deriving, from a string it built itself, something the
+    /// producer knew all along.
+    pub device: Option<Serial>,
 }
 
 /// The injectable egress seam.
@@ -360,14 +369,45 @@ enum Session {
     Moving,
 }
 
+/// What the host has been told about one device, and what it was last told.
+///
+/// # Two questions that used to share one answer, and that is where [#88] lived
+///
+/// This map answered *"may DATA flow for this serial?"* by the presence of a
+/// key, and *"what does a rebirth re-declare?"* by its value. A DBIRTH the
+/// outbound queue refused makes those answers disagree: the host was never told
+/// about the device, so nothing may flow — but the last reading is still the
+/// right thing to re-declare when the birth is retried, and dropping the key to
+/// express the first would have thrown away the second, blanking a tag the
+/// bridge can still account for.
+///
+/// So `born` carries the host's knowledge and `last` carries ours.
+#[derive(Debug, Clone)]
+struct Declaration {
+    /// Whether the DBIRTH declaring this device actually reached the transport.
+    ///
+    /// **False is not "unknown", it is "the host does not have it"** — set only
+    /// where a refusal was observed ([`SparkplugPublisher::withdraw`]), never
+    /// as a default.
+    born: bool,
+    /// The last reading published for this device — a rebirth re-declares what
+    /// is actually known instead of resetting every tag to "nothing".
+    last: Option<MeterUpdate>,
+}
+
+impl Declaration {
+    /// A device the host has just been told about.
+    const fn born(last: Option<MeterUpdate>) -> Self {
+        Self { born: true, last }
+    }
+}
+
 /// Maps judged readings onto the Sparkplug wire for one edge node.
 pub struct SparkplugPublisher {
     node: EdgeNode,
     session: Session,
-    /// Devices declared by the last BIRTH, with the last reading published for
-    /// each — a rebirth re-declares what is actually known instead of resetting
-    /// every tag to "nothing".
-    declared: HashMap<Serial, Option<MeterUpdate>>,
+    /// Devices declared by the last BIRTH, and what the host knows of each.
+    declared: HashMap<Serial, Declaration>,
 }
 
 impl SparkplugPublisher {
@@ -421,6 +461,7 @@ impl SparkplugPublisher {
             topic: node_topic(&self.node, MessageType::NDeath),
             payload: encode(&payload),
             message: MessageType::NDeath,
+            device: None,
         }
     }
 
@@ -460,6 +501,7 @@ impl SparkplugPublisher {
                     topic: node_topic(&self.node, MessageType::NBirth),
                     payload: encode(&payload),
                     message: MessageType::NBirth,
+                    device: None,
                 });
                 live
             }
@@ -469,6 +511,7 @@ impl SparkplugPublisher {
                     topic: node_topic(&self.node, MessageType::NBirth),
                     payload: encode(&payload),
                     message: MessageType::NBirth,
+                    device: None,
                 });
                 live
             }
@@ -477,7 +520,7 @@ impl SparkplugPublisher {
 
         let mut declared = HashMap::with_capacity(device_topics.len());
         for (serial, topic) in device_topics {
-            let known = self.declared.get(&serial).cloned().flatten();
+            let known = self.declared.get(&serial).and_then(|d| d.last.clone());
             let metrics = match &known {
                 // A re-declared reading has NOT been re-judged against now, so
                 // it is never re-asserted as Good: it is true history, published
@@ -515,13 +558,56 @@ impl SparkplugPublisher {
                 topic,
                 payload: encode(&payload),
                 message: MessageType::DBirth,
+                device: Some(serial.clone()),
             });
-            declared.insert(serial, known);
+            declared.insert(serial, Declaration::born(known));
         }
 
         self.declared = declared;
         self.session = Session::Live(live);
         Ok(())
+    }
+
+    /// Withdraws the declaration of devices whose BIRTH the transport REFUSED,
+    /// so their readings are counted as lost instead of as published ([#88]).
+    ///
+    /// # This does not tell the host anything, and that is the point
+    ///
+    /// Nothing is emitted here. The host already believes what it believes —
+    /// that this device does not exist — and the defect being repaired is that
+    /// the *bridge* believed otherwise. Every later reading now returns
+    /// [`Published::DroppedUndeclaredDevice`], which is both what the host does
+    /// with it and what `/healthz` should have been reporting all along.
+    ///
+    /// The last reading is KEPT: the device is not dead, it is un-announced, and
+    /// the rebirth that eventually declares it should carry the value the bridge
+    /// still holds rather than a blank tag.
+    ///
+    /// A serial this publisher never declared is ignored — the caller passes
+    /// what the transport refused, and only the transport decides what that was.
+    pub fn withdraw(&mut self, serials: &[Serial]) {
+        for serial in serials {
+            if let Some(declaration) = self.declared.get_mut(serial) {
+                declaration.born = false;
+            }
+        }
+    }
+
+    /// Withdraws EVERY device declaration, for a birth whose NBIRTH was refused.
+    ///
+    /// # Why one lost node certificate takes every device with it
+    ///
+    /// A DBIRTH is meaningful only under the session its NBIRTH opens. When the
+    /// node certificate never leaves, the host either holds no session for this
+    /// node at all or still holds the previous one — and in both cases the
+    /// device births that DID get through are discarded on arrival. Withdrawing
+    /// only the refused DBIRTHs would then leave the bridge counting readings as
+    /// emitted for devices the host is throwing away, which is the very defect
+    /// this repairs, one level up.
+    pub fn withdraw_all(&mut self) {
+        for declaration in self.declared.values_mut() {
+            declaration.born = false;
+        }
     }
 
     /// Announces ONE device on a session that is already alive, without
@@ -569,8 +655,10 @@ impl SparkplugPublisher {
             topic,
             payload: encode(&payload),
             message: MessageType::DBirth,
+            device: Some(serial.clone()),
         });
-        self.declared.insert(serial.clone(), None);
+        self.declared
+            .insert(serial.clone(), Declaration::born(None));
         Ok(true)
     }
 
@@ -613,6 +701,7 @@ impl SparkplugPublisher {
             topic,
             payload: encode(&payload),
             message: MessageType::DDeath,
+            device: Some(serial.clone()),
         });
         self.declared.remove(serial);
         Ok(true)
@@ -632,7 +721,12 @@ impl SparkplugPublisher {
         let Session::Live(live) = &mut self.session else {
             return Ok(Published::DroppedBeforeBirth);
         };
-        if !self.declared.contains_key(&serial) {
+        // NOT `contains_key`: a device whose DBIRTH the transport refused is
+        // still in this map — its last reading has to survive for the retry —
+        // but the host has never heard of it, so its DATA is discarded there.
+        // Counting such a reading as emitted is [#88], and the map's own key was
+        // what made the wrong answer the easy one.
+        if !self.declared.get(&serial).is_some_and(|d| d.born) {
             return Ok(Published::DroppedUndeclaredDevice { serial });
         }
         let topic = self
@@ -655,8 +749,10 @@ impl SparkplugPublisher {
             topic,
             payload: encode(&payload),
             message: MessageType::DData,
+            device: Some(serial.clone()),
         });
-        self.declared.insert(serial, Some(update.clone()));
+        self.declared
+            .insert(serial, Declaration::born(Some(update.clone())));
         Ok(Published::Emitted)
     }
 }
@@ -1897,6 +1993,91 @@ mod tests {
         p.birth(UtcMillis(1_000), &[Serial::new(SERIAL)], &mut sink)
             .expect("the corrected birth succeeds");
         assert_eq!(decode(&sink.emitted[0]).seq, Some(0));
+    }
+
+    #[test]
+    fn a_withdrawn_device_drops_its_readings_instead_of_counting_them_published() {
+        let (mut p, mut sink) = born();
+        // The control, and it comes FIRST on purpose: this device publishes
+        // normally, so the assertion below is about the withdrawal and not about
+        // some unrelated reason the reading could not go out.
+        assert_eq!(
+            p.publish(&update(Quality::Good), &mut sink).unwrap(),
+            Published::Emitted,
+            "a declared device publishes; without this the test below proves nothing"
+        );
+        sink.emitted.clear();
+
+        p.withdraw(&[Serial::new(SERIAL)]);
+
+        assert_eq!(
+            p.publish(&update(Quality::Good), &mut sink).unwrap(),
+            Published::DroppedUndeclaredDevice {
+                serial: Serial::new(SERIAL)
+            },
+            "the host was never told about this device: its DATA is discarded \
+             there, and [#88] is the bridge counting it as delivered"
+        );
+        assert!(
+            sink.emitted.is_empty(),
+            "and nothing is put on the wire for a device the host does not know"
+        );
+    }
+
+    /// [#88] — withdrawing a declaration must not throw away the reading the
+    /// rebirth will re-declare.
+    ///
+    /// # The mutation this exists for is the one a Rust author would write
+    ///
+    /// `withdraw` has an obvious one-line body — `self.declared.remove(serial)` —
+    /// which passes the drop test above and loses the last reading. The device
+    /// then comes back COLD on the next birth: a blank tag where the bridge still
+    /// holds a value, which is the very thing `birth`'s "a transport blip does not
+    /// blank a tag" rule forbids. Withdrawing is not burying; `device_death`
+    /// removes, and this does not.
+    ///
+    /// **Falsification, 2026-08-23:**
+    ///
+    /// 1. `withdraw` bodied as `self.declared.remove(serial);` — the ordinary
+    ///    shortcut: RED here (the tag comes back blank), GREEN on the drop test.
+    /// 2. `withdraw` as a no-op — the shape the defect shipped in: RED on the drop
+    ///    test, GREEN here.
+    ///
+    /// Neither mutation is caught by both, which is why both tests exist.
+    #[test]
+    fn withdrawing_a_device_keeps_the_reading_its_rebirth_re_declares() {
+        let (mut p, mut sink) = born();
+        assert_eq!(
+            p.publish(&update(Quality::Good), &mut sink).unwrap(),
+            Published::Emitted
+        );
+        sink.emitted.clear();
+
+        p.withdraw(&[Serial::new(SERIAL)]);
+        p.birth(UtcMillis(2_000), &[Serial::new(SERIAL)], &mut sink)
+            .unwrap();
+
+        let dbirth = decode(&sink.emitted[1]);
+        let power = metric(&dbirth, METRIC_POWER);
+        assert_eq!(
+            power.value,
+            Some(payload::metric::Value::DoubleValue(0.018)),
+            "a device that was never announced is not a device that died: the \
+             reading the bridge still holds is what its birth must carry"
+        );
+        assert_eq!(
+            quality_of(power),
+            ignition_quality_code(Quality::Stale),
+            "...re-declared, and never re-asserted as Good"
+        );
+
+        // And the birth puts it back: this is what makes the withdrawal
+        // recoverable rather than a latch.
+        assert_eq!(
+            p.publish(&update(Quality::Good), &mut sink).unwrap(),
+            Published::Emitted,
+            "the rebirth declared the device, so its readings flow again"
+        );
     }
 
     #[test]
