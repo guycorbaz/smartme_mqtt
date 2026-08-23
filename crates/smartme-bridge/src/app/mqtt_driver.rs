@@ -1485,14 +1485,21 @@ pub async fn run(
                         tracing::info!("poll task closed the channel; stopping");
                         break SessionEnd::InboxClosed;
                     };
-                    let mut queue = Queue::default();
-                    // EVERY ARM BELOW EITHER PUBLISHES OR COUNTS, and story 4.11
+                    // EVERY OUTCOME EITHER PUBLISHES OR COUNTS, and story 4.11
                     // is the requirement that there is no third possibility. The
                     // reason slug and the source timestamp travel with each, so a
                     // reading lost here is identified by WHEN IT WAS TRUE — the
                     // only handle an operator has for lining a gap up against the
                     // source.
-                    let lost = |reason, fault: Option<String>| {
+                    //
+                    // ONE LOSS, ONE RECORD. This emitted an `error!` here AND the
+                    // `warn!` below for the same unpublishable reading until the
+                    // 2026-08-18 review — so a log-based tally double-counted, and
+                    // the `error!` fired BEFORE the counter moved, leaving a window
+                    // where a scrape saw a logged loss with no count. The error is
+                    // now a field on the one line that carries `meter`, `reason`
+                    // and `value_date`.
+                    if let Some((reason, fault)) = deliver(&client, &mut publisher, &update) {
                         pulse.dropped(&update.meter, reason);
                         tracing::warn!(
                             meter = %update.meter,
@@ -1502,28 +1509,6 @@ pub async fn run(
                             fault = fault.as_deref().unwrap_or("-"),
                             "the judged reading never reached the wire; dropped, never buffered"
                         );
-                    };
-                    let outcome = publisher.publish(&update, &mut queue);
-                    // ONE LOSS, ONE RECORD. This emitted an `error!` here AND the
-                    // `warn!` below for the same unpublishable reading until the
-                    // 2026-08-18 review — so a log-based tally double-counted, and
-                    // the `error!` fired BEFORE the counter moved, leaving a window
-                    // where a scrape saw a logged loss with no count. The error is
-                    // now a field on the one line that carries `meter`, `reason`
-                    // and `value_date`.
-                    let fault = outcome.as_ref().err().map(|e| e.to_string());
-                    match reason_for(&outcome) {
-                        // The publisher emitted; the transport may still refuse.
-                        // COUNTED ONCE PER READING, not per message: one reading
-                        // is one DDATA today, and should that ever become two, a
-                        // reading half-published is still ONE reading the host did
-                        // not receive.
-                        None => {
-                            if !publish_all(&client, &mut queue).is_empty() {
-                                lost(DropReason::TransportQueueFull, None);
-                            }
-                        }
-                        Some(reason) => lost(reason, fault),
                     }
                 }
                 _ = &mut shutdown => {
@@ -1892,6 +1877,49 @@ fn publish(client: &AsyncClient, message: Outbound) -> bool {
             );
             false
         }
+    }
+}
+
+/// Publishes one judged reading, and says what became of it — `None` when the
+/// host has it, the drop reason and any fault when it does not.
+///
+/// # Why this is a function, and it is [#95]
+///
+/// It has two ways of failing and they were pinned unequally. The publisher's
+/// refusals — a DATA before the BIRTH, an undeclared device, an unencodable
+/// payload — are reached from `chaos_broker_recovery`. The TRANSPORT's refusal
+/// was reached by nothing: deleting the `transport-queue-full` count left the
+/// whole suite green, measured 2026-08-19.
+///
+/// The issue judged that hole hard to close, because making a real outage fill
+/// `rumqttc`'s request channel is timing this harness does not control, and
+/// pinning the timing would pin the harness. **That is true of a chaos test and
+/// false of this one**: a client built with a request channel of capacity 1 whose
+/// `EventLoop` is never polled refuses the second message every time, with no
+/// timing involved at all. The dispatch was inside a `select!` arm, where nothing
+/// could call it; as a function it is called directly.
+///
+/// Everything it does, the branch did in this order, and the order is the point:
+/// the queue is drained ONLY when the publisher emitted, because a reading the
+/// publisher refused has nothing to drain and must not be reported against the
+/// transport.
+///
+/// COUNTED ONCE PER READING, not per message: one reading is one DDATA today,
+/// and should that ever become two, a reading half-published is still ONE reading
+/// the host did not receive.
+fn deliver(
+    client: &AsyncClient,
+    publisher: &mut SparkplugPublisher,
+    update: &MeterUpdate,
+) -> Option<(DropReason, Option<String>)> {
+    let mut queue = Queue::default();
+    let outcome = publisher.publish(update, &mut queue);
+    let fault = outcome.as_ref().err().map(std::string::ToString::to_string);
+    match reason_for(&outcome) {
+        // The publisher emitted; the transport may still refuse.
+        None => (!publish_all(client, &mut queue).is_empty())
+            .then_some((DropReason::TransportQueueFull, None)),
+        Some(reason) => Some((reason, fault)),
     }
 }
 
@@ -3031,6 +3059,146 @@ mod tests {
     /// `let _ = publish(client, message);` — dropping the count, which is what
     /// shipped — turns this red. Before this test the same mutation left the whole
     /// suite green, which is why `announce`'s misreport survived review-by-reading.
+    /// [#95] — the transport's refusal is counted, and it is the call site
+    /// nothing reached.
+    ///
+    /// Measured on 2026-08-19: deleting the `transport-queue-full` count left the
+    /// whole suite GREEN. `chaos_broker_recovery` reaches the publisher's
+    /// refusals through `before-birth` and has never once produced this one,
+    /// which its own comment predicted — so the count could be removed and
+    /// nothing would say so.
+    ///
+    /// **A capacity-1 request channel that nothing drains makes it
+    /// deterministic**, with no timing at all: the first message takes the slot,
+    /// the second is refused, every run. That is what [#95] judged out of reach —
+    /// correctly for a chaos test against a real broker, and not for this one.
+    ///
+    /// The control is the same publisher and the same reading on a client with
+    /// room: the reading goes out and NOTHING is counted. Without it this test
+    /// would pass just as well against a `deliver` that reported a loss every
+    /// time, which is the failure that costs an operator the most — a bridge
+    /// crying loss over readings the host has.
+    ///
+    /// **Falsification, 2026-08-23:**
+    ///
+    /// 1. the `transport-queue-full` arm deleted — the state [#95] measured: RED;
+    /// 2. `deliver` reporting the loss without asking `publish_all`: RED on the
+    ///    control.
+    ///
+    /// **And one mutation that is NOT caught, recorded because it was run and
+    /// survived:** hoisting the drain out of the `None` arm so it runs for every
+    /// outcome. It was written expecting red and stayed green through two
+    /// attempts, including the third case below which was added for it.
+    ///
+    /// It is green because it is EQUIVALENT, not because this test is blind. A
+    /// publisher that refuses a reading emits nothing, so the queue is empty on
+    /// every `Some(reason)` path and a drain there can refuse nothing. The
+    /// ordering is therefore load-bearing for the READER and not for the
+    /// behaviour — which is worth knowing before someone "simplifies" it and
+    /// believes the suite blessed the change. It would stop being equivalent the
+    /// day a refused reading left something queued, and nothing here would say
+    /// so.
+    ///
+    /// The third case below stands on its own merits regardless: it pins that the
+    /// publisher's reason wins when both causes are live, which is the answer an
+    /// operator acts on.
+    #[test]
+    fn a_reading_the_transport_refuses_is_counted_against_the_transport() {
+        use crate::core::oracle::Verdict;
+        use crate::domain::{Kw, Kwh, Measurement, MeterId, Quality, UtcMillis};
+
+        let serial = Serial::new("30000001");
+        let reading = MeterUpdate::uniform(
+            MeterId::new("meter"),
+            Measurement {
+                meter: MeterId::new("meter"),
+                serial: serial.clone(),
+                power: Some(Kw(0.018)),
+                energy: Some(Kwh(4_843.822)),
+                value_date: UtcMillis(1_784_984_792_050),
+                quality: Quality::Good,
+            },
+            Verdict::good(),
+        );
+
+        let node = sparkplug_b::EdgeNode::new("Site", "Bridge").expect("valid ids");
+
+        // THE CONTROL FIRST: room in the channel, and the reading goes out.
+        let roomy = MqttOptions::new("roomy", "127.0.0.1", 1883);
+        let (roomy_client, _roomy_loop) = AsyncClient::new(roomy, 16);
+        let mut publisher = SparkplugPublisher::new(node.clone(), None);
+        announce(
+            &roomy_client,
+            &mut publisher,
+            UtcMillis(1_000),
+            std::slice::from_ref(&serial),
+            BirthReason::Connected,
+        );
+        assert_eq!(
+            deliver(&roomy_client, &mut publisher, &reading),
+            None,
+            "a reading the transport accepted must be counted against nothing; \
+             a bridge that reported losses for readings the host HAS is worse \
+             than one that reports none"
+        );
+
+        // AND THE SUBJECT: exactly two slots, taken by the NBIRTH and the DBIRTH,
+        // so the device IS declared and the reading is refused by the transport
+        // alone. The `EventLoop` is dropped on the floor, so nothing ever drains
+        // it and the refusal needs no timing.
+        //
+        // **Not one slot**, and the first draft of this test used one: the DBIRTH
+        // was then refused too, [#88] withdrew the declaration, and `deliver`
+        // answered `undeclared-device` — the right answer to a different
+        // question, and a test that would have passed for the wrong reason had it
+        // asserted "some loss" instead of naming which.
+        let tight = MqttOptions::new("tight", "127.0.0.1", 1883);
+        let (tight_client, _never_polled) = AsyncClient::new(tight, 2);
+        let mut publisher = SparkplugPublisher::new(node, None);
+        announce(
+            &tight_client,
+            &mut publisher,
+            UtcMillis(1_000),
+            std::slice::from_ref(&serial),
+            BirthReason::Connected,
+        );
+
+        assert_eq!(
+            deliver(&tight_client, &mut publisher, &reading),
+            Some((DropReason::TransportQueueFull, None)),
+            "the publisher emitted and the TRANSPORT refused: that is a reading \
+             the host does not have, and until now deleting the line that counts \
+             it left the suite green"
+        );
+
+        // AND THE DISCRIMINATION, which the first version of this test did not
+        // have: the publisher refuses AND the channel is full at the same time.
+        // The answer is the publisher's reason, because there was nothing to
+        // hand the transport — a reading it never saw cannot be one it refused.
+        //
+        // One slot: the DBIRTH is refused, [#88] withdraws the declaration, and
+        // the queue is full for the DDATA that follows. Both causes are live at
+        // once, which is the only state that can tell them apart.
+        let both = MqttOptions::new("both", "127.0.0.1", 1883);
+        let (both_client, _also_never_polled) = AsyncClient::new(both, 1);
+        let mut publisher =
+            SparkplugPublisher::new(sparkplug_b::EdgeNode::new("Site", "Bridge").unwrap(), None);
+        announce(
+            &both_client,
+            &mut publisher,
+            UtcMillis(1_000),
+            std::slice::from_ref(&serial),
+            BirthReason::Connected,
+        );
+        assert_eq!(
+            deliver(&both_client, &mut publisher, &reading),
+            Some((DropReason::UndeclaredDevice, None)),
+            "the publisher's refusal wins: hoisting the drain out of its arm \
+             would report a transport refusal for a reading the transport was \
+             never offered, and send an operator after a broker that is fine"
+        );
+    }
+
     /// [#88], end to end — the wiring `withdrawal_for` alone cannot prove.
     ///
     /// The two decision tests above pin what SHOULD be withdrawn; nothing yet
