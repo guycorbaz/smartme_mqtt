@@ -73,12 +73,41 @@ trap log_run EXIT
 step() { CURRENT_STEP="$1"; printf '\n\033[1m── %s\033[0m\n' "$1"; }
 ok()   { printf '\033[32m✓ %s\033[0m\n' "$1"; }
 
-# Runs `cargo test …` and remembers the NAMES of whatever failed.
+# A test that has flaked this many times stops being tolerated.
 #
-# The step alone cannot tell a flake from a defect; the test name can, because a
-# flake is the same handful of names coming back. `tee` keeps the output on
-# screen unchanged, and `pipefail` is already set so the exit status is still
-# cargo's.
+# THIS THRESHOLD IS A POLICY, not a measurement, and it is the one number here
+# worth arguing about. Three says: once is noise, twice is bad luck, three times
+# is a defect nobody has looked at. Lower it and the gate nags; raise it and the
+# quarantine becomes the place flakes go to be forgotten, which is the failure
+# this whole mechanism exists to avoid.
+FLAKE_BUDGET=3
+QUARANTINE="$(git rev-parse --git-dir)/ci-local-quarantine.tsv"
+
+# Runs `cargo test …`, and on failure runs it ONE more time before refusing.
+#
+# # Why a retry, when a gate exists to refuse
+#
+# R6 is not "the gate refuses" — it is "the workaround is to bypass it". A gate
+# that refuses a push for a reason unrelated to the change is what makes
+# `--no-verify` reasonable, and `CLAUDE.md` treats that flag as an on-record
+# claim. One retry removes the temptation for the case where it is illegitimate,
+# and for no other case.
+#
+# # The retry repeats the STEP, never the test alone
+#
+# Re-running just the failed test would be cheaper and would be wrong. [#94] was
+# red in the full suite and green in isolation — 42 targeted runs found nothing —
+# because the defect needed another thread to reach a callsite first. A retry
+# that isolated the test would have called it a flake and hidden a real defect
+# for as long as it took someone to disbelieve the gate. Same command, same
+# conditions, or the second run answers a different question than the first.
+#
+# # What is bought with the second run is recorded, not spent
+#
+# A pass on the retry lets the push through AND writes the names to the
+# quarantine file. Nothing is silently forgiven: the count is printed on every
+# subsequent run, and at `FLAKE_BUDGET` the gate refuses. That is what keeps this
+# from becoming an amnesty — the tolerance is a countdown, not a pardon.
 tested() {
     local out
     out="$(mktemp)"
@@ -91,7 +120,41 @@ tested() {
     FAILED_TESTS="$(awk '/^failures:$/{f=1;next} /^test result:/{f=0} f&&NF==1{print $1}' "$out" \
         | sort -u | paste -sd, -)"
     rm -f "$out"
-    return 1
+
+    # Spent its budget already? Then it is not a flake any more, and saying so is
+    # the whole point of counting.
+    local spent name
+    for name in ${FAILED_TESTS//,/ }; do
+        spent=$(grep -cF "	${name}	" "$QUARANTINE" 2>/dev/null || true)
+        if (( spent >= FLAKE_BUDGET )); then
+            printf '\n\033[31m\033[1m✗ %s has now failed-then-passed %s times.\033[0m\n' \
+                "$name" "$spent"
+            echo "That is no longer a flake, and this gate will not retry it again."
+            echo "Its history: grep '$name' $QUARANTINE"
+            return 1
+        fi
+    done
+
+    printf '\n\033[33m── retrying the step once (R6): %s\033[0m\n' "$FAILED_TESTS"
+    echo "A second run of the SAME command, not of the failed test alone: [#94] was"
+    echo "red in the suite and green in isolation, so isolating would ask a different"
+    echo "question than the one that failed."
+    if ! "$@"; then
+        echo "failed twice — this is not a flake."
+        return 1
+    fi
+
+    # Passed on the retry. Recorded, printed, and counted against the budget.
+    for name in ${FAILED_TESTS//,/ }; do
+        printf '%s\t%s\t%s\t%s\n' \
+            "$(date -Iseconds)" "$name" "$(git rev-parse --short HEAD 2>/dev/null || echo '?')" \
+            "$CURRENT_STEP" >>"$QUARANTINE"
+        spent=$(grep -cF "	${name}	" "$QUARANTINE" 2>/dev/null || true)
+        printf '\033[33m⚠ %s failed then passed — %s of %s before this gate refuses it\033[0m\n' \
+            "$name" "$spent" "$FLAKE_BUDGET"
+    done
+    FAILED_TESTS=""
+    return 0
 }
 
 # ---------------------------------------------------------------------------
