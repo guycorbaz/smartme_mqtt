@@ -27,8 +27,72 @@ cd "$(dirname "$0")/.."
 fast=0
 [[ "${1:-}" == "--fast" ]] && fast=1
 
-step() { printf '\n\033[1m── %s\033[0m\n' "$1"; }
+# ---------------------------------------------------------------------------
+# Every run leaves a line behind ([#94] follow-up, R6)
+# ---------------------------------------------------------------------------
+#
+# The register has carried R6 — *the gate refuses one push in two, and the
+# obvious workaround is to bypass it* — since 2026-08-19, rated on nothing but
+# recollection. Two causes were found and repaired on 2026-08-23; whether that
+# ended it can only be answered by counting, and until now this script recorded
+# NOTHING: not a date, not a duration, not which step went red.
+#
+# That is not a detail of bookkeeping. The 2026-08-22 follow-up lowered its
+# guard on "three days, twenty-six commits, no occurrence" and two refusals
+# landed the same evening. A memory of calm is not a measurement of calm.
+#
+# The log lives in `.git/`: it is per-clone, never committed, survives
+# `cargo clean`, and describes THIS machine — which is the only thing it can
+# honestly describe. Reading it: `column -t .git/ci-local-runs.tsv`.
+RUN_LOG="$(git rev-parse --git-dir)/ci-local-runs.tsv"
+RUN_STARTED=$SECONDS
+CURRENT_STEP="startup"
+FAILED_TESTS=""
+
+# Written by an EXIT trap rather than at the end, because `set -e` means a
+# failing run never reaches the end — and a log that only records successes
+# would answer the opposite of the question being asked.
+log_run() {
+    local status=$?
+    local verdict="pass"
+    (( status == 0 )) || verdict="fail"
+    local mode="full"
+    (( fast )) && mode="fast"
+    printf '%s\t%s\t%ss\t%s\t%s\t%s\t%s\n' \
+        "$(date -Iseconds)" \
+        "$verdict" \
+        "$(( SECONDS - RUN_STARTED ))" \
+        "$mode" \
+        "$(git rev-parse --short HEAD 2>/dev/null || echo '?')" \
+        "${CURRENT_STEP}" \
+        "${FAILED_TESTS:--}" \
+        >>"$RUN_LOG"
+}
+trap log_run EXIT
+
+step() { CURRENT_STEP="$1"; printf '\n\033[1m── %s\033[0m\n' "$1"; }
 ok()   { printf '\033[32m✓ %s\033[0m\n' "$1"; }
+
+# Runs `cargo test …` and remembers the NAMES of whatever failed.
+#
+# The step alone cannot tell a flake from a defect; the test name can, because a
+# flake is the same handful of names coming back. `tee` keeps the output on
+# screen unchanged, and `pipefail` is already set so the exit status is still
+# cargo's.
+tested() {
+    local out
+    out="$(mktemp)"
+    if "$@" 2>&1 | tee "$out"; then
+        rm -f "$out"
+        return 0
+    fi
+    # `cargo test` lists them under `failures:`, one indented name per line, and
+    # prints that block twice — hence `sort -u`.
+    FAILED_TESTS="$(awk '/^failures:$/{f=1;next} /^test result:/{f=0} f&&NF==1{print $1}' "$out" \
+        | sort -u | paste -sd, -)"
+    rm -f "$out"
+    return 1
+}
 
 # ---------------------------------------------------------------------------
 # Not a CI step, but the failure mode CI cannot warn you about early enough:
@@ -121,13 +185,13 @@ if (( fast )); then
     # skipping what it promises: on a machine without Docker it panicked at
     # "broker container starts" instead of being skipped, and the documented
     # no-Docker path was broken by a story that never touched this file.
-    cargo test --workspace -- --skip chaos_ \
+    tested cargo test --workspace -- --skip chaos_ \
         --skip a_confirmed_mapping_does_birth \
         --skip an_unconfirmed_mapping_never_reaches \
         --skip an_unconfigured_bridge_never_reaches
     ok "tests (broker-dependent tests skipped — run without --fast before pushing)"
 else
-    cargo test --workspace
+    tested cargo test --workspace
     ok "tests"
 fi
 
@@ -141,7 +205,7 @@ fi
 # enable it — which also means that WITHOUT this step the feature would be dead
 # code and the guard untested, the failure mode the step exists to prevent.
 step "ci.yml — the panicking-handler guard (feature-gated route)"
-cargo test -p smartme-bridge --features panic-probe \
+tested cargo test -p smartme-bridge --features panic-probe \
     --test a_panicking_handler_does_not_cost_the_meters
 ok "a panicking handler costs the page and nothing else"
 

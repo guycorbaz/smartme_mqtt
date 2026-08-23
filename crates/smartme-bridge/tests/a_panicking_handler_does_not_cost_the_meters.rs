@@ -243,13 +243,39 @@ fn a_panicking_handler_costs_the_page_and_nothing_else() {
     // THE PREMISE, and without it every assertion after the panic is vacuous.
     // The explicit `kill` that used to stand here is gone: `Bridge`'s `Drop` does
     // it on this path and on every other one, which is the whole of [#98].
+    //
+    // AND IT NAMES THE HARNESS WHEN THE HARNESS IS AT FAULT (R6, 2026-08-24). The
+    // window this file documents — the kernel hands out a port, `an_unused_port`
+    // releases it, something takes it before the bridge binds — produces exactly
+    // this `None`, and the message used to blame the bridge for it: *"the poll
+    // loop never started"*, about a bridge that started fine and found its port
+    // occupied. Two causes, one symptom, and the one an operator would chase is
+    // the wrong one.
+    //
+    // They are told apart AFTER the child is gone: the bridge is killed first, so
+    // whatever still holds the port is not it. A port that binds means the bridge
+    // really did fail to serve; a port that refuses means someone else has it and
+    // this run proves nothing about the bridge.
     let before = match before {
         Some(health) => health,
-        None => panic!(
-            "the poll loop never started within 20 s, so nothing below could mean anything. \
-             Either the UI never answered at all, or it answered with `loop_age_ms: null` \
-             throughout — a bridge serving its screen while polling nothing"
-        ),
+        None => {
+            bridge.take().kill().expect("the bridge can be killed");
+            let stolen = std::net::TcpListener::bind(("127.0.0.1", port)).is_err();
+            assert!(
+                !stolen,
+                "THE HARNESS LOST THE PORT, and this run says nothing about the \
+                 bridge: {port} is still held by another process after the bridge \
+                 was killed, so the bridge never got the port it was told to serve \
+                 on. Re-run. This is the bind race `an_unused_port` documents \
+                 above, and it is what R6 is made of"
+            );
+            panic!(
+                "the poll loop never started within 20 s, so nothing below could mean anything. \
+                 Either the UI never answered at all, or it answered with `loop_age_ms: null` \
+                 throughout — a bridge serving its screen while polling nothing. The port was \
+                 free once the bridge was killed, so this is the BRIDGE and not the harness"
+            );
+        }
     };
     assert!(
         loop_age(&before).is_some(),
