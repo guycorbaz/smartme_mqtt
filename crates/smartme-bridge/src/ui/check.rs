@@ -564,8 +564,23 @@ fn render(state: &Arc<UiState>, chosen: Option<&str>, refusal: Option<Refusal>) 
         .map(|f| {
             f.dropped()
                 .into_iter()
-                .filter(|(m, _, _)| **m == meter)
-                .map(|(_, reason, count)| format!("{} × {}", count, reason.as_str()))
+                .filter(|lost| *lost.meter == meter)
+                .map(|lost| {
+                    format!(
+                        "{} × {}{}",
+                        lost.count,
+                        lost.reason.as_str(),
+                        // The count of a disabled meter cannot rise, and saying
+                        // so is the whole of [#90]: without it the operator
+                        // reads their own deliberate gesture as an unexplained
+                        // loss that simply stopped getting worse.
+                        if lost.retired {
+                            " (before you disabled it)"
+                        } else {
+                            ""
+                        }
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default();

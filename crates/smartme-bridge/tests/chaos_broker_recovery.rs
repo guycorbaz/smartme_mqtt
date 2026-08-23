@@ -458,8 +458,8 @@ async fn a_broker_that_comes_back_gets_a_new_session_and_the_old_timestamps() {
     let moved: Vec<_> = fleet
         .dropped()
         .into_iter()
-        .filter(|(_, reason, _)| DRIVER_SIDE.contains(reason))
-        .map(|(meter, reason, count)| (meter.to_string(), reason.as_str(), count))
+        .filter(|lost| DRIVER_SIDE.contains(&lost.reason))
+        .map(|lost| (lost.meter.to_string(), lost.reason.as_str(), lost.count))
         .collect();
     println!("AC3 MEASUREMENT — driver-side drop counters after the outage: {moved:?}");
     assert!(
@@ -472,7 +472,7 @@ async fn a_broker_that_comes_back_gets_a_new_session_and_the_old_timestamps() {
         fleet
             .dropped()
             .into_iter()
-            .map(|(m, r, c)| (m.to_string(), r.as_str(), c))
+            .map(|lost| (lost.meter.to_string(), lost.reason.as_str(), lost.count))
             .collect::<Vec<_>>()
     );
     // WHICH reason is deliberately not asserted: whether the outage produces

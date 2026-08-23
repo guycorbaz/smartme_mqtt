@@ -1015,11 +1015,18 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
             .map(|f| f.dropped())
             .unwrap_or_default()
             .iter()
-            .map(|(meter, reason, count)| format!(
-                "{{\"meter\":{},\"reason\":{},\"count\":{}}}",
-                json_string(&meter.to_string()),
-                json_string(reason.as_str()),
-                count,
+            // `retired` travels WITH the count ([#90]). A machine reading this
+            // list has the same question an operator has — is this number a
+            // live fault or the history of a meter someone switched off — and
+            // the count alone cannot answer it: a disabled meter's figure is
+            // frozen, not falling, so it looks exactly like a fault that has
+            // stopped getting worse.
+            .map(|lost| format!(
+                "{{\"meter\":{},\"reason\":{},\"count\":{},\"retired\":{}}}",
+                json_string(&lost.meter.to_string()),
+                json_string(lost.reason.as_str()),
+                lost.count,
+                lost.retired,
             ))
             .collect::<Vec<_>>()
             .join(",")
@@ -2950,6 +2957,67 @@ mod tests {
     /// `{"status":"running","intends_to_publish":true,"wedged":false,
     /// "failed_sources":[],"degraded_meters":[],"dropped_readings":[],…}`. That
     /// is a bridge losing readings while every field on this endpoint says it is
+    /// [#90] — a disabled meter keeps its losses AND says they are history.
+    ///
+    /// # The two errors this sits between
+    ///
+    /// Clearing the counters on `retire` would erase a fact that did happen, and
+    /// `dropped`'s own rule forbids exactly that erasure for exactly that reason.
+    /// Leaving them bare reports an operator's deliberate gesture as an
+    /// unexplained loss that merely stopped getting worse — indistinguishable, on
+    /// a screen, from a fault nobody has looked at. So the number stays and the
+    /// sentence is added.
+    ///
+    /// **Falsification, 2026-08-23:**
+    ///
+    /// 1. `retire` not setting `retired` — the state before this repair: RED
+    ///    (`"retired":false` on a meter that was switched off).
+    /// 2. `retire` clearing `dropped` instead — the other candidate the issue
+    ///    named: RED, the row disappears entirely and the count is lost.
+    /// 3. `record_at` not clearing `retired`: RED on the last assertion, where a
+    ///    meter that publishes again is still labelled switched-off.
+    #[tokio::test]
+    async fn a_disabled_meter_keeps_its_losses_and_healthz_says_they_are_history() {
+        use crate::app::poll_publish::DropReason;
+        use crate::core::State as OracleState;
+        use crate::core::clock::FakeClock;
+        use crate::core::oracle::Verdict;
+        use crate::domain::{MeterId, UtcMillis};
+        use std::sync::Arc;
+
+        let meter = MeterId::new("appart-est");
+        let clock = Arc::new(FakeClock::new(UtcMillis(1_784_984_793_000)));
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let state = ui(publishing(
+            beats.clone(),
+            clock.clone(),
+            Arc::clone(&config),
+        ));
+
+        beats.dropped(&meter, DropReason::OutboxFull);
+        beats.retire(&meter);
+
+        let health = body(healthz(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            health.contains(
+                "{\"meter\":\"appart-est\",\"reason\":\"outbox-full\",\"count\":1,\"retired\":true}"
+            ),
+            "the reading WAS lost, so the count stays; what is added is that it \
+             cannot rise, because the operator switched this meter off:\n{health}"
+        );
+
+        // And it comes back: a meter that publishes again is not retired,
+        // whatever it was a moment ago. Without this the label latches, and a
+        // re-enabled meter's live losses read as history.
+        beats.record(&meter, OracleState::initial(), Verdict::good());
+        let health = body(healthz(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            health.contains("\"count\":1,\"retired\":false"),
+            "a meter that publishes is not switched off:\n{health}"
+        );
+    }
+
     /// well, which is the state this test exists to make impossible.
     #[tokio::test]
     async fn a_lost_reading_is_named_in_healthz_and_moves_no_status_code() {
@@ -2987,7 +3055,9 @@ mod tests {
         let health = body(response).await;
 
         assert!(
-            health.contains("{\"meter\":\"appart-est\",\"reason\":\"outbox-full\",\"count\":2}"),
+            health.contains(
+                "{\"meter\":\"appart-est\",\"reason\":\"outbox-full\",\"count\":2,\"retired\":false}"
+            ),
             "the loss must name the meter, the reason and how many — an operator \
              told only that something was dropped cannot tell a full queue from an \
              unpublishable payload:\n{health}"

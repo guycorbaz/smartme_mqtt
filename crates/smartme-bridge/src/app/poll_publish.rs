@@ -327,6 +327,49 @@ pub struct MeterState {
     /// count that wraps to zero is a surface that lies, which is the one thing
     /// this bridge is built not to do.
     pub dropped: [u64; DropReason::COUNT],
+    /// The operator switched this meter OFF ([#90]).
+    ///
+    /// # Why the counters above are not cleared instead
+    ///
+    /// [`Self::dropped`] is cumulative for the process lifetime, and its own
+    /// documentation says why: a counter reset by a reconnect reports the
+    /// smallest figure exactly when the fault was largest. Clearing it on a
+    /// disable would apply that same erasure to a fact that did happen — the
+    /// readings WERE lost — so what is added is the sentence that explains the
+    /// number, not a rule that deletes it.
+    ///
+    /// **This marks the DELIBERATE gesture and nothing else.** A meter whose
+    /// configuration row was removed keeps polling until the restart the cost
+    /// table demanded, and its `undeclared-device` count keeps rising; that
+    /// counter is the restart debt staying visible, and marking it retired would
+    /// hide exactly what the poll loop's own comment says must stay loud.
+    ///
+    /// It also answers a question no field could answer before: a retired meter
+    /// and one that has never completed a tick both carry `None` everywhere.
+    pub retired: bool,
+}
+
+/// One meter's losses under one reason, as the operator surfaces read them.
+///
+/// # Why a struct where a tuple did
+///
+/// It grew a fourth member ([#90]) and `lost[0].3` says nothing. The members are
+/// also not of one kind any more: three describe the loss, and `retired`
+/// describes the METER — a reader that misses that distinction reports a
+/// disabled meter's history as a live fault, which is the confusion this exists
+/// to remove.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lost<'a> {
+    /// The meter the readings belonged to.
+    pub meter: &'a MeterId,
+    /// Why they never reached the wire.
+    pub reason: DropReason,
+    /// How many, cumulative for the process lifetime.
+    pub count: u64,
+    /// The operator has since switched this meter off, so the count is history
+    /// and cannot rise. **Not set for a meter whose configuration row was
+    /// removed** — see [`FleetMeter::retired`].
+    pub retired: bool,
 }
 
 /// The whole fleet at one instant (AR6).
@@ -419,15 +462,18 @@ impl FleetState {
     /// about. A fleet that has lost nothing renders as an empty list, which is
     /// the honest shape — not six zeros per meter, which is noise an operator
     /// learns to scroll past.
-    pub fn dropped(&self) -> Vec<(&MeterId, DropReason, u64)> {
+    pub fn dropped(&self) -> Vec<Lost<'_>> {
         self.meters
             .iter()
             .flat_map(|m| {
-                DropReason::ALL
-                    .into_iter()
-                    .map(move |reason| (&m.meter, reason, m.dropped[reason.index()]))
+                DropReason::ALL.into_iter().map(move |reason| Lost {
+                    meter: &m.meter,
+                    reason,
+                    count: m.dropped[reason.index()],
+                    retired: m.retired,
+                })
             })
-            .filter(|(_, _, count)| *count > 0)
+            .filter(|lost| lost.count > 0)
             .collect()
     }
 }
@@ -502,6 +548,7 @@ impl Heartbeats {
                 last_energy_kwh: None,
                 culprit: None,
                 dropped: [0; DropReason::COUNT],
+                retired: false,
             })
             .collect();
         Self(Arc::new(tokio::sync::watch::Sender::new(FleetState {
@@ -585,6 +632,13 @@ impl Heartbeats {
                     entry.last_energy_kwh = p.energy_kwh;
                 }
                 entry.culprit = published.cause().map(crate::core::oracle::Cause::culprit);
+                // A meter that publishes is not retired, whatever it was a
+                // moment ago. Cleared HERE rather than where the operator
+                // re-enables it, for the reason `retire` is called from the poll
+                // loop and not from `apply`: the state follows what the bridge
+                // OBSERVES, and a re-enable that never produces a reading has
+                // not un-retired anything an operator should be shown.
+                entry.retired = false;
                 fleet.generation += 1;
             }
         });
@@ -616,6 +670,10 @@ impl Heartbeats {
                 entry.source_value_date = None;
                 entry.last_power_kw = None;
                 entry.last_energy_kwh = None;
+                // The opinion is gone; the COUNT of what was lost is not, and
+                // this is what tells an operator why a number that cannot rise
+                // any more is still on their screen ([#90]).
+                entry.retired = true;
                 fleet.generation += 1;
             }
         });
@@ -4246,9 +4304,9 @@ mod tests {
         let fleet = beats.snapshot();
         let lost = fleet.dropped();
         assert_eq!(lost.len(), 1, "one reading was lost, once: {lost:?}");
-        assert_eq!(lost[0].0, &meter);
-        assert_eq!(lost[0].1, DropReason::OutboxFull);
-        assert_eq!(lost[0].2, 1);
+        assert_eq!(lost[0].meter, &meter);
+        assert_eq!(lost[0].reason, DropReason::OutboxFull);
+        assert_eq!(lost[0].count, 1);
     }
 
     /// **AC1 — a dead transport task is its own reason, not a full queue.**
@@ -4290,7 +4348,7 @@ mod tests {
         let lost = fleet.dropped();
         assert_eq!(lost.len(), 1, "one reading, one reason: {lost:?}");
         assert_eq!(
-            lost[0].1,
+            lost[0].reason,
             DropReason::MqttTaskGone,
             "a closed channel is a DEAD TRANSPORT TASK, not a busy one — and it is \
              the one reason of the six that a container restart would clear, so \
@@ -4509,7 +4567,10 @@ mod tests {
 
         let lost = after.dropped();
         assert_eq!(lost.len(), 1, "one reason, one row: {lost:?}");
-        assert_eq!((lost[0].1, lost[0].2), (DropReason::MqttTaskGone, 1000));
+        assert_eq!(
+            (lost[0].reason, lost[0].count),
+            (DropReason::MqttTaskGone, 1000)
+        );
     }
 
     /// **AC2 — the count saturates rather than wrapping.**
@@ -4582,7 +4643,7 @@ mod tests {
         let fleet = beats.snapshot();
         let lost = fleet.dropped();
         assert_eq!(lost.len(), 1, "{lost:?}");
-        assert_eq!(lost[0].0, &MeterId::new("b"));
-        assert_eq!(lost[0].1, DropReason::BeforeBirth);
+        assert_eq!(lost[0].meter, &MeterId::new("b"));
+        assert_eq!(lost[0].reason, DropReason::BeforeBirth);
     }
 }

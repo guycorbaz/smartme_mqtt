@@ -294,11 +294,29 @@ the wire can report this --- what is being reported is precisely what never reac
 --- so \code{/healthz} is the only place it appears, under \code{dropped\_readings}. It is an
 empty list when nothing has been lost.
 
-Each entry names the meter, the reason and how many:
+Each entry names the meter, the reason, how many, and whether the meter has since been
+switched off:
 
 \begin{verbatim}
-"dropped_readings":[{"meter":"appart-est","reason":"outbox-full","count":2}]
+"dropped_readings":[{"meter":"appart-est","reason":"outbox-full",
+                    "count":2,"retired":false}]
 \end{verbatim}
+
+\code{retired} answers the question the count alone cannot: \textbf{is this a live fault, or
+the history of a meter you disabled?} A disabled meter's figure is frozen rather than falling,
+so without this flag it reads exactly like a fault that stopped getting worse. The counts are
+\emph{not} cleared when a meter is disabled --- the readings really were lost, and erasing a
+fact is the one thing these surfaces may not do --- so what you get is the number plus the
+sentence that explains it. A meter that publishes again is no longer \code{retired}, on its
+first reading.
+
+\begin{warning}
+\textbf{A meter whose configuration row you \emph{deleted} is not \code{retired}}, and the
+difference is deliberate. Deleting a row costs a restart, which the configuration screen tells
+you; until you perform it the meter goes on polling and goes on counting
+\code{undeclared-device} once per period. That rising count is the restart debt staying
+visible, and labelling it as history would hide the one thing you still have to do.
+\end{warning}
 
 The counts are cumulative for as long as the process runs --- an outage spanning three
 reconnections is one outage --- and they are not cleared by a reconnection. A restart clears
