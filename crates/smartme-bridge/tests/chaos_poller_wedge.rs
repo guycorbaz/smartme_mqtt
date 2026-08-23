@@ -197,17 +197,24 @@ async fn bridge_with_ui(
     config: BridgeConfig,
     state_dir: std::path::PathBuf,
 ) -> (u16, tokio::sync::oneshot::Sender<()>) {
-    let ui_port = common::an_unused_host_port();
     let phase: ui::PhaseHandle = Arc::new(arc_swap::ArcSwap::from_pointee(ui::Phase::starting()));
-    tokio::spawn(ui::serve(
-        ui_port,
+    // RETRIED rather than re-run by hand. The bind race this harness has
+    // documented since story 4.x — the kernel hands out a port,
+    // `an_unused_host_port` releases it, something else takes it before
+    // `ui::serve` binds — was answered here by an assertion telling the reader to
+    // re-run. It cost a refused push on 2026-08-23, in `healthcheck_probe` where
+    // the message did not even name the race. The parade now lives in the shared
+    // harness and applies to both.
+    let phase_for_state = Arc::clone(&phase);
+    let ui_port = common::serve_ui_on_a_free_port(move || {
         ui::UiState::new(
-            Arc::clone(&phase),
-            state_dir,
+            Arc::clone(&phase_for_state),
+            state_dir.clone(),
             Arc::new(smartme_bridge::core::SystemClock::new()),
             Arc::new(tokio::sync::Notify::new()),
-        ),
-    ));
+        )
+    })
+    .await;
 
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
     let handle = Arc::clone(&phase);
@@ -228,32 +235,18 @@ async fn bridge_with_ui(
         }
     });
 
-    // The UI binds asynchronously; a probe that raced it would report "no
-    // answer" about a server that was seconds from listening.
-    //
-    // **AND IT FAILS HERE IF IT NEVER ANSWERS, which it did not until 2026-08-19.**
-    // This loop used to fall through silently, so a UI that never bound left every
-    // assertion below to fail on its own terms — a pre-push gate reported
+    // The wait that used to live here is inside `serve_ui_on_a_free_port`, which
+    // returns only once the UI has ANSWERED — so reaching this line already means
+    // the harness is up, and no assertion below can be read as a bridge defect
+    // when it was a port that never bound. **The requirement that a harness which
+    // cannot start must SAY so is unchanged**, and it is why that helper panics
+    // with its own message rather than returning a port nothing is on: this loop
+    // used to fall through silently, and a pre-push gate once reported
     // `THE BLOCKED LOOP NEVER READ AS WEDGED … Last body: ` with an EMPTY body,
-    // accusing the bridge of not wedging when nothing had answered at all. A
-    // harness that cannot start must say so, or it indicts the code under test.
-    let mut answered = false;
-    for _ in 0..100 {
-        if healthz(ui_port).is_some() {
-            answered = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert!(
-        answered,
-        "THE UI NEVER ANSWERED on port {ui_port} within 10 s, so nothing below is about the \
-         bridge. The likeliest cause is the bind race this harness documents: \
-         `an_unused_host_port` asks the kernel for a free port and releases it, and something \
-         else can take it before `ui::serve` binds — narrow, and real enough to have happened. \
-         Re-run; if it repeats, the server is failing to start for a reason worth reading in \
-         the log"
-    );
+    // accusing the bridge of not wedging when nothing had answered at all.
+    //
+    // `healthz` is still what the assertions below read; it is no longer what
+    // decides the harness is ready, because a connection is not an answer.
     (ui_port, stop_tx)
 }
 

@@ -133,6 +133,89 @@ pub fn an_unused_host_port() -> u16 {
         .port()
 }
 
+/// Starts the web UI on a free port and returns the port it is **actually
+/// answering on**, retrying if the port is lost before `ui::serve` binds it.
+///
+/// # The race this closes, and why it could not be left to "re-run"
+///
+/// [`an_unused_host_port`] asks the kernel for a port and RELEASES it before
+/// handing back the number, so anything may take it in between —
+/// `chaos_poller_wedge` has documented that window for a while and answered it
+/// with *re-run*. For a container mapping there is no alternative: the port must
+/// be named before the container exists. **For the UI there is**, because the
+/// caller can simply try again, and this is where it happens.
+///
+/// It cost a refused push on 2026-08-23: `healthcheck_probe` went red on the
+/// pre-push hook and green on every re-run, and its message blamed the bridge
+/// (*"a bridge that answers on /healthz is healthy"*) for a port the harness
+/// never got. A gate that refuses a push for a reason unrelated to the change is
+/// how `--no-verify` becomes tempting, which is the one thing the pre-push rule
+/// exists to prevent.
+///
+/// # Why it waits for an ANSWER and not for a connection
+///
+/// `TcpStream::connect` succeeding proves only that *something* holds the port —
+/// and something else holding it is precisely the failure being guarded against.
+/// A squatting listener accepts the connection and never replies, so a
+/// connect-based wait returns success and hands the test a port the UI is not on.
+/// This reads an HTTP status line back, by hand: there is no HTTP client in the
+/// dev-dependencies, and a `GET` written out is shorter than earning one.
+///
+/// `ui::serve` cannot report the failure itself: it logs and RETURNS when the
+/// bind fails, because in production a bridge that loses its UI must keep
+/// publishing (that behaviour is not a defect and is not touched here). In a
+/// spawned task that return is silent, which is what made the symptom land on
+/// the wrong suspect.
+pub async fn serve_ui_on_a_free_port(make_state: impl Fn() -> smartme_bridge::ui::UiState) -> u16 {
+    const ATTEMPTS: usize = 5;
+    for attempt in 1..=ATTEMPTS {
+        let port = an_unused_host_port();
+        tokio::spawn(smartme_bridge::ui::serve(port, make_state()));
+        if ui_answers(port, Duration::from_secs(2)).await {
+            return port;
+        }
+        eprintln!(
+            "the web UI did not come up on port {port} (attempt {attempt} of \
+             {ATTEMPTS}); something took the port between the kernel handing it \
+             out and `ui::serve` binding it. Retrying on another port."
+        );
+    }
+    panic!(
+        "the web UI did not answer on any of {ATTEMPTS} ports. That is no longer \
+         a lost race — read the log for the reason `ui::serve` is failing to \
+         start, and do NOT read this as a defect in what the test measures"
+    );
+}
+
+/// Whether the web UI answers `GET /healthz` on `port` before `timeout`.
+///
+/// Any HTTP status counts, `503` included: what is being established is that the
+/// UI is THERE, not that it is happy. A test asserting the status reads it
+/// itself, from its own request.
+pub async fn ui_answers(port: u16, timeout: Duration) -> bool {
+    use std::io::{Read, Write};
+
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+            if stream
+                .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                .is_ok()
+            {
+                let mut answer = [0_u8; 12];
+                if let Ok(read) = stream.read(&mut answer) {
+                    if answer[..read].starts_with(b"HTTP/1.") {
+                        return true;
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    false
+}
+
 /// Blocks until the broker on `port` completes an MQTT **CONNACK**, or the
 /// deadline passes.
 ///

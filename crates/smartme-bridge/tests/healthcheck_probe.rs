@@ -35,6 +35,44 @@ fn scratch(name: &str) -> std::path::PathBuf {
     dir
 }
 
+/// The harness guard: something holding the port is NOT the UI answering.
+///
+/// # Why this is the assertion that matters
+///
+/// The bind race is closed by retrying, and a retry is only as good as the test
+/// that decides an attempt failed. The obvious test — `TcpStream::connect`
+/// succeeds — is the one that cannot work here, because the whole failure being
+/// guarded against is *another process holding this port*: it accepts the
+/// connection, never answers, and a connect-based wait declares victory and
+/// hands back a port the UI is not on. That is the same false pass the old wait
+/// loop in this file could produce.
+///
+/// A bare listener that never accepts is exactly that squatter: the kernel
+/// completes the handshake into its backlog, so the connection succeeds and no
+/// byte ever comes back.
+///
+/// **FALSIFIED 2026-08-23** — `ui_answers` rewritten as
+/// `std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()`, which is how one
+/// would ordinarily write "is it up yet": RED here, and green on every other test
+/// in this file. The mutation is the shipped shape of the wait it replaces.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_process_holding_the_port_is_not_the_ui_answering() {
+    // Bound and never accepted, and kept alive by this binding for the whole test.
+    let squatter = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("the kernel has a port");
+    let port = squatter
+        .local_addr()
+        .expect("a bound listener has an address")
+        .port();
+
+    assert!(
+        !common::ui_answers(port, std::time::Duration::from_secs(2)).await,
+        "a port that accepts connections and answers nothing must NOT count as \
+         the UI being up: taking it for the UI is how the harness hands a test a \
+         port the bridge was never on, and every assertion afterwards indicts the \
+         bridge for it"
+    );
+}
+
 /// **AC1 and AC2's healthy half** — a bridge that answers is healthy, including
 /// one that is deliberately publishing nothing.
 ///
@@ -58,23 +96,21 @@ fn scratch(name: &str) -> std::path::PathBuf {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_bridge_that_answers_is_healthy_even_when_it_publishes_nothing() {
     let dir = scratch("healthy");
-    let port = common::an_unused_host_port();
-    tokio::spawn(ui::serve(
-        port,
+    // THROUGH THE HARNESS, and the reason is on the record: this test went red on
+    // the pre-push hook of 2026-08-23 and green on every re-run, blaming the
+    // bridge for a port the harness had lost between `an_unused_host_port` and
+    // `ui::serve`. `serve_ui_on_a_free_port` retries and waits for an ANSWER
+    // rather than for a connection — a squatter accepts the connection too.
+    let dir_for_state = dir.clone();
+    let port = common::serve_ui_on_a_free_port(move || {
         ui::UiState::new(
             ui::Phase::silent(ui::Lifecycle::Unconfigured).into_handle(),
-            dir.clone(),
+            dir_for_state.clone(),
             Arc::new(smartme_bridge::core::SystemClock::new()),
             Arc::new(tokio::sync::Notify::new()),
-        ),
-    ));
-    // Wait for the listener rather than sleeping on a guess.
-    for _ in 0..200 {
-        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+        )
+    })
+    .await;
 
     let output = probe(port, &dir);
     assert_eq!(
