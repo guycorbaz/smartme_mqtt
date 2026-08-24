@@ -347,6 +347,27 @@ pub struct MeterState {
     /// It also answers a question no field could answer before: a retired meter
     /// and one that has never completed a tick both carry `None` everywhere.
     pub retired: bool,
+    /// How many of [`Self::dropped`] were **republications** rather than fresh
+    /// readings ([#92]).
+    ///
+    /// # Two questions that shared one number
+    ///
+    /// ADR 0027 requires a verdict every cycle, so a meter whose source has gone
+    /// quiet republishes its last known value with a degraded verdict, once per
+    /// period. Under a source failure and a broker outage at the same time the
+    /// SAME value is refused again and again, and each refusal moved the counter
+    /// — so the total said N where the historian was missing exactly one distinct
+    /// measurement.
+    ///
+    /// Both readings are true and they answer different questions: *how many
+    /// messages did the bridge fail to hand over*, which is the total the manual
+    /// defines and which must not shrink, and *how many distinct measurements is
+    /// the historian missing*, which is the total minus this.
+    ///
+    /// **Not a seventh `DropReason`**, deliberately: that enum answers *why* the
+    /// bridge could not hand a message over, and the reason here is unchanged —
+    /// a full queue. What differs is *what* was lost, and that is a second axis.
+    pub republications_lost: u64,
 }
 
 /// One meter's losses under one reason, as the operator surfaces read them.
@@ -370,6 +391,11 @@ pub struct Lost<'a> {
     /// and cannot rise. **Not set for a meter whose configuration row was
     /// removed** — see [`FleetMeter::retired`].
     pub retired: bool,
+    /// How many of this METER's losses were republications rather than distinct
+    /// readings ([#92]). Per meter and not per reason: a republication is refused
+    /// for whatever reason the transport gives, and the reason is not what this
+    /// counts.
+    pub republications: u64,
 }
 
 /// The whole fleet at one instant (AR6).
@@ -471,6 +497,7 @@ impl FleetState {
                     reason,
                     count: m.dropped[reason.index()],
                     retired: m.retired,
+                    republications: m.republications_lost,
                 })
             })
             .filter(|lost| lost.count > 0)
@@ -549,6 +576,7 @@ impl Heartbeats {
                 culprit: None,
                 dropped: [0; DropReason::COUNT],
                 retired: false,
+                republications_lost: 0,
             })
             .collect();
         Self(Arc::new(tokio::sync::watch::Sender::new(FleetState {
@@ -688,6 +716,22 @@ impl Heartbeats {
     /// panic: `retire` and `record` already take that position, and a reading for
     /// an unserved meter is a reconfiguration race, not a bug worth killing the
     /// transport for.
+    /// Counts one lost reading that was a REPUBLICATION of a value already
+    /// published ([#92]).
+    ///
+    /// Moves the ordinary counter too: the message really was not handed over,
+    /// and the manual defines the total as messages the bridge could not hand
+    /// over. This one only says how many of them were copies.
+    pub fn dropped_republication(&self, meter: &MeterId, reason: DropReason) {
+        self.dropped(meter, reason);
+        self.0.send_modify(|fleet| {
+            if let Some(entry) = fleet.meters.iter_mut().find(|m| &m.meter == meter) {
+                entry.republications_lost = entry.republications_lost.saturating_add(1);
+                fleet.generation += 1;
+            }
+        });
+    }
+
     pub fn dropped(&self, meter: &MeterId, reason: DropReason) {
         self.0.send_modify(|fleet| {
             if let Some(entry) = fleet.meters.iter_mut().find(|m| &m.meter == meter) {

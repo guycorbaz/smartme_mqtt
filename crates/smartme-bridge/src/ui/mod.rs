@@ -1022,11 +1022,19 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
             // frozen, not falling, so it looks exactly like a fault that has
             // stopped getting worse.
             .map(|lost| format!(
-                "{{\"meter\":{},\"reason\":{},\"count\":{},\"retired\":{}}}",
+                "{{\"meter\":{},\"reason\":{},\"count\":{},\"retired\":{},\
+                 \"republications\":{}}}",
                 json_string(&lost.meter.to_string()),
                 json_string(lost.reason.as_str()),
                 lost.count,
                 lost.retired,
+                // HOW MANY OF THIS METER'S LOSSES WERE COPIES ([#92]). `count`
+                // stays what the manual defines — messages the bridge could not
+                // hand over — and the historian's question, *how many distinct
+                // measurements am I missing*, is `count` minus this. Per meter,
+                // so it repeats across that meter's rows: it counts what was
+                // lost, not why.
+                lost.republications,
             ))
             .collect::<Vec<_>>()
             .join(",")
@@ -3001,7 +3009,7 @@ mod tests {
         let health = body(healthz(State(Arc::clone(&state))).await.into_response()).await;
         assert!(
             health.contains(
-                "{\"meter\":\"appart-est\",\"reason\":\"outbox-full\",\"count\":1,\"retired\":true}"
+                "{\"meter\":\"appart-est\",\"reason\":\"outbox-full\",\"count\":1,\"retired\":true,\"republications\":0}"
             ),
             "the reading WAS lost, so the count stays; what is added is that it \
              cannot rise, because the operator switched this meter off:\n{health}"
@@ -3056,7 +3064,7 @@ mod tests {
 
         assert!(
             health.contains(
-                "{\"meter\":\"appart-est\",\"reason\":\"outbox-full\",\"count\":2,\"retired\":false}"
+                "{\"meter\":\"appart-est\",\"reason\":\"outbox-full\",\"count\":2,\"retired\":false,\"republications\":0}"
             ),
             "the loss must name the meter, the reason and how many — an operator \
              told only that something was dropped cannot tell a full queue from an \

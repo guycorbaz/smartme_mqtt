@@ -299,8 +299,17 @@ switched off:
 
 \begin{verbatim}
 "dropped_readings":[{"meter":"appart-est","reason":"outbox-full",
-                    "count":2,"retired":false}]
+                    "count":2,"retired":false,"republications":0}]
 \end{verbatim}
+
+\code{republications} answers the question \code{count} cannot: \textbf{how many
+distinct measurements is the historian actually missing?} \prog publishes something every
+cycle, so a meter whose source has gone quiet re-sends its last known value with a degraded
+quality. If the broker is unreachable at the same time, that \emph{same} measurement is refused
+once per period --- at a 30-second period, twenty minutes of double failure counts forty losses
+where exactly one measurement is missing. The total is still right, and it is still what this
+section defines; \code{count} minus \code{republications} is what the historian lacks. The
+figure is per meter, so it repeats across that meter's rows: it counts what was lost, not why.
 
 \code{retired} answers the question the count alone cannot: \textbf{is this a live fault, or
 the history of a meter you disabled?} A disabled meter's figure is frozen rather than falling,

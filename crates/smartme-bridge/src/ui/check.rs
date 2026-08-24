@@ -567,9 +567,21 @@ fn render(state: &Arc<UiState>, chosen: Option<&str>, refusal: Option<Refusal>) 
                 .filter(|lost| *lost.meter == meter)
                 .map(|lost| {
                     format!(
-                        "{} × {}{}",
+                        "{} × {}{}{}",
                         lost.count,
                         lost.reason.as_str(),
+                        // Said once per meter, on the rows where it can mislead
+                        // ([#92]): a figure of 40 that is 39 copies of one value
+                        // reads as forty lost measurements otherwise.
+                        if lost.republications > 0 {
+                            format!(
+                                " ({} of this meter's losses were republications \
+                                 of a value already sent)",
+                                lost.republications
+                            )
+                        } else {
+                            String::new()
+                        },
                         // The count of a disabled meter cannot rise, and saying
                         // so is the whole of [#90]: without it the operator
                         // reads their own deliberate gesture as an unexplained

@@ -837,6 +837,32 @@ impl SparkplugPublisher {
         })
     }
 
+    /// Whether this reading carries the same acquisition instant as the last one
+    /// CONFIRMED for its device — that is, whether it is a republication ([#92]).
+    ///
+    /// # Why the publisher answers this and not the poll loop
+    ///
+    /// ADR 0027 makes every cycle publish something, so a meter whose source has
+    /// gone quiet re-sends its last known value with a degraded verdict. The poll
+    /// loop knows it is repeating itself; what it does NOT know is whether the
+    /// previous attempt reached the host, and that is the question that decides
+    /// whether a loss is a distinct measurement or a copy of one already counted.
+    /// Only the publisher knows, because only the publisher records confirmations.
+    ///
+    /// **`ValueDate`, never the publication instant.** Two readings sharing an
+    /// acquisition time are the same measurement whatever the clock says when
+    /// they were sent — that is the distinction `source_value_date` already draws
+    /// for the state screen (story 6.3 AC2).
+    ///
+    /// A device with no confirmed reading yet answers `false`: nothing has been
+    /// published for it, so nothing can be a repeat of it.
+    pub fn is_republication(&self, update: &MeterUpdate) -> bool {
+        self.declared
+            .get(&update.measurement.serial)
+            .and_then(|d| d.last.as_ref())
+            .is_some_and(|last| last.measurement.value_date == update.measurement.value_date)
+    }
+
     /// The transport accepted the queued publication: record the reading as the
     /// last one published ([#92], ADR 0046).
     ///

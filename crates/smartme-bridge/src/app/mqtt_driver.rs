@@ -1499,8 +1499,10 @@ pub async fn run(
                     // where a scrape saw a logged loss with no count. The error is
                     // now a field on the one line that carries `meter`, `reason`
                     // and `value_date`.
-                    if let Some((reason, fault)) = deliver(&client, &mut publisher, &update) {
-                        pulse.dropped(&update.meter, reason);
+                    if let Some(loss) = deliver(&client, &mut publisher, &update) {
+                        let Loss { reason, fault, .. } = &loss;
+                        let (reason, fault) = (*reason, fault.clone());
+                        count_loss(&pulse, &update.meter, &loss);
                         tracing::warn!(
                             meter = %update.meter,
                             serial = %update.measurement.serial,
@@ -1929,17 +1931,30 @@ fn deliver(
     client: &AsyncClient,
     publisher: &mut SparkplugPublisher,
     update: &MeterUpdate,
-) -> Option<(DropReason, Option<String>)> {
+) -> Option<Loss> {
     let mut queue = Queue::default();
     let pending = match publisher.publish(update, &mut queue) {
         Ok(pending) => pending,
-        Err(error) => return Some((DropReason::Unpublishable, Some(error.to_string()))),
+        Err(error) => {
+            return Some(Loss {
+                reason: DropReason::Unpublishable,
+                fault: Some(error.to_string()),
+                republication: false,
+            });
+        }
     };
     // The publisher's own refusals never queued anything: answer them without
     // touching the transport, and `confirmed` records nothing for them.
+    // ASKED BEFORE THE ANSWER, because confirming would make this reading the
+    // last one and every reading its own repeat ([#92]).
+    let republication = publisher.is_republication(update);
     if let Some(reason) = reason_for_outcome(pending.outcome()) {
         publisher.confirmed(pending);
-        return Some((reason, None));
+        return Some(Loss {
+            reason,
+            fault: None,
+            republication,
+        });
     }
     // Queued. THE TRANSPORT NOW DECIDES WHETHER THE PUBLISHER'S STATE MOVES
     // ([#92], ADR 0046): a reading it refused reached no host, so the sequence
@@ -1949,8 +1964,47 @@ fn deliver(
         None
     } else {
         publisher.refused(pending);
-        Some((DropReason::TransportQueueFull, None))
+        Some(Loss {
+            reason: DropReason::TransportQueueFull,
+            fault: None,
+            republication,
+        })
     }
+}
+
+/// Counts one loss against the meter, on the axis the loss says it belongs to.
+///
+/// # Why this is a function and not two lines in the `select!` arm
+///
+/// It is the whole of [#92]'s third half at the point where it can go wrong, and
+/// inside the arm nothing could reach it — the same gap [#95] was filed for. A
+/// `deliver` that classifies perfectly and a caller that always calls `dropped`
+/// produce exactly the defect being repaired, with every other test green.
+fn count_loss(
+    pulse: &crate::app::poll_publish::Heartbeats,
+    meter: &crate::domain::MeterId,
+    loss: &Loss,
+) {
+    if loss.republication {
+        pulse.dropped_republication(meter, loss.reason);
+    } else {
+        pulse.dropped(meter, loss.reason);
+    }
+}
+
+/// One reading that never reached the host, and what is known about it.
+///
+/// `republication` is the axis [#92] added: the reason says WHY the bridge could
+/// not hand the message over, and this says WHAT was lost — a distinct
+/// measurement, or another copy of one already counted. Under a source failure
+/// and a broker outage at once, the same stale value is refused once per period,
+/// and a total that could not tell them apart said N where the historian was
+/// missing one.
+#[derive(Debug, PartialEq, Eq)]
+struct Loss {
+    reason: DropReason,
+    fault: Option<String>,
+    republication: bool,
 }
 
 /// Which device declarations a partly-published BIRTH sequence invalidates.
@@ -3057,6 +3111,157 @@ mod tests {
     /// `let _ = publish(client, message);` — dropping the count, which is what
     /// shipped — turns this red. Before this test the same mutation left the whole
     /// suite green, which is why `announce`'s misreport survived review-by-reading.
+    /// [#92] — the classification reaches the COUNTERS, which `deliver` alone
+    /// cannot show.
+    ///
+    /// A `deliver` that classifies perfectly and a caller that always calls
+    /// `dropped` produce exactly the defect being repaired, with every other test
+    /// green. That is the gap [#95] was filed for, one issue later.
+    ///
+    /// **Falsification, 2026-08-24:** `count_loss` calling `dropped` for every
+    /// loss — the state before this change: RED, `republications` stays 0 where
+    /// 1 is owed, while the total is right in both cases and cannot tell them
+    /// apart.
+    #[test]
+    fn a_republication_and_a_reading_move_different_counters() {
+        use crate::app::poll_publish::Heartbeats;
+        use crate::domain::MeterId;
+
+        let meter = MeterId::new("garage");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let loss = |republication| Loss {
+            reason: DropReason::TransportQueueFull,
+            fault: None,
+            republication,
+        };
+
+        count_loss(&beats, &meter, &loss(false));
+        count_loss(&beats, &meter, &loss(true));
+
+        let fleet = beats.snapshot();
+        let lost = fleet.dropped();
+        assert_eq!(lost.len(), 1, "one reason, one row: {lost:?}");
+        assert_eq!(
+            lost[0].count, 2,
+            "BOTH were messages the bridge could not hand over, and the manual \
+             defines the total as exactly that: it must not shrink because one \
+             was a copy"
+        );
+        assert_eq!(
+            lost[0].republications, 1,
+            "and one of them was a copy, so the historian is missing ONE distinct \
+             measurement rather than two"
+        );
+    }
+
+    /// [#92], third half — the same stale value refused twice is ONE distinct
+    /// measurement lost, and the counters say both things.
+    ///
+    /// # The failure this prevents is an operator reading forty for one
+    ///
+    /// ADR 0027 makes every cycle publish something, so a meter whose source has
+    /// gone quiet re-sends its last known value with a degraded verdict, once per
+    /// period. Add a broker outage and the SAME value is refused again and again:
+    /// at a 30 s period, twenty minutes of double failure counted forty losses
+    /// where the historian was missing exactly one measurement.
+    ///
+    /// Both numbers are now published and neither replaces the other: `count` is
+    /// what the manual defines — messages the bridge could not hand over, which
+    /// must not shrink — and `count` minus `republications` is what the historian
+    /// is missing.
+    ///
+    /// # The question is asked BEFORE the answer, and that ordering is the test
+    ///
+    /// `is_republication` compares against the last CONFIRMED reading. Asking it
+    /// after confirming would make every reading its own repeat, because
+    /// confirming is what makes it the last one.
+    ///
+    /// **Falsification, 2026-08-24:**
+    ///
+    /// 1. `deliver` calling `dropped` for every loss — the state before this
+    ///    change: RED, `republications` stays 0 where 1 is owed;
+    /// 2. `is_republication` answering `true` unconditionally: RED on the control
+    ///    below, where a genuinely new reading is counted as a copy;
+    /// 3. `is_republication` comparing the VALUE instead of the `ValueDate` —
+    ///    `last.measurement.power == update.measurement.power`, which is what one
+    ///    writes when thinking "same reading means same numbers": RED on the
+    ///    control, where a genuinely new measurement carrying an unchanged power
+    ///    is filed as a copy. A steady load makes that the ordinary case, not the
+    ///    exotic one.
+    #[test]
+    fn one_stale_value_refused_twice_is_one_distinct_measurement_lost() {
+        use crate::core::oracle::Verdict;
+        use crate::domain::{Kw, Kwh, Measurement, MeterId, Quality, UtcMillis};
+
+        let serial = Serial::new("30000001");
+        let meter = MeterId::new("meter");
+        let at = |value_date: i64| {
+            MeterUpdate::uniform(
+                meter.clone(),
+                Measurement {
+                    meter: meter.clone(),
+                    serial: serial.clone(),
+                    power: Some(Kw(0.018)),
+                    energy: Some(Kwh(4_843.822)),
+                    value_date: UtcMillis(value_date),
+                    quality: Quality::Good,
+                },
+                Verdict::good(),
+            )
+        };
+
+        let node = sparkplug_b::EdgeNode::new("Site", "Bridge").expect("valid ids");
+        // Three slots: NBIRTH, DBIRTH, and ONE accepted DDATA. Everything after
+        // is refused by the transport, which is the outage half of the scenario.
+        let options = MqttOptions::new("tight", "127.0.0.1", 1883);
+        let (client, _never_polled) = AsyncClient::new(options, 3);
+        let mut publisher = SparkplugPublisher::new(node, None);
+        announce(
+            &client,
+            &mut publisher,
+            UtcMillis(1_000),
+            std::slice::from_ref(&serial),
+            BirthReason::Connected,
+        );
+
+        // The reading the host DOES receive, and which every re-send below
+        // repeats.
+        assert_eq!(
+            deliver(&client, &mut publisher, &at(1_784_984_792_050)),
+            None,
+            "the premise: this one goes out, or nothing below is a repeat of \
+             anything"
+        );
+
+        // The source has gone quiet: the same measurement, re-sent, refused.
+        let first = deliver(&client, &mut publisher, &at(1_784_984_792_050));
+        assert_eq!(
+            first,
+            Some(Loss {
+                reason: DropReason::TransportQueueFull,
+                fault: None,
+                republication: true,
+            }),
+            "the same acquisition instant is the same measurement, whatever the \
+             clock said when it was re-sent"
+        );
+
+        // THE CONTROL: a genuinely NEW measurement, refused by the same full
+        // queue, is not a copy of anything. Without it, `republication: true`
+        // everywhere would pass the assertion above.
+        assert_eq!(
+            deliver(&client, &mut publisher, &at(1_784_984_852_050)),
+            Some(Loss {
+                reason: DropReason::TransportQueueFull,
+                fault: None,
+                republication: false,
+            }),
+            "a new acquisition instant is a distinct measurement the historian \
+             will never have: counting it as a copy would UNDERSTATE the loss, \
+             which is the opposite error and the worse one"
+        );
+    }
+
     /// [#92] — a refused reading leaves NO trace: no hole in the sequence, and
     /// nothing recorded as last published.
     ///
@@ -3304,7 +3509,11 @@ mod tests {
 
         assert_eq!(
             deliver(&tight_client, &mut publisher, &reading),
-            Some((DropReason::TransportQueueFull, None)),
+            Some(Loss {
+                reason: DropReason::TransportQueueFull,
+                fault: None,
+                republication: false,
+            }),
             "the publisher emitted and the TRANSPORT refused: that is a reading \
              the host does not have, and until now deleting the line that counts \
              it left the suite green"
@@ -3331,7 +3540,11 @@ mod tests {
         );
         assert_eq!(
             deliver(&both_client, &mut publisher, &reading),
-            Some((DropReason::UndeclaredDevice, None)),
+            Some(Loss {
+                reason: DropReason::UndeclaredDevice,
+                fault: None,
+                republication: false,
+            }),
             "the publisher's refusal wins: hoisting the drain out of its arm \
              would report a transport refusal for a reading the transport was \
              never offered, and send an operator after a broker that is fine"
