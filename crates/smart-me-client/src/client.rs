@@ -391,6 +391,11 @@ impl SmartMeClient {
         if status == 401 || status == 403 {
             return Err(SmartMeError::AuthRejected { status });
         }
+        let retry_after = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
         if status == 400 {
             // RFC 6749 §5.2: only a body blaming the client/credentials is fatal.
             let fatal = resp
@@ -412,8 +417,8 @@ impl SmartMeClient {
                 SmartMeError::HttpStatus { status }
             });
         }
-        if !resp.status().is_success() {
-            return Err(SmartMeError::HttpStatus { status });
+        if let Some(e) = classify_token_status(status, retry_after.as_deref()) {
+            return Err(e);
         }
         let token: TokenResponse = resp.json().await.map_err(SmartMeError::from_reqwest)?;
         if token.expires_in <= 0 {
@@ -630,6 +635,36 @@ fn decode_devices(body: &[u8]) -> Result<DeviceList, SmartMeError> {
 /// guessing its meaning would be a fact about smart-me that nobody measured — the
 /// refusal story 2.2 AC4 and ADR 0033 both made. If a `400` appears in the field
 /// it arrives as `HttpStatus`, visibly, and gets classified then.
+/// What a token-exchange status means, for every status but `400` ([#77]).
+///
+/// # Why a sibling of [`classify_device_status`] rather than a caller of it
+///
+/// The two endpoints do not answer the same questions. `404` means *this device
+/// is not in the account* on one and nothing at all on the other; `400` carries
+/// an OAuth error body that only this one has, and reading it is `async`, which
+/// is why that status is settled before this function is reached.
+///
+/// What they DO share is the one that matters here: **the rate limit is applied
+/// to the account, so a `429` reaches both** — and this is the endpoint that runs
+/// first, since `ensure_token` precedes every fetch whose token has expired.
+/// Story 2.6's AC3 built the wait for the device fetch alone, so the mechanism
+/// failed precisely on the day it was needed: unclassified, a `429` here fell to
+/// `HttpStatus` → `Transient` → `source-unreachable`, and no wait was armed.
+///
+/// `Retry-After` is read exactly as it is on the device path, in its seconds form
+/// only — the date form yields "wait, but we were not told how long" rather than
+/// a delay silently read as zero.
+fn classify_token_status(status: u16, retry_after: Option<&str>) -> Option<SmartMeError> {
+    match status {
+        200..=299 => None,
+        401 | 403 => Some(SmartMeError::AuthRejected { status }),
+        429 => Some(SmartMeError::RateLimited {
+            retry_after_secs: retry_after.and_then(|v| v.trim().parse::<u64>().ok()),
+        }),
+        _ => Some(SmartMeError::HttpStatus { status }),
+    }
+}
+
 fn classify_device_status(
     status: u16,
     retry_after: Option<&str>,
@@ -900,6 +935,96 @@ mod tests {
                 Some(SmartMeError::HttpStatus { status: 500 })
             ),
             "a server fault names no repair and must stay transient"
+        );
+    }
+
+    /// [#77] — the wait is armed on the token endpoint too, and that is the one
+    /// that runs FIRST.
+    ///
+    /// # The gap this closes, in the words the issue used
+    ///
+    /// Story 2.6's AC3 promised *"a 429 is honoured, and it is the only
+    /// source-side wait this story builds"* — and built it for the device fetch.
+    /// The account-wide limit that produces a `429` on `/Devices/{id}` produces
+    /// one on `/oauth/token` as well, and `ensure_token` precedes every fetch
+    /// whose token has expired. **The endpoint that was not covered is the one
+    /// that runs first**, so the mechanism failed on exactly the day it was
+    /// needed: a `429` fell to `HttpStatus` → `Transient` → `source-unreachable`,
+    /// and nothing waited.
+    ///
+    /// The control is the pair below it: `401` must stay the credential and `500`
+    /// must stay transient. Without them, a classifier answering `RateLimited` to
+    /// everything would pass the first assertion — and arming a wait on a rejected
+    /// credential is worse than not arming one at all, because it hides a fault a
+    /// wait can never clear.
+    ///
+    /// **FALSIFIED 2026-08-24**, two mutations RUN:
+    ///
+    /// - the `429` arm deleted, which is the state this issue reported: RED with
+    ///   `HttpStatus { status: 429 }` — the exact shape that armed no wait;
+    /// - `retry_after` ignored (`retry_after_secs: None` always): RED — and on the
+    ///   FIRST assertion, which pins `Some(120)`, not on the one written for the
+    ///   absent header. Caught, and the reason recorded is the measured one.
+    ///
+    /// # What this does NOT cover, measured and stated
+    ///
+    /// That `fetch_token` calls this at all. Restoring the old
+    /// `if !resp.status().is_success()` — the state [#77] reported — leaves the
+    /// whole workspace green, measured 2026-08-24.
+    ///
+    /// It is not coverable the way the same gap was closed three times elsewhere
+    /// today, and the reason is a deliberate one: [`SmartMeClient::new`] refuses
+    /// any base URL that is not `https` (NFR13), so a stub answering `429` over
+    /// plain HTTP cannot be reached, and standing up TLS inside a unit test would
+    /// cost more than the branch is worth.
+    ///
+    /// **The same is true of [`classify_device_status`]'s call sites**, and has
+    /// been since they were extracted — so this is the shape of the client's
+    /// testing, not a regression introduced here. Worth its own issue rather than
+    /// a silence: what is pinned everywhere in this file is the mapping, never the
+    /// dispatch.
+    #[test]
+    fn a_rate_limit_on_the_token_endpoint_arms_the_same_wait() {
+        assert!(
+            matches!(
+                classify_token_status(429, Some("120")),
+                Some(SmartMeError::RateLimited {
+                    retry_after_secs: Some(120)
+                })
+            ),
+            "the account-wide limit reaches this endpoint too, and it is the one \
+             `ensure_token` runs before every expired fetch"
+        );
+        assert_eq!(
+            match classify_token_status(429, None) {
+                Some(SmartMeError::RateLimited { retry_after_secs }) => retry_after_secs,
+                other => panic!("429 must classify as RateLimited, got {other:?}"),
+            },
+            None,
+            "absent means we were not told how long, never zero"
+        );
+
+        // THE CONTROLS, and they are what stop this passing for the wrong reason.
+        for status in [401, 403] {
+            assert!(
+                matches!(
+                    classify_token_status(status, None),
+                    Some(SmartMeError::AuthRejected { status: s }) if s == status
+                ),
+                "{status} is the credential: arming a wait on it would hide a fault \
+                 no wait can clear"
+            );
+        }
+        assert!(
+            matches!(
+                classify_token_status(500, None),
+                Some(SmartMeError::HttpStatus { status: 500 })
+            ),
+            "a server fault names no repair and must stay transient"
+        );
+        assert!(
+            classify_token_status(200, None).is_none(),
+            "and a token that was issued is not an error"
         );
     }
 
