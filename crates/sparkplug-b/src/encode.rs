@@ -156,6 +156,19 @@ impl LiveSession {
         self.data(timestamp_ms, metrics)
     }
 
+    /// Gives back the sequence number the last message took, because that
+    /// message **never reached the wire**.
+    ///
+    /// A thin pass-through to [`SeqCounter::give_back`], and its condition of use
+    /// is that one, in full: a single message in flight, refused by the
+    /// transport. Replaying a number that did reach the wire is worse than the
+    /// hole it repairs. See [ADR 0046] for the one call site this exists for.
+    ///
+    /// [ADR 0046]: ../../../docs/adr/0046-a-publication-is-confirmed-by-the-transport-or-taken-back.md
+    pub fn give_back_seq(&mut self) {
+        self.seq.give_back();
+    }
+
     /// A device DATA message.
     #[must_use]
     pub fn device_data(&mut self, timestamp_ms: u64, metrics: Vec<Metric>) -> Payload {

@@ -1850,12 +1850,30 @@ fn subscribe_to_commands(client: &AsyncClient, topic: &str) {
 ///   of an outage, which is exactly when FR22 is being asked its question.
 ///
 /// [#85]: https://github.com/guycorbaz/smartme_mqtt/issues/85
+///
+/// **Kept for the tests that pin the whole mapping, error arm included.** Since
+/// [#92] the production path answers a [`Pending`], so it reads the outcome half
+/// through [`reason_for_outcome`] and handles the error at the call site — but
+/// the two arms are one rule and a test that could only reach half of it would
+/// stop being the guard it was written as.
+#[cfg(test)]
 fn reason_for(outcome: &Result<Published, sparkplug_b::TopicError>) -> Option<DropReason> {
     match outcome {
-        Ok(Published::Emitted) => None,
-        Ok(Published::DroppedBeforeBirth) => Some(DropReason::BeforeBirth),
-        Ok(Published::DroppedUndeclaredDevice { .. }) => Some(DropReason::UndeclaredDevice),
+        Ok(published) => reason_for_outcome(published),
         Err(_) => Some(DropReason::Unpublishable),
+    }
+}
+
+/// The mapping itself, over what the publisher decided.
+///
+/// Split out when `publish` began answering with a [`Pending`] ([#92], ADR 0046):
+/// the error arm belongs to the call, the rest belongs to the outcome, and
+/// `deliver` needs the second half alone.
+const fn reason_for_outcome(published: &Published) -> Option<DropReason> {
+    match published {
+        Published::Emitted => None,
+        Published::DroppedBeforeBirth => Some(DropReason::BeforeBirth),
+        Published::DroppedUndeclaredDevice { .. } => Some(DropReason::UndeclaredDevice),
     }
 }
 
@@ -1913,13 +1931,25 @@ fn deliver(
     update: &MeterUpdate,
 ) -> Option<(DropReason, Option<String>)> {
     let mut queue = Queue::default();
-    let outcome = publisher.publish(update, &mut queue);
-    let fault = outcome.as_ref().err().map(std::string::ToString::to_string);
-    match reason_for(&outcome) {
-        // The publisher emitted; the transport may still refuse.
-        None => (!publish_all(client, &mut queue).is_empty())
-            .then_some((DropReason::TransportQueueFull, None)),
-        Some(reason) => Some((reason, fault)),
+    let pending = match publisher.publish(update, &mut queue) {
+        Ok(pending) => pending,
+        Err(error) => return Some((DropReason::Unpublishable, Some(error.to_string()))),
+    };
+    // The publisher's own refusals never queued anything: answer them without
+    // touching the transport, and `confirmed` records nothing for them.
+    if let Some(reason) = reason_for_outcome(pending.outcome()) {
+        publisher.confirmed(pending);
+        return Some((reason, None));
+    }
+    // Queued. THE TRANSPORT NOW DECIDES WHETHER THE PUBLISHER'S STATE MOVES
+    // ([#92], ADR 0046): a reading it refused reached no host, so the sequence
+    // number goes back and `declared` keeps what it had.
+    if publish_all(client, &mut queue).is_empty() {
+        publisher.confirmed(pending);
+        None
+    } else {
+        publisher.refused(pending);
+        Some((DropReason::TransportQueueFull, None))
     }
 }
 
@@ -3027,6 +3057,147 @@ mod tests {
     /// `let _ = publish(client, message);` — dropping the count, which is what
     /// shipped — turns this red. Before this test the same mutation left the whole
     /// suite green, which is why `announce`'s misreport survived review-by-reading.
+    /// [#92] — a refused reading leaves NO trace: no hole in the sequence, and
+    /// nothing recorded as last published.
+    ///
+    /// # Why the hole matters more than the missing message
+    ///
+    /// A `seq` jump is not "one message short" to a Sparkplug host. The
+    /// specification makes it a lost-message condition: the host issues a Rebirth
+    /// Request or marks the node stale. So one counted drop escalated into a
+    /// session-level event that `dropped_readings` never mentioned — and it is
+    /// the arm that fires most during an outage, because a full outbound queue is
+    /// exactly what an outage looks like from here.
+    ///
+    /// The second half is the disagreement [#90] made visible: `/healthz` said
+    /// the reading was lost while the publisher's memory had it as delivered, so
+    /// a later rebirth re-declared it.
+    ///
+    /// # The control is what stops this passing for the wrong reason
+    ///
+    /// A publisher that never advanced its sequence at all would satisfy the
+    /// first assertion, so the accepted reading is checked to have consumed a
+    /// number. And a publisher that recorded nothing ever would satisfy the
+    /// second, so the accepted reading is checked to be re-declared by a rebirth.
+    ///
+    /// **Falsification, 2026-08-24:**
+    ///
+    /// 1. `refused` not calling `give_back_seq` — the state before ADR 0046:
+    ///    RED, the DDATA after the refusal carries 3 where 2 is owed;
+    /// 2. `refused` behaving as `confirmed` — the other half of the same defect:
+    ///    RED, and it is worth saying WHERE, because it is not where it was
+    ///    expected. It fails on the SEQUENCE assertion (`3` where `2` is owed),
+    ///    which comes first, and never reaches the memory assertion it was
+    ///    written for. The mutation is caught; the reason recorded here is the
+    ///    measured one and not the intended one;
+    /// 3. `confirmed` recording nothing: RED on the memory assertion
+    ///    (`None` where `0.019` is owed) — which is what gives the control a
+    ///    subject, and the only mutation that reaches that half.
+    #[test]
+    fn a_reading_the_transport_refused_leaves_neither_a_hole_nor_a_memory() {
+        use crate::core::oracle::Verdict;
+        use crate::domain::{Kw, Kwh, Measurement, MeterId, Quality, UtcMillis};
+
+        let serial = Serial::new("30000001");
+        let reading = |power: f64| {
+            MeterUpdate::uniform(
+                MeterId::new("meter"),
+                Measurement {
+                    meter: MeterId::new("meter"),
+                    serial: serial.clone(),
+                    power: Some(Kw(power)),
+                    energy: Some(Kwh(4_843.822)),
+                    value_date: UtcMillis(1_784_984_792_050),
+                    quality: Quality::Good,
+                },
+                Verdict::good(),
+            )
+        };
+
+        let node = sparkplug_b::EdgeNode::new("Site", "Bridge").expect("valid ids");
+        // Two slots: the NBIRTH and the DBIRTH take them, so the device is
+        // declared and everything after is refused by the transport alone.
+        let options = MqttOptions::new("tight", "127.0.0.1", 1883);
+        let (client, _never_polled) = AsyncClient::new(options, 2);
+        let mut publisher = SparkplugPublisher::new(node, None);
+        announce(
+            &client,
+            &mut publisher,
+            UtcMillis(1_000),
+            std::slice::from_ref(&serial),
+            BirthReason::Connected,
+        );
+
+        // The birth consumed seq 0 (NBIRTH) and 1 (DBIRTH), so the next message
+        // owes 2. Read through what a publication actually emits rather than
+        // from a counter nobody sees.
+        let seq_of = |sink: &Queue| {
+            sparkplug_b::decode(&sink.pending.last().expect("a message").payload)
+                .expect("valid protobuf")
+                .seq
+        };
+
+        let mut refused_sink = Queue::default();
+        let pending = publisher
+            .publish(&reading(0.018), &mut refused_sink)
+            .expect("valid topics");
+        assert_eq!(seq_of(&refused_sink), Some(2), "the refused DDATA took 2");
+        publisher.refused(pending);
+
+        let mut next = Queue::default();
+        let pending = publisher
+            .publish(&reading(0.019), &mut next)
+            .expect("valid topics");
+        assert_eq!(
+            seq_of(&next),
+            Some(2),
+            "2 never reached the wire, so 2 is what the next message owes: a host \
+             that sees a jump does not report one lost reading, it issues a \
+             Rebirth Request or marks the node stale"
+        );
+        publisher.confirmed(pending);
+
+        // THE CONTROL: the accepted reading DID consume a number, so the first
+        // assertion is not satisfied by a publisher that never advances.
+        let mut third = Queue::default();
+        let pending = publisher
+            .publish(&reading(0.020), &mut third)
+            .expect("valid topics");
+        assert_eq!(
+            seq_of(&third),
+            Some(3),
+            "an accepted reading advances the sequence; without this, a publisher \
+             stuck at one number would pass the assertion above"
+        );
+        publisher.refused(pending);
+
+        // And the memory: a rebirth re-declares the ACCEPTED reading, never the
+        // refused ones.
+        let mut rebirth = Queue::default();
+        publisher
+            .birth(
+                UtcMillis(2_000),
+                std::slice::from_ref(&serial),
+                &mut rebirth,
+            )
+            .expect("valid topics");
+        let dbirth = sparkplug_b::decode(&rebirth.pending[1].payload).expect("valid protobuf");
+        let power = dbirth
+            .metrics
+            .iter()
+            .find(|m| m.name.as_deref() == Some(crate::adapters::sparkplug_publisher::METRIC_POWER))
+            .expect("the power metric");
+        assert_eq!(
+            power.value,
+            Some(sparkplug_b::protobuf::payload::metric::Value::DoubleValue(
+                0.019
+            )),
+            "the rebirth must re-declare the reading the host RECEIVED (0.019), \
+             not one the transport refused: `dropped_readings` naming a reading \
+             the rebirth treats as delivered is the contradiction [#92] reports"
+        );
+    }
+
     /// [#95] — the transport's refusal is counted, and it is the call site
     /// nothing reached.
     ///
@@ -3223,14 +3394,22 @@ mod tests {
         };
 
         let mut sink = Queue::default();
+        // Through `publish` + `confirmed`, as the driver does: since [#92] the
+        // outcome is read from a `Pending` the caller must answer.
+        let mut answered = |p: &mut SparkplugPublisher, update: &MeterUpdate| {
+            let pending = p.publish(update, &mut sink).expect("valid topics");
+            let outcome = pending.outcome().clone();
+            p.confirmed(pending);
+            outcome
+        };
         assert_eq!(
-            publisher.publish(&reading(&declared), &mut sink).unwrap(),
+            answered(&mut publisher, &reading(&declared)),
             Published::Emitted,
             "this device's certificate took the second slot: the host has it, and \
              reporting its readings as lost would be the opposite error"
         );
         assert_eq!(
-            publisher.publish(&reading(&refused), &mut sink).unwrap(),
+            answered(&mut publisher, &reading(&refused)),
             Published::DroppedUndeclaredDevice {
                 serial: refused.clone()
             },

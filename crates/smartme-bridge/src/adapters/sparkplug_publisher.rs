@@ -335,6 +335,74 @@ impl Sink for RecordingSink {
     }
 }
 
+/// A queued publication whose fate the transport has not reported yet ([#92]).
+///
+/// # Why the outcome cannot simply be returned
+///
+/// [`SparkplugPublisher::publish`] used to take the sequence number, encode, queue
+/// AND record the reading as published — all before anything had touched a
+/// socket. When the transport then refused, two things were already wrong: the
+/// `seq` had a hole, which a Sparkplug host reads as a lost-message condition
+/// rather than as one missing message, and the refused reading was what a later
+/// rebirth re-declared as last published. `/healthz` said lost; the publisher's
+/// memory said delivered.
+///
+/// So the state moves when the transport answers, and this is the answer's
+/// handle. [`SparkplugPublisher::confirmed`] records the reading;
+/// [`SparkplugPublisher::refused`] gives the sequence number back and leaves
+/// `declared` untouched.
+///
+/// # The enforcement is `Drop`, because `must_use` was MEASURED and does not hold
+///
+/// A caller that forgets to answer reproduces exactly the defect this repairs, on
+/// whichever branch was forgotten — the shape ADR 0029 met with
+/// `UnverifiedReading`. The first draft relied on `#[must_use]` and claimed the
+/// gate's `clippy -D warnings` would catch an omission. **It does not.** The
+/// omission was written out — `deliver` reading `outcome()` and never answering —
+/// and `clippy -D warnings` reported NOTHING: the value is bound and read, so it
+/// counts as used, and `must_use` only ever spoke about a value nobody touched.
+///
+/// So the guarantee is made real instead of claimed. Dropping an unanswered
+/// `Pending` trips a `debug_assert`, which fires in every test and every gate run
+/// and compiles out of the released image — a bridge must not gain a new way to
+/// panic in production, and by then the omission would have been caught a
+/// hundred times over.
+///
+/// `#[must_use]` is kept for the one case it does cover: a call whose result is
+/// discarded outright.
+///
+/// [ADR 0046]: ../../../docs/adr/0046-a-publication-is-confirmed-by-the-transport-or-taken-back.md
+#[must_use = "the transport has not answered yet: call `confirmed` or `refused`, \
+              or the publisher claims a reading the host may never receive ([#92])"]
+#[derive(Debug)]
+pub struct Pending {
+    outcome: Published,
+    /// `Some` only when a DDATA was actually queued — the two dropped outcomes
+    /// put nothing on the wire, so there is nothing to confirm or take back.
+    queued: Option<MeterUpdate>,
+    /// Whether `confirmed` or `refused` has taken it.
+    answered: bool,
+}
+
+impl Pending {
+    /// What the publisher decided, before the transport had its say.
+    pub const fn outcome(&self) -> &Published {
+        &self.outcome
+    }
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        debug_assert!(
+            self.answered,
+            "a publication was prepared and the transport's answer was never \
+             reported ([#92], ADR 0046): call `confirmed` or `refused`. Dropping \
+             this leaves the sequence with a hole the host reads as a lost-message \
+             condition, or records a reading the host may never have received"
+        );
+    }
+}
+
 /// What happened to a reading handed to [`SparkplugPublisher::publish`].
 ///
 /// A drop is REPORTED, never silent: the architecture requires a per-device
@@ -716,10 +784,14 @@ impl SparkplugPublisher {
         &mut self,
         update: &MeterUpdate,
         sink: &mut impl Sink,
-    ) -> Result<Published, TopicError> {
+    ) -> Result<Pending, TopicError> {
         let serial = update.measurement.serial.clone();
         let Session::Live(live) = &mut self.session else {
-            return Ok(Published::DroppedBeforeBirth);
+            return Ok(Pending {
+                outcome: Published::DroppedBeforeBirth,
+                queued: None,
+                answered: false,
+            });
         };
         // NOT `contains_key`: a device whose DBIRTH the transport refused is
         // still in this map — its last reading has to survive for the retry —
@@ -727,7 +799,11 @@ impl SparkplugPublisher {
         // Counting such a reading as emitted is [#88], and the map's own key was
         // what made the wrong answer the easy one.
         if !self.declared.get(&serial).is_some_and(|d| d.born) {
-            return Ok(Published::DroppedUndeclaredDevice { serial });
+            return Ok(Pending {
+                outcome: Published::DroppedUndeclaredDevice { serial },
+                queued: None,
+                answered: false,
+            });
         }
         let topic = self
             .node
@@ -751,9 +827,51 @@ impl SparkplugPublisher {
             message: MessageType::DData,
             device: Some(serial.clone()),
         });
-        self.declared
-            .insert(serial, Declaration::born(Some(update.clone())));
-        Ok(Published::Emitted)
+        // `declared` is NOT written here any more ([#92], ADR 0046): what it holds
+        // describes what the HOST has received, and the host cannot have received
+        // anything yet. `confirmed` writes it once the transport says so.
+        Ok(Pending {
+            outcome: Published::Emitted,
+            queued: Some(update.clone()),
+            answered: false,
+        })
+    }
+
+    /// The transport accepted the queued publication: record the reading as the
+    /// last one published ([#92], ADR 0046).
+    ///
+    /// A `Pending` that queued nothing — a drop before the birth, or for an
+    /// undeclared device — records nothing, because nothing was sent.
+    pub fn confirmed(&mut self, mut pending: Pending) {
+        pending.answered = true;
+        if let Some(update) = pending.queued.take() {
+            let serial = update.measurement.serial.clone();
+            self.declared
+                .insert(serial, Declaration::born(Some(update)));
+        }
+    }
+
+    /// The transport REFUSED the queued publication: give the sequence number
+    /// back and leave `declared` as it was ([#92], ADR 0046).
+    ///
+    /// # The condition that makes giving the number back sound
+    ///
+    /// One message was in flight and it was refused, so the number never reached
+    /// the wire: there is no hole to leave and nothing to replay. That is
+    /// [`SeqCounter::give_back`]'s stated condition, and it is this call site it
+    /// was written for. A partly-refused BIRTH sequence does NOT satisfy it —
+    /// some of it went out — which is why `announce` withdraws declarations
+    /// ([#88]) instead of rewinding anything.
+    ///
+    /// Nothing is emitted and nothing is recorded: the host was not told, so the
+    /// bridge does not remember telling it.
+    pub fn refused(&mut self, mut pending: Pending) {
+        pending.answered = true;
+        if pending.queued.is_some() {
+            if let Session::Live(live) = &mut self.session {
+                live.give_back_seq();
+            }
+        }
     }
 }
 
@@ -1404,6 +1522,23 @@ mod tests {
         )
     }
 
+    /// Publishes and confirms, the way the driver does when the transport
+    /// accepts — the shape almost every test below wants.
+    ///
+    /// Since [#92] `publish` only PREPARES: the state moves when the transport
+    /// answers. A test that skipped the answer would be asserting against a
+    /// publisher mid-publication, which is a state the driver never leaves it in.
+    fn publish_and_confirm(
+        p: &mut SparkplugPublisher,
+        update: &MeterUpdate,
+        sink: &mut impl Sink,
+    ) -> Published {
+        let pending = p.publish(update, sink).expect("valid topics");
+        let outcome = pending.outcome().clone();
+        p.confirmed(pending);
+        outcome
+    }
+
     fn born() -> (SparkplugPublisher, RecordingSink) {
         let mut p = publisher();
         let mut sink = RecordingSink::default();
@@ -1693,7 +1828,7 @@ mod tests {
     fn a_good_reading_carries_units_serial_and_the_source_timestamp() {
         let (mut p, mut sink) = born();
         assert_eq!(
-            p.publish(&update(Quality::Good), &mut sink).unwrap(),
+            publish_and_confirm(&mut p, &update(Quality::Good), &mut sink),
             Published::Emitted
         );
 
@@ -1729,7 +1864,7 @@ mod tests {
         let (mut p, mut sink) = born();
         // The SOURCE said the reading is fine; the oracle judged it stale.
         assert_eq!(
-            p.publish(&update(Quality::Stale), &mut sink).unwrap(),
+            publish_and_confirm(&mut p, &update(Quality::Stale), &mut sink),
             Published::Emitted
         );
 
@@ -1752,7 +1887,7 @@ mod tests {
     fn a_bad_verdict_publishes_no_value_at_all() {
         let (mut p, mut sink) = born();
         assert_eq!(
-            p.publish(&update(Quality::Bad), &mut sink).unwrap(),
+            publish_and_confirm(&mut p, &update(Quality::Bad), &mut sink),
             Published::Emitted
         );
 
@@ -1769,7 +1904,7 @@ mod tests {
     fn a_drop_before_the_birth_is_reported_not_silent() {
         let mut p = publisher();
         let mut sink = RecordingSink::default();
-        let outcome = p.publish(&update(Quality::Good), &mut sink).unwrap();
+        let outcome = publish_and_confirm(&mut p, &update(Quality::Good), &mut sink);
         assert_eq!(outcome, Published::DroppedBeforeBirth);
         assert!(sink.emitted.is_empty());
     }
@@ -1779,7 +1914,7 @@ mod tests {
         let (mut p, mut sink) = born();
         let mut stranger = update(Quality::Good);
         stranger.measurement.serial = Serial::new("99999999");
-        let outcome = p.publish(&stranger, &mut sink).unwrap();
+        let outcome = publish_and_confirm(&mut p, &stranger, &mut sink);
         assert_eq!(
             outcome,
             Published::DroppedUndeclaredDevice {
@@ -1928,11 +2063,11 @@ mod tests {
             m.serial = Serial::new(serial);
             m.meter = MeterId::new(serial);
             assert_eq!(
-                p.publish(
+                publish_and_confirm(
+                    &mut p,
                     &MeterUpdate::uniform(m.meter.clone(), m, verdict_of(published)),
                     &mut sink
-                )
-                .expect("a declared device"),
+                ),
                 Published::Emitted,
                 "the premise: every one of these must actually reach the wire, or \
                  the map below would be asserted over an empty stream"
@@ -2002,7 +2137,7 @@ mod tests {
         // normally, so the assertion below is about the withdrawal and not about
         // some unrelated reason the reading could not go out.
         assert_eq!(
-            p.publish(&update(Quality::Good), &mut sink).unwrap(),
+            publish_and_confirm(&mut p, &update(Quality::Good), &mut sink),
             Published::Emitted,
             "a declared device publishes; without this the test below proves nothing"
         );
@@ -2011,7 +2146,7 @@ mod tests {
         p.withdraw(&[Serial::new(SERIAL)]);
 
         assert_eq!(
-            p.publish(&update(Quality::Good), &mut sink).unwrap(),
+            publish_and_confirm(&mut p, &update(Quality::Good), &mut sink),
             Published::DroppedUndeclaredDevice {
                 serial: Serial::new(SERIAL)
             },
@@ -2048,7 +2183,7 @@ mod tests {
     fn withdrawing_a_device_keeps_the_reading_its_rebirth_re_declares() {
         let (mut p, mut sink) = born();
         assert_eq!(
-            p.publish(&update(Quality::Good), &mut sink).unwrap(),
+            publish_and_confirm(&mut p, &update(Quality::Good), &mut sink),
             Published::Emitted
         );
         sink.emitted.clear();
@@ -2074,7 +2209,7 @@ mod tests {
         // And the birth puts it back: this is what makes the withdrawal
         // recoverable rather than a latch.
         assert_eq!(
-            p.publish(&update(Quality::Good), &mut sink).unwrap(),
+            publish_and_confirm(&mut p, &update(Quality::Good), &mut sink),
             Published::Emitted,
             "the rebirth declared the device, so its readings flow again"
         );
@@ -2084,7 +2219,7 @@ mod tests {
     fn a_rebirth_redeclares_what_is_known_instead_of_blanking_it() {
         let (mut p, mut sink) = born();
         assert_eq!(
-            p.publish(&update(Quality::Good), &mut sink).unwrap(),
+            publish_and_confirm(&mut p, &update(Quality::Good), &mut sink),
             Published::Emitted
         );
         sink.emitted.clear();
@@ -2181,11 +2316,11 @@ mod tests {
         p.birth(UtcMillis(1), &[Serial::new(SERIAL)], &mut sink)
             .unwrap();
         assert_eq!(
-            p.publish(&update(Quality::Good), &mut sink).unwrap(),
+            publish_and_confirm(&mut p, &update(Quality::Good), &mut sink),
             Published::Emitted
         );
         assert_eq!(
-            p.publish(&update(Quality::Good), &mut sink).unwrap(),
+            publish_and_confirm(&mut p, &update(Quality::Good), &mut sink),
             Published::Emitted
         );
 
@@ -2310,7 +2445,7 @@ mod tests {
 
         let (mut p, mut sink) = born();
         assert_eq!(
-            p.publish(&update(Quality::Good), &mut sink).unwrap(),
+            publish_and_confirm(&mut p, &update(Quality::Good), &mut sink),
             Published::Emitted
         );
         // The premise: the DDATA itself carries the reading's own time.
@@ -2388,7 +2523,10 @@ mod tests {
         let (mut p, mut sink) = born();
         let mut refused = update(Quality::Good);
         refused.verdicts = Verdicts::uniform(Verdict::bad(Cause::CounterWentBackwards));
-        assert_eq!(p.publish(&refused, &mut sink).unwrap(), Published::Emitted);
+        assert_eq!(
+            publish_and_confirm(&mut p, &refused, &mut sink),
+            Published::Emitted
+        );
         sink.emitted.clear();
 
         p.new_session();
