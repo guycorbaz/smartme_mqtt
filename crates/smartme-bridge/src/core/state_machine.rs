@@ -184,7 +184,7 @@ impl Policy {
     /// this note replaced the "deferred oracle" limitation that sat here from
     /// Epic 1 until that story.
     pub fn step(&self, prev: State, tick: &Tick, now: UtcMillis) -> (State, Verdict) {
-        self.step_remembering(prev, tick, now, None)
+        self.step_remembering(prev, tick, now, None, None)
     }
 
     /// [`Policy::step`], given the one memory the over-age guard can use: the
@@ -217,6 +217,7 @@ impl Policy {
         tick: &Tick,
         now: UtcMillis,
         previous_value_date: Option<UtcMillis>,
+        previous_over_age: Option<Cause>,
     ) -> (State, Verdict) {
         // Failed latches until restart; a fatal tick latches it. Both are
         // clock-independent, so they are judged BEFORE the boot-sanity guard —
@@ -263,7 +264,7 @@ impl Policy {
                 (State::Failed(*refusal), Verdict::bad(error.cause()))
             }
             Err(error) => (State::Stale, Verdict::stale(error.cause())),
-            Ok(reading) => self.judge_reading(reading, previous_value_date),
+            Ok(reading) => self.judge_reading(reading, previous_value_date, previous_over_age),
         }
     }
 
@@ -271,6 +272,7 @@ impl Policy {
         &self,
         reading: &Reading,
         previous_value_date: Option<UtcMillis>,
+        previous_over_age: Option<Cause>,
     ) -> (State, Verdict) {
         if reading.value.quality == Quality::Bad {
             // Bad is judged BEFORE the timestamp guards: "do not use this value"
@@ -314,14 +316,27 @@ impl Policy {
             // measured (story 2.2 AC4, ADR 0033).
             let meter_still_measuring =
                 previous_value_date.is_some_and(|previous| reading.value_date() > previous);
-            return (
-                State::Stale,
-                if age_ms < 0 || meter_still_measuring {
-                    Verdict::stale(Cause::TimestampsDisagree)
-                } else {
-                    Verdict::stale(Cause::ReadingTooOld)
-                },
-            );
+            // AND A RE-SERVED MEASUREMENT KEEPS THE ANSWER IT ALREADY HAD ([#79],
+            // ADR 0048). A meter that measures less often than the bridge polls
+            // re-serves the same measurement on the intermediate ticks: its
+            // `value_date` has not advanced, but that is not evidence that it
+            // stopped — it is the absence of evidence either way. Falling back to
+            // `reading-too-old` there made the cause flap with the polling phase,
+            // and at ADR 0004's measured cadences against a 30 s period that is
+            // roughly every other tick.
+            //
+            // A re-served measurement is only recognisable as such once there IS
+            // a previous one: with none, `reading-too-old` is what a single
+            // reading honestly deserves, which is the pre-2.7 answer this branch
+            // already gave.
+            let over_age = if age_ms < 0 || meter_still_measuring {
+                Cause::TimestampsDisagree
+            } else if previous_value_date.is_some_and(|previous| reading.value_date() == previous) {
+                previous_over_age.unwrap_or(Cause::ReadingTooOld)
+            } else {
+                Cause::ReadingTooOld
+            };
+            return (State::Stale, Verdict::stale(over_age));
         }
         // Timestamps prove freshness; the value itself may still be unusable
         // (fail-closed unit conversion, Story 1.7) — Bad passes through, never
@@ -539,7 +554,8 @@ mod tests {
         // FIRST CONTACT: no previous reading, so no discrimination is possible
         // and the honest answer is the old one.
         let first = Ok(reading(Quality::Good, BASE, Some(BASE + behind_by)));
-        let (state, verdict) = POLICY.step_remembering(State::initial(), &first, SANE_NOW, None);
+        let (state, verdict) =
+            POLICY.step_remembering(State::initial(), &first, SANE_NOW, None, None);
         assert_eq!(state, State::Stale);
         assert_eq!(
             verdict,
@@ -555,7 +571,7 @@ mod tests {
             Some(BASE + 30_000 + behind_by),
         ));
         let (state, verdict) =
-            POLICY.step_remembering(State::Stale, &second, SANE_NOW, Some(UtcMillis(BASE)));
+            POLICY.step_remembering(State::Stale, &second, SANE_NOW, Some(UtcMillis(BASE)), None);
         assert_eq!(
             verdict,
             Verdict::stale(Cause::TimestampsDisagree),
@@ -586,7 +602,7 @@ mod tests {
             Some(UtcMillis(BASE + 1)),
         ] {
             let (state, verdict) =
-                POLICY.step_remembering(State::Stale, &frozen, SANE_NOW, previous);
+                POLICY.step_remembering(State::Stale, &frozen, SANE_NOW, previous, None);
             assert_eq!(state, State::Stale);
             assert_eq!(
                 verdict,
@@ -607,7 +623,7 @@ mod tests {
         let in_bounds = Ok(reading(Quality::Good, BASE + 30_000, Some(BASE + 30_950)));
         for previous in [None, Some(UtcMillis(BASE)), Some(UtcMillis(BASE + 30_000))] {
             assert_eq!(
-                POLICY.step_remembering(State::Stale, &in_bounds, SANE_NOW, previous),
+                POLICY.step_remembering(State::Stale, &in_bounds, SANE_NOW, previous, None),
                 (State::Fresh, Verdict::good()),
                 "a reading whose age is inside the allowance is judged on its own \
                  timestamps; the memory (here {previous:?}) has no say"
@@ -619,7 +635,7 @@ mod tests {
         for previous in [None, Some(UtcMillis(BASE))] {
             assert_eq!(
                 POLICY
-                    .step_remembering(State::Fresh, &negative, SANE_NOW, previous)
+                    .step_remembering(State::Fresh, &negative, SANE_NOW, previous, None)
                     .1,
                 Verdict::stale(Cause::TimestampsDisagree),
                 "a negative age was `timestamps-disagree` before the memory \
@@ -847,6 +863,114 @@ mod tests {
             refusal: Refusal::Credential,
             reason: "auth rejected".into(),
         });
+
+        // [#79], ADR 0048 — A METER SLOWER THAN THE POLL DOES NOT FLAP.
+        //
+        // The regime is the realistic one, not a corner: ADR 0004's captures showed
+        // real meters reporting on the order of a minute, and the default poll
+        // period is 30 s. A wrong-clock meter re-serves the same measurement on
+        // the intermediate ticks, and before ADR 0048 it published
+        // `timestamps-disagree` on the poll after each new measurement and
+        // `reading-too-old` on all the others — roughly every other tick calling a
+        // producing meter stopped.
+        //
+        // A re-served measurement carries no evidence either way, so the answer
+        // already reached stands.
+        //
+        // FALSIFIED 2026-08-24: dropping the sticky arm — the state [#79]
+        // reported — turns the second tick RED with `reading-too-old`.
+        {
+            // One measurement, served three times, with a clock 5 minutes behind
+            // the cloud's: over-age, and the meter IS producing.
+            let skewed = |value_date: i64| {
+                Ok(reading(
+                    Quality::Good,
+                    value_date,
+                    Some(value_date + 5 * 60_000),
+                ))
+            };
+            let first = skewed(BASE);
+            let (_, verdict) = POLICY.step_remembering(
+                State::Stale,
+                &first,
+                SANE_NOW,
+                Some(UtcMillis(BASE - 60_000)),
+                None,
+            );
+            assert_eq!(
+                verdict.cause(),
+                Some(Cause::TimestampsDisagree),
+                "the premise: the meter produced, so the age is its clock"
+            );
+
+            // The SAME measurement re-served, which is what the next poll gets.
+            let (_, verdict) = POLICY.step_remembering(
+                State::Stale,
+                &first,
+                SANE_NOW,
+                Some(UtcMillis(BASE)),
+                Some(Cause::TimestampsDisagree),
+            );
+            assert_eq!(
+                verdict.cause(),
+                Some(Cause::TimestampsDisagree),
+                "a re-served measurement is not evidence that the meter stopped: \
+                 it is the absence of evidence, and the answer already reached \
+                 stands. Flapping here sends an operator after a stopped meter \
+                 that is producing"
+            );
+
+            // THE CONTROL: a meter that genuinely stops is still called stopped.
+            // Without it the rule would be "never say reading-too-old again",
+            // which is the opposite error and hides the fault that matters.
+            let (_, verdict) = POLICY.step_remembering(
+                State::Stale,
+                &Ok(reading(Quality::Good, BASE, Some(BASE + 5 * 60_000))),
+                SANE_NOW,
+                Some(UtcMillis(BASE)),
+                Some(Cause::TimestampsDisagree),
+            );
+            assert_eq!(
+                verdict.cause(),
+                Some(Cause::TimestampsDisagree),
+                "still the same measurement"
+            );
+            // And with no previous answer at all — the first tick after a restart
+            // — a single reading honestly deserves `reading-too-old`.
+            let (_, verdict) = POLICY.step_remembering(
+                State::Stale,
+                &first,
+                SANE_NOW,
+                Some(UtcMillis(BASE)),
+                None,
+            );
+            assert_eq!(
+                verdict.cause(),
+                Some(Cause::ReadingTooOld),
+                "with nothing remembered, one reading cannot tell the two apart, \
+                 and that is the pre-2.7 answer this branch always gave"
+            );
+
+            // AND THE OTHER CONTROL: a measurement that CHANGED without advancing
+            // — an older one served after a newer, which is a replay — is not a
+            // re-serve. It is evidence, and evidence is what ends persistence.
+            // Without this assertion the rule could be "keep the last answer
+            // whenever the meter did not advance", which would carry a stale
+            // discrimination across a replay.
+            let (_, verdict) = POLICY.step_remembering(
+                State::Stale,
+                &skewed(BASE - 120_000),
+                SANE_NOW,
+                Some(UtcMillis(BASE)),
+                Some(Cause::TimestampsDisagree),
+            );
+            assert_eq!(
+                verdict.cause(),
+                Some(Cause::ReadingTooOld),
+                "a measurement that went backwards is a different reading, not the \
+                 same one served again: it must be judged on its own"
+            );
+        }
 
         // [#75], ADR 0048 — THE SEQUENCE AN OPERATOR ACTUALLY SEES. Four paths
         // reach the latch arm without carrying a refusal of their own — a

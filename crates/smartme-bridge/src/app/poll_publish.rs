@@ -870,6 +870,21 @@ pub struct MeterMemory {
     /// source-side wait this bridge honours, because it is the one the poll
     /// interval cannot know about.
     pub rate_limited_until: Option<MonotonicMs>,
+    /// The over-age cause this meter last published, so a RE-SERVED measurement
+    /// keeps it instead of falling back ([#79], ADR 0048).
+    ///
+    /// A meter that measures less often than the bridge polls re-serves the same
+    /// measurement on the intermediate ticks. Its `value_date` has not advanced,
+    /// and that is not evidence that it stopped — it is the absence of evidence
+    /// either way, so the discrimination keeps the answer it already reached.
+    /// Without it the cause flapped with the polling phase: at ADR 0004's measured
+    /// cadences against the default 30 s period, roughly every other tick called a
+    /// producing meter stopped.
+    ///
+    /// **In memory only.** Like `last_http_date` it is not persisted, so the first
+    /// tick after a restart has no previous answer and falls back to what a single
+    /// reading honestly deserves. [#80] owns that class of question.
+    pub over_age_cause: Option<crate::core::oracle::Cause>,
     /// The `Date` header of the last SUCCESSFUL fetch, for the stalled-feed oracle
     /// (story 2.7 AC1).
     ///
@@ -912,6 +927,7 @@ pub async fn step_once<S: Source + Send>(
         rate_limited_until,
         last_http_date,
         last_value_date,
+        over_age_cause,
     } = memory;
     let Context {
         meter,
@@ -998,8 +1014,13 @@ pub async fn step_once<S: Source + Send>(
     // Judged WITH the previous reading's `value_date` (story 2.7 AC2): the
     // over-age guard is the one row of the table that can tell a wrong clock
     // from old data, and only when it knows whether the meter produced since.
-    let (freshness_state, freshness) =
-        policy.step_remembering(previous, &tick, clock.wall(), *last_value_date);
+    let (freshness_state, freshness) = policy.step_remembering(
+        previous,
+        &tick,
+        clock.wall(),
+        *last_value_date,
+        *over_age_cause,
+    );
 
     // The monotonicity oracle (Story 2.2). It judges a RELATION between two
     // readings, so it has nothing to say when the fetch failed — there is no new
@@ -1054,6 +1075,15 @@ pub async fn step_once<S: Source + Send>(
         && reading.value_date() >= crate::core::state_machine::PLAUSIBILITY_FLOOR
     {
         *last_value_date = Some(reading.value_date());
+    }
+
+    // AND THE OVER-AGE ANSWER IS REMEMBERED, so a re-served measurement can keep
+    // it ([#79], ADR 0048). Only the two over-age causes are: this memory answers
+    // *"which of the two faults did we decide this reading has"*, and a verdict
+    // that is not about age has no opinion on that question — clearing it on one
+    // would make the next re-serve fall back, which is the flap this repairs.
+    if let Some(cause @ (Cause::TimestampsDisagree | Cause::ReadingTooOld)) = freshness.cause() {
+        *over_age_cause = Some(cause);
     }
 
     let judgements = [
