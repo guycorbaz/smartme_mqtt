@@ -948,7 +948,55 @@ pub async fn step_once<S: Source + Send>(
     // exists to prevent.
     let now_mono = clock.monotonic();
     let waiting = matches!(*rate_limited_until, Some(until) if now_mono < until);
-    let tick: Tick = if waiting {
+    // AND THE OTHER CASE WHERE ASKING IS POINTLESS ([#81]). `Failed` is absorbing
+    // (ADR 0009): no answer to this fetch can change an absorbing verdict, so the
+    // call is a request made for nothing — every period, for ever, until a
+    // restart. For the credential latch that is precisely the hammering story
+    // 2.6's own doc warns against: *"retrying with a credential the other end
+    // refused is how a bridge hammers an API"*, performed by the poll loop rather
+    // than by a caller.
+    //
+    // **The cycle still publishes**, which is why this is shaped exactly like the
+    // rate-limit wait above rather than as an early return: ADR 0027 requires a
+    // verdict every cycle for these meters — they are not gone, the asking is
+    // broken — and the refusal is now available to synthesise one, which is what
+    // [#75] made possible by putting it inside `State::Failed`.
+    //
+    // `DeviceNotInAccount` is NOT here: story 3.5 already stops that one at the
+    // loop, where the DDEATH ends the publication too (ADR 0034). Reaching it
+    // here would mean the certificate never went out.
+    //
+    // Nothing arms a wait from this path: the tick is `Fatal`, and only a
+    // `RateLimited` carrying a delay sets `rate_limited_until`.
+    //
+    // **AND ONLY WHEN THERE IS SOMETHING TO REPUBLISH**, which is the condition
+    // the first draft of this change omitted and an integration test caught. A
+    // meter latched on its very FIRST tick has no last measurement, and the
+    // republish path correctly gives it nothing — *"its DBIRTH already declared it
+    // valueless and non-good, which is the truth"*. Skipping the fetch there takes
+    // away the only way it could ever acquire one, and the meter falls silent for
+    // good: this defect traded for a worse one.
+    //
+    // The case [#81] is about is the other one, and it is the common one: a
+    // credential that EXPIRES under a running bridge, on a meter that has been
+    // publishing. That meter has a last measurement, so the cycle keeps its
+    // per-cycle `Bad` verdict and the API stops being asked.
+    let latched = match previous {
+        State::Failed(refusal)
+            if refusal != crate::core::source::Refusal::DeviceNotInAccount && last.is_some() =>
+        {
+            Some(refusal)
+        }
+        _ => None,
+    };
+    let tick: Tick = if let Some(refusal) = latched {
+        Err(SourceError::Fatal {
+            refusal,
+            reason: "the meter is latched; no request was made, because no answer \
+                     could change an absorbing verdict"
+                .to_string(),
+        })
+    } else if waiting {
         Err(SourceError::RateLimited { retry_after: None })
     } else {
         match tokio::time::timeout(config.fetch_timeout, source.fetch(meter)).await {
@@ -3471,6 +3519,152 @@ mod tests {
             got.push(u);
         }
         (state, got)
+    }
+
+    /// [#81] — a latched meter stops being asked, and goes on publishing.
+    ///
+    /// # The two halves, and why one without the other would be wrong
+    ///
+    /// `Failed` is absorbing (ADR 0009), so no answer can change the verdict: the
+    /// call is a request made for nothing, every period, for ever. For the
+    /// credential latch it is the hammering story 2.6's own doc warns against —
+    /// *"retrying with a credential the other end refused is how a bridge hammers
+    /// an API"* — performed by the poll loop.
+    ///
+    /// But ADR 0027 requires a verdict EVERY cycle for these meters: they are not
+    /// gone, the asking is broken, and silence on a Sparkplug wire reads as
+    /// "nothing has changed". So the tick is synthesised from the refusal the
+    /// state carries — which [#75] made possible three commits ago by putting it
+    /// inside `State::Failed`. Stopping the fetch without publishing would trade
+    /// this defect for a worse one.
+    ///
+    /// **Falsification, 2026-08-24:**
+    ///
+    /// 1. the latched arm deleted — the state [#81] reported: RED, the source is
+    ///    asked once more;
+    /// 2. `DeviceNotInAccount` allowed into the arm: RED on the control below.
+    ///    That control was ADDED because the mutation survived without it — the
+    ///    first draft asserted only that a credential latch is not asked, and an
+    ///    arm taking every refusal passed it.
+    ///
+    /// 3. `last.is_some()` dropped from the condition: RED — on
+    ///    `a_disabled_meters_alarm_retires_with_it_and_a_re_enable_judges_afresh`,
+    ///    an INTEGRATION test, not on this one.
+    ///
+    /// **That third mutation is how this condition was found, not a guard written
+    /// for it.** The first draft skipped the fetch for every latched meter, all
+    /// 304 unit tests stayed green, and the integration test went red with `the
+    /// first tick publishes: Elapsed`. A meter latched on its first tick has no
+    /// last measurement, so skipping the fetch took away the only way it could
+    /// acquire one and it fell silent for good.
+    ///
+    /// A fourth was written into this list before being run — an early `return` in
+    /// place of the synthesised tick — and is not claimed: it is not expressible
+    /// without restructuring the function, since what follows the tick is the
+    /// whole of the judging. The publication half is covered by the assertion on
+    /// `published` rather than by a mutation.
+    #[tokio::test]
+    async fn a_latched_meter_is_not_asked_again_and_still_publishes() {
+        let clock = FakeClock::new(UtcMillis(SANE_NOW));
+        let beats = Heartbeats::for_meters([MeterId::new("garage")]);
+        let heartbeat = beats.of(&MeterId::new("garage")).expect("present");
+        let (tx, mut rx) = mpsc::channel(8);
+        let meter = MeterId::new("garage");
+        let ctx = Context {
+            meter: &meter,
+            clock: &clock,
+            policy: policy(),
+            config: config(),
+            heartbeat: &heartbeat,
+            outbox: &tx,
+        };
+
+        // A source that would answer perfectly if it were asked.
+        let mut source = FakeSource::new().then(Ok(reading(Quality::Good, 950)));
+        // AND A METER THAT HAS ANSWERED BEFORE. Without this the test proves
+        // nothing about publication: a meter that has NEVER answered has no last
+        // measurement and correctly gets nothing — its DBIRTH already declared it
+        // valueless. The first draft omitted it and read the resulting silence as
+        // a defect in the change, which it was not.
+        let mut mem = MeterMemory {
+            last: Some(reading(Quality::Good, 950).value),
+            ..MeterMemory::default()
+        };
+        let (state, _) = step_once(
+            &ctx,
+            &mut source,
+            State::Failed(crate::core::source::Refusal::Credential),
+            &mut mem,
+        )
+        .await;
+
+        assert!(
+            source.calls.is_empty(),
+            "a latched meter must not be asked: the answer cannot change an \
+             absorbing verdict, and asking anyway is the hammering story 2.6 warns \
+             about — one call per period per latched meter, until a restart"
+        );
+        assert_eq!(
+            source.remaining(),
+            1,
+            "and the scripted answer is untouched, which is what says the fetch \
+             was skipped rather than consumed"
+        );
+
+        drop(tx);
+        let mut published = Vec::new();
+        while let Some(u) = rx.recv().await {
+            published.push(u);
+        }
+        assert_eq!(
+            published.len(),
+            1,
+            "AND THE CYCLE STILL PUBLISHES: ADR 0027 requires a verdict every cycle \
+             for a meter that is latched but not gone. Stopping the fetch AND the \
+             publication would trade this defect for silence, which a Sparkplug \
+             consumer reads as 'nothing has changed'"
+        );
+        assert_eq!(
+            published[0].verdict().cause(),
+            Some(Cause::CredentialRejected),
+            "and the verdict names the refusal that latched it, not a generic one"
+        );
+        assert_eq!(
+            state,
+            State::Failed(crate::core::source::Refusal::Credential),
+            "the latch is unchanged"
+        );
+
+        // THE CONTROL: the GONE latch is still asked here. Story 3.5 stops that
+        // one at the loop, where the DDEATH ends the publication too (ADR 0034),
+        // and swallowing it in `step_once` would hide the path that emits the
+        // certificate. Without this assertion the arm could take every refusal
+        // and the test above would not notice.
+        let (tx2, _rx2) = mpsc::channel(8);
+        let ctx2 = Context {
+            meter: &meter,
+            clock: &clock,
+            policy: policy(),
+            config: config(),
+            heartbeat: &heartbeat,
+            outbox: &tx2,
+        };
+        let mut gone_source = FakeSource::new().then(Ok(reading(Quality::Good, 950)));
+        let mut gone_mem = MeterMemory::default();
+        let _ = step_once(
+            &ctx2,
+            &mut gone_source,
+            State::Failed(crate::core::source::Refusal::DeviceNotInAccount),
+            &mut gone_mem,
+        )
+        .await;
+        assert_eq!(
+            gone_source.calls.len(),
+            1,
+            "the gone latch is the loop's business, not this function's: it is \
+             stopped one level up, and absorbing it here would mean the DDEATH \
+             never went out"
+        );
     }
 
     async fn drive(source: FakeSource) -> (State, Vec<MeterUpdate>) {
