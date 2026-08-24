@@ -837,6 +837,35 @@ impl SparkplugPublisher {
         })
     }
 
+    /// Whether this reading is identical, in every published respect, to the last
+    /// one CONFIRMED for its device — so publishing it would tell the host
+    /// nothing it does not already hold ([#32], ADR 0047).
+    ///
+    /// # Compared whole, and against the CONFIRMED one
+    ///
+    /// `MeterUpdate` is exactly what gets published: the measurement — serial,
+    /// power, energy, units, `ValueDate`, source quality — and the verdicts, which
+    /// carry the per-metric quality **and** the cause that contract v12 publishes
+    /// as `Cause/Power` and `Cause/Energy` (ADR 0044). Comparing anything narrower
+    /// would suppress a message that differed from its predecessor; comparing the
+    /// value alone would let a quality transition go unpublished, and staleness
+    /// would stop being observable — which is the failure this project is named
+    /// for.
+    ///
+    /// **Against the confirmed one, not the attempted one**, and since ADR 0046
+    /// that is what `last` holds: a reading the transport refused never reached
+    /// the host, so a later identical reading is not a repeat as far as the host
+    /// is concerned — it is the first time it would hear it.
+    ///
+    /// A device with no confirmed reading answers `false`: the host holds nothing
+    /// for it, so nothing can be redundant.
+    pub fn is_unchanged(&self, update: &MeterUpdate) -> bool {
+        self.declared
+            .get(&update.measurement.serial)
+            .and_then(|d| d.last.as_ref())
+            .is_some_and(|last| last == update)
+    }
+
     /// Whether this reading carries the same acquisition instant as the last one
     /// CONFIRMED for its device — that is, whether it is a republication ([#92]).
     ///

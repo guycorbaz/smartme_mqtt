@@ -1932,6 +1932,20 @@ fn deliver(
     publisher: &mut SparkplugPublisher,
     update: &MeterUpdate,
 ) -> Option<Loss> {
+    // REPORT BY EXCEPTION ([#32], ADR 0047), and it is the FIRST thing asked. A
+    // reading identical in every published respect to the last one the host
+    // CONFIRMED carries nothing it does not already hold: the session is stateful,
+    // and a consumer that needs to relearn issues a Rebirth Request, which this
+    // driver answers. Any change publishes — quality and cause included.
+    //
+    // Answering `None` says "nothing to count", which is the truth: a message the
+    // bridge chose not to send is a decision, not a loss. It lives here rather
+    // than in the `select!` arm so a test can reach it — the arm's answer would be
+    // `continue`, which is control flow and not a value, and the whole suite
+    // stayed green with the suppression deleted (measured 2026-08-24).
+    if publisher.is_unchanged(update) {
+        return None;
+    }
     let mut queue = Queue::default();
     let pending = match publisher.publish(update, &mut queue) {
         Ok(pending) => pending,
@@ -3111,6 +3125,178 @@ mod tests {
     /// `let _ = publish(client, message);` — dropping the count, which is what
     /// shipped — turns this red. Before this test the same mutation left the whole
     /// suite green, which is why `announce`'s misreport survived review-by-reading.
+    /// [#32], ADR 0047 — an identical reading is suppressed, and ANY change
+    /// publishes.
+    ///
+    /// # The half that matters is the second one
+    ///
+    /// Suppressing on the value alone would let a quality transition go
+    /// unpublished, and staleness would stop being observable — a frozen value
+    /// staying on an operator's screen labelled good is the failure this project
+    /// is named for. So the test asserts four transitions, and three of them
+    /// change nothing an eye would call "the reading": the quality, the cause, and
+    /// the acquisition instant with identical numbers.
+    ///
+    /// # Why against the CONFIRMED reading
+    ///
+    /// A reading the transport refused never reached the host, so an identical one
+    /// afterwards is the first time the host would hear it. Comparing against the
+    /// last *attempted* publication would suppress it and leave the host holding
+    /// nothing — which is the state [#92] repaired one issue ago.
+    ///
+    /// **Falsification, 2026-08-24:**
+    ///
+    /// 1. `is_unchanged` comparing `measurement.power` only: RED on the quality
+    ///    transition — the shape [#32] warned must not be lost;
+    /// 2. `is_unchanged` answering `true` whenever a last reading exists: RED on
+    ///    every transition;
+    /// 3. the suppression deleted from `deliver` — the state before ADR 0047:
+    ///    RED, `Some(TransportQueueFull)` where `None` is owed.
+    ///
+    /// # The third mutation took three attempts to catch, and that is the lesson
+    ///
+    /// It first lived in the `select!` arm as a `continue`, where no test could
+    /// reach it — the same gap [#95] was filed for, one issue earlier. Deleting it
+    /// left the WHOLE suite green, chaos tier included, because nothing in this
+    /// repository observes a frozen meter. **Measured, not feared.** Moving it
+    /// into `deliver` made it a value rather than control flow.
+    ///
+    /// The second attempt asserted on a queue this test owned, and the mutation
+    /// walked straight through: `deliver` builds its own queue and hands it to the
+    /// client, so a local one observes nothing whatever happens.
+    ///
+    /// What works is a request channel with no slot left: a suppressed reading
+    /// touches nothing and answers `None`, a published one is refused and comes
+    /// back `TransportQueueFull`. The distinction is visible from outside, which
+    /// is the only place a test stands.
+    #[test]
+    fn an_identical_reading_is_suppressed_and_any_change_publishes() {
+        use crate::core::oracle::{Cause, Verdict};
+        use crate::domain::{Kw, Kwh, Measurement, MeterId, Quality, UtcMillis};
+
+        let serial = Serial::new("30000001");
+        let meter = MeterId::new("meter");
+        let reading = |value_date: i64, power: f64, verdict: Verdict| {
+            MeterUpdate::uniform(
+                meter.clone(),
+                Measurement {
+                    meter: meter.clone(),
+                    serial: serial.clone(),
+                    power: Some(Kw(power)),
+                    energy: Some(Kwh(4_843.822)),
+                    value_date: UtcMillis(value_date),
+                    quality: Quality::Good,
+                },
+                verdict,
+            )
+        };
+
+        let node = sparkplug_b::EdgeNode::new("Site", "Bridge").expect("valid ids");
+        let options = MqttOptions::new("roomy", "127.0.0.1", 1883);
+        let (client, _never_polled) = AsyncClient::new(options, 64);
+        let mut publisher = SparkplugPublisher::new(node, None);
+        announce(
+            &client,
+            &mut publisher,
+            UtcMillis(1_000),
+            std::slice::from_ref(&serial),
+            BirthReason::Connected,
+        );
+
+        // A SECOND publisher whose channel holds its birth and one reading, and
+        // nothing more: the suppression is then the only thing standing between a
+        // repeat and a refusal.
+        let tight_options = MqttOptions::new("tight", "127.0.0.1", 1883);
+        let (tight_client, _also_never_polled) = AsyncClient::new(tight_options, 3);
+        let mut tight = SparkplugPublisher::new(
+            sparkplug_b::EdgeNode::new("Site", "Bridge").expect("valid ids"),
+            None,
+        );
+        announce(
+            &tight_client,
+            &mut tight,
+            UtcMillis(1_000),
+            std::slice::from_ref(&serial),
+            BirthReason::Connected,
+        );
+
+        let first = reading(1_784_984_792_050, 0.018, Verdict::good());
+        assert_eq!(
+            deliver(&tight_client, &mut tight, &first),
+            None,
+            "the premise: the third slot takes this one"
+        );
+
+        assert!(
+            !publisher.is_unchanged(&first),
+            "nothing has been confirmed for this device, so the host holds nothing \
+             and no reading can be redundant"
+        );
+        assert_eq!(deliver(&client, &mut publisher, &first), None);
+
+        assert!(
+            publisher.is_unchanged(&first),
+            "the same reading again tells the host what it is already displaying: \
+             this is the unplugged meter's 17 000 messages a day"
+        );
+
+        // AND `deliver` ACTS ON IT — the half an `is_unchanged` assertion cannot
+        // show, and the half that was missing. Measured on 2026-08-24: with the
+        // suppression deleted the WHOLE suite stayed green, chaos tier included,
+        // because nothing observed a frozen meter.
+        //
+        // Observed through a FULL request channel, because `deliver` builds its
+        // own queue and hands it straight to the client: a suppressed reading
+        // touches nothing and answers `None`; a published one meets a channel with
+        // no slot left and comes back as `TransportQueueFull`. The two are
+        // therefore distinguishable from outside, which a queue this test owns
+        // could never be — the first draft asserted on such a queue and the
+        // mutation walked straight through it.
+        assert_eq!(
+            deliver(&tight_client, &mut tight, &first),
+            None,
+            "the channel has been full since the birth, so a reading that reached \
+             it would come back refused. `None` means nothing was sent — and a \
+             suppressed reading is not a loss either: counting it would report a \
+             fault where the bridge made a decision"
+        );
+
+        // THE FOUR TRANSITIONS, and three of them leave the numbers alone.
+        assert!(
+            !publisher.is_unchanged(&reading(1_784_984_792_050, 0.019, Verdict::good())),
+            "a new value publishes"
+        );
+        assert!(
+            !publisher.is_unchanged(&reading(
+                1_784_984_792_050,
+                0.018,
+                Verdict::stale(Cause::ReadingTooOld)
+            )),
+            "A QUALITY TRANSITION PUBLISHES, with the value untouched. Suppressing \
+             on the value alone would leave a frozen reading on screen labelled \
+             good, which is the failure this bridge exists to prevent"
+        );
+        assert!(
+            !publisher.is_unchanged(&reading(
+                1_784_984_792_050,
+                0.018,
+                Verdict::stale(Cause::TimestampsDisagree)
+            )) && !publisher.is_unchanged(&reading(
+                1_784_984_792_050,
+                0.018,
+                Verdict::stale(Cause::ReadingTooOld)
+            )),
+            "and so does a CAUSE transition at equal quality: contract v12 \
+             publishes the cause as its own metric (ADR 0044), so an operator \
+             reads it and it must not go stale in silence"
+        );
+        assert!(
+            !publisher.is_unchanged(&reading(1_784_984_852_050, 0.018, Verdict::good())),
+            "a new acquisition instant publishes even with identical numbers: it \
+             is what tells the historian the measurement was confirmed again"
+        );
+    }
+
     /// [#92] — the classification reaches the COUNTERS, which `deliver` alone
     /// cannot show.
     ///
@@ -3195,7 +3381,13 @@ mod tests {
 
         let serial = Serial::new("30000001");
         let meter = MeterId::new("meter");
-        let at = |value_date: i64| {
+        // The verdict travels because a republication is the last known value
+        // re-sent with a DEGRADED one — that is what makes it a republication
+        // rather than a repeat, and since ADR 0047 a strictly identical reading is
+        // suppressed before the transport ever sees it. The first draft of this
+        // test re-sent an identical reading and went red the day report-by-
+        // exception landed, which is the composition working.
+        let at = |value_date: i64, verdict: Verdict| {
             MeterUpdate::uniform(
                 meter.clone(),
                 Measurement {
@@ -3206,7 +3398,7 @@ mod tests {
                     value_date: UtcMillis(value_date),
                     quality: Quality::Good,
                 },
-                Verdict::good(),
+                verdict,
             )
         };
 
@@ -3227,14 +3419,25 @@ mod tests {
         // The reading the host DOES receive, and which every re-send below
         // repeats.
         assert_eq!(
-            deliver(&client, &mut publisher, &at(1_784_984_792_050)),
+            deliver(
+                &client,
+                &mut publisher,
+                &at(1_784_984_792_050, Verdict::good())
+            ),
             None,
             "the premise: this one goes out, or nothing below is a repeat of \
              anything"
         );
 
         // The source has gone quiet: the same measurement, re-sent, refused.
-        let first = deliver(&client, &mut publisher, &at(1_784_984_792_050));
+        let first = deliver(
+            &client,
+            &mut publisher,
+            &at(
+                1_784_984_792_050,
+                Verdict::stale(crate::core::oracle::Cause::ReadingTooOld),
+            ),
+        );
         assert_eq!(
             first,
             Some(Loss {
@@ -3250,7 +3453,11 @@ mod tests {
         // queue, is not a copy of anything. Without it, `republication: true`
         // everywhere would pass the assertion above.
         assert_eq!(
-            deliver(&client, &mut publisher, &at(1_784_984_852_050)),
+            deliver(
+                &client,
+                &mut publisher,
+                &at(1_784_984_852_050, Verdict::good())
+            ),
             Some(Loss {
                 reason: DropReason::TransportQueueFull,
                 fault: None,
