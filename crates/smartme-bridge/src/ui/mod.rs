@@ -1300,7 +1300,7 @@ mod tests {
         ] {
             beats.record_at(
                 meter,
-                OracleState::Failed,
+                OracleState::Failed(crate::core::source::Refusal::Credential),
                 Verdict::bad(cause),
                 Some(crate::app::poll_publish::Publication {
                     at: UtcMillis(now.0 - 1_000),
@@ -1639,7 +1639,7 @@ mod tests {
 
         beats.record_at(
             &meter,
-            OracleState::Failed,
+            OracleState::Failed(crate::core::source::Refusal::Credential),
             Verdict::bad(Cause::CredentialRejected),
             Some(crate::app::poll_publish::Publication {
                 at: UtcMillis(now.0 - 4_000),
@@ -2619,7 +2619,7 @@ mod tests {
         // the meter in two lists.
         beats.record(
             &cellar,
-            OracleState::Failed,
+            OracleState::Failed(crate::core::source::Refusal::Credential),
             crate::core::oracle::Verdict::bad(crate::core::oracle::Cause::SourceRefused),
         );
 
@@ -2739,7 +2739,7 @@ mod tests {
         // Now one meter's source fails fatally — a refused credential.
         beats.record(
             &crate::domain::MeterId::new("cellar"),
-            OracleState::Failed,
+            OracleState::Failed(crate::core::source::Refusal::Credential),
             crate::core::oracle::Verdict::bad(crate::core::oracle::Cause::SourceRefused),
         );
 

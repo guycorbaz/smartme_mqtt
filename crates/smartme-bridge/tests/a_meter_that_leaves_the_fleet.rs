@@ -332,9 +332,11 @@ async fn a_device_the_account_refuses_ends_with_one_certificate_and_the_alarm_st
     // final `device-not-in-account` can be dropped as undeclared. One short
     // sleep lets the latch tick run without reaching the next period.
     tokio::time::sleep(Duration::from_secs(1)).await;
-    assert_eq!(
-        beats.snapshot().of(&meter).and_then(|m| m.verdict),
-        Some(smartme_bridge::core::state_machine::State::Failed),
+    assert!(
+        matches!(
+            beats.snapshot().of(&meter).and_then(|m| m.verdict),
+            Some(smartme_bridge::core::state_machine::State::Failed(_))
+        ),
         "the premise: the latch tick has run"
     );
     assert!(

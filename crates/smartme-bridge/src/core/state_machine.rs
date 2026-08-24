@@ -23,7 +23,16 @@ pub enum State {
     /// No proof of freshness — cold start, doubtful timestamps, transient trouble.
     Stale,
     /// Fatal error: retrying with the same config would keep lying.
-    Failed,
+    ///
+    /// **Carries the refusal that latched it** ([#75], ADR 0048), so every later
+    /// tick republishes the cause of the fault rather than a generic one that
+    /// happens to fit that tick. Before ADR 0048 a latched meter answered
+    /// `SourceRefused` on any non-fatal tick — so one network hiccup replaced
+    /// `credential-rejected` with `source-refused` and the next good tick put it
+    /// back, changing the label while the fault stood still.
+    ///
+    /// `Refusal` is `Copy`, which is why this costs nothing to pass around.
+    Failed(crate::core::source::Refusal),
 }
 
 impl State {
@@ -212,17 +221,27 @@ impl Policy {
         // Failed latches until restart; a fatal tick latches it. Both are
         // clock-independent, so they are judged BEFORE the boot-sanity guard —
         // an unsynced RTC must not soften an auth failure into Stale.
-        if prev == State::Failed || matches!(tick, Err(SourceError::Fatal { .. })) {
-            // THE REFUSAL NAMES ITSELF when there is one (story 2.6). A tick
-            // arriving after the latch, without being a refusal of its own, keeps
-            // the narrowed `SourceRefused`: the meter is latched by something that
-            // already happened, and re-deriving which is not something this
-            // function can do.
-            let cause = match tick {
-                Err(SourceError::Fatal { refusal, .. }) => refusal.cause(),
-                _ => Cause::SourceRefused,
-            };
-            return (State::Failed, Verdict::bad(cause));
+        if let (
+            State::Failed(_) | State::Fresh | State::Stale,
+            Err(SourceError::Fatal { refusal, .. }),
+        ) = (prev, &tick)
+        {
+            // A NEW refusal replaces the old one: this tick carries evidence, and
+            // the latest fault is the one to repair.
+            return (State::Failed(*refusal), Verdict::bad(refusal.cause()));
+        }
+        if let State::Failed(latched) = prev {
+            // AND A TICK THAT CARRIES NO EVIDENCE KEEPS THE CAUSE ([#75], ADR
+            // 0048). Four paths reach here — a Timeout, a Transient, a
+            // RateLimited, or a GOOD reading — and none of them says anything
+            // about the fault that latched this meter. Republishing the refusal it
+            // already reached is what stops one network hiccup relabelling an
+            // expired credential as `source-refused` and the next good tick
+            // putting it back.
+            //
+            // Before ADR 0048 `State::Failed` carried no payload, so this function
+            // genuinely could not re-derive which refusal it was. Now it is told.
+            return (prev, Verdict::bad(latched.cause()));
         }
         // Boot sanity: an unsynced host clock poisons every local stamp.
         if now < PLAUSIBILITY_FLOOR {
@@ -235,7 +254,14 @@ impl Policy {
             // lands in, which is this machine's own business: a fatal latches
             // `Failed`, everything else is `Stale` and retried. Story 2.6's rule
             // that a rate limit is not unreachability lives in the table.
-            Err(error @ SourceError::Fatal { .. }) => (State::Failed, Verdict::bad(error.cause())),
+            // A FATAL NEVER REACHES HERE since ADR 0048: the two guards at the
+            // top of this function take every `Fatal`, whatever `prev` was, so
+            // that the refusal can be carried into `State::Failed`. The arm is
+            // kept because the match must stay exhaustive over `SourceError`, and
+            // it answers what it always answered.
+            Err(error @ SourceError::Fatal { refusal, .. }) => {
+                (State::Failed(*refusal), Verdict::bad(error.cause()))
+            }
             Err(error) => (State::Stale, Verdict::stale(error.cause())),
             Ok(reading) => self.judge_reading(reading, previous_value_date),
         }
@@ -677,14 +703,14 @@ mod tests {
         // the absorption.
         let good_tick = Ok(reading(Quality::Good, BASE, Some(BASE + 500)));
         assert_eq!(
-            POLICY.step_quality(State::Failed, &good_tick, SANE_NOW),
-            (State::Failed, Quality::Bad)
+            POLICY.step_quality(State::Failed(Refusal::Credential), &good_tick, SANE_NOW),
+            (State::Failed(Refusal::Credential), Quality::Bad)
         );
         // A later timeout must not launder Bad into Stale either.
         let timeout: Tick = Err(SourceError::Timeout);
         assert_eq!(
-            POLICY.step_quality(State::Failed, &timeout, SANE_NOW),
-            (State::Failed, Quality::Bad)
+            POLICY.step_quality(State::Failed(Refusal::Credential), &timeout, SANE_NOW),
+            (State::Failed(Refusal::Credential), Quality::Bad)
         );
         // Only a restart (fresh initial state) re-opens the door.
         assert_eq!(
@@ -704,7 +730,7 @@ mod tests {
         let pre_2020 = UtcMillis(PLAUSIBILITY_FLOOR.0 - 1);
         assert_eq!(
             POLICY.step_quality(State::Fresh, &fatal, pre_2020),
-            (State::Failed, Quality::Bad)
+            (State::Failed(Refusal::Credential), Quality::Bad)
         );
     }
 
@@ -728,7 +754,7 @@ mod tests {
         );
         assert_eq!(
             POLICY.step_quality(State::Fresh, &fatal, SANE_NOW),
-            (State::Failed, Quality::Bad)
+            (State::Failed(Refusal::Credential), Quality::Bad)
         );
     }
 
@@ -822,25 +848,97 @@ mod tests {
             reason: "auth rejected".into(),
         });
 
+        // [#75], ADR 0048 — THE SEQUENCE AN OPERATOR ACTUALLY SEES. Four paths
+        // reach the latch arm without carrying a refusal of their own — a
+        // Timeout, a Transient, a RateLimited, or a GOOD reading — and the code's
+        // own justification enumerated one of them and called it unlikely. A
+        // network hiccup on a latched meter needs nothing unusual at all.
+        //
+        // Before ADR 0048 this sequence published
+        // `credential-rejected → source-refused → credential-rejected`: the label
+        // changed while the fault stood still, and an operator looking just after
+        // the hiccup saw the undifferentiated cause story 2.6 was written to
+        // remove, with nothing on screen saying the precise information had
+        // existed thirty seconds earlier.
+        //
+        // FALSIFIED 2026-08-24, mutation RUN: the arm restored to
+        // `_ => Cause::SourceRefused` — the state this issue reported — goes RED
+        // on the first non-fatal tick of the walk below.
+        let latched = State::Failed(Refusal::Credential);
+        for (name, tick) in [
+            ("a network hiccup", Err(SourceError::Timeout)),
+            (
+                "a transient fault",
+                Err(SourceError::Transient {
+                    reason: "connection reset".into(),
+                }),
+            ),
+            (
+                "a rate limit",
+                Err(SourceError::RateLimited {
+                    retry_after: Some(std::time::Duration::from_secs(30)),
+                }),
+            ),
+            ("a perfectly good reading", fresh.clone()),
+        ] {
+            let (state, verdict) = POLICY.step(latched, &tick, SANE_NOW);
+            assert_eq!(
+                state, latched,
+                "{name} must not clear the latch, and must not change WHICH \
+                 refusal it is"
+            );
+            assert_eq!(
+                verdict.cause(),
+                Some(Cause::CredentialRejected),
+                "{name} says nothing about the credential that latched this \
+                 meter, so it must not relabel the fault: an operator sent to the \
+                 broker for an expired token repairs nothing"
+            );
+        }
+
         // Latching refusals, from both doors — and since story 2.6 THE TWO DOORS
         // NO LONGER PUBLISH THE SAME CAUSE, which is the whole of the narrowing.
         //
         //  - a FATAL TICK names its own refusal: the fixture above builds a
         //    `Refusal::Credential`, so the row says `credential-rejected` and an
         //    operator is sent to the token rather than to a meter;
-        //  - a PREVIOUSLY-FAILED meter whose current tick is fine keeps the
-        //    narrowed `SourceRefused`: it is latched by something that already
-        //    happened, and this function cannot re-derive which. Naming one of the
-        //    three here would claim a fault that is not happening.
+        //  - a PREVIOUSLY-FAILED meter whose current tick is fine REPUBLISHES THE
+        //    REFUSAL THAT LATCHED IT, since ADR 0048. This row read
+        //    `Cause::SourceRefused` until 2026-08-24, with a comment explaining
+        //    that the function could not re-derive which refusal it was — true of
+        //    the function as it stood, and the defect [#75] reported: one network
+        //    hiccup relabelled an expired credential `source-refused`, and the next
+        //    good tick put it back. `State::Failed` carries the refusal now, so the
+        //    function is told rather than guessing.
         for (prev, tick, expected) in [
-            (State::Failed, &fresh, Cause::SourceRefused),
+            (
+                State::Failed(Refusal::Credential),
+                &fresh,
+                Cause::CredentialRejected,
+            ),
             (State::initial(), &fatal, Cause::CredentialRejected),
         ] {
             let (state, verdict) = POLICY.step(prev, tick, SANE_NOW);
-            assert_eq!(state, State::Failed);
+            assert!(matches!(state, State::Failed(_)), "the latch is absorbing");
             assert_eq!(verdict.cause(), Some(expected));
             assert!(verdict.latches(), "a refusal must latch");
         }
+
+        // AND THE DISCRIMINATION: a latched meter meeting a NEW refusal takes the
+        // new one. A cause persists while the evidence does not change (ADR 0048);
+        // it does not outlive evidence that it has.
+        let other = Err(SourceError::Fatal {
+            refusal: Refusal::Configuration,
+            reason: "base url refused".into(),
+        });
+        let (state, verdict) = POLICY.step(State::Failed(Refusal::Credential), &other, SANE_NOW);
+        assert_eq!(
+            state,
+            State::Failed(Refusal::Configuration),
+            "a tick that carries a refusal of its own replaces the latched one: \
+             the latest fault is the one to repair"
+        );
+        assert_eq!(verdict.cause(), Some(Cause::ConfigurationContradicted));
 
         // Everything else describes one reading and must not latch.
         let cases: [(&str, Tick, UtcMillis, Option<Cause>); 8] = [
@@ -902,9 +1000,8 @@ mod tests {
         for (name, tick, now, expected) in cases {
             let (state, verdict) = POLICY.step(State::initial(), &tick, now);
             assert_eq!(verdict.cause(), expected, "{name}: wrong cause");
-            assert_ne!(
-                state,
-                State::Failed,
+            assert!(
+                !matches!(state, State::Failed(_)),
                 "{name} describes a reading, not an identity"
             );
             assert!(!verdict.latches(), "{name} must not latch");

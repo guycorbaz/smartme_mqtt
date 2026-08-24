@@ -462,7 +462,7 @@ impl FleetState {
     pub fn degraded(&self) -> Vec<(&MeterId, Verdict)> {
         self.meters
             .iter()
-            .filter(|m| m.verdict != Some(State::Failed))
+            .filter(|m| !matches!(m.verdict, Some(State::Failed(_))))
             .filter_map(|m| m.published.map(|v| (&m.meter, v)))
             .filter(|(_, v)| v.quality() != Quality::Good)
             .collect()
@@ -474,7 +474,7 @@ impl FleetState {
     /// bridge that looks healthy and publishes nothing.
     pub fn failed(&self) -> Vec<&MeterId> {
         self.verdicts()
-            .filter(|(_, s)| *s == State::Failed)
+            .filter(|(_, s)| matches!(s, State::Failed(_)))
             .map(|(m, _)| m)
             .collect()
     }
@@ -1131,11 +1131,15 @@ pub async fn step_once<S: Source + Send>(
     // `Policy::step` and deriving it here from `prev` plus the composed verdict.
     // That is a change to the table AC10 requires be preserved verbatim, so it
     // does not belong in this story — it belongs in the one that first needs it.
-    let next = if published.meter().latches() {
-        State::Failed
-    } else {
-        freshness_state
-    };
+    //
+    // ADR 0048 TURNED THAT INTO A QUESTION WITH A SHAPE. `State::Failed` now names
+    // the refusal that latched it, and a composed metric-scoped cause carries no
+    // refusal — so the branch this comment describes can no longer be written
+    // without deciding WHICH refusal such a cause means. It was unreachable today
+    // (the paragraph above proves it, and deleting it was measured to change
+    // nothing), so the line goes and [#71] inherits a decision that now has a
+    // compiler-shaped reason to be taken rather than a prose one.
+    let next = freshness_state;
 
     // WHAT MAY BE REMEMBERED, and it is one rule for both memories (Story 2.3
     // AC3/AC4). Before it, `energy_reference` advanced on `reading.value.quality
@@ -2611,9 +2615,8 @@ mod tests {
         // What would be a defect is a LATCH — a frozen feed is not a refusal, and
         // requiring a restart to clear a cloud that thawed by itself would be the
         // fault ADR 0029 accepted for identity and nobody accepted for this.
-        assert_ne!(
-            state,
-            State::Failed,
+        assert!(
+            !matches!(state, State::Failed(_)),
             "a frozen feed must not need a restart"
         );
     }
@@ -3593,7 +3596,7 @@ mod tests {
         .await;
         drop(_capture_guard);
 
-        assert_eq!(state, State::Failed);
+        assert!(matches!(state, State::Failed(_)));
         let line = unreadable_line(&sink.text());
         assert!(
             line.contains("9202685"),
@@ -3618,7 +3621,7 @@ mod tests {
             reason: "auth rejected".to_string(),
         })))
         .await;
-        assert_eq!(state, State::Failed);
+        assert!(matches!(state, State::Failed(_)));
     }
 
     #[tokio::test(start_paused = true)]
