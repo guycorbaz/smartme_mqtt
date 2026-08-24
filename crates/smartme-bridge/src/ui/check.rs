@@ -52,11 +52,14 @@ pub(super) enum SourceLink {
         /// the configured one. Two facts side by side — the identity oracle's
         /// verdict is the middle link's business, not this one's.
         serial: i64,
-        value_date: String,
-        power: f64,
-        power_unit: String,
-        energy: f64,
-        energy_unit: String,
+        /// What the account sent — and `None` where it sent `null`, which six of
+        /// these eight fields are allowed to be ([#74]). This screen shows what
+        /// arrived, so an absence is shown as an absence rather than as a zero.
+        value_date: Option<String>,
+        power: Option<f64>,
+        power_unit: Option<String>,
+        energy: Option<f64>,
+        energy_unit: Option<String>,
     },
     /// The account could not be asked, or refused. `what` is [`SmartMeError`]'s own
     /// wording — story 2.6 AC5 wrote a repair into each variant's `Display`, and
@@ -482,6 +485,15 @@ fn render(state: &Arc<UiState>, chosen: Option<&str>, refusal: Option<Refusal>) 
                         || "no row in the configuration".to_string(),
                         |m| m.serial.to_string(),
                     );
+                    // ABSENCE IS SHOWN AS ABSENCE ([#74]). Six of these fields
+                    // may be `null`, and rendering a missing number as `0` would
+                    // be this screen inventing a measurement — on the one page
+                    // whose whole purpose is to say what the account actually
+                    // sent.
+                    let number =
+                        |v: Option<f64>| v.map_or_else(|| "null".to_string(), |n| n.to_string());
+                    let text =
+                        |v: Option<&String>| v.map_or_else(|| "null".to_string(), |s| escape(s));
                     format!(
                         "<strong>answered</strong> in {took_ms} ms, {}. It reported \
                          serial {serial} (the configuration declares {}), measured at \
@@ -491,11 +503,11 @@ fn render(state: &Arc<UiState>, chosen: Option<&str>, refusal: Option<Refusal>) 
                          the next link.</em>",
                         ago(now, at),
                         escape(&declared),
-                        escape(&value_date),
-                        power = power,
-                        power_unit = escape(&power_unit),
-                        energy = energy,
-                        energy_unit = escape(&energy_unit),
+                        text(value_date.as_ref()),
+                        power = number(power),
+                        power_unit = text(power_unit.as_ref()),
+                        energy = number(energy),
+                        energy_unit = text(energy_unit.as_ref()),
                     )
                 }
                 SourceLink::Refused { cause, what } => format!(

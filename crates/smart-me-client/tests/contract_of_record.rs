@@ -29,7 +29,7 @@ fn all_captured_devices_deserialize() {
 
 fn meter_a(devs: &[Device]) -> &Device {
     devs.iter()
-        .find(|d| d.name == "METER-A")
+        .find(|d| d.name.as_deref() == Some("METER-A"))
         .expect("METER-A present in the capture")
 }
 
@@ -40,27 +40,33 @@ fn the_device_by_id_object_shape_deserializes_as_get_device_does() {
     // the exact same type parameter — closing the envelope gap flagged in review.
     let raw = std::fs::read_to_string(fixtures().join("smartme_device_by_id.json")).expect("read");
     let d: Device = serde_json::from_str(&raw).expect("single-object body deserializes");
-    assert_eq!(d.name, "METER-A");
-    assert_eq!(d.value_date, "2026-07-25T13:06:32.0500519Z");
+    assert_eq!(d.name.as_deref(), Some("METER-A"));
+    assert_eq!(
+        d.value_date.as_deref(),
+        Some("2026-07-25T13:06:32.0500519Z")
+    );
 }
 
 #[test]
 fn meter_a_fields_match_the_capture() {
     let devs = devices();
     let a = meter_a(&devs);
-    assert_eq!(a.name, "METER-A");
+    assert_eq!(a.name.as_deref(), Some("METER-A"));
     assert_eq!(a.serial, 30_000_001);
     assert_eq!(a.id, "a1a1a1a1-b2b2-c3c3-d4d4-000000000001");
-    assert_eq!(a.active_power_unit, "kW");
-    assert_eq!(a.counter_reading_unit, "kWh");
-    assert!(a.active_power > 0.0);
-    assert_eq!(a.value_date, "2026-07-25T13:06:32.0500519Z");
+    assert_eq!(a.active_power_unit.as_deref(), Some("kW"));
+    assert_eq!(a.counter_reading_unit.as_deref(), Some("kWh"));
+    assert!(a.active_power.is_some_and(|p| p > 0.0));
+    assert_eq!(
+        a.value_date.as_deref(),
+        Some("2026-07-25T13:06:32.0500519Z")
+    );
 }
 
 #[test]
 fn every_captured_value_date_parses() {
     for d in devices() {
-        let ms = parse_value_date(&d.value_date);
+        let ms = parse_value_date(d.value_date.as_deref().expect("the capture carries one"));
         assert!(ms.is_some(), "ValueDate {:?} must parse", d.value_date);
     }
 }
@@ -72,7 +78,10 @@ fn the_dead_meter_is_visible_in_the_capture() {
     let devs = devices();
     let ages: Vec<i64> = devs
         .iter()
-        .map(|d| parse_value_date(&d.value_date).expect("parses"))
+        .map(|d| {
+            parse_value_date(d.value_date.as_deref().expect("the capture carries one"))
+                .expect("parses")
+        })
         .collect();
     let newest = *ages.iter().max().expect("non-empty");
     let oldest = *ages.iter().min().expect("non-empty");
@@ -90,7 +99,8 @@ fn value_date_and_captured_date_header_cohere() {
     // ever re-captured, re-capture both together.)
     let devs = devices();
     let a = meter_a(&devs);
-    let value_ms = parse_value_date(&a.value_date).expect("parses");
+    let value_ms = parse_value_date(a.value_date.as_deref().expect("the capture carries one"))
+        .expect("parses");
     let raw = std::fs::read_to_string(fixtures().join("http_headers/valid.txt")).expect("read");
     let date_line = raw
         .lines()

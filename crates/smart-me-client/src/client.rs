@@ -1074,19 +1074,24 @@ mod tests {
     /// exactly what shipped before this change.
     #[test]
     fn a_refused_payload_names_the_field_the_api_changed() {
-        // Every field but `ActivePower`, which the bridge consumes.
-        let without_power = r#"{
-            "Id": "1", "Name": "n", "Serial": 30000001,
-            "ActivePowerUnit": "kW",
+        // A NON-NULLABLE field, since [#74]. `Serial` and `Id` are the two the
+        // API's description does not allow to be null, so they are the two whose
+        // absence still means *the shape of the answer changed* rather than
+        // *this meter had nothing to report* — and they are what this guard is
+        // about. The nullable six are carried as absences now, each degrading its
+        // own metric.
+        let without_serial = r#"{
+            "Id": "1", "Name": "n",
+            "ActivePower": 0.7, "ActivePowerUnit": "kW",
             "CounterReading": 4843.822, "CounterReadingUnit": "kWh",
             "ValueDate": "2026-07-25T13:06:32.0500519Z"
         }"#;
-        let e = decode_device(without_power.as_bytes())
+        let e = decode_device(without_serial.as_bytes())
             .expect_err("a payload we cannot read must not parse");
         assert!(matches!(e, SmartMeError::Decode { .. }));
         let shown = e.to_string();
         assert!(
-            shown.contains("ActivePower"),
+            shown.contains("Serial"),
             "an operator learns nothing from a decode failure that names no field: {shown:?}"
         );
         assert!(
@@ -1095,29 +1100,40 @@ mod tests {
         );
     }
 
-    /// **And the case the field name does NOT exist, pinned so it is not mistaken for
-    /// a regression later.** serde names a field it did not find; it names none when
-    /// the field is there with the wrong type. The API declares six of the eight
-    /// fields this client consumes as nullable, so this is the likely case, not the
-    /// exotic one — [#73] stays open on it.
+    /// **[#74] — a `null` is no longer refused at all, so there is no name to
+    /// miss.**
+    ///
+    /// This slot held `a_null_is_refused_and_serde_names_no_field_for_it`, which
+    /// pinned that serde names a field it did not find and names none when the
+    /// field is there with the wrong type — `invalid type: null, expected f64 at
+    /// line 3 column 31`, a line and a column into a payload no operator ever
+    /// sees. It carried its own condition for removal: *"if serde has started
+    /// naming the field here, this limitation is over"*.
+    ///
+    /// **Serde did not start naming it. The question stopped being asked.** Six of
+    /// the eight fields are nullable per the API's description, so a `null` is now
+    /// carried as the absence it is and degrades its own metric. There is no
+    /// decode failure left to name anything, which closes the naming half of [#74]
+    /// by removing the case rather than by improving the message.
+    ///
+    /// FALSIFIED 2026-08-24: making `active_power` a bare `f64` again brings the
+    /// refusal back and turns this red.
     #[test]
-    fn a_null_is_refused_and_serde_names_no_field_for_it() {
+    fn a_null_is_carried_as_an_absence_rather_than_refused() {
         let null_power = r#"{
             "Id": "1", "Name": "n", "Serial": 30000001,
             "ActivePower": null, "ActivePowerUnit": "kW",
             "CounterReading": 4843.822, "CounterReadingUnit": "kWh",
             "ValueDate": "2026-07-25T13:06:32.0500519Z"
         }"#;
-        let e = decode_device(null_power.as_bytes()).expect_err("a null is not a measurement");
-        let shown = e.to_string();
-        assert!(
-            shown.contains("invalid type: null"),
-            "the refusal must at least say what arrived: {shown:?}"
-        );
-        assert!(
-            !shown.contains("ActivePower"),
-            "if serde has started naming the field here, this limitation is over and \
-             [#73] can close — delete this test and say so: {shown:?}"
+        let device = decode_device(null_power.as_bytes())
+            .expect("a null in one metric must not cost the reading");
+        assert_eq!(device.active_power, None);
+        assert_eq!(
+            device.counter_reading,
+            Some(4843.822),
+            "the energy index was readable throughout, and losing it to the power's \
+             null is what [#74] reported"
         );
     }
 

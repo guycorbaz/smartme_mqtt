@@ -310,9 +310,30 @@ fn map_error(e: SmartMeError) -> SourceError {
 /// the epoch floor (no timestamp can be invented for it) — the state machine's
 /// plausibility guard keeps it un-fresh forever.
 fn map_device(device: &Device, http_date_ms: Option<i64>, meter: &MeterId) -> UnverifiedReading {
-    let power = convert_power(device.active_power, &device.active_power_unit);
-    let energy = convert_energy(device.counter_reading, &device.counter_reading_unit);
-    let value_date = smart_me_client::parse_value_date(&device.value_date);
+    // AN ABSENT NUMBER IS THAT METRIC'S FAULT, NOT THE READING'S ([#74]). Six of
+    // the eight fields consumed here are nullable per the API's own description,
+    // and requiring them made ONE `null` fail the whole deserialization — the
+    // energy index thrown away with it, read and convertible. The reading now
+    // reaches this function, where story 2.5's per-field rule already lives.
+    //
+    // `ValueUnusable` rather than a new cause: the vocabulary is part of the
+    // versioned contract, and `value-unusable` is what a missing number IS. No
+    // `CONTRACT_VERSION` bump, and nothing new for an operator to learn.
+    let power = match (device.active_power, &device.active_power_unit) {
+        (Some(value), Some(unit)) => convert_power(value, unit),
+        _ => Err(Cause::ValueUnusable),
+    };
+    let energy = match (device.counter_reading, &device.counter_reading_unit) {
+        (Some(value), Some(unit)) => convert_energy(value, unit),
+        _ => Err(Cause::ValueUnusable),
+    };
+    // A missing timestamp needs no new arm: `None` is what an unparseable one
+    // already produces, and the reading-level fault below already answers it with
+    // `SourceTimestampUnparseable` — a freshness fault, not a value fault.
+    let value_date = device
+        .value_date
+        .as_deref()
+        .and_then(smart_me_client::parse_value_date);
 
     // ONE FIELD'S FAULT IS THAT FIELD'S (story 2.5). Until then any failure set
     // `Quality::Bad` for the whole reading, so an unrecognised unit on
@@ -418,6 +439,101 @@ mod tests {
                 "ValueDate":"{value_date}"}}"#
         ))
         .expect("test device json")
+    }
+
+    /// [#74] — a `null` costs its own metric and lets its neighbour through.
+    ///
+    /// # The failure this ends
+    ///
+    /// `Device` required all eight fields it consumes while the API's description
+    /// declares six of them nullable, so ONE null failed the deserialization and
+    /// the whole reading was lost — the energy index included, read and
+    /// convertible and thrown away with the rest. That is the failure story 2.5
+    /// repaired for units, arriving through the schema instead, and it contradicts
+    /// ADR 0031, whose thesis is that a verdict belongs to a metric.
+    ///
+    /// The machinery to do the right thing was already here: `SourceFaults` has
+    /// judged per field since story 2.5. What was missing was letting the reading
+    /// reach it.
+    ///
+    /// # `ValueUnusable` rather than a new cause
+    ///
+    /// The cause vocabulary is part of the versioned contract, so a new variant
+    /// costs a `CONTRACT_VERSION` bump. `value-unusable` is what a missing number
+    /// IS, and it is already what a reading with no usable number at all answers.
+    /// Nothing new for an operator to learn, and the wire is unchanged.
+    ///
+    /// **Falsification, 2026-08-24:**
+    ///
+    /// 1. `active_power` back to a bare `f64` — the state [#74] reported: the
+    ///    fixture below fails to deserialize and the test cannot even build its
+    ///    input, which is the defect stated as a compile-time fact;
+    /// 2. the `(Some, Some)` match replaced by `Err(Cause::ValueUnusable)` for
+    ///    every case: RED on the control, where a complete reading loses its power.
+    #[test]
+    fn a_null_metric_is_that_metric_s_fault_and_the_other_survives() {
+        let with_null_power: Device = serde_json::from_str(
+            r#"{"Id":"a1","Name":"METER-A","Serial":30000001,
+                "ActivePower":null,"ActivePowerUnit":"kW",
+                "CounterReading":4843.822,"CounterReadingUnit":"kWh",
+                "ValueDate":"2026-07-25T13:06:32.0500519Z"}"#,
+        )
+        .expect("a null must not stop the reading");
+
+        let reading = map_device(
+            &with_null_power,
+            Some(1_784_984_792_050),
+            &MeterId::new("m"),
+        )
+        .0;
+
+        assert_eq!(
+            reading.value.power, None,
+            "the power is absent, and absence is carried rather than faked into a \
+             zero nobody measured"
+        );
+        assert_eq!(
+            reading.faults.power,
+            Some(Cause::ValueUnusable),
+            "and the absence is NAMED, per metric"
+        );
+        assert_eq!(
+            reading.value.energy,
+            Some(Kwh(4_843.822)),
+            "THE NEIGHBOUR SURVIVES: this index was readable and convertible \
+             throughout, and losing it to the power's null is the whole of [#74]"
+        );
+        assert_eq!(
+            reading.faults.energy, None,
+            "it has no complaint of its own"
+        );
+        assert_eq!(
+            reading.faults.reading, None,
+            "and the READING is not condemned: one usable number is enough for it \
+             to be worth judging, which is what `ValueUnusable` at reading level \
+             already meant"
+        );
+        assert_eq!(
+            reading.value.quality,
+            Quality::Good,
+            "so the reading-level quality stays Good and the state machine judges \
+             it normally — the power's fault travels on the power's metric"
+        );
+
+        // THE CONTROL: a complete reading loses nothing.
+        let complete = map_device(
+            &device("kW", "kWh", VD),
+            Some(1_784_984_792_050),
+            &MeterId::new("m"),
+        )
+        .0;
+        assert_eq!(
+            complete.value.power,
+            Some(Kw(0.018)),
+            "without this, a `map_device` that dropped every power would pass the \
+             assertions above"
+        );
+        assert_eq!(complete.faults.power, None);
     }
 
     const VD: &str = "2026-07-25T13:06:32.0500519Z";

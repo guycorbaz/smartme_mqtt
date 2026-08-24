@@ -14,26 +14,54 @@ use serde::Deserialize;
 /// [`parse_value_date`] converts it, so a malformed timestamp is a visible `None`
 /// at the conversion site, never a silently defaulted date.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+///
+/// # Six of these eight are OPTIONAL, and requiring them cost whole readings
+///
+/// The API's own description — `docs/spec/smart-me-api/openapi-v1.json`, the
+/// authority on presence and nullability — declares `Name`, `ActivePower`,
+/// `ActivePowerUnit`, `CounterReading`, `CounterReadingUnit` and `ValueDate` as
+/// nullable. Only `Id` and `Serial` are not.
+///
+/// This struct required all eight until 2026-08-24, so **one `null` failed the
+/// whole deserialization** and the reading was lost entire — the energy index
+/// included, read and convertible and thrown away with the rest ([#74]). That is
+/// the failure story 2.5 repaired for units, arriving through the schema instead,
+/// and it contradicts [ADR 0031], whose thesis is that a verdict belongs to a
+/// metric.
+///
+/// The exposure stood unnoticed from story 1.6 in July until the description was
+/// read in August — the reason `CLAUDE.md` now says to check both the description
+/// and the fixtures, and to know which one is being quoted.
+///
+/// **The bridge's adapter already judges per field** (`map_device`'s
+/// `SourceFaults`), so an absent number degrades ITS metric and lets its
+/// neighbour through. What was missing was letting the reading get that far.
+///
+/// [#74]: https://github.com/guycorbaz/smartme_mqtt/issues/74
+/// [ADR 0031]: ../../../docs/adr/0031-a-verdict-belongs-to-a-metric.md
 #[serde(rename_all = "PascalCase")]
 pub struct Device {
     /// smart-me device UUID.
     pub id: String,
-    /// Human-assigned device name.
-    pub name: String,
-    /// Physical device serial (a JSON number on the wire).
+    /// Human-assigned device name. **Nullable per the description.**
+    pub name: Option<String>,
+    /// Physical device serial (a JSON number on the wire). Non-nullable.
     pub serial: i64,
-    /// Active power in `active_power_unit`.
-    pub active_power: f64,
+    /// Active power in `active_power_unit`. **Nullable per the description.**
+    pub active_power: Option<f64>,
     /// Unit of `active_power` (observed: `"kW"`). Converted fail-closed in the
-    /// bridge adapter (Story 1.7) — NEVER here.
-    pub active_power_unit: String,
-    /// Cumulative energy counter in `counter_reading_unit`.
-    pub counter_reading: f64,
-    /// Unit of `counter_reading` (observed: `"kWh"`).
-    pub counter_reading_unit: String,
+    /// bridge adapter (Story 1.7) — NEVER here. **Nullable per the description.**
+    pub active_power_unit: Option<String>,
+    /// Cumulative energy counter in `counter_reading_unit`. **Nullable per the
+    /// description.**
+    pub counter_reading: Option<f64>,
+    /// Unit of `counter_reading` (observed: `"kWh"`). **Nullable per the
+    /// description.**
+    pub counter_reading_unit: Option<String>,
     /// Measurement timestamp, ISO-8601 UTC with `Z` and 7-digit fraction
-    /// (observed: `2026-07-25T13:06:32.0500519Z`).
-    pub value_date: String,
+    /// (observed: `2026-07-25T13:06:32.0500519Z`). **Nullable per the
+    /// description.**
+    pub value_date: Option<String>,
 }
 
 /// One device as it appears in the ACCOUNT LISTING (`GET /Devices`) — story 3.4.
@@ -223,43 +251,80 @@ mod tests {
         }
     }
 
-    /// **Story 2.5 AC5 — completeness is fail-closed, and this test is what says
-    /// so rather than the code being trusted to.**
+    /// **[#74] — a nullable field is no longer fatal, and what that costs is
+    /// stated.**
     ///
-    /// FR16 asks that *"a missing/null field yields degraded quality"*. This
-    /// deserializer does something stricter and better: `Device` carries no
-    /// `#[serde(default)]`, so a payload missing a field we consume fails to parse
-    /// and **nothing is published at all**. A reading assembled from a payload we
-    /// could not read would claim a measurement we do not have.
+    /// This test asserted the opposite until 2026-08-24: *"a payload missing a
+    /// field we consume fails to parse and nothing is published at all"*, on the
+    /// reasoning that a reading assembled from a payload we could not read would
+    /// claim a measurement we do not have. **The reasoning was right and the scope
+    /// was wrong.** It threw away the metrics that WERE readable with the one that
+    /// was not — the energy index included, read and convertible — which is the
+    /// failure story 2.5 repaired for units, arriving through the schema instead.
     ///
-    /// The deviation from FR16's letter is deliberate and recorded in the story.
-    /// The residual belongs to story 2.6: an operator sees a parse failure and no
-    /// field name.
+    /// Six of the eight fields are nullable per the API's own description, so this
+    /// was not a hypothetical: it is the shape the wire is most likely to produce.
     ///
-    /// FALSIFIED 2026-08-12: adding `#[serde(default)]` to `Device` makes both
-    /// assertions red — the missing power deserializes to `0.0`, which is a
-    /// substituted value reaching the bridge under the name of a measurement, and
-    /// it is exactly the class `BAD_CARRIER` was removed for.
+    /// # What this gives up, and it is worth naming
+    ///
+    /// `Option<T>` makes serde accept a field that is **absent** as well as one
+    /// that is `null`, so a field the API REMOVED no longer stops anything. That
+    /// detection is not lost, it moves: a metric whose value never arrives is
+    /// permanently degraded with `value-unusable` on the wire and on the screens,
+    /// which is visible — and it no longer costs the metric beside it.
+    ///
+    /// The two non-nullable fields keep the old guarantee, and the test below
+    /// pins it.
+    ///
+    /// FALSIFIED 2026-08-24: making `active_power` a bare `f64` again — the state
+    /// [#74] reported — turns the first assertion red, `null` failing the whole
+    /// parse.
     #[test]
-    fn a_payload_missing_a_field_we_consume_does_not_parse_at_all() {
-        // Every field but `ActivePower`, which we consume.
-        let without_power = r#"{
+    fn a_nullable_field_costs_its_own_metric_and_not_the_reading() {
+        // `null` where the description allows it: the reading still parses.
+        let null_power = r#"{
             "Id": "1", "Name": "n", "Serial": 30000001,
-            "ActivePowerUnit": "kW",
+            "ActivePower": null, "ActivePowerUnit": "kW",
             "CounterReading": 4843.822, "CounterReadingUnit": "kWh",
             "ValueDate": "2026-07-25T13:06:32.0500519Z"
         }"#;
-        let parsed: Result<Device, _> = serde_json::from_str(without_power);
-        assert!(
-            parsed.is_err(),
-            "a missing field must stop the reading, not be defaulted into one: a \
-             zero that nobody measured is indistinguishable from a meter reading \
-             zero"
+        let parsed: Device = serde_json::from_str(null_power)
+            .expect("a nullable field carrying null must not cost the reading");
+        assert_eq!(
+            parsed.active_power, None,
+            "the absence is carried, not faked"
         );
-        assert!(
-            parsed.unwrap_err().to_string().contains("ActivePower"),
-            "and the error must name the field — it is the only thing an operator \
-             has to go on"
+        assert_eq!(
+            parsed.counter_reading,
+            Some(4843.822),
+            "AND THE NEIGHBOUR SURVIVES: the energy index was readable and \
+             convertible, and losing it to a null on the power was the whole of \
+             [#74]"
         );
+
+        // The two fields the description does NOT allow to be null keep the old
+        // guarantee, and serde still names them.
+        for (missing, body) in [
+            (
+                "Serial",
+                r#"{"Id": "1", "Name": "n", "ActivePower": 0.7,
+                    "ActivePowerUnit": "kW", "CounterReading": 1.0,
+                    "CounterReadingUnit": "kWh", "ValueDate": "x"}"#,
+            ),
+            (
+                "Id",
+                r#"{"Name": "n", "Serial": 30000001, "ActivePower": 0.7,
+                    "ActivePowerUnit": "kW", "CounterReading": 1.0,
+                    "CounterReadingUnit": "kWh", "ValueDate": "x"}"#,
+            ),
+        ] {
+            let parsed: Result<Device, _> = serde_json::from_str(body);
+            let error = parsed.expect_err("a non-nullable field is still fatal");
+            assert!(
+                error.to_string().contains(missing),
+                "and the error must name it — it is the only thing an operator has \
+                 to go on. Got: {error}"
+            );
+        }
     }
 }
