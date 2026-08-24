@@ -367,6 +367,110 @@ fn string_property(value: &str) -> payload::PropertyValue {
 
 #[cfg(test)]
 mod tests {
+
+    /// [#30] — the four encoder invariants that were correct by construction and
+    /// asserted by nothing.
+    ///
+    /// # Why "correct by construction" is not enough here
+    ///
+    /// It is the rule the Epic 1 retrospective bought with contract v1: *148 green
+    /// tests all agreed with each other and the wire was wrong*. Each of these
+    /// four is a MUST that this encoder happens to satisfy, and nothing in the
+    /// tree would notice if it stopped.
+    ///
+    /// # The four, and where each was blind
+    ///
+    /// **The array lengths** —
+    /// `tck-id-payloads-propertyset-keys-array-size` and `-values-array-size`
+    /// (`Sparkplug_6_Payloads.adoc:570` and `:576`): the two arrays MUST hold the
+    /// same number of entries. `encode_properties` pushes a key and a value
+    /// together in each branch, so they cannot diverge.
+    /// `a_birth_is_self_describing` indexes `values[0]` and `values[1]`, which
+    /// would panic if values were SHORT — and pass silently if values were LONG.
+    ///
+    /// **The property types** — `-metric-propertyvalue-type-value` (`:588`) and
+    /// `-type-req`, plus `-propertyset-quality-value-type`: a property value's
+    /// `type` MUST be present and MUST be one of the enumerated types. The
+    /// quality half was asserted against `DataType::Int32.code()`, which is
+    /// production's own expression and follows it wherever it goes; the `engUnit`
+    /// half was not asserted at all, because `unit_of` matches the VALUE variant
+    /// and never the type field. Hence the LITERAL `3` and `12` below, and a walk
+    /// over every pair rather than a check on one constructor.
+    ///
+    /// **The metric timestamp** — `-name-birth-data-requirement` (`:475`): it MUST
+    /// be included with every metric in all NBIRTH, DBIRTH, NDATA and DDATA. (The
+    /// id says `name`; the clause is about the timestamp — the specification's id
+    /// is misleading, not our filing.) Every timestamp assertion in the tree reads
+    /// the PAYLOAD level; nothing read the encoded metric's own field.
+    ///
+    /// **FALSIFIED 2026-08-24, four mutations RUN, each against its own assertion:**
+    ///
+    /// - `values.push(…)` duplicated in the unit branch — the arrays diverge: RED;
+    /// - `r#type` dropped from `string_property`: RED — the mutation the matrix
+    ///   recorded as staying green;
+    /// - `r#type` dropped from `int_property`: RED — the other half, which
+    ///   `-propertyvalue-type-req` was waiting for;
+    /// - `timestamp: None` in `encode_metric`: RED.
+    ///
+    /// `datatype` is NOT covered here and not claimed: `a_birth_is_self_describing`
+    /// already pins it.
+    #[test]
+    fn the_four_encoder_invariants_nothing_was_watching() {
+        let mut metric = Metric::new("Power", MetricValue::Double(0.018), 1_784_984_792_050);
+        metric.quality_code = Some(Quality::Good.code());
+        metric.engineering_unit = Some("kW".to_string());
+        metric
+            .properties
+            .push(("Cause".to_string(), "no-cause".to_string()));
+
+        let encoded = encode_metric(&metric);
+
+        // 4. The metric-level timestamp, read from the ENCODED metric.
+        assert_eq!(
+            encoded.timestamp,
+            Some(1_784_984_792_050),
+            "every metric of every BIRTH and DATA must carry its own timestamp: \
+             the payload-level one says when the message was built, not when this \
+             number was true"
+        );
+
+        let properties = encoded.properties.expect("three properties were set");
+
+        // 1–2. The two arrays, in both directions.
+        assert_eq!(
+            properties.keys.len(),
+            properties.values.len(),
+            "a PropertySet whose arrays disagree is unreadable by index, which is \
+             the only way a consumer can read it"
+        );
+        assert_eq!(
+            properties.keys.len(),
+            3,
+            "quality, engineering unit, and the caller's own — the count is stated \
+             so a LONGER values array cannot satisfy the equality above by \
+             accident"
+        );
+
+        // 3. Every property value names its type, and names it correctly.
+        for (key, value) in properties.keys.iter().zip(&properties.values) {
+            // THE LITERAL CODES, not `DataType::Int32.code()`. This document
+            // records that the quality property's `type` was once "asserted by a
+            // test that compared production's own expression against itself" —
+            // which follows the code wherever it goes and witnesses nothing. `3`
+            // and `12` are the specification's numbers
+            // (`Sparkplug_6_Payloads.adoc`, the DataType enumeration), so a
+            // change to `DataType` has to answer to them.
+            let expected = if key == Quality::PROPERTY_KEY { 3 } else { 12 };
+            assert_eq!(
+                value.r#type,
+                Some(expected),
+                "property {key:?} must declare its type: a consumer reads the \
+                 value variant THROUGH it, and the string properties were asserted \
+                 by their variant alone"
+            );
+        }
+    }
+
     use super::*;
     use crate::datatype::DataType;
 

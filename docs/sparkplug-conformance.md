@@ -908,12 +908,12 @@ expressed in the type system.
 
 | tck-id | Level | Our behaviour | Proof | Verdict |
 | --- | --- | --- | --- | --- |
-| `payloads-propertyset-keys-array-size` | MUST | `encode_properties` pushes key and value together in each branch, and Story 2.1's caller-supplied properties are pushed as pairs from a `Vec<(String, String)>` — a shape in which they cannot diverge | — **correct by construction; no test asserts the invariant**, though one incidentally notices a surplus key — see the mutation note below | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
-| `payloads-propertyset-values-array-size` | MUST | as above — the same invariant stated from the other side; the Story 2.1 property carries its key in the same tuple | — **correct by construction, wholly unproven**: a surplus value passes entirely unnoticed | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
+| `payloads-propertyset-keys-array-size` | MUST | `encode_properties` pushes key and value together in each branch, and Story 2.1's caller-supplied properties are pushed as pairs from a `Vec<(String, String)>` — a shape in which they cannot diverge | `the_four_encoder_invariants_nothing_was_watching` asserts the two lengths equal AND states the count, so a surplus value cannot satisfy the equality by accident. Falsified 2026-08-24 by duplicating a `values.push` | **conformant** |
+| `payloads-propertyset-values-array-size` | MUST | as above — the same invariant stated from the other side; the Story 2.1 property carries its key in the same tuple | same assertion, and the stated count is what closes the surplus-value direction the row previously called wholly unproven | **conformant** |
 | `payloads-metric-propertyvalue-type-type` | MUST | property `type` is an unsigned 32-bit integer | pinned `sparkplug_b.proto` types it `optional uint32` — **schema witness** ([ADR 0014](adr/0014-schema-as-conformance-evidence.md)); a non-`u32` here does not fail a test, it fails to compile | conformant |
-| `payloads-metric-propertyvalue-type-value` | MUST | we emit `Int32` (3) for quality and `String` (12) for `engUnit`; both enumerated | **neither half is proven** — see the row below; delete the `r#type` line from `string_property` (`encode.rs:300`) and the suite stays green, and the `Int32` half is a tautology | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
-| `payloads-metric-propertyvalue-type-req` | MUST | `int_property` / `string_property` always set `type` (`encode.rs:290-306`) | — **half-witnessed at best**: deleting `r#type` from `int_property` goes red, from `string_property` goes green. The clause says *every* property value, so a witness for one of the two constructors does not prove it. The BIRTH scope (`:593-594`) is bridged only by "one `encode_metric` serves every message type" — the code-shape reasoning this matrix refuses elsewhere | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
-| `payloads-propertyset-quality-value-type` | MUST | property type `Int32` (code 3) | — **the cited assertion is a tautology; see below** | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
+| `payloads-metric-propertyvalue-type-value` | MUST | we emit `Int32` (3) for quality and `String` (12) for `engUnit`; both enumerated | `the_four_encoder_invariants_nothing_was_watching` requires the type per key against the specification's LITERAL codes, `3` and `12`, rather than against `DataType`'s own expression — the tautology this chapter recorded for the quality half. Falsified 2026-08-24 from both constructors | **conformant** |
+| `payloads-metric-propertyvalue-type-req` | MUST | `int_property` / `string_property` always set `type` | `the_four_encoder_invariants_nothing_was_watching` walks EVERY key/value pair, so both constructors are witnessed — falsified 2026-08-24 in both directions, `int_property` and `string_property` each turning it red. That is what the row asked for: *a witness for one of the two constructors does not prove it*. The BIRTH scope is still bridged by one `encode_metric` serving every message type, which this row notes and this test does not change | **conformant** |
+| `payloads-propertyset-quality-value-type` | MUST | property type `Int32` (code 3) | `the_four_encoder_invariants_nothing_was_watching` asserts the LITERAL `3` for the quality key, not `DataType::Int32.code()` — which is precisely the tautology this row recorded, an assertion that followed production's own expression wherever it went. Falsified 2026-08-24 by dropping `r#type` from `int_property` | **conformant** |
 | `payloads-propertyset-quality-value-value` | MUST | **the bridge publishes Ignition's codes, not `0`/`192`/`500`** | `sparkplug_publisher.rs::no_non_good_quality_can_be_mistaken_for_good_by_ignition`, `::the_generic_crate_still_publishes_the_specified_codes` | **deviation** ([ADR 0012](adr/0012-quality-codes-spec-versus-host.md)) |
 
 **`-quality-value-type` was `conformant` until the code review of Story 4.2, and it was the most
@@ -979,7 +979,7 @@ is legal and is a deliberate choice — a consumer should never have to infer go
 | --- | --- | --- | --- | --- |
 | `payloads-timestamp-in-UTC` | MUST | epoch-milliseconds throughout; `UtcMillis` is UTC by construction (AR15) and every producer is UTC-referenced — `SystemTime::now()` since `UNIX_EPOCH` (`clock.rs:80-85`), the RFC 7231 `Date` header (GMT), and the smart-me `ValueDate` (ISO-8601, mandatory `Z`, `smart-me-client/src/types.rs:39`) | `smart-me-client::http_date::skew_fixtures_parse_to_their_documented_offsets` (a timezone offset introduced anywhere in the conversion moves the parsed value and fails it), `types.rs::rejects_malformed_value_dates` | conformant |
 | `payloads-metric-timestamp-in-UTC` | MUST | the metric timestamp is the reading's own `ValueDate`, carried through the same UTC pipeline | same proofs — **and the claim is bounded to the unit**: they prove no offset enters the `ValueDate` → epoch-millis conversion, which is what *"in UTC"* asks. That the field is *populated at all* is a separate obligation, and it is the `gap` on the row below | conformant |
-| `payloads-name-birth-data-requirement` | MUST | *(a timestamp clause — see the editorial note above)* `encode_metric` always sets the metric-level `timestamp` (`encode.rs:242`) | — **every timestamp assertion in the tree is payload-level**; nothing reads an encoded metric's `timestamp` field, and the mutation that drops it stays green | **gap (unproven)** ([#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)) |
+| `payloads-name-birth-data-requirement` | MUST | *(a timestamp clause — see the editorial note above)* `encode_metric` always sets the metric-level `timestamp` | `the_four_encoder_invariants_nothing_was_watching` reads the ENCODED metric's own `timestamp`, which no assertion in the tree did. Falsified 2026-08-24 by setting it to `None` | **conformant** |
 | `payloads-name-cmd-requirement` | MAY | *(a timestamp clause)* governs metrics in NCMD/DCMD, which are Host-published | — | n/a — see the NCMD/DCMD note |
 | `payloads-nbirth-timestamp` | MUST | NBIRTH is stamped with `clock.wall()`, passed into `announce` at the CONNACK call site (`mqtt_driver.rs:1223`) and at the rebirth one (`:1292`) — the publish instant, as the clause requires | `chaos_no_replay_at_reconnect` bounds the stamp on the wire between two readings of the driver's own clock, one taken before the driver existed and one after the NBIRTH arrived. **Falsified against #30's own words, at the call site the issue named** — replacing both `clock.wall()` arguments with `UtcMillis(42)` goes red with `THE NODE BIRTH DOES NOT SPEAK THE PUBLICATION INSTANT … published somewhere in [1787132581436, 1787132581477] and carries 42`. Story 4.12's `an_hour_of_outage_does_not_move_the_re_declared_reading_forward` asserts the publisher's half — that `birth()` stamps the instant it is handed — and **that alone did not earn this row**: see the note under the tally | conformant |
 | `payloads-dbirth-timestamp` | MUST | **cold start conforms** (stamped `now`); **a rebirth re-declaring a known reading is stamped with that reading's `ValueDate`**, and since story 4.12 that choice is routed through `timestamp_source_for(Emission::DeviceBirthRedeclaring)` — a table, not two call sites | `a_rebirth_redeclares_what_is_known_instead_of_blanking_it`; and story 4.12's `an_hour_of_outage_does_not_move_the_re_declared_reading_forward` (unit, an hour of simulated outage) and `chaos_no_replay_at_reconnect` (a real transport break, an independent subscriber). Moving the table row changes what is **emitted**: `left: Some(1784988392050), right: Some(1784984792050)` | **deviation** ([#29](https://github.com/guycorbaz/smartme_mqtt/issues/29)) |
@@ -1659,9 +1659,9 @@ saying so.
 `-timestamp`, `-seq`, `-seq-inc`, `-seq-number` — moved from gap to conformant when the bridge
 began emitting the message. See the note under that table for what did *not* move.
 
-**39 conformant · 4 deviations · 7 gaps · 59 n/a**
+**45 conformant · 4 deviations · 1 gap · 59 n/a**
 
-`39 + 4 + 7 + 59 = 109` — the enumerated clause set, with no remainder.
+`45 + 4 + 1 + 59 = 109` — the enumerated clause set, with no remainder.
 
 **This tally was `38 · 4 · 8 · 59` until Story 4.12** (2026-08-18), which moved
 `payloads-nbirth-timestamp` from `gap (unproven)` to `conformant`: `38 + 1 = 39` and `8 − 1 = 7`.
@@ -1688,8 +1688,8 @@ from `gap (unimplemented)` to `conformant`. `30 + 1 = 31` and `15 − 1 = 14`.
 
 **The count of 109 is a count of ids, not of requirements.** Two of them,
 `payloads-sequence-num-req-nbirth` and `-zero-nbirth`, are one clause under two spellings (see the
-editorial note at the head of this chapter), and both hold a `conformant` row. So **39 conformant is
-38 distinct**, and the chapter states **108 distinct requirements**. The arithmetic is kept against
+editorial note at the head of this chapter), and both hold a `conformant` row. So **45 conformant is
+44 distinct**, and the chapter states **108 distinct requirements**. The arithmetic is kept against
 109 because 109 is what a mechanical enumeration of the specification returns, and a matrix that
 cannot be diffed against the norm is worth less than one that double-counts a known phantom.
 
@@ -1705,16 +1705,18 @@ was a proof cell that named evidence weaker than its clause, and one of them
 `bdSeq` (Story 4.10). A sixth `deviation` verdict renders in this chapter — the scope limit — and is
 deliberately outside the tally, because it is a scope decision rather than a `tck-id` row.
 
-**The 7 gaps, split by kind** (see "How to read this"):
+**The 1 gap** (see "How to read this"):
 
-- **6 × `gap (unproven)`** — we do the thing; nothing proves it. Both property-set array-length
-  clauses, the `engUnit` property's `type`, the quality property's `type`, `-propertyvalue-type-req`,
-  and the metric-level `timestamp`. *The will's retain flag left this list on 2026-08-11:
-  `the_registered_will_carries_the_qos_and_retain_the_norm_mandates` now observes it. **The NBIRTH
-  payload timestamp left it on 2026-08-18**, story 4.12 — although not on the evidence claimed at
-  the time; `chaos_no_replay_at_reconnect` carries the falsification since 2026-08-19, and the note
-  under the tally says what was wrong with the first one.* All
-  [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30).
+- **0 × `gap (unproven)`** — **the list emptied on 2026-08-24**, with
+  [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30). All six left together:
+  both property-set array-length clauses, the `engUnit` property's `type`, the quality property's
+  `type`, `-propertyvalue-type-req` and the metric-level `timestamp`, carried by
+  `the_four_encoder_invariants_nothing_was_watching` — one test, six invariants, each falsified by
+  its own mutation. *The two that had a stated reason for resisting are the ones worth naming: the
+  quality `type` was a tautology, so the assertion now cites the specification's literal `3` rather
+  than `DataType::Int32.code()`; and `-propertyvalue-type-req` was witnessed for `int_property`
+  only, so the test walks EVERY key/value pair and was falsified from both constructors.* Earlier
+  departures: the will's retain flag on 2026-08-11, the NBIRTH payload timestamp on 2026-08-18.
 - **1 × `gap (unimplemented)`** — we do not do it: edge-node-descriptor uniqueness
   ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)).
   `payloads-nbirth-rebirth-req` left this list at Story 4.7; **the three DDEATH clauses and the
@@ -1752,10 +1754,17 @@ the Property sets section, where all six are tabulated). The clean five:
 | --- | --- | --- |
 | `encode_metric` drops `name` | **red** | `-name-requirement`, `conformant` — as required |
 | `int_property` drops `r#type` | **red** | `-propertyvalue-type-req` — see below |
-| `encode_metric` drops `timestamp` | **green** | `-name-birth-data-requirement`, `gap` — as required |
-| `string_property` drops `r#type` | **green** | `-propertyvalue-type-value`, `gap` — as required |
-| unpaired PropertySet **value** appended | **green** | `-values-array-size`, `gap` — as required |
-| unpaired PropertySet **key** appended | **red** | `-keys-array-size`, and it is still a `gap` |
+| `encode_metric` drops `timestamp` | **green** in 4.2, **RED since 2026-08-24** | `-name-birth-data-requirement`, now `conformant` |
+| `string_property` drops `r#type` | **green** in 4.2, **RED since 2026-08-24** | `-propertyvalue-type-value` and `-type-req`, now `conformant` |
+| unpaired PropertySet **value** appended | **green** in 4.2, **RED since 2026-08-24** | `-values-array-size`, now `conformant` |
+| unpaired PropertySet **key** appended | **red** | `-keys-array-size`, and it was still a `gap` then — the red came from an incidental index, not from an assertion of the invariant |
+
+*The three greens above were the audit's own evidence that the rows were gaps, and they are the
+mutations `the_four_encoder_invariants_nothing_was_watching` was written against ([#30]). The table
+is kept rather than rewritten: it records what Story 4.2 measured, and what changed it is dated
+beside it.*
+
+[#30]: https://github.com/guycorbaz/smartme_mqtt/issues/30
 
 **Red does not mean `conformant`, and the last two rows are why the symmetry must be stated rather
 than assumed.** A surplus *key* goes red, yet its clause stays a `gap`: the failure comes from
@@ -1813,9 +1822,9 @@ conformance scope".
 | 3 — Components | 0 | 0 | 0 | 1 | 1 |
 | 4 — Topics | 32 | 3 | 3 | 32 | 70 |
 | 5 — Operational behaviour | 32 | 1 | 17 | 49 | 99 |
-| 6 — Payloads | 39 | 4 | 7 | 59 | 109 |
+| 6 — Payloads | 45 | 4 | 1 | 59 | 109 |
 | 10 — Conformance | 0 | 0 | 0 | 12 | 12 |
-| **Total** | **107** | **9** | **32** | **155** | **303** |
+| **Total** | **113** | **9** | **26** | **155** | **303** |
 
 **Chapter 4 moved `31 · 4` → `32 · 3` on 2026-08-22**: ADR 0042 repaired
 `topics-nbirth-bdseq-increment`'s zero-start half ([#100]), so one row went from `deviation` to
