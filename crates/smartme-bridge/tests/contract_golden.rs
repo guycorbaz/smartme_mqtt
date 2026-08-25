@@ -154,7 +154,7 @@ const GOLDEN_NAMES_V13: NameGolden = &[
     ("metric.cause.power", "cause/puissance"),
     ("metric.cause.energy", "cause/energie"),
     ("value.cause.none", "no-cause"),
-    ("property.serial", "serie"),
+    ("property.serial", "serial"),
 ];
 
 /// The quality codes, as of contract v10. Its own copy — a golden is a
@@ -566,7 +566,7 @@ const NAME_SET_CHANGES: &[(i64, &str)] = &[
     (
         13,
         "ADR 0049: the device is named by its measuring point instead of its serial, and the \
-         DBIRTH declares the serial as the `serie` property so the wire still says which \
+         DBIRTH declares the serial as the `serial` property so the wire still says which \
          physical meter answers for the name. The property key is a name a consumer reads, \
          so the name set grows by one",
     ),

@@ -87,7 +87,7 @@ mapping\_confirmed   & no  & \textbf{Set this by hand on a first run, or nothing
 \midrule
 meter\_id  & yes & The meter's short name --- and, since contract~13, \textbf{the Sparkplug device level of every topic this meter publishes on}. A value that cannot be a topic level is refused. Renaming it orphans the series a host has recorded under the old name, so it needs a restart and buries the old device. \\
 device\_id & yes & The smart-me device UUID behind it. \\
-serial     & yes & The meter's serial. It is published as the \code{serie} property of the device BIRTH and checked against what smart-me reports; a mismatch refuses the meter rather than warning about it. It stopped being the topic level at contract~13. \\
+serial     & yes & The meter's serial. It is published as the \code{serial} property of the device BIRTH and checked against what smart-me reports; a mismatch refuses the meter rather than warning about it. It stopped being the topic level at contract~13. \\
 enabled    & yes & Whether this meter is published. Disabling one publishes a \code{DDEATH}; enabling one publishes a \code{DBIRTH}. \\
 priority   & no  & Whether this is one of the meters you actually care about. \textbf{Absent means \code{false}.} It changes nothing about what is published --- it is counted on the state screen, so that during an incident you can see at a glance whether the meters that matter are among the affected ones. The bridge cannot deduce it: smart-me reports an id, a name, a serial and two numbers, and no make or model. Marking a meter does \emph{not} withdraw the mapping confirmation. \\
 \bottomrule
@@ -150,7 +150,7 @@ time:
 group\_id & the Sparkplug group --- second level of every topic \\
 node\_id & this bridge, as one edge node --- fourth level \\
 meters[].meter\_id & the \emph{device} level, one per meter \\
-meters[].serial & the \code{serie} property of the device BIRTH --- not a topic level \\
+meters[].serial & the \code{serial} property of the device BIRTH --- not a topic level \\
 \bottomrule
 \end{tabular}
 \end{center}

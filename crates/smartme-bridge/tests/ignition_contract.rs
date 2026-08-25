@@ -354,7 +354,7 @@ async fn ignition_contract_gate() {
             "Node Control/Rebirth is present, Boolean, and reads false",
             "puissance and energie exist for device contract-meter — the device is \
              named by its measuring point from contract v13, and 30000001 is NOT a folder",
-            "Under the properties of puissance, `serie` reads 30000001 — the wire still says \
+            "Under the properties of puissance, `serial` reads 30000001 — the wire still says \
              WHICH physical meter answers for this name",
             "Their quality is NOT good — nothing has been read yet, and the bridge says so",
             "puissance and energie have NO VALUE — the `value` row is empty, not 0. A fabricated \

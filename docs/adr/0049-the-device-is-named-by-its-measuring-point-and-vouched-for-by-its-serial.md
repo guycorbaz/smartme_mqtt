@@ -45,7 +45,7 @@ serial guaranteed: that a name cannot be attached to the wrong meter. A swapped 
 would publish one flat's measurements under another's name, and **no value would stop being
 plausible** — the failure mode this bridge exists to refuse.
 
-1. **The DBIRTH declares the serial**, as the `serie` property on every metric it carries
+1. **The DBIRTH declares the serial**, as the `serial` property on every metric it carries
    (`PROPERTY_SERIAL`). The wire still says which physical meter is speaking, and a person in front
    of a tag browser can make the same check the bridge makes.
 2. **A meter whose fetched serial is not the declared one is refused**, not warned about. That guard
@@ -65,6 +65,14 @@ It is declared on **every** metric of the DBIRTH rather than on a chosen one: a 
 property only where a BIRTH declares it, and an operator inspecting a tag should not have to know
 which of the four carries the identity.
 
+**The key is `serial`, in English, where the metric names beside it are not.** ADR 0050 translates
+the metric names because a consumer renders them as folders — they become path levels under an
+operator's eyes. A property key is not rendered that way: it sits beside `engUnit` and `quality`, in
+the company of Sparkplug's own vocabulary, which is where this repository keeps English. The site's
+report requires *the serial in a property of the birth certificate* and does not name the key, so
+this is ours to choose; arbitrated by Guy on 2026-08-25, against a first draft that spelled it
+`serie`.
+
 ## Consequences
 
 **`CONTRACT_VERSION` moves to 13, together with ADR 0050.** A device id is not a tag name, but the
@@ -75,7 +83,7 @@ would put a number in that table that nothing stands behind.
 
 **It owes a Tier-3 attestation** (action H7 of the epic-8 retrospective). `docs/ignition-contract-runbook.md`
 records v13 as awaiting one, with the session's own steps updated: the device folder is now the short
-name, and one step reads the `serie` property.
+name, and one step reads the `serial` property.
 
 **The window is open and closes without announcing itself.** The supervisor does not historise
 sub-metering yet, so today this costs a restart; once it does, it costs a broken series. The site

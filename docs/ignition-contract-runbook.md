@@ -228,9 +228,9 @@ gate), and that the serial `30000001` is **not** a folder anywhere in the tree.
 > for the operator.
 >
 > **And then check what replaces the guarantee that gave up.** In the tag properties of `puissance`,
-> the property **`serie` must read `30000001`**. Without it, nothing on the wire says which physical
+> the property **`serial` must read `30000001`**. Without it, nothing on the wire says which physical
 > meter is behind the name, and a swapped configuration line would publish one flat's measurements
-> under another's with every value still plausible. A missing `serie` here is a FAILED step, not a
+> under another's with every value still plausible. A missing `serial` here is a FAILED step, not a
 > cosmetic one.
 
 > **Where to read the datatype, added 2026-08-22.** Nowhere an operator would look. The Tag Browser
@@ -447,7 +447,7 @@ list; this one needs the opposite discipline — **ask, then look, then compare.
 > - **Step 1 — the device folder is the meter's SHORT NAME**, `contract-meter` for this gate, and
 >   the serial `30000001` is **not** a folder anywhere in the tree. This is the half that breaks a
 >   consumer silently: a host watching the old device id simply stops receiving.
-> - **Step 1 — `serie` reads `30000001` in the PROPERTIES of `puissance`.** It is what replaces the
+> - **Step 1 — `serial` reads `30000001` in the PROPERTIES of `puissance`.** It is what replaces the
 >   guarantee the serial gave by being the device id, and a person in front of the browser is who
 >   it is for. Absent here, the rename has taken something and given nothing back.
 > - **Every step — the metrics are `puissance`, `energie`, `cause/puissance`, `cause/energie`.**

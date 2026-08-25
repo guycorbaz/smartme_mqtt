@@ -37,7 +37,7 @@ serial: what a supervisor historises is a measuring point --- the metering of a 
 feeder --- so a device id built on the serial would make a \emph{replaced meter} into a new device
 and break the series at the moment nothing changed for the operator. That rename gives up the one
 thing the serial guaranteed, which is that a name cannot be attached to the wrong meter, so it
-arrives with what replaces it: the device BIRTH declares the serial as the \code{serie} property on
+arrives with what replaces it: the device BIRTH declares the serial as the \code{serial} property on
 every metric, and the bridge \emph{refuses} a meter whose fetched serial is not the one its
 configuration declares. Both halves share one version number because they share one window: while
 the supervisor does not historise sub-metering, a rename costs a restart and nothing more.
@@ -116,7 +116,7 @@ history.
 13 & breaking & The metric names become the site's words --- \code{puissance},
     \code{energie}, \code{cause/puissance}, \code{cause/energie} --- and the Sparkplug
     device is named by the meter's short name instead of its serial. The serial is
-    declared as the \code{serie} property of every metric in the device BIRTH, and a
+    declared as the \code{serial} property of every metric in the device BIRTH, and a
     meter whose fetched serial is not the declared one is refused. \code{Contract/Version}
     and \code{Node Control/Rebirth} keep their names: one is fixed by the specification,
     the other names a fact about the service. \\
@@ -189,7 +189,7 @@ meter's serial, which made it impossible to attribute a value to the wrong meter
 reads a serial off the device itself, and cannot read a name off anything. A name is a
 correspondence written by hand in a file, and a swapped line would publish one flat's
 measurements under another's with every value still plausible. So the guarantee changes form
-rather than disappearing: \textbf{the device BIRTH declares the serial as the \code{serie}
+rather than disappearing: \textbf{the device BIRTH declares the serial as the \code{serial}
 property} of every metric, and \prog{} \textbf{refuses to publish} a meter whose fetched serial
 is not the one its configuration declares --- a refusal that latches, not a warning.
 

@@ -533,7 +533,7 @@ pub(crate) fn same_mapping(a: &StoredConfig, b: &StoredConfig) -> bool {
 ///   weaker reason; the classification does not change, its weight does.
 /// - `meters[].device_id` — which cloud device feeds the row.
 /// - `meters[].serial` — the identity ADR 0029 binds every response to, and
-///   what the device BIRTH publishes as its `serie` property. It was the device
+///   what the device BIRTH publishes as its `serial` property. It was the device
 ///   level of the topic until contract v13; it stayed MAPPING when it stopped
 ///   being one, because it is still what says the name is on the right box.
 ///

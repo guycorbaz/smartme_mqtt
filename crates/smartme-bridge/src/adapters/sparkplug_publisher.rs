@@ -370,6 +370,17 @@ pub const UNIT_ENERGY: &str = "kWh";
 /// precisely what is wanted. The two decisions do not disagree; they read the
 /// same measurement.
 ///
+/// # English, where the metric names beside it are not
+///
+/// ADR 0050 gives the four metric names the site's words because a consumer
+/// renders a metric name as a FOLDER — it becomes a path level under an
+/// operator's eyes, and an English word at the end of a French tag tree reads as
+/// an inconsistency. A property key is not rendered that way: it sits beside
+/// `engUnit` and `quality`, in the company of Sparkplug's own vocabulary, which
+/// is where this bridge keeps English. So the two decisions are consistent
+/// rather than in tension, and the site's report leaves the key unnamed — it
+/// requires *the serial in a property of the birth certificate*, not a spelling.
+///
 /// **Declared on every metric of the DBIRTH**, not on a chosen one: a host
 /// materialises a property only where a BIRTH declares it, and an operator
 /// inspecting a tag should not have to know which of the four is the one that
@@ -378,7 +389,7 @@ pub const UNIT_ENERGY: &str = "kWh";
 /// property it was sent, and this one has no later value to send.
 ///
 /// [ADR 0049]: ../../../docs/adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md
-pub const PROPERTY_SERIAL: &str = "serie";
+pub const PROPERTY_SERIAL: &str = "serial";
 
 /// One message ready for the transport: where it goes and what it carries.
 ///
@@ -1815,7 +1826,7 @@ mod tests {
     /// does not carry that key at all.
     ///
     /// The two answers are different and both are asserted below: a DBIRTH must
-    /// carry `serie`, and a DDATA must NOT — a host ignores a property in a
+    /// carry `serial`, and a DDATA must NOT — a host ignores a property in a
     /// DDATA (measured 2026-08-22, ADR 0044), so bytes spent on it would say
     /// nothing to anyone.
     fn property_of(m: &payload::Metric, key: &str) -> Option<String> {
@@ -2181,7 +2192,7 @@ mod tests {
     /// Naming the device after its measuring point gives up the one guarantee the
     /// serial provided for free: that a name could not be attached to the wrong
     /// meter. The concordance guard is what replaces it for the BRIDGE; this
-    /// property is what replaces it for a PERSON, who can read `serie` in the tag
+    /// property is what replaces it for a PERSON, who can read `serial` in the tag
     /// browser and check `cpt03` against the box on the wall.
     ///
     /// **All three birth paths, and the DDATA as a control.** A property is
@@ -2199,7 +2210,7 @@ mod tests {
     ///   `the cold-start DBIRTH must vouch for its device on puissance`.
     /// - the property moved into `metrics_for`, which is how somebody would
     ///   "simplify" it — every birth still vouches, and the DDATA control goes
-    ///   red: `a DDATA must not carry `serie`: a host ignores a property outside
+    ///   red: `a DDATA must not carry `serial`: a host ignores a property outside
     ///   a BIRTH, so it is bytes that say nothing — got Some("30000001")`.
     #[test]
     fn every_birth_vouches_for_the_device_it_names() {
