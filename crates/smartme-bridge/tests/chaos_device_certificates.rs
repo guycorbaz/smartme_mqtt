@@ -43,6 +43,9 @@ use smartme_bridge::core::state_machine::Policy;
 use smartme_bridge::domain::{MeterId, Serial};
 
 const SERIAL: &str = "30000001";
+/// What that meter is CALLED on the wire — the device level of every topic this
+/// test waits for, since contract v13 (ADR 0049).
+const METER: &str = "garage";
 const NODE: &str = "ChaosDeviceCerts";
 
 fn config(port: u16, state_dir: &std::path::Path) -> BridgeConfig {
@@ -60,7 +63,7 @@ fn config(port: u16, state_dir: &std::path::Path) -> BridgeConfig {
         http_timeout: Duration::from_secs(30),
         meters: vec![smartme_bridge::app::config::MeterConfig {
             priority: false,
-            meter: MeterId::new("garage"),
+            meter: MeterId::new(METER),
             device_id: "a1a1a1a1-b2b2-c3c3-d4d4-000000000001".to_string(),
             serial: Serial::new(SERIAL),
             enabled: true,
@@ -165,7 +168,7 @@ async fn chaos_enabling_and_disabling_a_meter_costs_certificates_not_a_session()
     let nbirths = std::cell::Cell::new(1_u32);
 
     common::wait_for(&mut seen, Duration::from_secs(30), |s| {
-        s.topic.contains("/DBIRTH/") && s.topic.ends_with(SERIAL)
+        s.topic.contains("/DBIRTH/") && s.topic.ends_with(METER)
     })
     .await
     .expect("the device is declared at connect");
@@ -187,7 +190,7 @@ async fn chaos_enabling_and_disabling_a_meter_costs_certificates_not_a_session()
          STALE rather than left showing the last value as current",
     );
     assert!(
-        death.topic.ends_with(SERIAL),
+        death.topic.ends_with(METER),
         "the certificate must name the device that went away, not another: {}",
         death.topic
     );
@@ -209,7 +212,7 @@ async fn chaos_enabling_and_disabling_a_meter_costs_certificates_not_a_session()
     .await
     .expect("re-enabling the meter announces it again");
     assert!(
-        reborn.topic.ends_with(SERIAL),
+        reborn.topic.ends_with(METER),
         "wrong device re-announced: {}",
         reborn.topic
     );

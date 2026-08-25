@@ -88,7 +88,7 @@ mapping_confirmed = true    # a human has checked the mapping
 
 \begin{warning}
 \textbf{This is the error validation cannot catch, and half of it is still yours alone.} \prog
-refuses a serial that cannot be a topic level, two meters that would collide on one topic, and
+refuses a \code{meter\_id} that cannot be a topic level, two meters that would collide on one topic, and
 --- since 2026-08-09 --- a \code{serial} that is not the serial the paired \code{device\_id}
 actually reports (section~\ref{sec:serialmustmatch}). What none of that can tell you is that
 \code{garage} is pointed at the cellar's meter \emph{consistently}: serial and device id both
@@ -97,7 +97,9 @@ self-consistent --- and wrong, and every reading it publishes will be filed unde
 room for as long as it runs.
 
 Only you can see that one, and only by reading the serial beside the topic. It is what this
-confirmation is for.
+confirmation is for --- and since contract~13 it is also what the \code{serie} property in the
+device BIRTH is for: the wire now names the measuring point, so the serial travels beside it and
+you can check the pairing from the tag browser as well as from this screen.
 
 And the cost of not seeing it is not a restart. A SCADA host \emph{persists what it discovers}: the
 tag folder outlives the process, has to be deleted by hand, and deleting it discards the alarm and
@@ -542,31 +544,34 @@ most likely to be the production one.
 \end{warning}
 
 \section{Meter-to-topic mapping}
-Each \code{[[meters]]} table maps one smart-me device onto one Sparkplug device. The
-\code{serial} becomes the device level of the topic; \code{device\_id} is the smart-me UUID
-that is actually polled and never appears on the wire.
+Each \code{[[meters]]} table maps one smart-me device onto one Sparkplug device.
+\textbf{\code{meter\_id} becomes the device level of the topic}; \code{serial} is what the
+bridge holds smart-me to and publishes as a property of the device BIRTH; \code{device\_id} is
+the smart-me UUID that is actually polled and never appears on the wire.
 
 \begin{warning}
-\textbf{\code{meter\_id} does not reach the wire either.} This said it ``becomes the metric
-path a SCADA host displays'' until 2026-08-09, and that was measured false against a live
-deployment: the only strings a subscriber sees are \code{Power}, \code{Energy} and their
-units. \code{meter\_id} is a local label --- it names the meter in the log, on the web UI
-and in the configuration, and it stops there.
+\textbf{This reversed at contract~13, on 2026-08-25.} Until then the \code{serial} was the
+device level and \code{meter\_id} was a purely local label --- and this section said so, having
+already been corrected once in the other direction on 2026-08-09. What decided it is not a
+preference for readable names: \emph{what a supervisor historises is a measuring point, not a
+box}, so a device id built on the serial makes a replaced meter into a new device and breaks the
+series at the moment nothing changed for you.
 
-So a SCADA host browses \emph{serial numbers}, not room names:
+So a SCADA host now browses \emph{meter names}:
 
 \begin{lstlisting}
-PreProd/smartme-bridge/9202685/Power
-PreProd/smartme-bridge/9202798/Energy
+energie/smartme-bridge/cpt01/puissance
+energie/smartme-bridge/cpt02/energie
 \end{lstlisting}
 
-If you want readable names in the tag tree, that is a decision to take
-\textbf{before} the host has historised anything --- it is a change to the published
-structure, and a host persists what it discovers.
+\textbf{Choose \code{meter\_id} as carefully as you would a tag name}, because it is one:
+renaming it later orphans every series a host has recorded under the old one. That is why
+\prog{} classifies a rename as needing a restart, and why it buries the old device on the wire
+rather than letting a host go on showing its last value as current.
 \end{warning}
 
-Two serials that would produce the same topic are refused at startup, as is a serial that
-cannot be a topic level at all --- a mapping collision would merge two meters' histories
+Two meters that would produce the same topic are refused at startup, as is a \code{meter\_id}
+that cannot be a topic level at all --- a mapping collision would merge two meters' histories
 into one curve, which is not recoverable by fixing the configuration afterwards.
 
 \subsection{The serial must be the one smart-me reports}

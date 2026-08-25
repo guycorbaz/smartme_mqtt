@@ -25,7 +25,23 @@ quality codes and the cause vocabulary to the version they belong to, and fails 
 moves without this number moving. Before that, the number was maintained by whoever
 remembered.
 
-The number does not say what \emph{kind} of change it was, so it is worth stating. Version~12
+The number does not say what \emph{kind} of change it was, so it is worth stating. Version~13
+is \textbf{breaking}, twice over, and it is the first version whose reason comes from
+\emph{outside} this bridge: the site fixed its Sparkplug nomenclature, and the wire adopts it.
+The four metric names the bridge chooses take the site's words --- \code{puissance},
+\code{energie}, \code{cause/puissance}, \code{cause/energie} --- because a consumer restores a
+metric name as a \emph{folder}, so it behaves as one more path level under an operator's eyes and
+an English word at the end of a French tag tree is an inconsistency exactly where it costs most.
+And the Sparkplug device is named by the meter's \emph{short name} (\code{cptNN}) instead of its
+serial: what a supervisor historises is a measuring point --- the metering of a flat, a room, a
+feeder --- so a device id built on the serial would make a \emph{replaced meter} into a new device
+and break the series at the moment nothing changed for the operator. That rename gives up the one
+thing the serial guaranteed, which is that a name cannot be attached to the wrong meter, so it
+arrives with what replaces it: the device BIRTH declares the serial as the \code{serie} property on
+every metric, and the bridge \emph{refuses} a meter whose fetched serial is not the one its
+configuration declares. Both halves share one version number because they share one window: while
+the supervisor does not historise sub-metering, a rename costs a restart and nothing more.
+Version~12
 is \textbf{breaking}, and it replaces version~11 rather than extending it. Version~11 declared a
 \code{Cause} \emph{property} in every BIRTH so that Ignition would materialise it, which it did
 --- and the evening's measurement showed the other half: \textbf{a metric property is written by
@@ -33,8 +49,8 @@ a BIRTH and by nothing else}. A \textsc{ddata} carrying a new value for it is ig
 same message's quality update is applied. So the property stood frozen at its birth value, which
 meant \code{no-reading-yet} beside a healthy meter, for as long as the session lived. Under
 version~10 an operator saw nothing, which is uninformative; under version~11 they saw something
-untrue. From version~12 the cause travels as \emph{two metrics}, \code{Cause/Power} and
-\code{Cause/Energy} --- a \code{Cause} folder holding two string tags, whose values are what a
+untrue. From version~12 the cause travels as \emph{two metrics}, \code{cause/puissance} and
+\code{cause/energie} --- a \code{cause} folder holding two string tags, whose values are what a
 \textsc{ddata} exists to change --- and the property is gone. Version~11
 is \textbf{breaking}, and it is the first version whose reason is a \emph{host} behaviour rather
 than a change of judgement. Ignition materialises a metric property only when a BIRTH declares
@@ -75,7 +91,7 @@ had moved. It survives with its meaning narrowed to one case, not a single usabl
 whole reading, so a consumer keyed on it still sees it: less often, and more precisely. Version~6
 is \textbf{breaking}: a verdict now belongs to a \emph{metric} rather than to the reading, so a
 fault in the energy index no longer withholds the power value beside it. Nothing is renamed and no
-tag is added --- but a consumer that recorded \code{Power = null} whenever the energy index was
+tag is added --- but a consumer that recorded \code{Power = null} (\code{puissance} since version~13) whenever the energy index was
 refused records a real value for the identical situation from this version on, and points from
 either side cannot be compared without knowing which side they are on. The change is a correction;
 a correction that alters what a stored point \emph{means} is still breaking. Version~5
@@ -97,7 +113,14 @@ history.
 \toprule
 \textbf{Version} & \textbf{Kind} & \textbf{Change} \\
 \midrule
-12 & breaking & The cause becomes two metrics, \code{Cause/Power} and \code{Cause/Energy}
+13 & breaking & The metric names become the site's words --- \code{puissance},
+    \code{energie}, \code{cause/puissance}, \code{cause/energie} --- and the Sparkplug
+    device is named by the meter's short name instead of its serial. The serial is
+    declared as the \code{serie} property of every metric in the device BIRTH, and a
+    meter whose fetched serial is not the declared one is refused. \code{Contract/Version}
+    and \code{Node Control/Rebirth} keep their names: one is fixed by the specification,
+    the other names a fact about the service. \\
+12 & breaking & The cause becomes two metrics, \code{Cause/Power} and \code{Cause/Energy}, renamed \code{cause/puissance} and \code{cause/energie} at version~13
     (a \code{Cause} folder holding two string tags), and the \code{Cause} \emph{property}
     is removed. A property is written by a BIRTH and never updated, so a cause carried as
     one stood frozen; a metric's value is what a \textsc{ddata} changes. The cause tag is
@@ -143,7 +166,7 @@ history.
 \section{Topic grammar}
 
 The namespace is \code{spBv1.0}. One EON node represents the bridge; each meter is a
-\emph{device} beneath it, identified by its immutable serial number.
+\emph{device} beneath it, named by the measuring point it meters.
 
 \begin{center}
 \begin{tabular}{@{}l>{\ttfamily}l@{}}
@@ -151,16 +174,26 @@ The namespace is \code{spBv1.0}. One EON node represents the bridge; each meter 
 \normalfont\textbf{Level} & \normalfont\textbf{Topic} \\
 \midrule
 Node   & spBv1.0/\{group\}/\{TYPE\}/\{node\} \\
-Device & spBv1.0/\{group\}/\{TYPE\}/\{node\}/\{serial\} \\
+Device & spBv1.0/\{group\}/\{TYPE\}/\{node\}/\{meter\_id\} \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\code{group} and \code{node} are configured; \code{serial} is the meter's serial number,
-never a friendly name. Binding the topic to the serial is what makes it impossible to
-attribute a value to the wrong meter after a device is renamed or replaced.
+All three are configured. \code{meter\_id} is the meter's short name, and it is a device
+identifier rather than a label: a host files its history under it, so it must name the
+\emph{measuring point} --- the metering of a flat, a room, a feeder --- and not the box that
+currently performs it. A replaced meter keeps its name and keeps its series.
 
-Identifiers are validated \emph{before} the bridge connects. A serial that cannot be a
+\textbf{What that gives up, and what pays for it.} Until contract~13 the device level was the
+meter's serial, which made it impossible to attribute a value to the wrong meter: the bridge
+reads a serial off the device itself, and cannot read a name off anything. A name is a
+correspondence written by hand in a file, and a swapped line would publish one flat's
+measurements under another's with every value still plausible. So the guarantee changes form
+rather than disappearing: \textbf{the device BIRTH declares the serial as the \code{serie}
+property} of every metric, and \prog{} \textbf{refuses to publish} a meter whose fetched serial
+is not the one its configuration declares --- a refusal that latches, not a warning.
+
+Identifiers are validated \emph{before} the bridge connects. A \code{meter\_id} that cannot be a
 topic level makes the bridge refuse to publish, because the alternative — connecting,
 never birthing, and publishing nothing — looks identical to a healthy but idle bridge.
 
@@ -203,11 +236,11 @@ disabled cannot.
 \toprule
 \normalfont\textbf{Metric} & \textbf{Type} & \textbf{Unit} & \textbf{Meaning} \\
 \midrule
-Contract/Version & Int64  & ---   & Contract version, node BIRTH only. Currently 8. \\
+Contract/Version & Int64  & ---   & Contract version, node BIRTH only. Currently 13. \\
 Node Control/Rebirth & Boolean & --- & Always \code{false}. The command endpoint a host
                                        addresses to request a fresh birth; node BIRTH only. \\
-Power            & Double & kW    & Instantaneous power. \\
-Energy           & Double & kWh   & Cumulative energy counter. \\
+puissance        & Double & kW    & Instantaneous power. \\
+energie          & Double & kWh   & Cumulative energy counter. \\
 bdSeq            & Int64  & ---   & Session number; BIRTH and DEATH only. \\
 \bottomrule
 \end{tabular}
@@ -246,8 +279,8 @@ Since contract~4, a metric whose quality is \emph{not} \textsc{good} carries a s
 property, \code{Cause}, typed \code{String}, naming the check that refused it ---
 \code{reading-too-old}, \code{source-unreachable}, \code{counter-went-backwards} and so on.
 
-\textbf{Since contract~12 the cause is a TAG of its own}, \code{Cause/Power} or
-\code{Cause/Energy}, beside the measurement it describes --- not a property on it. A property is
+\textbf{Since contract~12 the cause is a TAG of its own}, \code{cause/puissance} or
+\code{cause/energie} (named in the site's words since contract~13), beside the measurement it describes --- not a property on it. A property is
 written by a BIRTH and never updated afterwards, measured against a live Ignition, so a cause
 carried as one froze at its birth value and went on asserting a fault the meter had recovered
 from. The tag reads \code{no-cause} when the measurement is good, and it is itself
@@ -297,7 +330,7 @@ only because the alternative was a silent lie. A separate key costs nothing: a
 
 \begin{note}
 \textbf{A counter that goes backwards is \textsc{bad}, not \textsc{stale}} (contract~5, and
-since contract~6 the refusal lands on the \code{Energy} metric alone). The
+since contract~6 the refusal lands on the \code{energie} metric alone). The
 value may be perfectly current --- a replacement meter really does read 12~kWh --- and it is
 the \emph{relation} to the previous reading that is broken. \textsc{bad} publishes null
 values, which withholds exactly the number a consumer would difference; publishing it
@@ -713,8 +746,8 @@ The two mechanisms are complementary rather than alternative: the will remains t
 \toprule
 \normalfont\textbf{Metric} & \textbf{Type} & \textbf{Unit, declared in the BIRTH} \\
 \midrule
-Power  & \code{Double} & kW \\
-Energy & \code{Double} & kWh \\
+puissance & \code{Double} & kW \\
+energie   & \code{Double} & kWh \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -724,8 +757,8 @@ third would change what a host discovers at birth --- a contract change, governe
 section below. \textbf{Both are 64-bit doubles}, including the cumulative energy counter: a
 32-bit float loses whole kilowatt-hours once a counter passes a few million, silently.
 
-\textbf{The device list is your configuration}, one Sparkplug device per enabled meter, keyed
-by serial (\S\ref{sec:mappingscheme}). Disabling a meter publishes a \code{DDEATH} for it;
+\textbf{The device list is your configuration}, one Sparkplug device per enabled meter, named
+by its \code{meter\_id} (\S\ref{sec:mappingscheme}). Disabling a meter publishes a \code{DDEATH} for it;
 enabling one publishes a \code{DBIRTH}. Nothing appears on the wire that is not a meter you
 configured and confirmed.
 

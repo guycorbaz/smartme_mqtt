@@ -527,10 +527,17 @@ pub(crate) fn same_mapping(a: &StoredConfig, b: &StoredConfig) -> bool {
 /// the confirmation must be withdrawn and re-given):
 /// - `group_id`, `node_id` — both appear in every topic the bridge publishes;
 ///   changing one changes where every device lands (the 2026-08-06 repair).
-/// - `meters[].meter_id` — the name in the Sparkplug metric path.
+/// - `meters[].meter_id` — **the device level of every topic this meter
+///   publishes on**, since contract v13 ([ADR 0049]). It was described here as
+///   "the name in the Sparkplug metric path" and was already MAPPING for that
+///   weaker reason; the classification does not change, its weight does.
 /// - `meters[].device_id` — which cloud device feeds the row.
-/// - `meters[].serial` — the device level of the topic, and the identity
-///   ADR 0029 binds every response to.
+/// - `meters[].serial` — the identity ADR 0029 binds every response to, and
+///   what the device BIRTH publishes as its `serie` property. It was the device
+///   level of the topic until contract v13; it stayed MAPPING when it stopped
+///   being one, because it is still what says the name is on the right box.
+///
+/// [ADR 0049]: ../../../docs/adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md
 /// - `meters[].enabled` — whether the row reaches the wire at all; and editing
 ///   a DISABLED meter still deserves a fresh look, so disabled rows project
 ///   like any other (the position [`same_mapping`]'s doc has always held).

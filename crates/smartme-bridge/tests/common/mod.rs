@@ -414,6 +414,11 @@ pub async fn wait_for(
 /// The Sparkplug identity and the meter are parameters because each chaos test
 /// needs its own group, so that two runs against the shared broker cannot see
 /// each other's births.
+/// The meter id [`write_config`] writes — and therefore, since contract v13
+/// (ADR 0049), **the device level of every topic the spawned bridge publishes
+/// on**. Tests that wait for a certificate match on this, not on the serial.
+pub const CONFIG_METER_ID: &str = "garage";
+
 pub fn write_config(
     dir: &std::path::Path,
     group: &str,
@@ -444,7 +449,7 @@ pub fn write_config(
              api_base = \"https://192.0.2.1\"\n\
              \n\
              [[meters]]\n\
-             meter_id = \"garage\"\n\
+             meter_id = \"{CONFIG_METER_ID}\"\n\
              device_id = \"a1a1a1a1-b2b2-c3c3-d4d4-000000000001\"\n\
              serial = \"{serial}\"\n\
              enabled = true\n",

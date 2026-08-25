@@ -42,7 +42,7 @@
 
 use crate::app::config::MeterConfig;
 use crate::app::supervisor::BridgeConfig;
-use crate::domain::Serial;
+use crate::domain::DeviceIdentity;
 
 /// What applying a change costs, in the terms an operator experiences.
 ///
@@ -82,9 +82,14 @@ pub struct Plan {
     /// since it renders by consequence rather than by struct layout.
     pub changes: Vec<Change>,
     /// Devices to announce, **before** any DDATA can carry their metrics.
-    pub births: Vec<Serial>,
+    ///
+    /// Both names travel since contract v13 ([ADR 0049]): the driver builds the
+    /// topic from the published one and files the declaration under the serial.
+    ///
+    /// [ADR 0049]: ../../../docs/adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md
+    pub births: Vec<DeviceIdentity>,
     /// Devices to bury.
-    pub deaths: Vec<Serial>,
+    pub deaths: Vec<DeviceIdentity>,
     /// Certificates the driver did NOT accept.
     ///
     /// **Empty is the claim, not the default.** `Control::apply` used to discard
@@ -93,7 +98,7 @@ pub struct Plan {
     /// verbatim what `Control::detached`'s own documentation says must never be
     /// handed to production code. A screen that says a device was buried when the
     /// bury was dropped is the SIGTERM-NO-LIE failure with a different door.
-    pub undelivered: Vec<Serial>,
+    pub undelivered: Vec<DeviceIdentity>,
 }
 
 impl Plan {
@@ -390,9 +395,9 @@ fn classify_meters(
                         // again, and the poll task is still bound to it either
                         // way.
                         if before.enabled {
-                            plan.deaths.push(before.serial.clone());
+                            plan.deaths.push(before.identity());
                         } else {
-                            plan.births.push(before.serial.clone());
+                            plan.births.push(before.identity());
                         }
                         plan.changes.push(Change {
                             field: "meters (enabled)",
@@ -411,17 +416,32 @@ fn classify_meters(
             // meter, the device must be buried; either way nothing takes its
             // place without a restart.
             None => {
-                // A death is owed only if that DEVICE stops existing. A rename
-                // arrives here as removed-plus-added while the serial — which is
-                // the device level of the topic — is unchanged, so burying it
-                // would tell a host that a device it can still see has gone.
-                let device_survives = new.iter().any(|m| m.serial == before.serial && m.enabled);
-                // And a device is only owed a burial if it was ever BORN, which
+                // A death is owed because that DEVICE stops existing, and since
+                // contract v13 that is decided by the PUBLISHED name.
+                //
+                // **This branch changed meaning with ADR 0049, and silently
+                // would have been the defect.** It used to ask whether the
+                // SERIAL survived somewhere in the new set, because the serial
+                // was the device level of the topic: a meter renamed in the file
+                // arrived here as removed-plus-added while the wire saw no change
+                // at all, so burying it would have told a host that a device it
+                // could still see had gone.
+                //
+                // Now the meter id IS the device level. Reaching this arm means
+                // no meter in the new set carries this name — `find` returned
+                // `None` — so the device is gone from the wire whatever serial
+                // turns up elsewhere, and the last value under `cpt03` would sit
+                // on the operator's screen looking current until something else
+                // ended the session. A renamed meter is, on the wire, one device
+                // buried and another born: the burial is owed here and the birth
+                // waits for the restart the rename already costs.
+                //
+                // A device is still only owed a burial if it was ever BORN, which
                 // means the runtime had a task for it. A meter added and removed
                 // between two restarts never reached the wire, so a DDEATH for
                 // it would bury something no host has heard of.
-                if before.enabled && is_served(&before.meter) && !device_survives {
-                    plan.deaths.push(before.serial.clone());
+                if before.enabled && is_served(&before.meter) {
+                    plan.deaths.push(before.identity());
                     plan.changes.push(Change {
                         field: "meters (removed)",
                         cost: Cost::DeviceCertificate,
@@ -449,8 +469,14 @@ fn classify_meters(
 mod tests {
     use super::*;
     use crate::core::state_machine::Policy;
-    use crate::domain::MeterId;
+    use crate::domain::{MeterId, Serial};
     use std::time::Duration;
+
+    /// The pair a certificate names: what the device is called on the wire, and
+    /// which meter answers for it (ADR 0049).
+    fn identity(id: &str, serial: &str) -> DeviceIdentity {
+        DeviceIdentity::new(MeterId::new(id), Serial::new(serial))
+    }
 
     fn meter(id: &str, serial: &str, enabled: bool) -> MeterConfig {
         MeterConfig {
@@ -653,7 +679,7 @@ mod tests {
 
             assert_eq!(
                 plan.deaths,
-                vec![target.serial.clone()],
+                vec![target.identity()],
                 "disabling {} must bury its device: a host that is not told goes on \
                  showing a switched-off meter's last value as current",
                 target.meter
@@ -702,7 +728,10 @@ mod tests {
         let plan = classify(&old, &new, &all);
         assert_eq!(
             plan.births,
-            vec![Serial::new("9202686")],
+            vec![DeviceIdentity::new(
+                MeterId::new("cellar"),
+                Serial::new("9202686")
+            )],
             "a meter with a task that is switched back on is born again, not \
              deferred to a restart: {plan:?}"
         );
@@ -749,12 +778,12 @@ mod tests {
 
         let on = classify(&off, &base(), &served());
         assert_eq!(on.cost(), Some(Cost::DeviceCertificate));
-        assert_eq!(on.births, vec![Serial::new("9202685")]);
+        assert_eq!(on.births, vec![identity("garage", "9202685")]);
         assert!(on.deaths.is_empty());
 
         let gone = classify(&base(), &off, &served());
         assert_eq!(gone.cost(), Some(Cost::DeviceCertificate));
-        assert_eq!(gone.deaths, vec![Serial::new("9202685")]);
+        assert_eq!(gone.deaths, vec![identity("garage", "9202685")]);
         assert!(gone.births.is_empty());
     }
 
@@ -785,7 +814,7 @@ mod tests {
              {plan:?}"
         );
         assert!(
-            !plan.births.contains(&Serial::new("9202686")),
+            !plan.births.contains(&identity("cellar", "9202686")),
             "a DBIRTH for a device that will never carry a reading is the \
              silence-reported-as-success case in its purest form: {plan:?}"
         );
@@ -800,15 +829,50 @@ mod tests {
     /// on the name, so on a rename it found nothing and stored the NEW
     /// `device_id` while the poll loop kept fetching the old one. [#52] through
     /// the front door.
+    ///
+    /// # It now BURIES the old device, and this test asserted the opposite
+    ///
+    /// Until contract v13 the meter id was a label: the wire named devices by
+    /// serial, so renaming one changed nothing a host could see and claiming a
+    /// certificate would have buried a device still in front of the operator's
+    /// eyes. **ADR 0049 makes the meter id the device level of the topic**, so a
+    /// rename removes `garage` from the wire and puts `garage-1` there instead.
+    /// The burial is owed: without it the host holds `garage`'s last value,
+    /// current-looking and never updated again, for as long as the session lives
+    /// — which is the one failure this project exists to prevent.
+    ///
+    /// The birth is NOT claimed here, for the reason every added meter is
+    /// refused one: nothing polls `garage-1` until the process restarts, and a
+    /// DBIRTH for a device that will never carry a reading reports a silence as a
+    /// success. The restart the rename already costs is what brings it to life.
+    ///
+    /// FALSIFIED 2026-08-25 by restoring the survives-by-serial condition, which
+    /// is the ordinary shape of this defect — the rule was correct for two weeks
+    /// and reads as correct still:
+    ///
+    /// ```text
+    /// assertion `left == right` failed: the renamed device leaves the wire under its
+    /// old name, and a host that is not told goes on showing its last value as current
+    ///   left: []
+    ///  right: [DeviceIdentity { published: MeterId("garage"), serial: Serial("9202685") }]
+    /// ```
     #[test]
-    fn renaming_a_meter_needs_a_restart_and_claims_no_certificate() {
+    fn renaming_a_meter_buries_the_device_it_removes_from_the_wire() {
         let mut new = base();
         new.meters[0].meter = MeterId::new("garage-1");
         let plan = classify(&base(), &new, &served());
         assert_eq!(plan.cost(), Some(Cost::ProcessRestart));
+        assert_eq!(
+            plan.deaths,
+            vec![identity("garage", "9202685")],
+            "the renamed device leaves the wire under its old name, and a host \
+             that is not told goes on showing its last value as current: {plan:?}"
+        );
         assert!(
-            plan.births.is_empty() && plan.deaths.is_empty(),
-            "a label change alters nothing on the wire: {plan:?}"
+            plan.births.is_empty(),
+            "nothing polls the new name until the restart this rename already \
+             costs, and a DBIRTH for a device that will never carry a reading \
+             reports a silence as a success: {plan:?}"
         );
     }
 

@@ -76,7 +76,9 @@ use smartme_bridge::app::{BridgeConfig, PollConfig};
 use smartme_bridge::core::clock::{Clock, SystemClock};
 use smartme_bridge::core::source::{Reading, Source, SourceError, SourceFaults};
 use smartme_bridge::core::state_machine::Policy;
-use smartme_bridge::domain::{Kw, Kwh, Measurement, MeterId, Quality, Serial, UtcMillis};
+use smartme_bridge::domain::{
+    DeviceIdentity, Kw, Kwh, Measurement, MeterId, Quality, Serial, UtcMillis,
+};
 
 const SERIAL: &str = "30000004";
 const METER: &str = "garage";
@@ -265,7 +267,12 @@ async fn a_hundred_thousand_iterations_do_not_grow_the_process() {
             death_flush: Duration::from_secs(2),
         },
         node,
-        vec![Serial::new(SERIAL)],
+        // Both names since contract v13 (ADR 0049): the topic carries the
+        // published one, the declaration is filed under the serial.
+        vec![DeviceIdentity::new(
+            MeterId::new(METER),
+            Serial::new(SERIAL),
+        )],
         Arc::clone(&clock),
         smartme_bridge::app::mqtt_driver::Health {
             meters: pulse.clone(),

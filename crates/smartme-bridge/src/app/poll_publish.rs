@@ -1631,20 +1631,22 @@ fn store_energy_reference(dir: &std::path::Path, meter: &MeterId, energy: crate:
     }
 }
 
-/// The identity one poll task serves: the meter, and the serial its Sparkplug
-/// device was BIRTHED under — captured at spawn, which is what makes it the
-/// IN-FORCE serial (story 3.5's review found the certificate taking the serial
-/// from the stored row instead, and `Control::apply` stores a serial edit that
-/// `reconfigure` classified ProcessRestart — not in force until the restart —
-/// so a Death could name a device the wire never birthed while the born one
-/// was left alive for ever). Bundled per the 2.7 rule: these two travel
-/// together — they are ADR 0029's pair, seen from the wire's side.
+/// The identity one poll task serves: the name its Sparkplug device was BIRTHED
+/// under, and the serial that vouches for it — both captured at spawn, which is
+/// what makes them the IN-FORCE pair (story 3.5's review found the certificate
+/// taking the serial from the stored row instead, and `Control::apply` stores a
+/// serial edit that `reconfigure` classified ProcessRestart — not in force until
+/// the restart — so a Death could name a device the wire never birthed while the
+/// born one was left alive for ever). Bundled per the 2.7 rule: these two travel
+/// together — they are ADR 0029's pair, seen from the wire's side, and since
+/// contract v13 they are the two halves of a [`DeviceIdentity`](crate::domain::DeviceIdentity).
 #[derive(Debug, Clone)]
 pub struct PolledMeter {
-    /// The logical meter.
+    /// The logical meter — and, from contract v13, the name its device is
+    /// published under (ADR 0049).
     pub meter: MeterId,
-    /// The serial the DBIRTH used. Every certificate this task ever sends
-    /// names THIS serial, whatever a not-yet-in-force edit desires.
+    /// The serial the DBIRTH vouched for. Every certificate this task ever sends
+    /// carries THIS serial, whatever a not-yet-in-force edit desires.
     pub serial: crate::domain::Serial,
 }
 
@@ -1835,8 +1837,13 @@ pub async fn run<S: Source + Send>(
         if gone_pending {
             heartbeat.touch(clock.monotonic(), current.poll.interval.as_millis() as i64);
             if devices
+                // The pair the certificate needs (ADR 0049): `meter` builds the
+                // topic, `serial` files the declaration. Both are the ones
+                // captured at spawn — the IN-FORCE identity — which is the whole
+                // reason `PolledMeter` holds them rather than reading the live
+                // configuration here.
                 .send(crate::app::mqtt_driver::DeviceCommand::Death(
-                    serial.clone(),
+                    crate::domain::DeviceIdentity::new(meter.clone(), serial.clone()),
                 ))
                 .await
                 .is_ok()
@@ -2021,13 +2028,16 @@ mod tests {
             &sent[0].measurement,
             sent[0].verdicts,
         );
+        // THE CONSTANTS, not their spelling: this test is about which value a
+        // metric carries, and a literal here would turn a contract rename into a
+        // failure in a story that has nothing to do with the contract.
         let power = metrics
             .iter()
-            .find(|m| m.name == "Power")
+            .find(|m| m.name == crate::adapters::sparkplug_publisher::METRIC_POWER)
             .expect("power is published");
         let energy = metrics
             .iter()
-            .find(|m| m.name == "Energy")
+            .find(|m| m.name == crate::adapters::sparkplug_publisher::METRIC_ENERGY)
             .expect("energy is published");
         assert!(
             matches!(power.value, sparkplug_b::model::MetricValue::Null(_)),
@@ -2048,7 +2058,10 @@ mod tests {
                 })
                 .unwrap_or_else(|| panic!("{name} is published"))
         };
-        assert_eq!(cause("Cause/Power"), "unit-not-recognised");
+        assert_eq!(
+            cause(crate::adapters::sparkplug_publisher::METRIC_CAUSE_POWER),
+            "unit-not-recognised"
+        );
         assert!(
             power.properties.is_empty(),
             "and the metric itself carries no property at all now"
@@ -2059,7 +2072,7 @@ mod tests {
             energy.value
         );
         assert_eq!(
-            cause("Cause/Energy"),
+            cause(crate::adapters::sparkplug_publisher::METRIC_CAUSE_ENERGY),
             "no-cause",
             "and names no cause — explicitly, since contract v11, and on its own \
              tag since v12 — least of all its neighbour's"

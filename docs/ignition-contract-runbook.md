@@ -217,19 +217,39 @@ zero. What is under test is whether Ignition accepts a **null metric that still 
 datatype** — if it rejects it, or invents a `0`, the cold-start design does not survive
 contact with the host.
 
-Also verify the device folder is named by the **serial** (`30000001`), not by a friendly name.
+Also verify the device folder is named by the meter's **short name** (`contract-meter` for this
+gate), and that the serial `30000001` is **not** a folder anywhere in the tree.
+
+> **This reversed at contract v13** ([ADR 0049](adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md)).
+> The step used to require the opposite — *named by the serial, not by a friendly name* — for a good
+> reason: the serial was the one identifier the bridge reads off the device itself. What decided
+> against it is what a supervisor historises: a measuring point, not a box. A device id built on the
+> serial makes a replaced meter into a new device and breaks the series at the moment nothing changed
+> for the operator.
+>
+> **And then check what replaces the guarantee that gave up.** In the tag properties of `puissance`,
+> the property **`serie` must read `30000001`**. Without it, nothing on the wire says which physical
+> meter is behind the name, and a swapped configuration line would publish one flat's measurements
+> under another's with every value still plausible. A missing `serie` here is a FAILED step, not a
+> cosmetic one.
 
 > **Where to read the datatype, added 2026-08-22.** Nowhere an operator would look. The Tag Browser
 > lists tag *properties* and `DataType` is not one of them; the **Tag Editor does not show it either**
 > for an MQTT Engine tag, because the module owns the type. Use the Designer's **Script Console**:
-> `system.tag.browse("[MQTT Engine]", {"recursive": True, "tagType": "AtomicTag", "name": "Power"})`
+> `system.tag.browse("[MQTT Engine]", {"recursive": True, "tagType": "AtomicTag", "name": "puissance"})`
 > and print each result's `dataType` — expected **`Float8`**. Without scripting, the Tag Editor's
 > **`Numeric`** category is weaker evidence of the same thing: Ignition composes it only for a
 > numeric tag, so its presence rules out a typeless or string tag.
 
 ### Step 2 — first reading
 
-`Power = 1.234 kW`, `Energy = 5678.9 kWh`, both `GOOD`.
+`puissance = 1.234 kW`, `energie = 5678.9 kWh`, both `GOOD`.
+
+> **The metric names took the site's words at contract v13**
+> ([ADR 0050](adr/0050-the-metric-names-are-the-sites-words.md)) — `puissance`, `energie`,
+> `cause/puissance`, `cause/energie` — because a consumer renders a metric name as a folder, so it
+> behaves as one more path level under an operator's eyes. Runs recorded below this line predate
+> that and name the metrics in English; they are a record, not an instruction.
 
 Deliberately awkward numbers: nothing round, nothing that could be a default or a placeholder.
 Check them **exactly**. A unit-scaling bug (W vs kW, Wh vs kWh) shows up here as a factor of
@@ -237,11 +257,11 @@ Check them **exactly**. A unit-scaling bug (W vs kW, Wh vs kWh) shows up here as
 
 > **The browser rounds, so "exactly" is not what you are reading.** Ignition's `FormatString`
 > defaults to `#,##0.##`: `1.234` displays as `1,23` and `2.345` as `2,35`. The factor of 1000
-> still shows; a third-decimal discrepancy does not. On 2026-08-21 a `Power` display one refresh
+> still shows; a third-decimal discrepancy does not. On 2026-08-21 a `puissance` display one refresh
 > behind read as a metric that had not updated at all, and cost ten minutes of the session.
 >
-> **And `EngHigh` defaults to `100`**, which `Energy = 5678.9` exceeds fifty-six times. A tag with
-> scaling enabled would clamp it to `100` and look exactly like a unit bug in the bridge. `Power`
+> **And `EngHigh` defaults to `100`**, which `energie = 5678.9` exceeds fifty-six times. A tag with
+> scaling enabled would clamp it to `100` and look exactly like a unit bug in the bridge. `puissance`
 > stays under 100 and does not run that risk — comparing the two tells you which you are looking
 > at.
 
@@ -258,7 +278,7 @@ Check that the tag timestamps **moved**. That is all this gate can establish.
 
 ### Step 3 — the values update
 
-`Power = 2.345`, `Energy = 5679.1`.
+`puissance = 2.345`, `energie = 5679.1`.
 
 Confirms updates flow without a rebirth or a reconnect, and that the energy counter moves
 **up**. A counter that goes backwards in a historian corrupts every derived rate.
@@ -411,7 +431,36 @@ list; this one needs the opposite discipline — **ask, then look, then compare.
 
 ## Record of runs
 
-> ### ✅ THE ATTESTATION IS CURRENT — v12, 2026-08-22 at 20:53
+> ### ⚠ THE ATTESTATION IS OWED — v13 shipped on 2026-08-25 and no session has run
+>
+> **The registre and the binary parted company again**, deliberately and with the reason written
+> down. `CONTRACT_VERSION` is **13**; the table below stops at v12. Action H7 of the epic-8
+> retrospective allows exactly this — *a bump earns an attestation, or records what it is waiting
+> for and when that arrives* — and this is the record: **v13 is waiting for a Tier-3 session
+> against Ignition, and nothing goes to production before it.**
+>
+> v13 carries the site's Sparkplug nomenclature (SCADA technical report v0.10 §16.9), in two
+> halves that share one window ([ADR 0049](adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md),
+> [ADR 0050](adr/0050-the-metric-names-are-the-sites-words.md)). **Four things to check that the
+> six steps did not ask for before:**
+>
+> - **Step 1 — the device folder is the meter's SHORT NAME**, `contract-meter` for this gate, and
+>   the serial `30000001` is **not** a folder anywhere in the tree. This is the half that breaks a
+>   consumer silently: a host watching the old device id simply stops receiving.
+> - **Step 1 — `serie` reads `30000001` in the PROPERTIES of `puissance`.** It is what replaces the
+>   guarantee the serial gave by being the device id, and a person in front of the browser is who
+>   it is for. Absent here, the rename has taken something and given nothing back.
+> - **Every step — the metrics are `puissance`, `energie`, `cause/puissance`, `cause/energie`.**
+>   The `cause` folder is lower case now too.
+> - **Step 1 — `Contract/Version` reads 13**, and `Node Control/Rebirth` is untouched. Both keep
+>   their English names on purpose: one is fixed by the specification, the other names a fact about
+>   the service rather than a quantity of the site.
+>
+> **Use a fresh group.** The rename means the old tag tree cannot be reused without leaving orphans
+> that look like the new tree's neighbours — and a residual group has already cost this gate a
+> false reading once (2026-08-21).
+>
+> ### ~~✅ THE ATTESTATION WAS CURRENT — v12, 2026-08-22 at 20:53~~ *(superseded by v13)*
 >
 > **Registre and binary coincide for the first time since 2026-08-03.** Three sessions ran that
 > day, at v10, v11 and v12, and the third is the one that stands: `CONTRACT_VERSION` is 12 and

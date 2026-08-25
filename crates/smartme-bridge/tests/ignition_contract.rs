@@ -69,7 +69,9 @@ use smartme_bridge::app::mqtt_driver::{self, MqttConfig};
 use smartme_bridge::core::channel::MeterUpdate;
 use smartme_bridge::core::clock::{Clock, SystemClock};
 use smartme_bridge::core::oracle::{Cause, Verdict};
-use smartme_bridge::domain::{Kw, Kwh, Measurement, MeterId, Quality, Serial, UtcMillis};
+use smartme_bridge::domain::{
+    DeviceIdentity, Kw, Kwh, Measurement, MeterId, Quality, Serial, UtcMillis,
+};
 
 use common::Seen;
 
@@ -297,7 +299,12 @@ async fn ignition_contract_gate() {
             death_flush: Duration::from_secs(2),
         },
         node,
-        vec![Serial::new(SERIAL)],
+        // Both names, since contract v13 (ADR 0049): the device is published as
+        // METER and vouched for by SERIAL, which the DBIRTH carries as a property.
+        vec![DeviceIdentity::new(
+            MeterId::new(METER),
+            Serial::new(SERIAL),
+        )],
         Arc::clone(&clock),
         // Story 4.11's drop counters. EMPTY ON PURPOSE: this test asserts nothing
         // about lost readings, and `Heartbeats::dropped` skips a meter it does not
@@ -316,7 +323,9 @@ async fn ignition_contract_gate() {
         death_rx,
     ));
 
-    println!("\n  Publishing as group={group:?} node={NODE_ID:?} device={SERIAL:?}");
+    println!(
+        "\n  Publishing as group={group:?} node={NODE_ID:?} device={METER:?} (serial {SERIAL:?})"
+    );
     println!("  Broker {host}:{port}");
     println!("  Clean-up afterwards: delete Edge Nodes/{group}/{NODE_ID} — and ONLY that folder.");
 
@@ -343,9 +352,12 @@ async fn ignition_contract_gate() {
             "The tag folder Edge Nodes/<group>/BridgeContractNode exists",
             version_expected.as_str(),
             "Node Control/Rebirth is present, Boolean, and reads false",
-            "Power and Energy exist for device 30000001",
+            "puissance and energie exist for device contract-meter — the device is \
+             named by its measuring point from contract v13, and 30000001 is NOT a folder",
+            "Under the properties of puissance, `serie` reads 30000001 — the wire still says \
+             WHICH physical meter answers for this name",
             "Their quality is NOT good — nothing has been read yet, and the bridge says so",
-            "Power and Energy have NO VALUE — the `value` row is empty, not 0. A fabricated \
+            "puissance and energie have NO VALUE — the `value` row is empty, not 0. A fabricated \
              zero is indistinguishable from a meter genuinely reading zero, and refusing to \
              fabricate one is what the cold start is for",
         ],
@@ -379,7 +391,7 @@ async fn ignition_contract_gate() {
     checkpoint(
         "STEP 2 — a good reading arrives",
         &[
-            "Power reads 1.234 kW and Energy reads 5678.9 kWh",
+            "puissance reads 1.234 kW and energie reads 5678.9 kWh",
             "Both qualities are GOOD",
             "The engineering units are shown (kW, kWh)",
         ],
@@ -392,9 +404,9 @@ async fn ignition_contract_gate() {
              EXACTLY: a factor of 1000 still shows, a third-decimal discrepancy does not. On \
              2026-08-21 a display one refresh behind read as a metric that had not updated, \
              and cost ten minutes",
-            "★ Energy is CLAMPED rather than wrong. EngHigh defaults to 100 and 5678.9 is \
+            "★ energie is CLAMPED rather than wrong. EngHigh defaults to 100 and 5678.9 is \
              fifty-six times it, so a tag with scaling enabled would show 100 and look \
-             exactly like a unit bug in the bridge. Power stays under 100 and does not run \
+             exactly like a unit bug in the bridge. puissance stays under 100 and does not run \
              that risk — comparing the two tells you which you are looking at",
         ],
     );
@@ -413,7 +425,7 @@ async fn ignition_contract_gate() {
     checkpoint(
         "STEP 3 — the value updates in place",
         &[
-            "Power now reads 2.345 kW and Energy 5679.1 kWh",
+            "puissance now reads 2.345 kW and energie 5679.1 kWh",
             "The values CHANGED rather than a second set of tags appearing",
             "Quality is still GOOD",
         ],

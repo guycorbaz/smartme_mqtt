@@ -66,7 +66,8 @@
 
 use smartme_bridge::adapters::sparkplug_publisher::{
     CAUSE_NONE, CONTRACT_VERSION, METRIC_CAUSE_ENERGY, METRIC_CAUSE_POWER, METRIC_ENERGY,
-    METRIC_NODE_CONTROL_REBIRTH, METRIC_POWER, UNIT_ENERGY, UNIT_POWER, ignition_quality_code,
+    METRIC_NODE_CONTROL_REBIRTH, METRIC_POWER, PROPERTY_SERIAL, UNIT_ENERGY, UNIT_POWER,
+    ignition_quality_code,
 };
 use smartme_bridge::core::oracle::Cause;
 use smartme_bridge::domain::Quality;
@@ -115,6 +116,45 @@ const GOLDEN_CAUSES_V4: CauseGolden = &[
     ("value-unusable", false, Quality::Bad),
     ("source-marked-stale", false, Quality::Stale),
     ("not-revalidated", false, Quality::Stale),
+];
+
+/// The quality codes, as of contract v13. Unchanged since v9: v13 is about what
+/// tags are CALLED and which device carries them, not about what a quality means.
+const GOLDEN_QUALITY_V13: QualityGolden = &[
+    (Quality::Good, 192),
+    (Quality::Stale, 0x8000_0000 | 516),
+    (Quality::Bad, 0x8000_0000 | 512),
+];
+
+/// The cause vocabulary, as of contract v13: unchanged from v12. Nothing new can
+/// be said about a reading — what moved is the language the tags are named in and
+/// the name the device is published under.
+const GOLDEN_CAUSES_V13: CauseGolden = GOLDEN_CAUSES_V12;
+
+/// The names, as of contract v13. **Four metric names change language and one
+/// property appears** (ADR 0050 and ADR 0049, SCADA technical report v0.10 §16.9).
+///
+/// A consumer that bound its tags under v12 finds none of the four where it was
+/// watching, and it finds them under a device that has also been renamed — from
+/// the meter's serial to its short name. That is two silent breakages in one
+/// window, which is exactly why they share one version number and one attestation.
+///
+/// **`metric.contract` and `metric.rebirth` deliberately do NOT move.** The
+/// rebirth endpoint is fixed word for word by the specification
+/// (`tck-id-operational-behavior-data-commands-rebirth-name`), and the contract
+/// version is a fact about the publishing SERVICE rather than a quantity of the
+/// site — the same reasoning by which the edge node keeps the service's name and
+/// escapes the site's equipment nomenclature.
+const GOLDEN_NAMES_V13: NameGolden = &[
+    ("metric.power", "puissance"),
+    ("metric.energy", "energie"),
+    ("metric.rebirth", "Node Control/Rebirth"),
+    ("unit.power", "kW"),
+    ("unit.energy", "kWh"),
+    ("metric.cause.power", "cause/puissance"),
+    ("metric.cause.energy", "cause/energie"),
+    ("value.cause.none", "no-cause"),
+    ("property.serial", "serie"),
 ];
 
 /// The quality codes, as of contract v10. Its own copy — a golden is a
@@ -507,6 +547,12 @@ fn live_names() -> Vec<(&'static str, &'static str)> {
         // measurement reads this string, and renaming it is the same silent
         // breakage as renaming the tag.
         ("value.cause.none", CAUSE_NONE),
+        // The property a DBIRTH declares the serial under, from v13 (ADR 0049).
+        // It is what a person in the tag browser reads to check that `cpt03` is
+        // the box they think it is — the check the device id used to make
+        // unnecessary by being the serial itself — so its key is as much part of
+        // the contract as a metric name.
+        ("property.serial", PROPERTY_SERIAL),
     ]
 }
 
@@ -517,6 +563,13 @@ fn live_names() -> Vec<(&'static str, &'static str)> {
 /// declaration nobody can check is worth no more than no declaration — so this
 /// list cannot be padded to quieten the guard.
 const NAME_SET_CHANGES: &[(i64, &str)] = &[
+    (
+        13,
+        "ADR 0049: the device is named by its measuring point instead of its serial, and the \
+         DBIRTH declares the serial as the `serie` property so the wire still says which \
+         physical meter answers for the name. The property key is a name a consumer reads, \
+         so the name set grows by one",
+    ),
     (
         11,
         "ADR 0043: every metric carries the `Cause` property, a good one included, so the \
@@ -543,6 +596,11 @@ struct Golden {
 /// golden is what the `None` arm refuses.
 fn golden_for(version: i64) -> Option<Golden> {
     match version {
+        13 => Some(Golden {
+            quality: GOLDEN_QUALITY_V13,
+            causes: GOLDEN_CAUSES_V13,
+            names: GOLDEN_NAMES_V13,
+        }),
         12 => Some(Golden {
             quality: GOLDEN_QUALITY_V12,
             causes: GOLDEN_CAUSES_V12,

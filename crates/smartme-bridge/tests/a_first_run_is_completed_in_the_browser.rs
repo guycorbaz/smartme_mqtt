@@ -367,9 +367,14 @@ fn from_an_empty_directory_to_publishing_without_touching_a_terminal() {
 
         // ---- AC3: the confirmation is its own screen and its own submission.
         let preview = get(port, "/confirm").ok_or("/confirm must answer")?;
+        // The topic's device level is the meter's NAME from contract v13 (ADR
+        // 0049) — and the serial must still be on the screen, in its own column,
+        // because that pairing is the whole point of this click: the wire no
+        // longer spells the serial out, so this screen is where a person checks
+        // that `garage` is the box they think it is.
         for shown in [
             "9202685",
-            "spBv1.0/Plant/DDATA/Bridge01/9202685",
+            "spBv1.0/Plant/DDATA/Bridge01/garage",
             "a1a1a1a1-b2b2-c3c3-d4d4-000000000001",
         ] {
             if !preview.contains(shown) {

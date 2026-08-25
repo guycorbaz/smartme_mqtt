@@ -664,8 +664,8 @@ the clause-by-clause audit --- 303 requirements, each with a verdict and its evi
 \toprule
 \textbf{Mechanism} & \textbf{Status} & \textbf{Notes} \\
 \midrule
-Topic namespace, device level & implemented & One node, one device per meter, keyed on the
-                                meter's serial number. \\
+Topic namespace, device level & implemented & One node, one device per meter, named by the
+                                meter's short name (contract~13; its serial until then). \\
 NBIRTH / DBIRTH / DDATA / NDEATH & implemented & \code{NDATA} and \code{DDEATH} are not
                                 emitted --- see chapter~\ref{ch:contract}. \\
 Will registered inside CONNECT & implemented & At \textbf{QoS~1}, as the specification

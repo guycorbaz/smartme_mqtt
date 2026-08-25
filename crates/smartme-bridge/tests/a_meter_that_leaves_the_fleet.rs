@@ -34,7 +34,9 @@ use smartme_bridge::core::clock::{Clock, FakeClock};
 use smartme_bridge::core::oracle::Cause;
 use smartme_bridge::core::source::{FakeSource, Reading, Refusal, SourceError};
 use smartme_bridge::core::state_machine::Policy;
-use smartme_bridge::domain::{Kw, Kwh, Measurement, MeterId, Quality, Serial, UtcMillis};
+use smartme_bridge::domain::{
+    DeviceIdentity, Kw, Kwh, Measurement, MeterId, Quality, Serial, UtcMillis,
+};
 use tokio::sync::mpsc;
 
 const SANE_NOW: i64 = 1_784_984_793_000;
@@ -354,8 +356,8 @@ async fn a_device_the_account_refuses_ends_with_one_certificate_and_the_alarm_st
         .expect("channel open");
     assert_eq!(
         ended,
-        DeviceCommand::Death(born_serial),
-        "the certificate names the SPAWN-TIME serial — the device the DBIRTH          used — never the stored row's, which may hold an edit not yet          restarted into force"
+        DeviceCommand::Death(DeviceIdentity::new(meter.clone(), born_serial)),
+        "the certificate names the SPAWN-TIME pair — the device the DBIRTH          used, under the name it used — never the stored row's, which may hold an          edit not yet restarted into force"
     );
     let cell = beats.snapshot();
     let published = cell

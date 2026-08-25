@@ -32,8 +32,10 @@ Concretely:
   Sparkplug **NDEATH (via LWT)** marks tags STALE natively; when the *cloud* fetch fails
   while the bridge is still alive on MQTT (the most likely failure), the bridge actively
   publishes **quality = STALE** rather than republishing a frozen value as fresh.
-- **Serial-bound identity** — every published topic is bound to its meter's immutable
-  serial number and verified, so a value is never attributed to the wrong meter.
+- **Vouched-for identity** — a device is published under the measuring point it meters, so a
+  replaced meter does not break its own history; its serial travels as a property of the device
+  BIRTH and is checked against the one the cloud reports on every reading, so a value is never
+  attributed to the wrong meter.
 - **Honest timestamps** — freshness is computed end-to-end from the meter's measurement
   time, never from the poll time.
 

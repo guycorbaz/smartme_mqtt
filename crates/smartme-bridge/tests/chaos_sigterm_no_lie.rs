@@ -348,7 +348,7 @@ async fn run_case(broker_host: &str, port: u16, group: &str) {
 
     // And so is the device — this is the tag a stale value would be shown on.
     if common::wait_for(&mut seen, Duration::from_secs(30), |s| {
-        s.topic.contains("/DBIRTH/") && s.topic.ends_with(SERIAL)
+        s.topic.contains("/DBIRTH/") && s.topic.ends_with(common::CONFIG_METER_ID)
     })
     .await
     .is_none()

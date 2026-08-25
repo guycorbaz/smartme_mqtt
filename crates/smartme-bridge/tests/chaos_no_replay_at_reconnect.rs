@@ -68,7 +68,9 @@ use smartme_bridge::app::poll_publish::Heartbeats;
 use smartme_bridge::core::channel::MeterUpdate;
 use smartme_bridge::core::clock::{Clock, SystemClock};
 use smartme_bridge::core::oracle::Verdict;
-use smartme_bridge::domain::{Kw, Kwh, Measurement, MeterId, Quality, Serial, UtcMillis};
+use smartme_bridge::domain::{
+    DeviceIdentity, Kw, Kwh, Measurement, MeterId, Quality, Serial, UtcMillis,
+};
 
 const SERIAL: &str = "30000001";
 const NODE_ID: &str = "ChaosNoReplay";
@@ -149,7 +151,12 @@ async fn a_reconnect_re_declares_the_reading_without_moving_its_clock() {
             death_flush: Duration::from_secs(2),
         },
         node,
-        vec![Serial::new(SERIAL)],
+        // Both names since contract v13 (ADR 0049): the topic carries the
+        // published one, the declaration is filed under the serial.
+        vec![DeviceIdentity::new(
+            MeterId::new("garage"),
+            Serial::new(SERIAL),
+        )],
         Arc::clone(&clock),
         // Story 4.11's counters. Empty on purpose: this test asserts nothing about
         // lost readings.

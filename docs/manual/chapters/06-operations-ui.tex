@@ -150,11 +150,11 @@ something is wrong with a meter rather than with the bridge. The columns are, in
 \toprule
 \normalfont\textbf{Column} & \textbf{What it says} \\
 \midrule
-Meter & the logical name, the one that appears in the Sparkplug metric path \\
+Meter & the logical name --- and, since contract~13, the Sparkplug device name itself \\
 Serial & the serial from your configuration --- and \emph{no topic is shown without one} \\
 Topic & built by the publisher's own code path, so it is the topic the bridge would really
 publish on; never spelled out by the page \\
-Power, Energy & the last values published, or \code{---}. \textbf{A dash is not a zero}: a
+puissance, energie & the last values published, or \code{---}. \textbf{A dash is not a zero}: a
 value nobody has published is absent, and a \code{0.000 kW} would be a measurement \\
 Reading age & how old the \emph{measurement} is, with the staleness threshold it was judged
 against --- e.g.\ \emph{4 minutes ago (stale past 90 s)} \\

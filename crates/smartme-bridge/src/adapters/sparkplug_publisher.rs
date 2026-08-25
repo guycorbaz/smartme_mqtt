@@ -25,7 +25,7 @@ use sparkplug_b::{
 
 use crate::core::channel::MeterUpdate;
 use crate::core::oracle::{Cause, Measured, Verdict, Verdicts};
-use crate::domain::{Measurement, Serial, UtcMillis};
+use crate::domain::{DeviceIdentity, Measurement, MeterId, Serial, UtcMillis};
 
 /// Version of the topic/metric contract with the SCADA host. Bump on ANY change
 /// to the topic grammar, to a metric name or unit, or to the meaning of a
@@ -64,6 +64,45 @@ use crate::domain::{Measurement, Serial, UtcMillis};
 ///   deviation from the specification — see [`ignition_quality_code`] and ADR
 ///   0012.
 /// - **1** — initial contract, with the specification's quality codes.
+///
+/// # ADR 0049 and ADR 0050 bump it to 13, together, on purpose
+///
+/// **The wire adopts the site's nomenclature** (SCADA technical report v0.10,
+/// §16.9), in two moves that share one version number because they share one
+/// window:
+///
+/// - **The metric names are the site's** ([#110], ADR 0050): `Power` becomes
+///   `puissance`, `Energy` becomes `energie`, and the two cause metrics follow —
+///   `cause/puissance`, `cause/energie`. Only the language changes; the
+///   structure, including the `/` a consumer renders as a folder, is untouched.
+///   `Contract/Version` and `Node Control/Rebirth` stay as they are: the first is
+///   a fact about the publishing SERVICE rather than a quantity of the site — the
+///   same reasoning that keeps the edge node named after the service — and the
+///   second is fixed word for word by the specification.
+/// - **The device is named by its measuring point** ([#111], ADR 0049): the
+///   Sparkplug device id is the meter's short name (`cptNN`) instead of its
+///   serial, and the DBIRTH carries the serial as the [`PROPERTY_SERIAL`]
+///   property on every metric it declares. A tag name appears in this contract's
+///   name set; a device id does not — but the tag set a consumer browses is
+///   reached THROUGH the device id, so a changed one orphans every series filed
+///   under the old name just as surely as a rename does.
+///
+/// **Breaking, on both halves.** Four names in the tag set change, and every
+/// series a consumer holds under the old device id stops being written to. A v12
+/// consumer finds nothing where it was watching.
+///
+/// **One bump rather than two, and the reason is not economy.** The Tier-3
+/// runbook's promise is that *two runs sharing a version number attest to the
+/// same tag set*; a v13 that existed only between two commits and was never
+/// attested would put a number in that table nothing stands behind. The site's
+/// own report makes the same call from the other side — *"la même fenêtre couvre
+/// les quatre points"* — because the cost of a rename is a broken series and the
+/// window in which there is no series to break closes once, not twice.
+///
+/// **The attestation this owes.** Action H7 of the epic-8 retrospective: a
+/// `CONTRACT_VERSION` bump earns a Tier-3 attestation, or records what it is
+/// waiting for and when that arrives. v13 is waiting for a Tier-3 session against
+/// Ignition, and `docs/ignition-contract-runbook.md` carries that entry.
 ///
 /// # ADR 0044 bumps it to 12, and it REPLACES v11 rather than extending it
 ///
@@ -182,7 +221,7 @@ use crate::domain::{Measurement, Serial, UtcMillis};
 /// vocabulary changed size (11 live, 10 in the v4 golden) without
 /// CONTRACT_VERSION moving"* — which is the first time that test caught a real
 /// change rather than a mutation written to try it.
-pub const CONTRACT_VERSION: i64 = 12;
+pub const CONTRACT_VERSION: i64 = 13;
 
 /// The quality code this bridge publishes for `quality`.
 ///
@@ -230,11 +269,17 @@ pub const METRIC_CONTRACT_VERSION: &str = "Contract/Version";
 /// `-value`.
 pub const METRIC_NODE_CONTROL_REBIRTH: &str = "Node Control/Rebirth";
 /// Metric name for instantaneous power.
-pub const METRIC_POWER: &str = "Power";
+///
+/// **The site's word since contract v13** (ADR 0050): a metric name lives in the
+/// payload, but consumers restore it as a FOLDER, so under an operator's eyes it
+/// behaves as one more path level — and `Power` at the end of a French tag tree
+/// is an inconsistency exactly where it costs most.
+pub const METRIC_POWER: &str = "puissance";
 /// Engineering unit published with [`METRIC_POWER`].
 pub const UNIT_POWER: &str = "kW";
-/// Metric name for the cumulative energy counter.
-pub const METRIC_ENERGY: &str = "Energy";
+/// Metric name for the cumulative energy counter. See [`METRIC_POWER`] for why
+/// it is the site's word.
+pub const METRIC_ENERGY: &str = "energie";
 
 /// The property key under which a non-good verdict names WHY (Story 2.1).
 ///
@@ -253,9 +298,13 @@ pub const METRIC_ENERGY: &str = "Energy";
 /// The metrics carrying the cause, one per measurement, from contract v12.
 ///
 /// **A `/` makes a FOLDER in Ignition** — established by `Contract/Version` and
-/// `Node Control/Rebirth` — so these two become a `Cause` folder holding two
-/// string tags. `Power/Cause` would have made `Power` a folder, and `Power` is
-/// already a tag: the tree cannot hold both.
+/// `Node Control/Rebirth` — so these two become a `cause` folder holding two
+/// string tags. `puissance/cause` would have made `puissance` a folder, and
+/// `puissance` is already a tag: the tree cannot hold both.
+///
+/// The folder took the site's word with the metrics it qualifies at contract v13
+/// (ADR 0050): only the language moved, and the pairing of a cause metric with
+/// the metric it qualifies is exactly what it was.
 ///
 /// **They replace the `Cause` PROPERTY, which could not work and was not merely
 /// inelegant.** Measured on 2026-08-22, on a virgin group, with the wire read at
@@ -265,9 +314,9 @@ pub const METRIC_ENERGY: &str = "Energy";
 /// frozen at its birth value, which under v11 meant `no-reading-yet` beside a
 /// healthy meter, for ever. A metric's value is precisely what a DDATA exists to
 /// change (ADR 0044, superseding ADR 0043).
-pub const METRIC_CAUSE_POWER: &str = "Cause/Power";
+pub const METRIC_CAUSE_POWER: &str = "cause/puissance";
 /// See [`METRIC_CAUSE_POWER`].
-pub const METRIC_CAUSE_ENERGY: &str = "Cause/Energy";
+pub const METRIC_CAUSE_ENERGY: &str = "cause/energie";
 
 /// The value [`METRIC_PROPERTY_CAUSE`] carries when a metric is `Good` — the
 /// explicit spelling of *no cause*.
@@ -290,6 +339,46 @@ pub const METRIC_CAUSE_ENERGY: &str = "Cause/Energy";
 pub const CAUSE_NONE: &str = "no-cause";
 /// Engineering unit published with [`METRIC_ENERGY`].
 pub const UNIT_ENERGY: &str = "kWh";
+
+/// The property key under which a DBIRTH declares WHICH physical meter answers
+/// for a device (contract v13, [ADR 0049], [#111]).
+///
+/// # Why the serial has to be on the wire at all
+///
+/// Until v13 the device id WAS the serial, so the wire said which box was
+/// speaking by construction: a name could not be attached to the wrong meter
+/// because it was not a name, it was the meter's own number. Naming the device
+/// after its measuring point (`cptNN`) is what keeps a replaced meter from
+/// becoming a new device — and it gives up exactly that guarantee. A swapped
+/// configuration line would publish one flat's measurements under another's name
+/// and **no value would stop being plausible**, which is the failure this bridge
+/// exists to refuse.
+///
+/// So the guarantee changes form rather than disappearing: the serial travels as
+/// a property, and `UnverifiedReading::verify` refuses a meter whose fetched
+/// serial is not the declared one (ADR 0029's latch, asked one step earlier).
+/// This property is what lets a person standing in front of the tag browser make
+/// the same check the bridge makes.
+///
+/// # A property, and here that is the right shape
+///
+/// ADR 0044 took the CAUSE out of a property for a measured reason: a metric
+/// property is written by a BIRTH and by nothing else, so a cause carried as one
+/// stood frozen at its birth value while the world moved. A serial is the
+/// opposite case — it cannot move within a session, because a serial that changed
+/// under us latches the meter off the wire — so *frozen at its birth value* is
+/// precisely what is wanted. The two decisions do not disagree; they read the
+/// same measurement.
+///
+/// **Declared on every metric of the DBIRTH**, not on a chosen one: a host
+/// materialises a property only where a BIRTH declares it, and an operator
+/// inspecting a tag should not have to know which of the four is the one that
+/// carries the identity. It is absent from DDATA, like the engineering unit that
+/// is already only meaningful at declaration — a host holds the last value of a
+/// property it was sent, and this one has no later value to send.
+///
+/// [ADR 0049]: ../../../docs/adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md
+pub const PROPERTY_SERIAL: &str = "serie";
 
 /// One message ready for the transport: where it goes and what it carries.
 ///
@@ -458,6 +547,18 @@ struct Declaration {
     /// where a refusal was observed ([`SparkplugPublisher::withdraw`]), never
     /// as a default.
     born: bool,
+    /// The name this device was announced under — the Sparkplug device id, and
+    /// since contract v13 the meter's short name rather than its serial
+    /// ([ADR 0049]).
+    ///
+    /// **Held here, so the mapping is applied in exactly one place.** A reading
+    /// arrives keyed by the serial the source reported; the topic it goes out on
+    /// is built from this. Recomputing the name at each call site would be a
+    /// second place for a device to acquire a name, which is how one ends up with
+    /// two.
+    ///
+    /// [ADR 0049]: ../../../docs/adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md
+    published: MeterId,
     /// The last reading published for this device — a rebirth re-declares what
     /// is actually known instead of resetting every tag to "nothing".
     last: Option<MeterUpdate>,
@@ -465,8 +566,12 @@ struct Declaration {
 
 impl Declaration {
     /// A device the host has just been told about.
-    const fn born(last: Option<MeterUpdate>) -> Self {
-        Self { born: true, last }
+    const fn born(published: MeterId, last: Option<MeterUpdate>) -> Self {
+        Self {
+            born: true,
+            published,
+            last,
+        }
     }
 }
 
@@ -475,6 +580,18 @@ pub struct SparkplugPublisher {
     node: EdgeNode,
     session: Session,
     /// Devices declared by the last BIRTH, and what the host knows of each.
+    ///
+    /// **Keyed by the SERIAL, while the wire carries the published name**
+    /// ([ADR 0049]). The two questions this map answers are asked with the
+    /// serial: a reading arrives carrying the one its source reported, and
+    /// [#88]'s undo names the device the transport refused. Keying it by the
+    /// published name instead would have to translate on the way in, on a value
+    /// that is not ours — and would silently drop the one thing this shape still
+    /// gives for free: a reading whose serial matches no declaration is
+    /// [`Published::DroppedUndeclaredDevice`] rather than a measurement published
+    /// under somebody else's name.
+    ///
+    /// [ADR 0049]: ../../../docs/adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md
     declared: HashMap<Serial, Declaration>,
 }
 
@@ -547,17 +664,21 @@ impl SparkplugPublisher {
     pub fn birth(
         &mut self,
         now: UtcMillis,
-        meters: &[Serial],
+        meters: &[DeviceIdentity],
         sink: &mut impl Sink,
     ) -> Result<(), TopicError> {
         // Validate EVERYTHING first — a half-emitted birth would put an
         // incomplete tag set on the irreversible side of the contract.
+        //
+        // **The topic is built from the PUBLISHED name** since contract v13
+        // (ADR 0049); the serial rides along because it keys the declaration and
+        // is declared as a property of every metric below.
         let device_topics = meters
             .iter()
-            .map(|serial| {
+            .map(|device| {
                 self.node
-                    .device_topic(MessageType::DBirth, serial.as_str())
-                    .map(|topic| (serial.clone(), topic))
+                    .device_topic(MessageType::DBirth, device.published.as_str())
+                    .map(|topic| (device.clone(), topic))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -587,7 +708,8 @@ impl SparkplugPublisher {
         };
 
         let mut declared = HashMap::with_capacity(device_topics.len());
-        for (serial, topic) in device_topics {
+        for (device, topic) in device_topics {
+            let DeviceIdentity { published, serial } = device;
             let known = self.declared.get(&serial).and_then(|d| d.last.clone());
             let metrics = match &known {
                 // A re-declared reading has NOT been re-judged against now, so
@@ -621,14 +743,14 @@ impl SparkplugPublisher {
                 // not by this call site** (2026-08-19 review).
                 None => timestamp,
             };
-            let payload = live.device_birth(payload_ts, metrics);
+            let payload = live.device_birth(payload_ts, vouched_for(metrics, &serial));
             sink.emit(Outbound {
                 topic,
                 payload: encode(&payload),
                 message: MessageType::DBirth,
                 device: Some(serial.clone()),
             });
-            declared.insert(serial, Declaration::born(known));
+            declared.insert(serial, Declaration::born(published, known));
         }
 
         self.declared = declared;
@@ -704,13 +826,13 @@ impl SparkplugPublisher {
     pub fn device_birth(
         &mut self,
         now: UtcMillis,
-        serial: &Serial,
+        device: &DeviceIdentity,
         sink: &mut impl Sink,
     ) -> Result<bool, TopicError> {
         // Validate the topic BEFORE touching the session, as `birth` does.
         let topic = self
             .node
-            .device_topic(MessageType::DBirth, serial.as_str())?;
+            .device_topic(MessageType::DBirth, device.published.as_str())?;
         let Session::Live(live) = &mut self.session else {
             return Ok(false);
         };
@@ -718,15 +840,20 @@ impl SparkplugPublisher {
         // A device declared for the first time has no reading yet, so it births
         // cold — the same metrics a connect-time birth would give it. Anything
         // else would assert a value nobody measured.
-        let payload = live.device_birth(timestamp, cold_start_metrics(timestamp));
+        let payload = live.device_birth(
+            timestamp,
+            vouched_for(cold_start_metrics(timestamp), &device.serial),
+        );
         sink.emit(Outbound {
             topic,
             payload: encode(&payload),
             message: MessageType::DBirth,
-            device: Some(serial.clone()),
+            device: Some(device.serial.clone()),
         });
-        self.declared
-            .insert(serial.clone(), Declaration::born(None));
+        self.declared.insert(
+            device.serial.clone(),
+            Declaration::born(device.published.clone(), None),
+        );
         Ok(true)
     }
 
@@ -752,12 +879,13 @@ impl SparkplugPublisher {
     pub fn device_death(
         &mut self,
         now: UtcMillis,
-        serial: &Serial,
+        device: &DeviceIdentity,
         sink: &mut impl Sink,
     ) -> Result<bool, TopicError> {
+        let serial = &device.serial;
         let topic = self
             .node
-            .device_topic(MessageType::DDeath, serial.as_str())?;
+            .device_topic(MessageType::DDeath, device.published.as_str())?;
         let Session::Live(live) = &mut self.session else {
             return Ok(false);
         };
@@ -798,16 +926,29 @@ impl SparkplugPublisher {
         // but the host has never heard of it, so its DATA is discarded there.
         // Counting such a reading as emitted is [#88], and the map's own key was
         // what made the wrong answer the easy one.
-        if !self.declared.get(&serial).is_some_and(|d| d.born) {
+        // **The published name comes from the declaration, never from the
+        // reading** ([ADR 0049]). The serial the source reported is what decides
+        // WHETHER this reading may go out; the name it goes out under is the one
+        // the DBIRTH announced. A reading whose serial matches no live
+        // declaration is dropped here — which is also the last thing standing
+        // between a swapped configuration line and one flat's measurements
+        // published under another's name, and why the concordance guard upstream
+        // (`UnverifiedReading::verify`) is not optional.
+        let Some(published) = self
+            .declared
+            .get(&serial)
+            .filter(|d| d.born)
+            .map(|d| d.published.clone())
+        else {
             return Ok(Pending {
                 outcome: Published::DroppedUndeclaredDevice { serial },
                 queued: None,
                 answered: false,
             });
-        }
+        };
         let topic = self
             .node
-            .device_topic(MessageType::DData, serial.as_str())?;
+            .device_topic(MessageType::DData, published.as_str())?;
         // NOT ROUTED THROUGH THE TABLE, and the reason is stronger than the
         // table: `publish` is handed no clock at all. `PublicationInstant` is
         // unrepresentable here — there is nothing to read it from — so
@@ -901,8 +1042,15 @@ impl SparkplugPublisher {
         pending.answered = true;
         if let Some(update) = pending.queued.take() {
             let serial = update.measurement.serial.clone();
+            // The name is the declaration's own, re-inserted with it. A reading
+            // only ever reaches `confirmed` after `publish` found a live
+            // declaration for its serial, so the name is always there; taking it
+            // from anywhere else would be inventing one.
+            let Some(published) = self.declared.get(&serial).map(|d| d.published.clone()) else {
+                return;
+            };
             self.declared
-                .insert(serial, Declaration::born(Some(update)));
+                .insert(serial, Declaration::born(published, Some(update)));
         }
     }
 
@@ -1003,6 +1151,28 @@ fn contract_metric(timestamp_ms: u64) -> Metric {
         timestamp_ms,
     )
     .with_quality_code(ignition_quality_code(Quality::Good))
+}
+
+/// Attaches the serial to every metric of a DEVICE BIRTH, so the wire says which
+/// physical meter answers for the name in the topic (contract v13, ADR 0049).
+///
+/// # Why this is a wrapper and not a line inside each metric builder
+///
+/// The birth path has three producers — `cold_start_metrics`, the re-declaration
+/// that runs `metrics_for` over the last known reading, and `device_birth`'s
+/// cold start — and the DDATA path shares two of them. Adding the property inside
+/// the builders would either put it on DDATA as well (where a host ignores it,
+/// so it would be bytes that mean nothing) or need the same line remembered in
+/// three places, which is the shape of an omission: a birth that quietly stopped
+/// declaring the serial would look exactly like one that never had to.
+///
+/// One function, applied at the three call sites that emit a DBIRTH and at no
+/// other, and `the_birth_vouches_for_its_device` asserts every one of them.
+fn vouched_for(metrics: Vec<Metric>, serial: &Serial) -> Vec<Metric> {
+    metrics
+        .into_iter()
+        .map(|metric| metric.with_property(PROPERTY_SERIAL, serial.as_str()))
+        .collect()
 }
 
 /// The tag set declared for a device with no reading yet: named, unit-carrying,
@@ -1542,6 +1712,15 @@ mod tests {
     }
 
     const SERIAL: &str = "30000001";
+    /// What that meter is CALLED on the wire — the device level of every topic
+    /// below, and the name `measurement()` gives its reading (ADR 0049).
+    const PUBLISHED: &str = "garage";
+
+    /// The pair a birth is given: the name it goes out under, and the serial it
+    /// is filed and vouched for under.
+    fn device() -> DeviceIdentity {
+        DeviceIdentity::new(MeterId::new(PUBLISHED), Serial::new(SERIAL))
+    }
 
     fn measurement(quality: Quality) -> Measurement {
         Measurement {
@@ -1597,7 +1776,7 @@ mod tests {
     fn born() -> (SparkplugPublisher, RecordingSink) {
         let mut p = publisher();
         let mut sink = RecordingSink::default();
-        p.birth(UtcMillis(1_000), &[Serial::new(SERIAL)], &mut sink)
+        p.birth(UtcMillis(1_000), &[device()], &mut sink)
             .expect("valid topics");
         sink.emitted.clear();
         (p, sink)
@@ -1629,6 +1808,22 @@ mod tests {
         match &m.value {
             Some(payload::metric::Value::StringValue(v)) => Some(v.clone()),
             _ => None,
+        }
+    }
+
+    /// The value of one string property of a metric, or `None` when the metric
+    /// does not carry that key at all.
+    ///
+    /// The two answers are different and both are asserted below: a DBIRTH must
+    /// carry `serie`, and a DDATA must NOT — a host ignores a property in a
+    /// DDATA (measured 2026-08-22, ADR 0044), so bytes spent on it would say
+    /// nothing to anyone.
+    fn property_of(m: &payload::Metric, key: &str) -> Option<String> {
+        let props = m.properties.as_ref()?;
+        let idx = props.keys.iter().position(|k| k == key)?;
+        match &props.values[idx].value {
+            Some(payload::property_value::Value::StringValue(v)) => Some(v.clone()),
+            other => panic!("{key} must be a string property, got {other:?}"),
         }
     }
 
@@ -1686,7 +1881,7 @@ mod tests {
     fn the_cold_start_birth_declares_the_cause_metrics_and_does_not_lie_about_them() {
         let mut p = publisher();
         let mut sink = RecordingSink::default();
-        p.birth(UtcMillis(1_000), &[Serial::new(SERIAL)], &mut sink)
+        p.birth(UtcMillis(1_000), &[device()], &mut sink)
             .expect("valid topics");
 
         let dbirth = decode(&sink.emitted[1]);
@@ -1718,14 +1913,14 @@ mod tests {
     fn cold_start_birth_declares_tags_with_no_value_and_stale_quality() {
         let mut p = publisher();
         let mut sink = RecordingSink::default();
-        p.birth(UtcMillis(1_000), &[Serial::new(SERIAL)], &mut sink)
+        p.birth(UtcMillis(1_000), &[device()], &mut sink)
             .expect("valid topics");
 
         assert_eq!(sink.emitted.len(), 2, "one NBIRTH + one DBIRTH");
         assert_eq!(sink.emitted[0].topic, "spBv1.0/Site/NBIRTH/Bridge");
         assert_eq!(
-            sink.emitted[1].topic, "spBv1.0/Site/DBIRTH/Bridge/30000001",
-            "the device is keyed by Serial"
+            sink.emitted[1].topic, "spBv1.0/Site/DBIRTH/Bridge/garage",
+            "the device level of the topic is the meter's published name (ADR 0049)"
         );
 
         let dbirth = decode(&sink.emitted[1]);
@@ -1788,10 +1983,10 @@ mod tests {
         let mut p = publisher();
         let mut sink = RecordingSink::default();
         // First birth: the `Session::Pending` arm.
-        p.birth(UtcMillis(1_000), &[Serial::new(SERIAL)], &mut sink)
+        p.birth(UtcMillis(1_000), &[device()], &mut sink)
             .expect("valid topics");
         // Second: the `Session::Live` arm — a reconnect or a rebirth answer.
-        p.birth(UtcMillis(2_000), &[Serial::new(SERIAL)], &mut sink)
+        p.birth(UtcMillis(2_000), &[device()], &mut sink)
             .expect("valid topics");
 
         let births: Vec<&Outbound> = sink
@@ -1889,7 +2084,7 @@ mod tests {
 
         assert_eq!(sink.emitted.len(), 1);
         let out = &sink.emitted[0];
-        assert_eq!(out.topic, "spBv1.0/Site/DDATA/Bridge/30000001");
+        assert_eq!(out.topic, "spBv1.0/Site/DDATA/Bridge/garage");
         assert_eq!(out.message, MessageType::DData);
 
         let ddata = decode(out);
@@ -1979,6 +2174,153 @@ mod tests {
         assert!(sink.emitted.is_empty());
     }
 
+    /// **Every DBIRTH says which physical meter answers for the name it
+    /// declares** — contract v13, ADR 0049, and the obligation the site's
+    /// nomenclature attaches to the rename (`A39`).
+    ///
+    /// Naming the device after its measuring point gives up the one guarantee the
+    /// serial provided for free: that a name could not be attached to the wrong
+    /// meter. The concordance guard is what replaces it for the BRIDGE; this
+    /// property is what replaces it for a PERSON, who can read `serie` in the tag
+    /// browser and check `cpt03` against the box on the wall.
+    ///
+    /// **All three birth paths, and the DDATA as a control.** A property is
+    /// materialised by a host only where a BIRTH declares it, so a path that
+    /// quietly stopped declaring it would look exactly like one that never had
+    /// to — and asserting one path would leave the other two free to drift. The
+    /// DDATA control is not a formality either: it is what says the property is
+    /// on the certificate rather than on everything, which is the difference
+    /// between a declaration and noise.
+    ///
+    /// FALSIFIED 2026-08-25, two mutations, each red on its own:
+    ///
+    /// - `vouched_for` returning `metrics` untouched — the ordinary shape of the
+    ///   omission, since the wrapper is one call away from being a no-op:
+    ///   `the cold-start DBIRTH must vouch for its device on puissance`.
+    /// - the property moved into `metrics_for`, which is how somebody would
+    ///   "simplify" it — every birth still vouches, and the DDATA control goes
+    ///   red: `a DDATA must not carry `serie`: a host ignores a property outside
+    ///   a BIRTH, so it is bytes that say nothing — got Some("30000001")`.
+    #[test]
+    fn every_birth_vouches_for_the_device_it_names() {
+        let all_four = [
+            METRIC_POWER,
+            METRIC_ENERGY,
+            METRIC_CAUSE_POWER,
+            METRIC_CAUSE_ENERGY,
+        ];
+
+        // 1. The cold-start birth.
+        let mut p = publisher();
+        let mut sink = RecordingSink::default();
+        p.birth(UtcMillis(1_000), &[device()], &mut sink)
+            .expect("valid topics");
+        let dbirth = decode(&sink.emitted[1]);
+        for name in all_four {
+            assert_eq!(
+                property_of(metric(&dbirth, name), PROPERTY_SERIAL).as_deref(),
+                Some(SERIAL),
+                "the cold-start DBIRTH must vouch for its device on {name}"
+            );
+        }
+
+        // 2. The re-declaration, which takes a different metric builder: a
+        //    rebirth after a reading carries that reading, degraded.
+        assert_eq!(
+            publish_and_confirm(&mut p, &update(Quality::Good), &mut sink),
+            Published::Emitted,
+            "the premise: the rebirth below has a reading to re-declare"
+        );
+        sink.emitted.clear();
+        p.birth(UtcMillis(2_000), &[device()], &mut sink)
+            .expect("valid topics");
+        let redeclared = decode(&sink.emitted[1]);
+        for name in all_four {
+            assert_eq!(
+                property_of(metric(&redeclared, name), PROPERTY_SERIAL).as_deref(),
+                Some(SERIAL),
+                "a rebirth re-declaring a known reading must vouch for it too on {name}"
+            );
+        }
+
+        // 3. The mid-session certificate (story 5.2 AC4), the third builder.
+        let (mut live, mut sink) = born();
+        let newcomer = DeviceIdentity::new(MeterId::new("cellar"), Serial::new("30000002"));
+        assert!(
+            live.device_birth(UtcMillis(3_000), &newcomer, &mut sink)
+                .expect("valid topics"),
+            "the premise: a live session accepts a device certificate"
+        );
+        let certificate = decode(&sink.emitted[0]);
+        for name in all_four {
+            assert_eq!(
+                property_of(metric(&certificate, name), PROPERTY_SERIAL).as_deref(),
+                Some("30000002"),
+                "a device announced mid-session must vouch for itself on {name}"
+            );
+        }
+
+        // The control: a DDATA carries no such property.
+        let (mut p, mut sink) = born();
+        assert_eq!(
+            publish_and_confirm(&mut p, &update(Quality::Good), &mut sink),
+            Published::Emitted,
+            "the premise: there is a DDATA to inspect"
+        );
+        let ddata = decode(&sink.emitted[0]);
+        assert_eq!(
+            property_of(metric(&ddata, METRIC_POWER), PROPERTY_SERIAL),
+            None,
+            "a DDATA must not carry `{PROPERTY_SERIAL}`: a host ignores a property \
+             outside a BIRTH, so it is bytes that say nothing"
+        );
+    }
+
+    /// **The device level of a DDATA comes from the DECLARATION, never from the
+    /// reading** (ADR 0049).
+    ///
+    /// A `Measurement` carries a `meter` field of its own, so the obvious way to
+    /// write `publish` after the rename is `device_topic(DData,
+    /// update.measurement.meter.as_str())` — one identifier, right there, no
+    /// lookup. It compiles, it is what a Rust author would reach for, and every
+    /// other test here would stay green because their fixtures agree on both
+    /// names.
+    ///
+    /// It is wrong for the reason the whole rename hangs on: what a host files
+    /// history under must be what the BIRTH announced. A reading whose `meter`
+    /// drifted — a renamed configuration row not yet restarted into force, a
+    /// source adapter filling the field from somewhere else — would open a second
+    /// device on the wire, undeclared, and split a series in half.
+    ///
+    /// So the fixture makes the two names disagree on purpose. FALSIFIED
+    /// 2026-08-25 with exactly that mutation:
+    ///
+    /// ```text
+    /// assertion `left == right` failed: the topic must name the device the BIRTH
+    /// declared, not the name the reading happens to carry
+    ///   left: "spBv1.0/Site/DDATA/Bridge/a-name-nothing-declared"
+    ///  right: "spBv1.0/Site/DDATA/Bridge/garage"
+    /// ```
+    #[test]
+    fn the_data_topic_names_the_declaration_not_the_reading() {
+        let (mut p, mut sink) = born();
+        let mut drifted = update(Quality::Good);
+        drifted.measurement.meter = MeterId::new("a-name-nothing-declared");
+        drifted.meter = MeterId::new("a-name-nothing-declared");
+
+        assert_eq!(
+            publish_and_confirm(&mut p, &drifted, &mut sink),
+            Published::Emitted,
+            "the premise: the reading is still routed by its serial, which is \
+             declared — a drifted NAME is not a drifted device"
+        );
+        assert_eq!(
+            sink.emitted[0].topic, "spBv1.0/Site/DDATA/Bridge/garage",
+            "the topic must name the device the BIRTH declared, not the name the \
+             reading happens to carry"
+        );
+    }
+
     /// **Story 3.1 AC2 and AC3, and nothing exercised either beyond one meter.**
     ///
     /// Every other `birth` test here passes one serial or none, because the
@@ -2014,13 +2356,14 @@ mod tests {
     fn four_devices_share_one_node_sequence() {
         let mut p = publisher();
         let mut sink = RecordingSink::default();
-        let fleet: Vec<Serial> = ["30000001", "30000002", "30000003", "30000004"]
+        let fleet: Vec<DeviceIdentity> = ["cpt01", "cpt02", "cpt03", "cpt04"]
             .iter()
-            .map(|s| Serial::new(*s))
+            .zip(["30000001", "30000002", "30000003", "30000004"])
+            .map(|(name, serial)| DeviceIdentity::new(MeterId::new(*name), Serial::new(serial)))
             .collect();
 
         p.birth(UtcMillis(1_000), &fleet, &mut sink)
-            .expect("four legal serials");
+            .expect("four legal identifiers");
 
         // AC2 — one NBIRTH, then one DBIRTH per meter, in that order.
         // `tck-id-message-flow-device-birth-publish-nbirth-wait`.
@@ -2042,10 +2385,12 @@ mod tests {
         // ...and each on its OWN device topic. Four DBIRTHs on one topic would
         // satisfy the shape assertion above while announcing one device four times.
         let topics: Vec<&str> = sink.emitted[1..].iter().map(|o| o.topic.as_str()).collect();
-        for serial in &fleet {
+        for device in &fleet {
             assert!(
-                topics.iter().any(|t| t.ends_with(serial.as_str())),
-                "no DBIRTH carried {serial:?}; got {topics:?}"
+                topics
+                    .iter()
+                    .any(|t| t.ends_with(device.published.as_str())),
+                "no DBIRTH carried {device:?}; got {topics:?}"
             );
         }
 
@@ -2099,9 +2444,12 @@ mod tests {
         let mut p = publisher();
         let mut sink = RecordingSink::default();
         let fleet = ["30000001", "30000002", "30000003", "30000004"];
-        let serials: Vec<Serial> = fleet.iter().map(|s| Serial::new(*s)).collect();
-        p.birth(UtcMillis(1_000), &serials, &mut sink)
-            .expect("four legal serials");
+        let devices: Vec<DeviceIdentity> = fleet
+            .iter()
+            .map(|s| DeviceIdentity::new(MeterId::new(format!("cpt-{s}")), Serial::new(*s)))
+            .collect();
+        p.birth(UtcMillis(1_000), &devices, &mut sink)
+            .expect("four legal identifiers");
         sink.emitted.clear();
 
         // Three answering, one silent — the shape of Guy's deployment. Each
@@ -2148,7 +2496,9 @@ mod tests {
             .collect();
         let expected: std::collections::BTreeMap<String, u32> = verdicts
             .iter()
-            .map(|(s, q)| ((*s).to_string(), ignition_quality_code(*q)))
+            // Keyed by the PUBLISHED name, which is what the topic's device level
+            // now holds (ADR 0049) — the serial is what routed the reading to it.
+            .map(|(s, q)| (format!("cpt-{s}"), ignition_quality_code(*q)))
             .collect();
         assert_eq!(
             seen, expected,
@@ -2163,24 +2513,31 @@ mod tests {
         );
     }
 
+    /// **The illegal value is the PUBLISHED name since contract v13** (ADR 0049).
+    /// It was the serial, which no longer reaches a topic at all: a test handing
+    /// `birth` an illegal serial would now pass whatever the code did, because
+    /// nothing would try to make a topic out of it.
     #[test]
-    fn an_illegal_serial_emits_nothing_at_all() {
+    fn an_illegal_device_name_emits_nothing_at_all() {
         let mut p = publisher();
         let mut sink = RecordingSink::default();
         let err = p
             .birth(
                 UtcMillis(1_000),
-                &[Serial::new(SERIAL), Serial::new("30/00+1")],
+                &[
+                    device(),
+                    DeviceIdentity::new(MeterId::new("cpt/03+"), Serial::new("30000002")),
+                ],
                 &mut sink,
             )
-            .expect_err("a serial with topic separators must be refused");
+            .expect_err("a device name with topic separators must be refused");
         assert!(matches!(err, TopicError::IllegalCharacter { .. }));
         assert!(
             sink.emitted.is_empty(),
             "not even the NBIRTH: a half-declared node is worse than none"
         );
         // ...and the session is untouched, so a corrected retry is a clean birth.
-        p.birth(UtcMillis(1_000), &[Serial::new(SERIAL)], &mut sink)
+        p.birth(UtcMillis(1_000), &[device()], &mut sink)
             .expect("the corrected birth succeeds");
         assert_eq!(decode(&sink.emitted[0]).seq, Some(0));
     }
@@ -2244,8 +2601,7 @@ mod tests {
         sink.emitted.clear();
 
         p.withdraw(&[Serial::new(SERIAL)]);
-        p.birth(UtcMillis(2_000), &[Serial::new(SERIAL)], &mut sink)
-            .unwrap();
+        p.birth(UtcMillis(2_000), &[device()], &mut sink).unwrap();
 
         let dbirth = decode(&sink.emitted[1]);
         let power = metric(&dbirth, METRIC_POWER);
@@ -2280,8 +2636,7 @@ mod tests {
         sink.emitted.clear();
 
         // A reconnect re-births the same session's devices.
-        p.birth(UtcMillis(2_000), &[Serial::new(SERIAL)], &mut sink)
-            .unwrap();
+        p.birth(UtcMillis(2_000), &[device()], &mut sink).unwrap();
         let dbirth = decode(&sink.emitted[1]);
         let power = metric(&dbirth, METRIC_POWER);
         assert_eq!(
@@ -2368,8 +2723,7 @@ mod tests {
     fn sequence_numbering_is_continuous_across_node_and_device_messages() {
         let mut p = publisher();
         let mut sink = RecordingSink::default();
-        p.birth(UtcMillis(1), &[Serial::new(SERIAL)], &mut sink)
-            .unwrap();
+        p.birth(UtcMillis(1), &[device()], &mut sink).unwrap();
         assert_eq!(
             publish_and_confirm(&mut p, &update(Quality::Good), &mut sink),
             Published::Emitted
@@ -2514,7 +2868,7 @@ mod tests {
 
         // The outage. The broker returns an hour later and the session re-births.
         p.new_session();
-        p.birth(UtcMillis(AN_HOUR_LATER), &[Serial::new(SERIAL)], &mut sink)
+        p.birth(UtcMillis(AN_HOUR_LATER), &[device()], &mut sink)
             .expect("valid topics");
 
         // The NBIRTH speaks NOW — it announces a session, not a measurement.
@@ -2585,12 +2939,8 @@ mod tests {
         sink.emitted.clear();
 
         p.new_session();
-        p.birth(
-            UtcMillis(9_000_000_000_000),
-            &[Serial::new(SERIAL)],
-            &mut sink,
-        )
-        .expect("valid topics");
+        p.birth(UtcMillis(9_000_000_000_000), &[device()], &mut sink)
+            .expect("valid topics");
         let dbirth = decode(&sink.emitted[1]);
         let power = metric(&dbirth, METRIC_POWER);
 

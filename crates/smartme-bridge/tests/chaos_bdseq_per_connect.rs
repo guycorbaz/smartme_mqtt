@@ -38,7 +38,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use smartme_bridge::app::mqtt_driver::{self, MqttConfig};
 use smartme_bridge::core::clock::{Clock, SystemClock};
-use smartme_bridge::domain::Serial;
+use smartme_bridge::domain::{DeviceIdentity, Serial};
 
 const SERIAL: &str = "30000001";
 const NODE_ID: &str = "ChaosBdSeq";
@@ -93,7 +93,12 @@ async fn chaos_bd_seq_advances_on_every_connect() {
             death_flush: Duration::from_secs(2),
         },
         node,
-        vec![Serial::new(SERIAL)],
+        // Both names since contract v13 (ADR 0049): the topic carries the
+        // published one, the declaration is filed under the serial.
+        vec![DeviceIdentity::new(
+            smartme_bridge::domain::MeterId::new("garage"),
+            Serial::new(SERIAL),
+        )],
         Arc::clone(&clock),
         // Story 4.11's drop counters. EMPTY ON PURPOSE: this test asserts nothing
         // about lost readings, and `Heartbeats::dropped` skips a meter it does not

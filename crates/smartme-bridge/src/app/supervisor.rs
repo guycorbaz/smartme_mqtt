@@ -14,6 +14,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::adapters::SmartMeCloudSource;
+use crate::app::config::MeterConfig;
 use crate::app::mqtt_driver::{self, DeviceCommand, MqttConfig};
 use crate::app::poll_publish::{self, Heartbeats, PollConfig};
 use crate::app::reconfigure::{self, Cost, Plan};
@@ -244,24 +245,24 @@ impl Control {
         // would go on showing a buried device's last value as current. Whatever
         // is not delivered is named in the plan, and the caller renders it.
         let mut undelivered = Vec::new();
-        for serial in &plan.deaths {
+        for device in &plan.deaths {
             if self
                 .devices
-                .send(DeviceCommand::Death(serial.clone()))
+                .send(DeviceCommand::Death(device.clone()))
                 .await
                 .is_err()
             {
-                undelivered.push(serial.clone());
+                undelivered.push(device.clone());
             }
         }
-        for serial in &plan.births {
+        for device in &plan.births {
             if self
                 .devices
-                .send(DeviceCommand::Birth(serial.clone()))
+                .send(DeviceCommand::Birth(device.clone()))
                 .await
                 .is_err()
             {
-                undelivered.push(serial.clone());
+                undelivered.push(device.clone());
             }
         }
         if !undelivered.is_empty() {
@@ -362,12 +363,16 @@ pub async fn run_with_control(
         return Err(StartupError::NoEnabledMeter);
     }
     // Validate every device identifier HERE, and ALL of them before any task
-    // starts: a serial that cannot be a topic level would otherwise leave the
-    // node connected, unborn and publishing nothing, forever. Refusing to start
-    // beats starting wrong — and refusing on the FOURTH meter after three are
-    // already polling would be starting wrong.
+    // starts: an identifier that cannot be a topic level would otherwise leave
+    // the node connected, unborn and publishing nothing, forever. Refusing to
+    // start beats starting wrong — and refusing on the FOURTH meter after three
+    // are already polling would be starting wrong.
+    //
+    // **The PUBLISHED name is what is checked** since contract v13 (ADR 0049).
+    // It was the serial, and checking that one now would be checking a value
+    // that no longer reaches a topic — a guard aimed one identifier to the left.
     for meter in &served {
-        node.device_topic(sparkplug_b::MessageType::DBirth, meter.serial.as_str())?;
+        node.device_topic(sparkplug_b::MessageType::DBirth, meter.meter.as_str())?;
     }
 
     let client = SmartMeClient::new(
@@ -418,7 +423,7 @@ pub async fn run_with_control(
             death_flush: Duration::from_secs(2),
         },
         node,
-        served.iter().map(|m| m.serial.clone()).collect(),
+        served.iter().map(MeterConfig::identity).collect(),
         Arc::clone(&clock),
         crate::app::mqtt_driver::Health {
             meters: heartbeats.clone(),
@@ -444,12 +449,13 @@ pub async fn run_with_control(
     let polls: Vec<_> = served
         .iter()
         .map(|meter| {
-            // The serial goes down with the meter, and it is the SAME value
-            // `node.device_topic` above births the device under. That is the
-            // point: the source compares it with what smart-me answers, so a
-            // serial that is legal but wrong stops the meter loudly instead of
-            // producing a bridge that fetches, judges and ticks while the
-            // publisher discards every reading (`UnverifiedReading::verify`).
+            // The serial goes down with the meter, and since contract v13 it is
+            // NOT the value `node.device_topic` above validates — that is the
+            // meter's published name now (ADR 0049). The serial's job here is
+            // the comparison: the source holds smart-me to it on every answer,
+            // so a serial that is legal but wrong stops the meter loudly
+            // (`UnverifiedReading::verify`) instead of letting the bridge
+            // publish another meter's numbers under this one's name.
             let source = SmartMeCloudSource::new(
                 client.clone(),
                 Arc::clone(&clock),
@@ -460,9 +466,10 @@ pub async fn run_with_control(
             tokio::spawn(poll_publish::run(
                 poll_publish::PolledMeter {
                     meter: meter.meter.clone(),
-                    // Captured at spawn: the serial the DBIRTH below uses, so
-                    // every certificate this task sends names the IN-FORCE
-                    // device rather than a stored, not-yet-restarted edit.
+                    // Captured at spawn, with the name beside it: the pair the
+                    // DBIRTH used, so every certificate this task sends names
+                    // the IN-FORCE device rather than a stored,
+                    // not-yet-restarted edit.
                     serial: meter.serial.clone(),
                 },
                 source,
@@ -531,7 +538,7 @@ pub async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{MeterId, Serial};
+    use crate::domain::{DeviceIdentity, MeterId, Serial};
 
     /// A [`Control`] with no bridge behind it: the channel is the observation
     /// point, so what `apply` decides is visible without a broker.
@@ -577,14 +584,20 @@ mod tests {
         assert_eq!(plan.cost(), Some(Cost::DeviceCertificate));
         assert_eq!(
             devices.try_recv().expect("a certificate was owed"),
-            DeviceCommand::Death(Serial::new("30000001"))
+            DeviceCommand::Death(DeviceIdentity::new(
+                MeterId::new("garage"),
+                Serial::new("30000001")
+            ))
         );
 
         let plan = control.apply(config()).await;
         assert_eq!(plan.cost(), Some(Cost::DeviceCertificate));
         assert_eq!(
             devices.try_recv().expect("a certificate was owed"),
-            DeviceCommand::Birth(Serial::new("30000001"))
+            DeviceCommand::Birth(DeviceIdentity::new(
+                MeterId::new("garage"),
+                Serial::new("30000001")
+            ))
         );
     }
 

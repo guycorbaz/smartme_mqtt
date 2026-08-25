@@ -1085,7 +1085,10 @@ fn cost_report(plan: &crate::app::reconfigure::Plan, period_in_force: u64) -> St
         let names: Vec<String> = plan
             .undelivered
             .iter()
-            .map(|s| format!("<code>{}</code>", escape(s.as_str())))
+            // The PUBLISHED name, which is what an operator reads in the tag
+            // browser and what they would go looking for (ADR 0049). The serial
+            // names a box; this names the device that is missing from the wire.
+            .map(|d| format!("<code>{}</code>", escape(d.published.as_str())))
             .collect();
         format!(
             "<p class=fault>These devices were NOT announced to the broker: {}. \
@@ -1201,8 +1204,10 @@ pub(super) async fn confirm_form(State(state): State<Arc<UiState>>) -> Response 
         &format!(
             "<h1>Confirm the meter mapping</h1>\
              <p>Check the <strong>serial</strong> against the <strong>topic</strong> on \
-             each row. A name that looks right is exactly the part that looks right when \
-             it is wrong, and a SCADA host keeps the tags it discovers.</p>\
+             each row. The topic now carries the meter's NAME, so this is the one place \
+             the pairing can be seen: a name that looks right is exactly the part that \
+             looks right when it is wrong, and a SCADA host keeps the tags it \
+             discovers.</p>\
              <table><tr><th>Meter</th><th>Serial</th><th>smart-me device id</th>\
              <th>Topic</th><th></th></tr>{body}</table>\
              <form method=post action=/confirm>\
@@ -1337,6 +1342,11 @@ pub(super) async fn meter_view(State(state): State<Arc<UiState>>) -> impl IntoRe
     for meter in &fleet.meters {
         let configured = config.meters.iter().find(|m| m.meter == meter.meter);
         let serial = configured.map(|m| m.serial.as_str());
+        // The device level of the topic, which is the meter's own name from
+        // contract v13 (ADR 0049) — and the row is still withheld when the
+        // running configuration no longer carries this meter, because a meter
+        // that is not configured has no topic whatever it is called.
+        let published = configured.map(|m| m.meter.as_str());
         // THE TOPIC IS BUILT BY THE PUBLISHER'S OWN PATH, never spelled here: a
         // page that concatenated it could show a topic the grammar refuses and the
         // bridge would never publish on.
@@ -1346,12 +1356,12 @@ pub(super) async fn meter_view(State(state): State<Arc<UiState>>) -> impl IntoRe
         // `spBv1.0/G/DDATA/N/—` — a topic nothing will ever publish on, rendered
         // as though it were the destination. A meter the running configuration no
         // longer carries has no topic, and saying so is the honest answer.
-        let topic = serial
-            .and_then(|serial| {
+        let topic = published
+            .and_then(|published| {
                 sparkplug_b::EdgeNode::new(&config.group_id, &config.node_id)
                     .ok()
                     .and_then(|node| {
-                        node.device_topic(sparkplug_b::MessageType::DData, serial)
+                        node.device_topic(sparkplug_b::MessageType::DData, published)
                             .ok()
                     })
             })

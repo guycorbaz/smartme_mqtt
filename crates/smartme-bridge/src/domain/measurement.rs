@@ -88,8 +88,12 @@ string_newtype!(
 );
 
 string_newtype!(
-    /// Physical device serial as reported by the meter; Story 1.9 keys the
-    /// Sparkplug device by it.
+    /// Physical device serial as reported by the meter. It keyed the Sparkplug
+    /// device from story 1.9 until [ADR 0049]; it is now the bridge's INTERNAL
+    /// key — what the smart-me API answers with, what routes a reading, and what
+    /// the concordance guard compares — while the wire carries [`MeterId`].
+    ///
+    /// [ADR 0049]: ../../../docs/adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md
     Serial
 );
 
@@ -98,6 +102,43 @@ string_newtype!(
     /// published as a topic by accident.
     TopicPath
 );
+
+/// One device, under both names it has: what the wire calls it, and which
+/// physical meter answers for it ([ADR 0049], [#111]).
+///
+/// # Why the two travel together rather than one being derived from the other
+///
+/// Until 2026-08-25 there was only one name. The Sparkplug device id WAS the
+/// serial, so the publisher, the driver and the reconfigure plan all passed a
+/// bare [`Serial`] around and nothing could disagree.
+///
+/// The site's nomenclature separates them, because what a supervisor historises
+/// is a measuring point and not a box: a replaced meter must not become a new
+/// device. So the wire carries [`MeterId`] — `cptNN`, the short name — and the
+/// serial stays the bridge's own key.
+///
+/// **A pair, not two parameters.** Every call that announces or buries a device
+/// needs both — the name to build the topic with, the serial to file the
+/// declaration under — and two positional arguments of the same shape are two
+/// arguments that can be swapped. Here the compiler holds them together, and the
+/// mapping is applied in exactly one place: the publisher's declaration table.
+///
+/// [ADR 0049]: ../../../docs/adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceIdentity {
+    /// The name this device is published under — the Sparkplug device id.
+    pub published: MeterId,
+    /// The serial the configuration declares for it, which the concordance guard
+    /// checks against the one smart-me reports (`UnverifiedReading::verify`).
+    pub serial: Serial,
+}
+
+impl DeviceIdentity {
+    /// The pair as configured.
+    pub const fn new(published: MeterId, serial: Serial) -> Self {
+        Self { published, serial }
+    }
+}
 
 /// The canonical reading: one meter, one instant, quality always explicit — never a
 /// substituted value (no `Default`, no `serde`; nothing persists a `Measurement`).

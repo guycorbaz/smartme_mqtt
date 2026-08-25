@@ -39,7 +39,7 @@ use smart_me_client::{Credentials, SmartMeClient};
 use crate::app::poll_publish::PollConfig;
 use crate::app::supervisor::BridgeConfig;
 use crate::core::state_machine::Policy;
-use crate::domain::{MeterId, Serial};
+use crate::domain::{DeviceIdentity, MeterId, Serial};
 
 /// Shortest publish period an operator may set.
 ///
@@ -96,11 +96,23 @@ pub const PERIOD_DEFAULT: Duration = Duration::from_secs(30);
 /// without deleting its settings and retyping them later.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeterConfig {
-    /// The logical meter name used in the Sparkplug metric path.
+    /// The meter's short name — and, since contract v13, the **Sparkplug device
+    /// identifier** ([ADR 0049], [#111]).
+    ///
+    /// It names the measuring point rather than the box: what a supervisor
+    /// historises is the metering of a flat, a room, a feeder, so a replaced
+    /// meter must not become a new device. Renaming it therefore orphans every
+    /// series filed under the old name, which is why `reconfigure::classify`
+    /// costs it a `ProcessRestart`.
+    ///
+    /// [ADR 0049]: ../../../docs/adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md
     pub meter: MeterId,
     /// smart-me device id backing it.
     pub device_id: String,
-    /// The device serial — the Sparkplug device identifier.
+    /// The device serial. It was the Sparkplug device identifier until contract
+    /// v13; it is now the bridge's internal key and the value the concordance
+    /// guard holds smart-me to — published as a property of the device BIRTH so
+    /// the wire still says which physical meter is speaking.
     pub serial: Serial,
     /// Whether this meter is published.
     pub enabled: bool,
@@ -110,6 +122,16 @@ pub struct MeterConfig {
     ///
     /// [ADR 0039]: ../../../docs/adr/0039-the-configuration-remembers-when-it-was-written-and-which-meters-matter.md
     pub priority: bool,
+}
+
+impl MeterConfig {
+    /// The two names this meter has on the wire: what it is published as, and
+    /// which physical device answers for it ([ADR 0049]).
+    ///
+    /// [ADR 0049]: ../../../docs/adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md
+    pub fn identity(&self) -> DeviceIdentity {
+        DeviceIdentity::new(self.meter.clone(), self.serial.clone())
+    }
 }
 
 /// Configuration exactly as it arrived, from an environment or a form. Every
@@ -360,20 +382,30 @@ fn period(raw: &Option<String>, faults: &mut Vec<Fault>) -> Duration {
     candidate
 }
 
-/// A serial must be usable as a Sparkplug device identifier **and** must be the
-/// serial the meter actually reports.
-fn check_serial(
-    raw: &str,
-    index: usize,
-    node: Option<&sparkplug_b::EdgeNode>,
-    faults: &mut Vec<Fault>,
-) {
+/// A serial must be the one the meter actually reports.
+///
+/// **It stopped having to be a legal topic level at contract v13** ([ADR 0049]):
+/// the device is named by its measuring point now, so a serial never reaches a
+/// topic. That check did not disappear — it moved to
+/// [`check_published_name`], which guards the value that DOES.
+///
+/// [ADR 0049]: ../../../docs/adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md
+fn check_serial(raw: &str, index: usize, faults: &mut Vec<Fault>) {
     let field = format!("meter {index} serial");
     // A leading zero is the one that has actually happened here, and it does not
-    // fail loudly: the bridge runs, the node births, the tags appear in the tag
-    // browser, and every reading is discarded as DroppedUndeclaredDevice because
-    // the serial the meter reports never matches the one declared. A healthy
-    // bridge that publishes nothing is far more expensive than a refusal now.
+    // fail loudly: the bridge runs, the node births, and the tags appear in the
+    // tag browser while the serial the meter reports never matches the one
+    // declared. A healthy bridge that publishes nothing is far more expensive
+    // than a refusal now.
+    //
+    // **WHAT THAT COSTS CHANGED WITH CONTRACT v13, and the rule did not.** Until
+    // then the mismatch showed up as a routing miss — the DDATA went out under
+    // the reported serial and the DBIRTH had used the declared one, so every
+    // reading was discarded as `DroppedUndeclaredDevice`. Now the device is named
+    // by its measuring point, so the routing miss is gone and the concordance
+    // guard is what refuses (ADR 0049, ADR 0029): the meter latches
+    // `identity-mismatch` on its first answer and is named on `/`. Louder than
+    // what it replaces, which does not make an offline refusal less worth having.
     //
     // KNOW WHAT THIS RULE ACTUALLY IS. The real requirement is *the serial must
     // be the one smart-me reports*, which cannot be checked offline. The leading
@@ -408,39 +440,61 @@ fn check_serial(
             field: field.clone(),
             source: key.clone(),
             problem: format!(
-                "has a leading zero ({} digits). smart-me reports it without one, so every \
-                 reading would be discarded as DroppedUndeclaredDevice — the bridge would \
-                 run, the node would appear in the tag browser, and no value would ever \
-                 arrive",
+                "has a leading zero ({} digits). smart-me reports it without one, so the \
+                 concordance guard would refuse this meter on its first answer — the \
+                 bridge would run, the node would appear in the tag browser, and this \
+                 meter would publish `identity-mismatch` until the file is corrected",
                 raw.len()
             ),
         });
     }
+}
+
+/// The published name must be usable as a Sparkplug device identifier: it IS the
+/// device level of every topic this meter's messages go out on ([ADR 0049]).
+///
+/// # This check moved from the serial to the meter id, it was not added
+///
+/// It has guarded the device level of the topic since story 5.1. Until contract
+/// v13 that level was the serial; from v13 it is the meter id, and leaving the
+/// check on the serial would have been a guard aimed one identifier to the left —
+/// refusing a serial that can no longer reach a topic while letting
+/// `meters[0].meter_id = "cave/2"` through to a node that connects, never births
+/// and publishes nothing.
+///
+/// **Checked even when the Sparkplug identity is itself faulty**, and it was not
+/// until 2026-08-05. `node` is `None` whenever `group_id`/`node_id` are missing
+/// or malformed, and this whole block was skipped — so `group_id = ""` with a
+/// device level of `meter/1` reported the group id, the operator fixed it and
+/// restarted, and only then learnt the device level cannot hold a `/`. Two
+/// edit-restart cycles, on the one rule AC7 exists for, in the story written to
+/// abolish them.
+///
+/// A device level's grammar does not depend on the node it hangs under, so a
+/// placeholder identity exercises exactly the same rule. It is never used for
+/// anything but this check.
+///
+/// [ADR 0049]: ../../../docs/adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md
+fn check_published_name(
+    raw: &str,
+    index: usize,
+    node: Option<&sparkplug_b::EdgeNode>,
+    faults: &mut Vec<Fault>,
+) {
     // Reuse the topic grammar rather than restating it: a second copy of these
     // rules is a second place for them to drift.
-    //
-    // **Checked even when the Sparkplug identity is itself faulty**, and it was
-    // not until 2026-08-05. `node` is `None` whenever `group_id`/`node_id` are
-    // missing or malformed, and this whole block was skipped — so `group_id = ""`
-    // with `serial = "meter/1"` reported the group id, the operator fixed it and
-    // restarted, and only then learnt the serial cannot be a topic level. Two
-    // edit-restart cycles, on the one rule AC7 exists for, in the story written
-    // to abolish them.
-    //
-    // A serial's grammar does not depend on the node it hangs under, so a
-    // placeholder identity exercises exactly the same rule. It is never used for
-    // anything but this check.
     let grammar = node
         .cloned()
         .or_else(|| sparkplug_b::EdgeNode::new("g".to_string(), "n".to_string()).ok());
     if let Some(node) = grammar.as_ref() {
         if let Err(error) = node.device_topic(sparkplug_b::MessageType::DBirth, raw) {
             faults.push(Fault {
-                field,
-                source: key,
+                field: format!("meter {index} id"),
+                source: Some(Source::File(format!("meters[{index}].meter_id"))),
                 problem: format!(
-                    "cannot be a Sparkplug topic level ({error}); the node would connect, \
-                     never birth, and publish nothing"
+                    "cannot be a Sparkplug topic level ({error}); it is what this meter's \
+                     device is called on the wire, so the node would connect, never birth, \
+                     and publish nothing"
                 ),
             });
         }
@@ -579,8 +633,11 @@ pub fn validate(raw: RawConfig) -> Result<BridgeConfig, ConfigErrors> {
             "it binds the reading to the device that produced it",
             &mut faults,
         );
+        if let Some(meter_id) = meter_id {
+            check_published_name(meter_id, index, node.as_ref(), &mut faults);
+        }
         if let Some(serial) = serial {
-            check_serial(serial, index, node.as_ref(), &mut faults);
+            check_serial(serial, index, &mut faults);
         }
         if let (Some(meter_id), Some(device_id), Some(serial)) = (meter_id, device_id, serial) {
             meters.push(MeterConfig {
@@ -828,7 +885,12 @@ pub fn mapping_preview(config: &BridgeConfig) -> Result<Vec<MappingRow>, sparkpl
                 meter: meter.meter.as_str().to_string(),
                 device_id: meter.device_id.clone(),
                 serial: meter.serial.as_str().to_string(),
-                topic: node.device_topic(sparkplug_b::MessageType::DData, meter.serial.as_str())?,
+                // **The device level is the PUBLISHED name** since contract v13
+                // (ADR 0049). Building this preview from the serial would show
+                // the operator a topic the bridge no longer publishes on — a
+                // check that passes for the wrong reason, which this function's
+                // own doc calls worse than no preview.
+                topic: node.device_topic(sparkplug_b::MessageType::DData, meter.meter.as_str())?,
                 enabled: meter.enabled,
             })
         })
@@ -1018,8 +1080,16 @@ mod tests {
              a UUID nobody recognises by sight"
         );
         assert_eq!(
-            rows[0].topic, "spBv1.0/Plant/DDATA/Bridge01/9202685",
-            "the operator must see the topic they will meet again in a trend"
+            rows[0].topic, "spBv1.0/Plant/DDATA/Bridge01/garage",
+            "the operator must see the topic they will meet again in a trend — \
+             and from contract v13 its device level is the meter's own name \
+             (ADR 0049), so a preview built from the serial would show them a \
+             topic the bridge never publishes on"
+        );
+        assert!(
+            !rows[0].topic.contains("9202685"),
+            "the serial must not appear in the topic at all: it is shown beside \
+             it, in its own column, which is what makes the mapping checkable"
         );
         assert!(rows[0].enabled);
     }
@@ -1295,6 +1365,13 @@ mod tests {
 
     /// AC7 — the failure this rule exists for is silent, which is why the message
     /// names the consequence and not the rule.
+    ///
+    /// **What it costs changed with contract v13** (ADR 0049): a declared serial
+    /// the meter does not report used to lose every reading to a routing miss;
+    /// now it latches `identity-mismatch` on the first answer. The message names
+    /// the consequence that is actually current — a message naming a drop reason
+    /// the bridge can no longer produce sends its reader looking for the wrong
+    /// symptom.
     #[test]
     fn a_serial_with_a_leading_zero_is_refused() {
         let mut raw = sound();
@@ -1302,21 +1379,39 @@ mod tests {
         let errors = validate(raw).expect_err("a leading zero should be refused");
         let rendered = format!("{errors}");
         assert!(
-            rendered.contains("DroppedUndeclaredDevice"),
+            rendered.contains("identity-mismatch"),
             "the message must name what it costs, got:\n{rendered}"
         );
     }
 
+    /// The device level of every topic is the meter id from contract v13
+    /// (ADR 0049), so that is what has to be a legal topic level.
+    ///
+    /// **This test used to hand `validate` an illegal SERIAL**, which no longer
+    /// reaches a topic at all: kept as it was, it would have gone on passing
+    /// while `meters[0].meter_id = "cave/2"` sailed through to a node that
+    /// connects, never births and publishes nothing.
     #[test]
-    fn a_serial_that_cannot_be_a_topic_level_is_refused() {
+    fn a_meter_id_that_cannot_be_a_topic_level_is_refused() {
         let mut raw = sound();
-        raw.meters[0].serial = Some("has/slash".into());
-        let errors = validate(raw).expect_err("a topic-illegal serial should be refused");
+        raw.meters[0].meter_id = Some("has/slash".into());
+        let errors = validate(raw).expect_err("a topic-illegal meter id should be refused");
         assert!(
-            fields(&errors).contains(&"meter 0 serial"),
+            fields(&errors).contains(&"meter 0 id"),
             "got {:?}",
             fields(&errors)
         );
+    }
+
+    /// And the other half of that move: a serial with a slash is no longer a
+    /// topic problem, because a serial no longer reaches a topic. It is refused
+    /// only by rules that are about the serial itself.
+    #[test]
+    fn a_serial_with_a_slash_is_no_longer_a_topic_fault() {
+        let mut raw = sound();
+        raw.meters[0].serial = Some("has/slash".into());
+        let config = validate(raw).expect("a serial is not a topic level from contract v13");
+        assert_eq!(config.meters[0].serial.as_str(), "has/slash");
     }
 
     #[test]

@@ -152,6 +152,26 @@ impl UnverifiedReading {
     /// `failed_sources` — while every reading was discarded as
     /// `DroppedUndeclaredDevice` behind one `warn` per period.
     ///
+    /// # From contract v13 this is the ONLY lock, and that is a change of standing
+    ///
+    /// [ADR 0049] names the device after its measuring point (`cptNN`) instead of
+    /// its serial, so a configuration line that names the wrong physical meter no
+    /// longer misroutes anything: the topic is built from a name the file
+    /// supplies, and a foreign meter's reading would go out under it looking
+    /// entirely plausible. **A wrong number under the right name is the failure
+    /// this project exists to refuse**, and it is worse than the silence above,
+    /// which at least stopped.
+    ///
+    /// The guard did not change; what changed is what stands behind it. It used
+    /// to be the second of two locks, the first being an accident of routing.
+    /// The accident survives — a reading whose serial matches no declaration is
+    /// still dropped rather than published — but it can only produce a silence
+    /// now, never a correction. So this comparison is what the site's own
+    /// nomenclature promises in exchange for the rename, written down as
+    /// obligation `A39`, and deleting it is not a simplification.
+    ///
+    /// [ADR 0049]: ../../../docs/adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md
+    ///
     /// `config::check_serial` already refuses the one shape of this that had
     /// actually happened here (a leading zero) and says in as many words that
     /// *"the real requirement is «the serial must be the one smart-me reports»,
@@ -187,10 +207,11 @@ impl UnverifiedReading {
                 refusal: Refusal::Identity,
                 reason: format!(
                     "meter {meter} is declared with serial {declared}, but smart-me device \
-                     {device_id} reports serial {reported}. The device is born on the wire \
-                     under the declared serial and every reading is routed by the reported \
-                     one, so nothing this meter reads would ever reach the broker. Correct \
-                     the serial or the device id in the configuration, then restart"
+                     {device_id} reports serial {reported}. The device is published under \
+                     the name {meter} and vouched for by the declared serial, so publishing \
+                     this reading would put one meter's measurements under another's name \
+                     with nothing on screen looking wrong. Correct the serial or the device \
+                     id in the configuration, then restart"
                 ),
             });
         }

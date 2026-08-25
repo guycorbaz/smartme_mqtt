@@ -75,7 +75,7 @@ async fn chaos_stale_on_cloud_timeout() {
     // The device BIRTH is the bridge's first statement about this meter, and it
     // is made before any reading exists.
     let birth = common::wait_for(&mut seen, Duration::from_secs(30), |s| {
-        s.topic.contains("/DBIRTH/") && s.topic.ends_with(SERIAL)
+        s.topic.contains("/DBIRTH/") && s.topic.ends_with(common::CONFIG_METER_ID)
     })
     .await
     .expect("the device birth reaches an independent subscriber");

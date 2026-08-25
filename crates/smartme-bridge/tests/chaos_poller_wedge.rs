@@ -284,7 +284,7 @@ async fn a_source_that_is_up_and_stuck_is_stale_on_the_wire_and_healthy_on_healt
 
     // ---- the wire: a silence that says it is one ---------------------------
     let birth = common::wait_for(&mut seen, Duration::from_secs(30), |s| {
-        s.topic.contains("/DBIRTH/") && s.topic.ends_with(SERIAL)
+        s.topic.contains("/DBIRTH/") && s.topic.ends_with(METER)
     })
     .await
     .expect("the device birth must reach an independent subscriber");

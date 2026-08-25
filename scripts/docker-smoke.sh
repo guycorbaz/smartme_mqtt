@@ -345,8 +345,13 @@ saved=$(http POST /config "$form" || true)
     || fail "the browser reported a save that never reached the bind mount; on a real deployment this is the /data ownership trap, and it must never pass silently"
 
 preview=$(http GET /confirm || true)
-[[ "$preview" == *"spBv1.0/Plant/DDATA/Bridge01/9202685"* ]] \
-    || { echo "$preview"; fail "the confirmation screen must show the exact topic beside the serial"; }
+# The device level of the topic is the meter's NAME from contract v13 (ADR 0049);
+# the serial is checked separately because it must still be on the screen — that
+# pairing is what the click confirms, and the wire no longer spells it out.
+[[ "$preview" == *"spBv1.0/Plant/DDATA/Bridge01/garage"* ]] \
+    || { echo "$preview"; fail "the confirmation screen must show the exact topic"; }
+[[ "$preview" == *"9202685"* ]] \
+    || { echo "$preview"; fail "the confirmation screen must show the serial beside the topic, or the click proves nothing"; }
 mapping=$(printf '%s' "$preview" | grep -o 'name=mapping value="[0-9a-f]*"' | head -1 | sed 's/.*value="\(.*\)"/\1/')
 [[ -n "$mapping" ]] || fail "the confirmation form carries no mapping fingerprint, so the click would bless whatever is on disk"
 

@@ -114,7 +114,7 @@ use crate::adapters::sparkplug_publisher::{Outbound, Published, Sink, SparkplugP
 use crate::app::poll_publish::DropReason;
 use crate::core::channel::MeterUpdate;
 use crate::core::clock::Clock;
-use crate::domain::Serial;
+use crate::domain::{DeviceIdentity, Serial};
 use sparkplug_b::{BdSeq, MessageType};
 
 /// How to reach the broker and how to behave on it.
@@ -307,13 +307,21 @@ fn qos_for(message: MessageType) -> (QoS, bool) {
 /// enabling a meter cost one certificate instead of a whole rebirth. Adding a
 /// *metric* to an existing device is a different thing and does need the full
 /// sequence (`Sparkplug_5:695`) — see [`SparkplugPublisher::device_birth`].
+///
+/// **It carries both names since contract v13** ([ADR 0049]): the published one
+/// builds the topic, the serial keys the declaration and is declared as a
+/// property of the certificate. A command carrying only the serial would leave
+/// the driver to look the other up, which is a second place for a device to
+/// acquire a name.
+///
+/// [ADR 0049]: ../../../docs/adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeviceCommand {
     /// A meter was enabled, or its serial changed: announce it.
-    Birth(Serial),
+    Birth(DeviceIdentity),
     /// A meter was disabled, deleted, or re-serialised: bury it, so its last
     /// value stops reading as current on the host's screen.
-    Death(Serial),
+    Death(DeviceIdentity),
 }
 
 /// What the transport task saw.
@@ -1177,7 +1185,7 @@ pub struct Health {
 pub async fn run(
     config: MqttConfig,
     node: sparkplug_b::EdgeNode,
-    mut meters: Vec<Serial>,
+    mut meters: Vec<DeviceIdentity>,
     clock: std::sync::Arc<dyn Clock + Send + Sync>,
     health: Health,
     mut inbox: mpsc::Receiver<MeterUpdate>,
@@ -1417,18 +1425,24 @@ pub async fn run(
                     };
                     let mut queue = Queue::default();
                     let outcome = match &command {
-                        DeviceCommand::Birth(serial) => {
-                            if !meters.contains(serial) {
-                                meters.push(serial.clone());
+                        DeviceCommand::Birth(device) => {
+                            if !meters.contains(device) {
+                                meters.push(device.clone());
                             }
-                            publisher.device_birth(clock.wall(), serial, &mut queue)
+                            publisher.device_birth(clock.wall(), device, &mut queue)
                         }
-                        DeviceCommand::Death(serial) => {
+                        DeviceCommand::Death(device) => {
                             // Drop it from the set BEFORE the certificate goes
                             // out, so a reconnect racing this cannot re-birth a
                             // device we are in the middle of burying.
-                            meters.retain(|s| s != serial);
-                            publisher.device_death(clock.wall(), serial, &mut queue)
+                            //
+                            // **By SERIAL, not by the pair.** A meter that is
+                            // being buried because its serial changed is the same
+                            // measuring point under a new box: the entry to drop
+                            // is the one for the device that is going away, and
+                            // matching the whole pair would leave it in the set.
+                            meters.retain(|m| m.serial != device.serial);
+                            publisher.device_death(clock.wall(), device, &mut queue)
                         }
                     };
                     match outcome {
@@ -1742,7 +1756,7 @@ fn announce(
     client: &AsyncClient,
     publisher: &mut SparkplugPublisher,
     now: crate::domain::UtcMillis,
-    meters: &[Serial],
+    meters: &[DeviceIdentity],
     reason: BirthReason,
 ) {
     let mut queue = Queue::default();
@@ -3175,6 +3189,7 @@ mod tests {
         use crate::domain::{Kw, Kwh, Measurement, MeterId, Quality, UtcMillis};
 
         let serial = Serial::new("30000001");
+        let device = DeviceIdentity::new(crate::domain::MeterId::new("cpt01"), serial.clone());
         let meter = MeterId::new("meter");
         let reading = |value_date: i64, power: f64, verdict: Verdict| {
             MeterUpdate::uniform(
@@ -3199,7 +3214,7 @@ mod tests {
             &client,
             &mut publisher,
             UtcMillis(1_000),
-            std::slice::from_ref(&serial),
+            std::slice::from_ref(&device),
             BirthReason::Connected,
         );
 
@@ -3216,7 +3231,7 @@ mod tests {
             &tight_client,
             &mut tight,
             UtcMillis(1_000),
-            std::slice::from_ref(&serial),
+            std::slice::from_ref(&device),
             BirthReason::Connected,
         );
 
@@ -3380,6 +3395,7 @@ mod tests {
         use crate::domain::{Kw, Kwh, Measurement, MeterId, Quality, UtcMillis};
 
         let serial = Serial::new("30000001");
+        let device = DeviceIdentity::new(crate::domain::MeterId::new("cpt01"), serial.clone());
         let meter = MeterId::new("meter");
         // The verdict travels because a republication is the last known value
         // re-sent with a DEGRADED one — that is what makes it a republication
@@ -3412,7 +3428,7 @@ mod tests {
             &client,
             &mut publisher,
             UtcMillis(1_000),
-            std::slice::from_ref(&serial),
+            std::slice::from_ref(&device),
             BirthReason::Connected,
         );
 
@@ -3511,6 +3527,7 @@ mod tests {
         use crate::domain::{Kw, Kwh, Measurement, MeterId, Quality, UtcMillis};
 
         let serial = Serial::new("30000001");
+        let device = DeviceIdentity::new(crate::domain::MeterId::new("cpt01"), serial.clone());
         let reading = |power: f64| {
             MeterUpdate::uniform(
                 MeterId::new("meter"),
@@ -3536,7 +3553,7 @@ mod tests {
             &client,
             &mut publisher,
             UtcMillis(1_000),
-            std::slice::from_ref(&serial),
+            std::slice::from_ref(&device),
             BirthReason::Connected,
         );
 
@@ -3589,7 +3606,7 @@ mod tests {
         publisher
             .birth(
                 UtcMillis(2_000),
-                std::slice::from_ref(&serial),
+                std::slice::from_ref(&device),
                 &mut rebirth,
             )
             .expect("valid topics");
@@ -3659,6 +3676,7 @@ mod tests {
         use crate::domain::{Kw, Kwh, Measurement, MeterId, Quality, UtcMillis};
 
         let serial = Serial::new("30000001");
+        let device = DeviceIdentity::new(crate::domain::MeterId::new("cpt01"), serial.clone());
         let reading = MeterUpdate::uniform(
             MeterId::new("meter"),
             Measurement {
@@ -3682,7 +3700,7 @@ mod tests {
             &roomy_client,
             &mut publisher,
             UtcMillis(1_000),
-            std::slice::from_ref(&serial),
+            std::slice::from_ref(&device),
             BirthReason::Connected,
         );
         assert_eq!(
@@ -3710,7 +3728,7 @@ mod tests {
             &tight_client,
             &mut publisher,
             UtcMillis(1_000),
-            std::slice::from_ref(&serial),
+            std::slice::from_ref(&device),
             BirthReason::Connected,
         );
 
@@ -3742,7 +3760,7 @@ mod tests {
             &both_client,
             &mut publisher,
             UtcMillis(1_000),
-            std::slice::from_ref(&serial),
+            std::slice::from_ref(&device),
             BirthReason::Connected,
         );
         assert_eq!(
@@ -3780,8 +3798,14 @@ mod tests {
         use crate::core::oracle::Verdict;
         use crate::domain::{Kw, Kwh, Measurement, MeterId, Quality, UtcMillis};
 
-        let declared = Serial::new("30000001");
-        let refused = Serial::new("30000002");
+        let declared = DeviceIdentity::new(
+            crate::domain::MeterId::new("cpt01"),
+            Serial::new("30000001"),
+        );
+        let refused = DeviceIdentity::new(
+            crate::domain::MeterId::new("cpt02"),
+            Serial::new("30000002"),
+        );
 
         let options = MqttOptions::new("falsify", "127.0.0.1", 1883);
         // Two slots, and the EventLoop is dropped on the floor: they are the only
@@ -3823,15 +3847,15 @@ mod tests {
             outcome
         };
         assert_eq!(
-            answered(&mut publisher, &reading(&declared)),
+            answered(&mut publisher, &reading(&declared.serial)),
             Published::Emitted,
             "this device's certificate took the second slot: the host has it, and \
              reporting its readings as lost would be the opposite error"
         );
         assert_eq!(
-            answered(&mut publisher, &reading(&refused)),
+            answered(&mut publisher, &reading(&refused.serial)),
             Published::DroppedUndeclaredDevice {
-                serial: refused.clone()
+                serial: refused.serial.clone()
             },
             "this device's certificate never left: every reading for it is thrown \
              away by the host, and [#88] is the bridge counting them as published"
