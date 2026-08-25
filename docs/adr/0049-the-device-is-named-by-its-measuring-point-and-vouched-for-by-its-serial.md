@@ -4,7 +4,7 @@
 - **Date:** 2026-08-25
 - **Decides:** what value the Sparkplug `device_id` carries, and what replaces the guarantee the previous value gave for free.
 - **Issue:** [#111](https://github.com/guycorbaz/smartme_mqtt/issues/111).
-- **Source:** SCADA technical report v0.10, §16.9.3 *Nomenclature Sparkplug* — open points `A37` (the rename) and `A39` (the guard). Decided together with [ADR 0050](0050-the-metric-names-are-the-sites-words.md), which shares its contract bump and its window.
+- **Source:** SCADA technical report v0.10, §16.9.3 *Nomenclature Sparkplug* — open points `A37` (the rename) and `A39` (the guard). Taken with [ADR 0050](0050-the-metric-names-stay-english.md), which proposed renaming the metrics in the same window and was reversed — so v13 carries this decision alone.
 
 ## Context
 
@@ -65,21 +65,25 @@ It is declared on **every** metric of the DBIRTH rather than on a chosen one: a 
 property only where a BIRTH declares it, and an operator inspecting a tag should not have to know
 which of the four carries the identity.
 
-**The key is `serial`, in English, where the metric names beside it are not.** ADR 0050 translates
-the metric names because a consumer renders them as folders — they become path levels under an
-operator's eyes. A property key is not rendered that way: it sits beside `engUnit` and `quality`, in
-the company of Sparkplug's own vocabulary, which is where this repository keeps English. The site's
-report requires *the serial in a property of the birth certificate* and does not name the key, so
-this is ours to choose; arbitrated by Guy on 2026-08-25, against a first draft that spelled it
-`serie`.
+**The key is `serial`, in English.** ADR 0050 would have translated the metric names, on the ground
+that a consumer renders them as folders — they become path levels under an operator's eyes. A
+property key is not rendered that way: it sits beside `engUnit` and `quality`, in the company of
+Sparkplug's own vocabulary, which is where this repository keeps English. That distinction survived
+ADR 0050's reversal, which kept the metric names English too, so nothing here now stands out. The
+site's report requires *the serial in a property of the birth certificate* and does not name the
+key, so it was ours to choose; arbitrated by Guy on 2026-08-25, against a first draft that spelled
+it `serie`.
 
 ## Consequences
 
-**`CONTRACT_VERSION` moves to 13, together with ADR 0050.** A device id is not a tag name, but the
+**`CONTRACT_VERSION` moves to 13, for this decision alone.** A device id is not a tag name, but the
 tag set a consumer browses is reached *through* it: every series filed under `9202685` stops being
-written to. One bump rather than two, because the Tier-3 runbook's promise is that two runs sharing a
-version attest to the same tag set — and a v13 that existed only between two commits, never attested,
-would put a number in that table that nothing stands behind.
+written to. The name set grows by one all the same — `serial` is a key a consumer reads.
+
+ADR 0050 was to have shared this bump; its reversal leaves v13 carrying one change instead of two,
+and changes nothing about the bump's necessity. What it does change is the window argument: the
+metric rename was cheap only while nothing is historised, and declining it now means paying the full
+price if it is ever reopened.
 
 **It owes a Tier-3 attestation** (action H7 of the epic-8 retrospective). `docs/ignition-contract-runbook.md`
 records v13 as awaiting one, with the session's own steps updated: the device folder is now the short

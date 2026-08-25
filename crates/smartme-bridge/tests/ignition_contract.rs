@@ -352,12 +352,12 @@ async fn ignition_contract_gate() {
             "The tag folder Edge Nodes/<group>/BridgeContractNode exists",
             version_expected.as_str(),
             "Node Control/Rebirth is present, Boolean, and reads false",
-            "puissance and energie exist for device contract-meter — the device is \
+            "Power and Energy exist for device contract-meter — the device is \
              named by its measuring point from contract v13, and 30000001 is NOT a folder",
-            "Under the properties of puissance, `serial` reads 30000001 — the wire still says \
+            "Under the properties of Power, `serial` reads 30000001 — the wire still says \
              WHICH physical meter answers for this name",
             "Their quality is NOT good — nothing has been read yet, and the bridge says so",
-            "puissance and energie have NO VALUE — the `value` row is empty, not 0. A fabricated \
+            "Power and Energy have NO VALUE — the `value` row is empty, not 0. A fabricated \
              zero is indistinguishable from a meter genuinely reading zero, and refusing to \
              fabricate one is what the cold start is for",
         ],
@@ -391,7 +391,7 @@ async fn ignition_contract_gate() {
     checkpoint(
         "STEP 2 — a good reading arrives",
         &[
-            "puissance reads 1.234 kW and energie reads 5678.9 kWh",
+            "Power reads 1.234 kW and Energy reads 5678.9 kWh",
             "Both qualities are GOOD",
             "The engineering units are shown (kW, kWh)",
         ],
@@ -404,9 +404,9 @@ async fn ignition_contract_gate() {
              EXACTLY: a factor of 1000 still shows, a third-decimal discrepancy does not. On \
              2026-08-21 a display one refresh behind read as a metric that had not updated, \
              and cost ten minutes",
-            "★ energie is CLAMPED rather than wrong. EngHigh defaults to 100 and 5678.9 is \
+            "★ Energy is CLAMPED rather than wrong. EngHigh defaults to 100 and 5678.9 is \
              fifty-six times it, so a tag with scaling enabled would show 100 and look \
-             exactly like a unit bug in the bridge. puissance stays under 100 and does not run \
+             exactly like a unit bug in the bridge. Power stays under 100 and does not run \
              that risk — comparing the two tells you which you are looking at",
         ],
     );
@@ -425,7 +425,7 @@ async fn ignition_contract_gate() {
     checkpoint(
         "STEP 3 — the value updates in place",
         &[
-            "puissance now reads 2.345 kW and energie 5679.1 kWh",
+            "Power now reads 2.345 kW and Energy 5679.1 kWh",
             "The values CHANGED rather than a second set of tags appearing",
             "Quality is still GOOD",
         ],

@@ -65,39 +65,38 @@ use crate::domain::{DeviceIdentity, Measurement, MeterId, Serial, UtcMillis};
 ///   0012.
 /// - **1** — initial contract, with the specification's quality codes.
 ///
-/// # ADR 0049 and ADR 0050 bump it to 13, together, on purpose
+/// # ADR 0049 bumps it to 13: the device is named by its measuring point
 ///
-/// **The wire adopts the site's nomenclature** (SCADA technical report v0.10,
-/// §16.9), in two moves that share one version number because they share one
-/// window:
+/// The Sparkplug device id is the meter's short name (`cptNN`) instead of its
+/// serial, and the DBIRTH carries the serial as the [`PROPERTY_SERIAL`] property
+/// on every metric it declares ([#111], SCADA technical report v0.10, §16.9.3).
+/// What a supervisor historises is a measuring point rather than a box, so a
+/// device id built on the serial would make a replaced meter into a new device
+/// and break the series at the moment nothing changed for the operator.
 ///
-/// - **The metric names are the site's** ([#110], ADR 0050): `Power` becomes
-///   `puissance`, `Energy` becomes `energie`, and the two cause metrics follow —
-///   `cause/puissance`, `cause/energie`. Only the language changes; the
-///   structure, including the `/` a consumer renders as a folder, is untouched.
-///   `Contract/Version` and `Node Control/Rebirth` stay as they are: the first is
-///   a fact about the publishing SERVICE rather than a quantity of the site — the
-///   same reasoning that keeps the edge node named after the service — and the
-///   second is fixed word for word by the specification.
-/// - **The device is named by its measuring point** ([#111], ADR 0049): the
-///   Sparkplug device id is the meter's short name (`cptNN`) instead of its
-///   serial, and the DBIRTH carries the serial as the [`PROPERTY_SERIAL`]
-///   property on every metric it declares. A tag name appears in this contract's
-///   name set; a device id does not — but the tag set a consumer browses is
-///   reached THROUGH the device id, so a changed one orphans every series filed
-///   under the old name just as surely as a rename does.
+/// **Breaking, though no metric name moves.** A tag name appears in this
+/// contract's name set; a device id does not — but the tag set a consumer
+/// browses is reached THROUGH the device id, so a changed one orphans every
+/// series filed under the old name just as surely as a rename does. The name set
+/// grows by one all the same: [`PROPERTY_SERIAL`] is a key a consumer reads.
 ///
-/// **Breaking, on both halves.** Four names in the tag set change, and every
-/// series a consumer holds under the old device id stops being written to. A v12
-/// consumer finds nothing where it was watching.
+/// # The metric names were renamed with it, then UN-renamed — read this before
+/// # proposing it again
 ///
-/// **One bump rather than two, and the reason is not economy.** The Tier-3
-/// runbook's promise is that *two runs sharing a version number attest to the
-/// same tag set*; a v13 that existed only between two commits and was never
-/// attested would put a number in that table nothing stands behind. The site's
-/// own report makes the same call from the other side — *"la même fenêtre couvre
-/// les quatre points"* — because the cost of a rename is a broken series and the
-/// window in which there is no series to break closes once, not twice.
+/// The site's report also fixes the metric names (§16.9.5): `puissance`,
+/// `energie`, `cause/puissance`, `cause/energie`, on the argument that a
+/// consumer renders a metric name as a FOLDER, so it behaves as one more path
+/// level under an operator's eyes and an English word at the end of a French tag
+/// tree is an inconsistency exactly where it costs most. It was implemented in
+/// this version and **reversed by Guy on 2026-08-25, before anything shipped**:
+/// the names stay `Power`, `Energy`, `Cause/Power`, `Cause/Energy`.
+///
+/// So the wire and §16.9.5 disagree, deliberately and on record. The site tracks
+/// it as anomaly `A38`, which stays open rather than being closed by this file,
+/// and ADR 0050 carries both the argument that was made and the decision that
+/// overrode it. **This is not an oversight to tidy up**: renaming these four
+/// constants to close A38 re-takes a decision that was taken, and owes a bump
+/// and a fresh attestation of its own.
 ///
 /// **The attestation this owes.** Action H7 of the epic-8 retrospective: a
 /// `CONTRACT_VERSION` bump earns a Tier-3 attestation, or records what it is
@@ -270,16 +269,17 @@ pub const METRIC_CONTRACT_VERSION: &str = "Contract/Version";
 pub const METRIC_NODE_CONTROL_REBIRTH: &str = "Node Control/Rebirth";
 /// Metric name for instantaneous power.
 ///
-/// **The site's word since contract v13** (ADR 0050): a metric name lives in the
-/// payload, but consumers restore it as a FOLDER, so under an operator's eyes it
-/// behaves as one more path level — and `Power` at the end of a French tag tree
-/// is an inconsistency exactly where it costs most.
-pub const METRIC_POWER: &str = "puissance";
+/// **English, and that was re-decided rather than inherited** (2026-08-25, see
+/// [`CONTRACT_VERSION`]'s v13 entry). The site's nomenclature asks for
+/// `puissance`; Guy kept the English name, so the wire and §16.9.5 of the site's
+/// report disagree, and the site's anomaly `A38` records that rather than this
+/// file.
+pub const METRIC_POWER: &str = "Power";
 /// Engineering unit published with [`METRIC_POWER`].
 pub const UNIT_POWER: &str = "kW";
 /// Metric name for the cumulative energy counter. See [`METRIC_POWER`] for why
-/// it is the site's word.
-pub const METRIC_ENERGY: &str = "energie";
+/// it is English.
+pub const METRIC_ENERGY: &str = "Energy";
 
 /// The property key under which a non-good verdict names WHY (Story 2.1).
 ///
@@ -298,13 +298,9 @@ pub const METRIC_ENERGY: &str = "energie";
 /// The metrics carrying the cause, one per measurement, from contract v12.
 ///
 /// **A `/` makes a FOLDER in Ignition** — established by `Contract/Version` and
-/// `Node Control/Rebirth` — so these two become a `cause` folder holding two
-/// string tags. `puissance/cause` would have made `puissance` a folder, and
-/// `puissance` is already a tag: the tree cannot hold both.
-///
-/// The folder took the site's word with the metrics it qualifies at contract v13
-/// (ADR 0050): only the language moved, and the pairing of a cause metric with
-/// the metric it qualifies is exactly what it was.
+/// `Node Control/Rebirth` — so these two become a `Cause` folder holding two
+/// string tags. `Power/Cause` would have made `Power` a folder, and `Power` is
+/// already a tag: the tree cannot hold both.
 ///
 /// **They replace the `Cause` PROPERTY, which could not work and was not merely
 /// inelegant.** Measured on 2026-08-22, on a virgin group, with the wire read at
@@ -314,9 +310,9 @@ pub const METRIC_ENERGY: &str = "energie";
 /// frozen at its birth value, which under v11 meant `no-reading-yet` beside a
 /// healthy meter, for ever. A metric's value is precisely what a DDATA exists to
 /// change (ADR 0044, superseding ADR 0043).
-pub const METRIC_CAUSE_POWER: &str = "cause/puissance";
+pub const METRIC_CAUSE_POWER: &str = "Cause/Power";
 /// See [`METRIC_CAUSE_POWER`].
-pub const METRIC_CAUSE_ENERGY: &str = "cause/energie";
+pub const METRIC_CAUSE_ENERGY: &str = "Cause/Energy";
 
 /// The value [`METRIC_PROPERTY_CAUSE`] carries when a metric is `Good` — the
 /// explicit spelling of *no cause*.
@@ -370,16 +366,15 @@ pub const UNIT_ENERGY: &str = "kWh";
 /// precisely what is wanted. The two decisions do not disagree; they read the
 /// same measurement.
 ///
-/// # English, where the metric names beside it are not
+/// # English, like everything else on this wire
 ///
-/// ADR 0050 gives the four metric names the site's words because a consumer
-/// renders a metric name as a FOLDER — it becomes a path level under an
-/// operator's eyes, and an English word at the end of a French tag tree reads as
-/// an inconsistency. A property key is not rendered that way: it sits beside
-/// `engUnit` and `quality`, in the company of Sparkplug's own vocabulary, which
-/// is where this bridge keeps English. So the two decisions are consistent
-/// rather than in tension, and the site's report leaves the key unnamed — it
-/// requires *the serial in a property of the birth certificate*, not a spelling.
+/// The site's report requires *the serial in a property of the birth
+/// certificate* and does not name the key, so the spelling was ours. A property
+/// key is not what a consumer renders as a folder — it sits beside `engUnit` and
+/// `quality`, in the company of Sparkplug's own vocabulary, which is where this
+/// bridge keeps English. The argument was written when the metric names beside
+/// it were about to become French (ADR 0050); that rename was reversed, so it is
+/// now simply consistent with them.
 ///
 /// **Declared on every metric of the DBIRTH**, not on a chosen one: a host
 /// materialises a property only where a BIRTH declares it, and an operator
@@ -2207,7 +2202,10 @@ mod tests {
     ///
     /// - `vouched_for` returning `metrics` untouched — the ordinary shape of the
     ///   omission, since the wrapper is one call away from being a no-op:
-    ///   `the cold-start DBIRTH must vouch for its device on puissance`.
+    ///   `the cold-start DBIRTH must vouch for its device on Power` (`left: None,
+    ///   right: Some("30000001")`). **Re-run on 2026-08-26** rather than having
+    ///   its metric name edited when ADR 0050 was reversed: a copied output that
+    ///   is touched up stops being evidence.
     /// - the property moved into `metrics_for`, which is how somebody would
     ///   "simplify" it — every birth still vouches, and the DDATA control goes
     ///   red: `a DDATA must not carry `serial`: a host ignores a property outside

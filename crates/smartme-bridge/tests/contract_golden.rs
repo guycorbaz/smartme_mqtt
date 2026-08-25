@@ -131,28 +131,37 @@ const GOLDEN_QUALITY_V13: QualityGolden = &[
 /// the name the device is published under.
 const GOLDEN_CAUSES_V13: CauseGolden = GOLDEN_CAUSES_V12;
 
-/// The names, as of contract v13. **Four metric names change language and one
-/// property appears** (ADR 0050 and ADR 0049, SCADA technical report v0.10 §16.9).
+/// The names, as of contract v13. **No metric is renamed; one property key
+/// appears** — `serial`, which the DBIRTH declares so the wire still says which
+/// physical meter answers for a device now that the device id no longer does
+/// (ADR 0049, SCADA technical report v0.10 §16.9.3).
 ///
-/// A consumer that bound its tags under v12 finds none of the four where it was
-/// watching, and it finds them under a device that has also been renamed — from
-/// the meter's serial to its short name. That is two silent breakages in one
-/// window, which is exactly why they share one version number and one attestation.
+/// A v12 consumer keeps every tag binding it had. What it loses is the DEVICE
+/// those tags hang under: the id moved from the meter's serial to its short
+/// name, which this list cannot express — a device id is not a name in the name
+/// set — and which is why v13 is breaking all the same.
 ///
-/// **`metric.contract` and `metric.rebirth` deliberately do NOT move.** The
-/// rebirth endpoint is fixed word for word by the specification
+/// **Four names were renamed here and then un-renamed**, in the same day and
+/// before anything shipped: §16.9.5 of the site's report asks for `puissance`,
+/// `energie`, `cause/puissance` and `cause/energie`, and Guy kept the English
+/// names on 2026-08-25. The site's anomaly `A38` stays open on that, and ADR
+/// 0050 records the decision and the argument it overrode. A later reader who "fixes" this list to match the
+/// site's report is proposing a contract change, not a correction.
+///
+/// **`metric.contract` and `metric.rebirth` would not have moved either way.**
+/// The rebirth endpoint is fixed word for word by the specification
 /// (`tck-id-operational-behavior-data-commands-rebirth-name`), and the contract
 /// version is a fact about the publishing SERVICE rather than a quantity of the
 /// site — the same reasoning by which the edge node keeps the service's name and
 /// escapes the site's equipment nomenclature.
 const GOLDEN_NAMES_V13: NameGolden = &[
-    ("metric.power", "puissance"),
-    ("metric.energy", "energie"),
+    ("metric.power", "Power"),
+    ("metric.energy", "Energy"),
     ("metric.rebirth", "Node Control/Rebirth"),
     ("unit.power", "kW"),
     ("unit.energy", "kWh"),
-    ("metric.cause.power", "cause/puissance"),
-    ("metric.cause.energy", "cause/energie"),
+    ("metric.cause.power", "Cause/Power"),
+    ("metric.cause.energy", "Cause/Energy"),
     ("value.cause.none", "no-cause"),
     ("property.serial", "serial"),
 ];
