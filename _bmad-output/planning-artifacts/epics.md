@@ -341,6 +341,11 @@ First-class, dual-audience documentation and the release surface: README, config
 **FRs covered:** FR41, FR42
 **NFR/AR:** NFR18, NFR19, NFR23 · AR16 *(contract doc)*, AR20 *(docs + ADRs)*, AR21 *(crate publish)*
 
+### Epic 9: The Backlog Absorbed — the open issues get a path, in cost-of-delay order
+Opened 2026-08-27, after the roadmap had been closed for five days ([ADR 0051]). Epics 0–8 delivered the product; this one delivers a **path through what they left open**. Its spine is the cost-of-delay triage of 2026-08-22 — *does this issue change the wire?* — and its first duty is to put that triage on the forge, where the project's oldest risk (R2) has been asking for it since day one. **It adds no requirement**: every story here closes issues that already exist.
+**FRs covered:** none new
+**NFR/AR:** none new · absorbs the open issues of Epics 1–6 without re-attaching them
+
 ## Epic 0: Socle — Workspace, CI Gates & Durability Primitive
 
 Establish the compilable, boundary-enforced substrate every later guarantee rests on: the 3-crate Cargo workspace, the CI gate wall, the checked-in Sparkplug `.proto` + fixtures scaffolding, and the shared atomic-persistence primitive. This epic delivers no user-visible feature; its value is measured in risk avoided — it makes the "never lies" invariants mechanically enforceable before the first line of behaviour is written.
@@ -1296,6 +1301,146 @@ So that "chapter 4 is done" is a countable claim rather than a remembered one.
 **Then** `70 + 109 + 124 = 303` holds with every chapter fully recorded, and the matrix says so.
 
 *Created 2026-07-28, out of the Story 4.2 code review. Story 4.1 audited the chapter's **topic grammar** and left the payload requirements the same chapter also states; nothing at the time obliged it to report how much of the chapter it had covered, since the completeness rule was only added to 4.2 and 4.3 afterwards. The count was 27 in the review's own report and is **29** on an independent recount — the review under-counted, which is worth noting about numbers produced by a single pass. Deliberately a separate story rather than re-opening 4.1: 4.1's work is correct as far as it goes and its commits are pushed; this is the remainder, and it is cheaper to schedule than to retro-fit.*
+
+## Epic 9: The Backlog Absorbed — the open issues get a path, in cost-of-delay order
+
+Opened on 2026-08-27 by [ADR 0051], five days after `epics.md` was declared exhausted. The project
+had no epic in progress and therefore, under the portfolio rule for a `actions: github` dossier, **no
+next action at all** — while thirty-one issues sat open with no ranking anyone could act on.
+
+**This epic adds no requirement.** Every story below closes issues that already exist, and its
+acceptance criteria are written against those issues rather than against new behaviour.
+
+**Its spine is the triage of 2026-08-22**, which ranked the backlog by the one criterion the
+production decision supplied: *does this issue change the wire?* While no tag is historised a wire
+change costs a restart; afterwards it costs a rewritten history, and **nothing announces the
+closing of that window** (site risk `R9`). That is why Story 9.1 comes before the story that ranks
+the rest — the six it carries are constrained by an event that can arrive without notice, and the
+others are not.
+
+**Issue attachment does not move.** The open issues stay attached to the epics that produced them in
+`gestion/jalons.md`. Re-attaching them to Epic 9 would solder E1–E6 by an act of writing, which is
+precisely what the rule of 2026-08-15 — *one open issue retains its milestone* — exists to prevent.
+Epic 9 says who does the work now; it does not say where the defect came from. **Closing its stories
+is therefore what solders E1 to E6**, and that is the intended mechanism.
+
+**Four issues stay outside this epic**: [#24], [#25], [#101] and [#112] carry the project's conduct
+and not its product, and the review of 2026-08-27 confirmed they retain no epic milestone. Epic 9
+does not adopt them.
+
+### Story 9.1: The six wire-changing issues are decided before `latest` moves
+
+As the maintainer,
+I want each issue that changes the published wire either fixed or refused on the record,
+So that the free-change window is spent deliberately rather than allowed to expire unnoticed.
+
+**Acceptance Criteria:**
+
+**Given** the six open issues the 2026-08-22 triage placed in pile A — [#27] (nothing verifies edge-node-descriptor or device-id uniqueness), [#28] (`datatype` on every DDATA against a SHOULD NOT), [#29] (the payload timestamp is the reading's `ValueDate`, not the publish time), [#34] (MQTT's character set is unvalidated), [#38] (the two DCMD `n/a` verdicts are time-limited), [#43] (no NDEATH reaches a subscriber at reconnect)
+**When** each is walked
+**Then** each ends in one of exactly two states: **fixed**, with its `CONTRACT_VERSION` consequence stated, or **refused**, with an ADR that says why and what would reopen it
+**And** no issue in this set is closed as "no longer relevant" without a body reading recorded in its closing comment.
+
+**Given** any of the six that is fixed
+**When** the fix changes what a consumer reads
+**Then** `CONTRACT_VERSION` moves and the bump earns a Tier-3 attestation or records what it waits for, per action H7 — the rule this project already owes [#112].
+
+**Given** the window argument
+**When** the story closes
+**Then** it states whether the window was still open at that date, because the argument that justified the ordering must be checkable afterwards rather than assumed.
+
+*[#29] and the Tier-3 gate's step 2 answer each other: the step is recorded **not attested** because it cannot fail (action H4), and [#29] is the clause it would have attested. Whoever takes one should read the other.*
+
+### Story 9.2: The triage reaches the forge, and R2 gets the hierarchy it has asked for since day one
+
+As the maintainer,
+I want the backlog's ranking to live where the issues live,
+So that a hierarchy survives the session that produced it.
+
+**Acceptance Criteria:**
+
+**Given** the arbitration suspended since 2026-08-15 — labels or GitHub milestones
+**When** it is made
+**Then** it is recorded, and every open issue carries its rank under the chosen scheme
+**And** the scheme distinguishes at least *changes the wire* from *does not*, which is the only criterion the project has ever found decisive.
+
+**Given** `notes/tri-arriere-issues-2026-08-22.md`, which holds a judgement made by reading **titles**
+**When** the ranking is applied
+**Then** an issue whose body contradicts its pile is re-ranked and the correction is noted — the note says of itself that it has the same fragility as the epic attachment, and [#2] showed what a body reading finds.
+
+**Given** the ranking is on the forge
+**When** the story closes
+**Then** R2's register entry is restated: what remains of it, or its closure.
+
+### Story 9.3: The operational defects are worked in the order 9.2 established
+
+As the maintainer,
+I want the issues that bite in exploitation closed or dated,
+So that the backlog stops being a place where a real defect is indistinguishable from a noted debt.
+
+**Acceptance Criteria:**
+
+**Given** pile B as it stands after Story 9.2 — [#20], [#49], [#50], [#52], [#78], [#80], [#82], [#83], [#85], [#87], [#91] and [#109]
+**When** each is taken in the ranked order
+**Then** it is closed by work, or carried with a **dated** reason on the issue itself
+**And** the security items ([#20] and [#50], broker TLS blocked upstream on a vulnerable `rustls-webpki`; OAuth2 already delivered) state their blocking dependency and what would lift it, rather than resting in the pile.
+
+**Given** [#109], which reports that this workspace pins status *mappings* and never their *dispatch*
+**When** it is closed
+**Then** the guard added is falsified against the ordinary shape of the fault and not the shape it had the day it was found — the rule of `CLAUDE.md`, and the reason five guards out of six were once blind.
+
+### Story 9.4: The debts of trace and proof are settled or restated as deliberate
+
+As the maintainer,
+I want each recorded debt either paid or re-stated with its reason and its date,
+So that "thirty-one open" stops meaning two different things at once.
+
+**Acceptance Criteria:**
+
+**Given** pile C's product debts — [#35], [#42], [#63], [#66], [#71], [#89], [#96], [#99] and [#102]
+**When** each is read **at the body** and not at the title
+**Then** it is closed as paid, closed as *not planned* with the reason on the issue, or kept with a re-stated deadline
+**And** any acceptance criterion recorded as unmet keeps an issue, per the rule this project adopted after Epic 1.
+
+**Given** [#101], which reports that the conformance matrix cites code positions by line number and at least four no longer point at code
+**When** Story 9.4 runs
+**Then** it is **not** adopted here — it is conduct, it retains no milestone, and Epic 9 leaves it where the review of 2026-08-27 put it. *Named so that its absence is a decision rather than an oversight.*
+
+**Given** the epic closes
+**When** the retrospective is written — `required`, and a condition of closing
+**Then** it states how many of the twenty-seven issues fell to work and how many to a body reading, because the answer changes what the next backlog is worth.
+
+[ADR 0051]: ../../docs/adr/0051-epic-9-absorbs-the-backlog.md
+[#20]: https://github.com/guycorbaz/smartme_mqtt/issues/20
+[#24]: https://github.com/guycorbaz/smartme_mqtt/issues/24
+[#25]: https://github.com/guycorbaz/smartme_mqtt/issues/25
+[#27]: https://github.com/guycorbaz/smartme_mqtt/issues/27
+[#28]: https://github.com/guycorbaz/smartme_mqtt/issues/28
+[#29]: https://github.com/guycorbaz/smartme_mqtt/issues/29
+[#34]: https://github.com/guycorbaz/smartme_mqtt/issues/34
+[#35]: https://github.com/guycorbaz/smartme_mqtt/issues/35
+[#38]: https://github.com/guycorbaz/smartme_mqtt/issues/38
+[#42]: https://github.com/guycorbaz/smartme_mqtt/issues/42
+[#43]: https://github.com/guycorbaz/smartme_mqtt/issues/43
+[#49]: https://github.com/guycorbaz/smartme_mqtt/issues/49
+[#50]: https://github.com/guycorbaz/smartme_mqtt/issues/50
+[#52]: https://github.com/guycorbaz/smartme_mqtt/issues/52
+[#63]: https://github.com/guycorbaz/smartme_mqtt/issues/63
+[#66]: https://github.com/guycorbaz/smartme_mqtt/issues/66
+[#71]: https://github.com/guycorbaz/smartme_mqtt/issues/71
+[#78]: https://github.com/guycorbaz/smartme_mqtt/issues/78
+[#80]: https://github.com/guycorbaz/smartme_mqtt/issues/80
+[#82]: https://github.com/guycorbaz/smartme_mqtt/issues/82
+[#83]: https://github.com/guycorbaz/smartme_mqtt/issues/83
+[#85]: https://github.com/guycorbaz/smartme_mqtt/issues/85
+[#87]: https://github.com/guycorbaz/smartme_mqtt/issues/87
+[#89]: https://github.com/guycorbaz/smartme_mqtt/issues/89
+[#91]: https://github.com/guycorbaz/smartme_mqtt/issues/91
+[#96]: https://github.com/guycorbaz/smartme_mqtt/issues/96
+[#101]: https://github.com/guycorbaz/smartme_mqtt/issues/101
+[#102]: https://github.com/guycorbaz/smartme_mqtt/issues/102
+[#109]: https://github.com/guycorbaz/smartme_mqtt/issues/109
+[#112]: https://github.com/guycorbaz/smartme_mqtt/issues/112
 
 [ADR 0036]: ../../docs/adr/0036-ar7-names-the-property-not-the-exporter.md
 [ADR 0038]: ../../docs/adr/0038-the-leak-gate-measures-per-iteration-growth-not-a-24-hour-slope.md
