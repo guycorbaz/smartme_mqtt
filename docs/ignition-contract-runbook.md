@@ -57,13 +57,19 @@ attests to an artifact state that no longer exists — see the drift note under 
 
 ```bash
 SPARKPLUG_CONTRACT_BROKER=<host>:1883 \
-SPARKPLUG_CONTRACT_GROUP=ContractV10 \
+SPARKPLUG_CONTRACT_GROUP=<ContractV13 — a name NEVER used before; V13b for a second pass> \
   cargo test -p smartme-bridge --test ignition_contract -- --ignored --nocapture
 ```
 
+> **The group is a placeholder on purpose, and it is the one line here that must not be pasted
+> blind.** It used to carry a real past group name, which is precisely the mistake the paragraph
+> below forbids: the reader who copies the block gets a folder Ignition has already garnished. It
+> is written as a placeholder so the command fails rather than lies.
+>
 > **Name the group after the contract you are attesting to, and NEVER REUSE ONE.** `ContractV3`
-> was the 2026-08-03 run, `ContractV10` the 2026-08-21 one; reusing a name puts two attestations'
-> evidence in one Ignition folder, and the tag tree outlives the test.
+> was the 2026-08-03 run, `ContractV10` the 2026-08-21 one, `ContractV12` the 2026-08-22 one;
+> reusing a name puts two attestations' evidence in one Ignition folder, and the tag tree outlives
+> the test.
 >
 > **A second pass on the same day needs a second name.** On 2026-08-21 the session ran twice on
 > `ContractV10`, and the second pass therefore began against tags Ignition had already garnished
@@ -88,6 +94,10 @@ SPARKPLUG_CONTRACT_GROUP=ContractTest \
 
 **Its step 4 is expected to show `Good(500)`.** That is not a failure of the gate; it is the
 demonstration the gate now exists for. See *Step 4* below.
+
+**`ContractTest` is a fixed name, and the never-reuse rule reaches it too.** This gate attests to
+nothing about the product, so its folder has never been evidence — but a residual tree still
+misleads a person reading it. Delete the folder afterwards, or append a discriminator.
 
 ## Both gates
 
