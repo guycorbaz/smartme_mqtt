@@ -4,7 +4,7 @@
 - **Date:** 2026-08-25
 - **Decides:** what language the metric names this bridge publishes are written in.
 - **Issue:** [#110](https://github.com/guycorbaz/smartme_mqtt/issues/110).
-- **Source:** SCADA technical report v0.10, §16.9.5 *Nomenclature Sparkplug*, open point `A38`. Decided together with [ADR 0049](0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md), which shares its contract bump and its window.
+- **Source:** SCADA technical report v0.10, §16.9.5 *Nomenclature Sparkplug* — then open point `A38`, retired on 2026-08-27 when §16.9.5 was revised to retain the English names. Decided together with [ADR 0049](0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md), which shares its contract bump and its window.
 
 ## Context
 
@@ -23,13 +23,19 @@ exactly where it costs most: the tree somebody walks when they are looking for a
 
 **REVERSED.** The names stay `Power`, `Energy`, `Cause/Power`, `Cause/Energy`. Guy arbitrated on
 2026-08-25, after the rename had been implemented and before it left the clone; the argument below
-was made, weighed and overridden, and it is kept in full because *it is the argument that will be
-made again* — the site's report still carries it, and anomaly `A38` still stands on it.
+was made, weighed and overridden, and it is kept in full because it is the argument a later reader
+will meet first.
+
+**What overrides it is the accent** (stated on 2026-08-27, when the site's report was revised to
+match). The site's naming rule forbids diacritics, and French quantity names carry them: adopting
+the site's vocabulary would publish `energie` for *énergie* — permanently misspelt words, shown as
+folders in the very tag tree the folder argument set out to make coherent. English has no accent to
+lose, so its names are exact. The argument above therefore defeats itself on its own ground.
 
 **This ADR is therefore a record of a decision NOT taken.** A later reader who renames the four
-constants to close `A38` is not tidying an oversight: they are re-taking this decision, and they owe
-a `CONTRACT_VERSION` bump and a fresh Tier-3 attestation for it, exactly as the rejected proposal
-did. The one thing that must not happen is the rename arriving quietly as a cleanup.
+constants is not tidying an oversight: they are re-taking this decision, and they owe a
+`CONTRACT_VERSION` bump and a fresh Tier-3 attestation for it, exactly as the rejected proposal did.
+The one thing that must not happen is the rename arriving quietly as a cleanup.
 
 ### What was proposed, and implemented, before it was reversed
 
@@ -59,10 +65,11 @@ folder, and the pairing of a cause metric with the metric it qualifies (ADR 0044
 
 ## Consequences of the reversal
 
-**The wire and §16.9.5 of the site's report disagree, on record.** The report retains `puissance` and
-`energie`; the bridge publishes `Power` and `Energy`. That is a disagreement between two documents
-that are each authoritative in their own domain, and it is worth more than a silent divergence: the
-site's anomaly `A38` stays **open, with no date**, and says why.
+**The wire and §16.9.5 of the site's report disagreed for two days, and no longer do.** The report
+retained `puissance` and `energie` when this ADR was written; on 2026-08-27 it was revised to retain
+the English names on the accent argument, and its anomaly `A38` was **retired** rather than left
+open with no date. The number is not reassigned. Each document remains authoritative in its own
+domain — what changed is that they now agree, and the agreement is recorded on both sides.
 
 **`CONTRACT_VERSION` still moves to 13** — for ADR 0049 alone, which is breaking on its own account:
 the device id moves from the serial to the short name, and every series a consumer holds under the

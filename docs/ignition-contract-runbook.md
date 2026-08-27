@@ -246,11 +246,13 @@ gate), and that the serial `30000001` is **not** a folder anywhere in the tree.
 `Power = 1.234 kW`, `Energy = 5678.9 kWh`, both `GOOD`.
 
 > **The metric names stayed English at contract v13, and that was a decision**
-> ([ADR 0050](adr/0050-the-metric-names-stay-english.md)). §16.9.5 of the site's report asks for
-> `puissance` and `energie`; the rename was implemented on 2026-08-25 and reversed the same day,
-> before anything shipped, so the site's anomaly `A38` stays open on the disagreement. If a session
-> ever finds French names here, the contract has moved and this runbook has not — stop and establish
-> which version you are looking at.
+> ([ADR 0050](adr/0050-the-metric-names-stay-english.md)). The rename was implemented on 2026-08-25
+> and reversed the same day, before anything shipped. §16.9.5 of the site's report asked for
+> `puissance` and `energie` until 2026-08-27, when it was revised to retain the English names on the
+> accent argument — the site's naming rule forbids diacritics, so French quantities could only be
+> published misspelt. The disagreement is therefore closed and the site's anomaly `A38` is retired,
+> not deferred. If a session ever finds French names here, the contract has moved and this runbook
+> has not — stop and establish which version you are looking at.
 
 Deliberately awkward numbers: nothing round, nothing that could be a default or a placeholder.
 Check them **exactly**. A unit-scaling bug (W vs kW, Wh vs kWh) shows up here as a factor of
