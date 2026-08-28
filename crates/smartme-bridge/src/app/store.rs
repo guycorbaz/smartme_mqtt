@@ -243,6 +243,48 @@ pub fn exists(dir: &Path) -> bool {
     }
 }
 
+/// The configured `ui_port`, read on its own and tolerantly, for the one case
+/// where the whole file cannot be read ([#66], finding 1).
+///
+/// # Why a second parse path exists at all
+///
+/// [`read`] is strict on purpose: a configuration it cannot fully understand is
+/// not a configuration, and a bridge that guesses at settings nobody wrote is the
+/// failure this project refuses. But one setting is needed *precisely when that
+/// strictness fires* — the port of the screen the operator is about to be sent to
+/// in order to repair the file. Falling back to [`crate::ui::DEFAULT_PORT`] there
+/// is right for a **first run**, which has nowhere to read a port from, and wrong
+/// for a **configured bridge whose file then broke**: the repair screen moves to
+/// a port Traefik is not pointed at, so the one screen that could fix the fault
+/// is the one the operator cannot reach.
+///
+/// # What it will and will not answer
+///
+/// It answers `None` for everything except a file that parses as TOML and carries
+/// a plausible `ui_port`. Absent file, unreadable bytes, TOML that does not parse,
+/// no `ui_port` key, a privileged or zero port — all `None`, and the caller falls
+/// back exactly as before. **It never widens what the bridge accepts**: nothing
+/// here reaches `StoredConfig`, and a file that fails [`read`] still fails it.
+/// The only thing this can do is put the repair screen where the operator left
+/// it.
+///
+/// The shape is [`overwrite`]'s: a private struct naming the one field, which
+/// ignores every other key rather than denying it.
+pub fn probe_ui_port(dir: &Path) -> Option<u16> {
+    #[derive(serde::Deserialize)]
+    struct Probe {
+        ui_port: Option<u16>,
+    }
+
+    let text = std::fs::read_to_string(config_path(dir)).ok()?;
+    let port = toml::from_str::<Probe>(&text).ok()?.ui_port?;
+    // The same floor `config::validate` applies, for the same reason: this
+    // process runs unprivileged and could not bind it. A port it cannot honour is
+    // not better than the default — it is a start-up failure wearing a
+    // configuration's clothes.
+    (port >= 1024).then_some(port)
+}
+
 /// Read the file, and nothing more.
 ///
 /// Split out from [`load`] for one reason: **`log_dir` and `log_keep` are in the

@@ -30,6 +30,20 @@ use crate::domain::{Measurement, MeterId, Quality};
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeterUpdate {
     /// Which meter this reading belongs to.
+    ///
+    /// **Read by production code, and it was not always so** ([#66], finding 3).
+    /// The 2026-08-09 review found this field used only by tests — the publisher
+    /// routes on `measurement.serial` and the driver traced the same — and asked
+    /// whether it should earn a reader or go, on the reasoning that a field which
+    /// looks like a safety check but is read by nothing is the worst of the three
+    /// outcomes.
+    ///
+    /// It earned one. `mqtt_driver` counts a lost reading against **this** name —
+    /// `count_loss(&pulse, &update.meter, &loss)` — and carries it on the single
+    /// warn line that reports the loss. That is deliberate: the loss counter is
+    /// per meter as an operator names it, not per serial, so it survives a meter
+    /// being replaced and lines up with the tags they are looking at. Deleting the
+    /// field would silently break both.
     pub meter: MeterId,
     /// The reading itself, carrying the source-level quality.
     pub measurement: Measurement,

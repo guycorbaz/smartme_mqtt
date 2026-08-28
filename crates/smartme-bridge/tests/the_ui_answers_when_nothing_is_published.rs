@@ -195,6 +195,77 @@ fn write_config(dir: &std::path::Path, port: u16, confirmed: bool) {
     .expect("write config");
 }
 
+/// [#66] finding 1 — **a configured bridge whose file then broke keeps its repair
+/// screen where the operator left it.**
+///
+/// The screen ADR 0026 exists to serve is reachable only if it is where the
+/// operator — or the reverse proxy in front of them — expects it. `main` took
+/// `ui_port` from a config it could parse and fell back to the first-run port
+/// whenever the read failed, which is right for a run with no file and wrong for
+/// this one: the fault that sends you to the repair screen is the same fault that
+/// moves it.
+///
+/// The environment names a DIFFERENT port on purpose. Without the tolerant probe
+/// the bridge answers there — a bridge that starts, serves, and is missed — so
+/// this test cannot pass by the fall-back accidentally agreeing.
+///
+/// FALSIFIED 2026-08-28 — mutation RUN: deleting `.or_else(|| store::probe_ui_port(state_dir))`
+/// from `ui_port_for` goes red, the UI never answering on the configured port.
+#[test]
+fn a_broken_configuration_does_not_move_the_repair_screen() {
+    let configured = checked_port_for(8);
+    let elsewhere = checked_port_for(9);
+    let dir = state_dir("broken_keeps_port");
+
+    // Valid TOML, refused by `read`: `node_id` is missing, and nothing defaults
+    // it. This is the shape of a file an operator half-edited by hand — the case
+    // the repair screen is for.
+    std::fs::write(
+        dir.join("config.toml"),
+        format!(
+            "schema_version = {}\n\
+             group_id = \"Plant\"\n\
+             broker_host = \"192.0.2.1\"\n\
+             broker_port = 1883\n\
+             publish_period_secs = 30\n\
+             mapping_confirmed = false\n\
+             ui_port = {configured}\n",
+            smartme_bridge::app::store::SCHEMA_VERSION
+        ),
+    )
+    .expect("write a broken config");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_smartme-bridge"))
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("SMARTME_STATE_DIR", &dir)
+        .env("SMARTME_UI_PORT", elsewhere.to_string())
+        .env("SMARTME_CLIENT_ID", "x")
+        .env("SMARTME_CLIENT_SECRET", "x")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the bridge binary runs");
+
+    let answer = wait_for_ui(configured, &mut child);
+    let elsewhere_answered = get(elsewhere, "/").is_some();
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        answer.is_some(),
+        "the repair screen must stay on the port the configuration names ({configured}), \
+         because that is where the operator and their reverse proxy are looking — a file \
+         that broke is exactly when they need to reach it"
+    );
+    assert!(
+        !elsewhere_answered,
+        "nothing may answer on the first-run port ({elsewhere}) once a file names one: \
+         a screen served in two places is a screen whose address nobody can state"
+    );
+}
+
 /// AC1 — a first run, which is the whole reason this story came before a screen.
 #[test]
 fn with_no_configuration_the_ui_answers_and_says_so() {

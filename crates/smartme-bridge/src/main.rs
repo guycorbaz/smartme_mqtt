@@ -387,9 +387,17 @@ async fn lifecycle(state_dir: PathBuf, ui_port: u16) -> Result<(), Box<dyn std::
 /// exists to refuse, arriving through the door marked "monitoring".
 ///
 /// [ADR 0037]: ../../docs/adr/0037-the-first-run-port-is-bootstrap-not-configuration.md
-fn ui_port_for(stored: Option<&StoredConfig>) -> u16 {
+fn ui_port_for(state_dir: &std::path::Path, stored: Option<&StoredConfig>) -> u16 {
     stored
         .and_then(|c| c.ui_port)
+        // The file could not be read as a whole — and that is exactly when the
+        // operator is about to be sent to the repair screen ([#66], finding 1).
+        // Sending them to the default port would move that screen away from where
+        // Traefik points, so the one screen that can fix the fault becomes the one
+        // they cannot reach. `probe_ui_port` reads that single setting
+        // tolerantly; it answers `None` for anything it cannot vouch for, and the
+        // fall-back below is then the same as it always was.
+        .or_else(|| store::probe_ui_port(state_dir))
         .unwrap_or_else(first_run_port)
 }
 
@@ -421,7 +429,7 @@ fn healthcheck() -> ! {
     let stored = store::exists(&state_dir)
         .then(|| store::read(&state_dir))
         .and_then(Result::ok);
-    let port = ui_port_for(stored.as_ref());
+    let port = ui_port_for(&state_dir, stored.as_ref());
     let url = format!("http://127.0.0.1:{port}/healthz");
 
     // A current-thread runtime for one request: this process does nothing else,
@@ -544,7 +552,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The UI's port comes from the file when there is one, and from a default
     // when there is not — because the run with no file is the run that needs the
     // UI most, and it has nowhere to read a port from.
-    let ui_port = ui_port_for(stored.as_ref().and_then(|r| r.as_ref().ok()));
+    let ui_port = ui_port_for(&state_dir, stored.as_ref().and_then(|r| r.as_ref().ok()));
 
     let (file_layer, file_log) = file_log_layer(stored.as_ref().and_then(|r| r.as_ref().ok()));
     tracing_subscriber::registry()

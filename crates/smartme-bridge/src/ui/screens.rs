@@ -991,7 +991,22 @@ pub(super) async fn save_config(
     // Only a running bridge has a control surface to apply to. A silent one has
     // nothing in force to compare against, so the honest report is that the
     // saved values take effect when it starts publishing.
-    let report = match state.phase().control() {
+    // ASKED OF `lifecycle`, NOT OF THE CONTROL SURFACE ([#66], finding 2).
+    //
+    // `Phase::starting()` is `lifecycle: Running` with `running: None` — a bridge
+    // that intends to publish and is still building its runtime. Matching on
+    // `control()` alone put that window in the same arm as a bridge nobody has
+    // configured, so a save arriving in it answered *"Nothing is published yet —
+    // confirm the meter mapping"* to an operator whose mapping IS confirmed. And
+    // the half that mattered more: it reached neither `apply` nor the cost report,
+    // so it never said the change was not in force.
+    //
+    // This is `b36f42d`'s defect — "the UI called a configured bridge
+    // unconfigured, on its first answer" — surviving on a path that commit did not
+    // reach. `Phase::starting` was created to end exactly this lie; the second
+    // instance is why the window gets its own arm here rather than a wider guard.
+    let phase = state.phase();
+    let report = match phase.control() {
         // A CHANGE THAT WITHDREW THE CONFIRMATION IS NOT CARRIED TO THE WIRE.
         //
         // `store::save` clears `mapping_confirmed` when the meter set changed,
@@ -1025,6 +1040,16 @@ pub(super) async fn save_config(
             // show the operator a change that has not happened.
             let in_force = control.current();
             cost_report(&plan, in_force.poll.interval.as_secs())
+        }
+        // The runtime is being built: there is no surface to apply to, and no
+        // plan to price. What can be said is true and useful — the file is
+        // written, and the lifecycle loop this handler nudges will read it.
+        None if phase.lifecycle == crate::ui::Lifecycle::Running => {
+            "<p><strong>Saved — the bridge is still starting.</strong></p>\
+             <p>It is building its runtime, so there is nothing yet to say what \
+             this change costs. The lifecycle loop re-reads the file: reload this \
+             page in a moment to see what is in force.</p>"
+                .to_string()
         }
         None => "<p>Saved. Nothing is published yet — confirm the meter mapping \
                  below to start.</p>"
@@ -1722,6 +1747,92 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// [#66] finding 2 — **a save arriving while the bridge is still starting
+    /// must not be told the bridge is unconfigured.**
+    ///
+    /// `Phase::starting()` is `lifecycle: Running` with no control surface, and
+    /// the handler used to match on the control surface alone: the window between
+    /// deciding to publish and holding a `Control` fell into the same arm as a
+    /// bridge nobody had configured. The operator — whose mapping IS confirmed —
+    /// read *"Nothing is published yet, confirm the meter mapping below to start"*
+    /// about a bridge that was opening its MQTT session.
+    ///
+    /// The window is short and opened on every CI run when `Phase::starting` was
+    /// introduced, which is the only reason its first instance was found at all.
+    ///
+    /// FALSIFIED 2026-08-28 — mutation RUN: removing the
+    /// `None if phase.lifecycle == Lifecycle::Running` arm, so the handler falls
+    /// back to the bare `None`, goes red on the first assertion with the page
+    /// carrying "Nothing is published yet".
+    ///
+    /// **Synchronous, driving its own runtime.** The `ENV` guard must be held
+    /// across the whole test — `posted` reads the credential from the process
+    /// environment — and a `MutexGuard` held across an `await` is what
+    /// `clippy::await_holding_lock` refuses, rightly: it would block another test
+    /// on a lock this task might never release. `block_on` keeps the guard on one
+    /// thread for the length of the test, which is the guarantee the lock is for.
+    #[test]
+    fn a_save_while_starting_is_not_answered_as_an_unconfigured_bridge() {
+        let dir =
+            std::env::temp_dir().join(format!("smartme_save_starting_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let state = Arc::new(UiState::new(
+            // The phase under test: intends to publish, has no control yet.
+            crate::ui::Phase::starting().into_handle(),
+            dir.clone(),
+            std::sync::Arc::new(crate::core::clock::FakeClock::new(
+                crate::domain::UtcMillis(1_784_984_793_000),
+            )),
+            Arc::new(tokio::sync::Notify::new()),
+        ));
+        let _env = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: see `ENV`. `validate` joins the credential from the
+        // environment, and a missing one would refuse the submission before it
+        // ever reached the arm under test.
+        unsafe {
+            std::env::set_var("SMARTME_CLIENT_ID", "id");
+            std::env::set_var("SMARTME_CLIENT_SECRET", "secret");
+        }
+        let fields: Fields = vec![
+            ("group_id".into(), "Home".into()),
+            ("node_id".into(), "Bridge01".into()),
+            ("broker_host".into(), "192.0.2.1".into()),
+            ("broker_port".into(), "1883".into()),
+            ("publish_period_secs".into(), "30".into()),
+            ("api_base".into(), "https://192.0.2.1".into()),
+            ("meter.0.meter_id".into(), "garage".into()),
+            ("meter.0.device_id".into(), "aaa-1".into()),
+            ("meter.0.serial".into(), "9202685".into()),
+            // Without this the submission is refused for publishing nothing, and
+            // the test would never reach the arm it is about.
+            ("meter.0.enabled".into(), "1".into()),
+        ];
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime for one handler");
+        let page = runtime.block_on(async {
+            let response =
+                save_config(State(Arc::clone(&state)), HeaderMap::new(), Form(fields)).await;
+            crate::ui::rendered_body(response).await
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            !page.contains("Nothing is published yet"),
+            "a bridge that is starting is not an unconfigured one, and telling the \
+             operator to confirm a mapping they have confirmed sends them to repair \
+             something that is not broken: {page}"
+        );
+        assert!(
+            page.contains("still starting"),
+            "the window must be named for what it is, so the operator knows to look \
+             again rather than believing the change was priced: {page}"
+        );
     }
 
     /// **Story 3.4 AC2 + AC4 — a pick fills the pair, and discovery saves and
