@@ -85,9 +85,12 @@ and changes nothing about the bump's necessity. What it does change is the windo
 metric rename was cheap only while nothing is historised, and declining it now means paying the full
 price if it is ever reopened.
 
-**It owes a Tier-3 attestation** (action H7 of the epic-8 retrospective). `docs/ignition-contract-runbook.md`
-records v13 as awaiting one, with the session's own steps updated: the device folder is now the short
-name, and one step reads the `serial` property.
+**It owed a Tier-3 attestation** (action H7 of the epic-8 retrospective), **and it was attested on
+2026-08-28** — six steps of six, Ignition 8.3.7 Maker Edition, MQTT Engine 5.0.0-rc1 ([#112](https://github.com/guycorbaz/smartme_mqtt/issues/112)).
+Both halves of this decision were checked against a real host: the device folder is the short name
+and the serial is a folder nowhere, and `serial` reads `30000001` in the properties of `Power`.
+**It displays as `Serial`** — Engine capitalises custom property keys, which is worth knowing
+before concluding the property is missing. See `docs/ignition-contract-runbook.md`.
 
 **The window is open and closes without announcing itself.** The supervisor does not historise
 sub-metering yet, so today this costs a restart; once it does, it costs a broken series. The site

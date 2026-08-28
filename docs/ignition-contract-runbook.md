@@ -243,6 +243,16 @@ gate), and that the serial `30000001` is **not** a folder anywhere in the tree.
 > under another's with every value still plausible. A missing `serial` here is a FAILED step, not a
 > cosmetic one.
 
+> **Where to read `serial`, and under what spelling — measured 2026-08-28.** Not in the Tag
+> Editor. It is a *custom* property, as `Cause` was, and it shows as a row of the tag itself in the
+> **Tag Browser**: `Edge Nodes / <group> / <node> / contract-meter / Power`, unfolded. And it reads
+> **`Serial`**, capitalised, where the wire publishes `serial` — MQTT Engine capitalises custom
+> property keys. **An operator searching for the published spelling finds nothing**, which is how
+> the 2026-08-28 session came within a sentence of recording a FAILED step. The pairing was
+> confirmed on the wire the same session: `· serial = 30000001` in the DBIRTH, `Serial` on screen.
+> It could not have been seen before v13 — `Cause` was already capitalised at the source, so no
+> published key had ever differed from its displayed one.
+
 > **Where to read the datatype, added 2026-08-22.** Nowhere an operator would look. The Tag Browser
 > lists tag *properties* and `DataType` is not one of them; the **Tag Editor does not show it either**
 > for an MQTT Engine tag, because the module owns the type. Use the Designer's **Script Console**:
@@ -444,35 +454,34 @@ list; this one needs the opposite discipline — **ask, then look, then compare.
 
 ## Record of runs
 
-> ### ⚠ THE ATTESTATION IS OWED — v13 shipped on 2026-08-25 and no session has run
+> ### ✅ THE ATTESTATION IS CURRENT — v13, 2026-08-28
 >
-> **The registre and the binary parted company again**, deliberately and with the reason written
-> down. `CONTRACT_VERSION` is **13**; the table below stops at v12. Action H7 of the epic-8
-> retrospective allows exactly this — *a bump earns an attestation, or records what it is waiting
-> for and when that arrives* — and this is the record: **v13 is waiting for a Tier-3 session
-> against Ignition, and nothing goes to production before it.**
+> **Registre and binary coincide.** `CONTRACT_VERSION` is **13** and v13 is attested on all six
+> steps, against Ignition 8.3.7 Maker Edition and MQTT Engine 5.0.0-rc1. The debt [#112] carried
+> since 2026-08-27 is discharged: nothing about production waits on this gate any more. What
+> production still waits on is **commissioning** — `group_id`, the `meter_id`s and the image, set in
+> one restart ([#114](https://github.com/guycorbaz/smartme_mqtt/issues/114)) — which is a deployment
+> act and not a gate.
 >
 > v13 carries half of the site's Sparkplug nomenclature (SCADA technical report v0.10 §16.9): the
 > device identity moves ([ADR 0049](adr/0049-the-device-is-named-by-its-measuring-point-and-vouched-for-by-its-serial.md)),
 > the metric names do not ([ADR 0050](adr/0050-the-metric-names-stay-english.md) — proposed,
-> implemented and reversed on 2026-08-25). **Three things to check that the six steps did not ask
-> for before:**
+> implemented and reversed on 2026-08-25). **The three checks v13 added, and what they returned:**
 >
-> - **Step 1 — the device folder is the meter's SHORT NAME**, `contract-meter` for this gate, and
->   the serial `30000001` is **not** a folder anywhere in the tree. This is the half that breaks a
->   consumer silently: a host watching the old device id simply stops receiving.
-> - **Step 1 — `serial` reads `30000001` in the PROPERTIES of `Power`.** It is what replaces the
->   guarantee the serial gave by being the device id, and a person in front of the browser is who
->   it is for. Absent here, the rename has taken something and given nothing back.
-> - **Step 1 — `Contract/Version` reads 13**, and `Node Control/Rebirth` is untouched.
+> - the device folder is the meter's SHORT NAME, `contract-meter`, and `30000001` is a folder
+>   nowhere in the tree — **held**;
+> - `serial` reads `30000001` in the properties of `Power` — **held, and it displays as `Serial`**.
+>   Read the capitalisation note under *Step 1*: it is where this session nearly recorded an
+>   absence;
+> - `Contract/Version` reads 13 and `Node Control/Rebirth` is untouched — **held**.
 >
 > **The metric names are UNCHANGED** — `Power`, `Energy`, `Cause/Power`, `Cause/Energy` — so a v13
 > tag tree looks exactly like a v12 one on that point. French names mean you are looking at
 > something other than this version.
 >
-> **Use a fresh group.** The device rename means the old tag tree cannot be reused without leaving
-> orphans that look like the new tree's neighbours — and a residual group has already cost this gate a
-> false reading once (2026-08-21).
+> **Use a fresh group, and DELETE THE OLD FOLDER BEFORE THE PASS THAT COUNTS.** This session spent
+> two aborted passes on that rule, and one of them returned a FALSE `Good` at step 4 — the single
+> reading this gate exists to refuse. See *What the 2026-08-28 session established*.
 >
 > ### ~~✅ THE ATTESTATION WAS CURRENT — v12, 2026-08-22 at 20:53~~ *(superseded by v13)*
 >
@@ -515,6 +524,7 @@ list; this one needs the opposite discipline — **ask, then look, then compare.
 
 | Date | Ignition | MQTT Engine | Contract | Artifact | Result |
 | --- | --- | --- | --- | --- | --- |
+| 2026-08-28 | 8.3.7 **Maker Edition** | 5.0.0-rc1 | **v13** | **the bridge binary** | **Pass — all six steps**, and NFR17 re-attested at the version the bridge emits. Step 4 was read on the wire and on the screen **at the same instant**, on one message: `2147484164` and `Bad_Stale`. Two aborted passes preceded it, one of which returned a **false `Good`** from a residual tag tree. Engine **capitalises custom property keys** (`serial` → `Serial`). Neither NDEATH reached a third-party subscriber, which [#43] already suspects. Below |
 | 2026-08-22 (20:53) | 8.3.7 **Maker Edition** | 5.0.0-rc1 | **v12** | **the bridge binary** | **Pass — all six steps, and the repair CONFIRMED rather than assumed.** The cause reached the operator for the first time since contract v4 invented it, eight versions ago: `no-reading-yet` at birth, `no-cause` when the values went good, `reading-too-old` when they degraded — **three transitions in DDATA, not one rebirth**. [#100] confirmed on the wire a second time. Below |
 | 2026-08-22 (20:22) | 8.3.7 **Maker Edition** | 5.0.0-rc1 | **v11** | **the bridge binary** | **Pass — all six steps — AND THE VERSION'S OWN HEADLINE CHANGE DOES NOT REACH THE OPERATOR.** Read both halves of that sentence. The guarantee holds and the contract is conformant on the wire; the `Cause` property that v11 was cut for is written by a BIRTH and never updated by a DDATA, so it stands frozen at `no-reading-yet` on healthy metrics. [#100] confirmed on the wire the same evening: `bd_seq=0`. Below |
 | 2026-08-22 (morning) | 8.3.7 **Maker Edition** | 5.0.0-rc1 | **v10** | **the bridge binary** | **Pass — all six steps.** The second complete run in this table, and the one that **re-attests NFR17 at v10**. `Offline DateTime` tracks the **will**, confirming the 2026-07-31 probe; [#107] measured on a virgin group and found `Cause` absent. Below |
@@ -528,6 +538,101 @@ A pass is only meaningful against a stated version, so add a row rather than edi
 **MQTT Engine module** column was added 2026-07-31: it is the component that decodes Sparkplug, so it
 governs conformance more directly than the Ignition platform version, and the note below had been
 asking for it since the table was written.
+
+### What the 2026-08-28 session established — v13 attested, and a false pass caught in time
+
+Ignition **8.3.7 Maker Edition**, MQTT Engine **5.0.0-rc1**, contract **v13**, group
+`ContractV13`. **Six steps, all passed.** NFR17 is attested at the version the bridge emits, and
+[#112] is discharged.
+
+**Three passes carried the name `ContractV13` that day, and only the last one counts.** The first
+read a residual tag tree and returned a false `Good` at step 4, then ended in a mis-handled restart.
+The second ran while the observer was subscribed to a group name the gate never used — `ContractV13b`
+was agreed, `ContractV13` was typed — so it was measured on one side only. The third ran with the
+Designer folder deleted first, and that is what makes it evidence. The never-reuse rule was bent
+knowingly, its motive being the residual tree and the tree being gone; but a reader of this table
+should know that the name alone does not separate the three.
+
+#### Step 4 was read on the wire and on the screen at the same instant, for the first time
+
+Every previous session read the tag browser and trusted the bridge's own tests for what had been
+sent. Here `observe_cause_property` was subscribed to `spBv1.0/ContractV13/#` throughout, and the
+operator reported the screen while the message was still the last one published:
+
+```
+DDATA/BridgeContractNode/contract-meter
+  Power    quality 2147484164 (Bad_Stale)   · engUnit = kW
+  Energy   quality 2147484164 (Bad_Stale)   · engUnit = kWh
+  Cause/Power   quality 192 (Good)
+  Cause/Energy  quality 192 (Good)
+```
+
+Screen, at that instant: `Quality = Bad_Stale`, value **frozen at `2,35`**, node **online**,
+`Death Count = 0`, both causes at `reading-too-old`. **The guarantee holds at v13**, and it now
+holds as a paired measurement rather than as two half-observations taken minutes apart.
+
+#### The first pass returned a FALSE `Good` at step 4, and the residue is why
+
+It read `Good` on `Power` and `Energy` while the causes moved to `reading-too-old` — an incoherent
+pair that took three exchanges to explain. Two candidate faults were ruled out from the repository
+before anything was concluded: the ADR 0047 de-duplication compares the whole reading, quality and
+cause included (`sparkplug_publisher.rs:1009`), and all three BIRTH producers pass through
+`vouched_for` (`:752`, `:851`). The wire then showed the bridge publishing `2147484164` correctly.
+
+**The tags being read belonged to a tree no message was refreshing any more.** The old folders had
+not been deleted, so the operator was reading a group that had been garnished by an earlier pass
+and then abandoned. That is the same failure as 2026-08-21, and this is its third appearance — but
+the first where it fell on the one property this gate exists to check. **A residual folder does not
+merely add noise: it can return the exact reading whose absence the project is built to guarantee.**
+
+The clean-up line the gate prints at the end is therefore not housekeeping, and *deleting before*
+matters as much as deleting after.
+
+#### Engine capitalises custom property keys — `serial` on the wire, `Serial` in the Designer
+
+The operator searched the properties of `Power` for `serial`, did not find it, and the step was one
+sentence from being recorded as FAILED — the runbook says, correctly, that a missing `serial` is a
+failed step and not a cosmetic one. It was present under **`Serial`**.
+
+The positive control came in the same session, from the rebirth's DBIRTH:
+
+```
+DBIRTH/BridgeContractNode/contract-meter
+  Power    quality 2147484164 (Bad_Stale)   · engUnit = kW   · serial = 30000001
+```
+
+**Wire `serial`, Designer `Serial`, one session, both read.** This was unobservable before v13:
+`Cause` was already capitalised at the source, so no published key had ever differed from its
+displayed spelling. See the note under *Step 1*.
+
+#### Neither NDEATH reached a subscriber, while Ignition counted two
+
+`Death Count` went `0 → 2` (stabilised — read twice, seconds apart) and `Offline DateTime` read
+**2026-08-28 11:31:17 AM**. The host processed both certificates.
+
+**Two observer windows, open and subscribed to `spBv1.0/ContractV13/#` across that instant — one
+since 09:16 UTC, one since 09:21, the deaths at 09:31:17 — received neither.** Both had captured
+every earlier message of the session within a second, and neither reported a transport error; the
+second window decoded **zero** messages in fifteen minutes and printed its own `INCONCLUSIVE`.
+
+**Two reservations, and they are not small.** The two windows are processes of the *same* program,
+so a common defect is not excluded. And the second window had no positive control: no other message
+was due in it, so its silence may be a general silence rather than a lost death.
+
+With those stated, the observation belongs to [#43] — *"No NDEATH reaches a subscriber… the will
+appears to be lost to session takeover"*, open since 2026-08-18 and written for the reconnect case.
+This extends the suspicion to a **graceful stop**, where ADR 0011 promises two certificates. It was
+measured in passing, not by an experiment designed for it; the experiment remains to be written.
+
+#### What this session did NOT measure
+
+- **The cold-start DBIRTH of the retained pass is not on the wire record.** The observer was opened
+  after the bridge had started, so step 1 rests on the Designer alone — corroborated by the same
+  BIRTH captured during an earlier pass, not by its own.
+- **The interval between the two deaths.** The Ignition log was not exported, so the ~2 s figure of
+  earlier sessions is neither confirmed nor contradicted here.
+- **Step 2's acquisition-versus-reception clause**, unmeasurable by this gate as it stands, and
+  still awaiting the small repair described under *Step 2*.
 
 ### What the 2026-08-22 20:53 session established — the repair, measured
 
@@ -871,10 +976,12 @@ has ever published — and both passes printed `bdSeq = Some(1)`. That is [#100]
 requires the first session to be numbered zero. The issue was opened 2026-08-19 from the code;
 this is the same fact observed on the wire during a Tier-3 session.
 
+[#43]: https://github.com/guycorbaz/smartme_mqtt/issues/43
 [#44]: https://github.com/guycorbaz/smartme_mqtt/issues/44
 [#100]: https://github.com/guycorbaz/smartme_mqtt/issues/100
 [#107]: https://github.com/guycorbaz/smartme_mqtt/issues/107
 [#108]: https://github.com/guycorbaz/smartme_mqtt/issues/108
+[#112]: https://github.com/guycorbaz/smartme_mqtt/issues/112
 
 ### What the 2026-08-03 run established — the run that closes NFR17
 
