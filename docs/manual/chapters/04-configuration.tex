@@ -211,6 +211,7 @@ Process restart & Nothing until the container is restarted. \\
 \midrule
 publish\_period\_secs   & Hot \\
 api\_base               & Process restart \\
+meters[].meter\_id      & Device certificate \emph{and} process restart --- see below \\
 meters[].device\_id     & Process restart \\
 meters[].enabled        & Device certificate \\
 meters[].serial         & Device certificate \\
@@ -232,6 +233,26 @@ the same session, and it \emph{requires} a \code{DDEATH} whenever a device can n
 provide real-time information --- which is exactly what a meter you have just switched off
 is. Stopping quietly would leave its last reading on the host's screen looking current.
 \end{note}
+
+\begin{warning}
+\textbf{Renaming a meter is not one change, and it is not made in one place.} Since contract~13
+the \code{meter\_id} \emph{is} the device level of the topic, so on the wire a rename is one
+device buried and another born: \prog{} publishes a \code{DDEATH} for the name that leaves ---
+without it, the old name's last value would sit on the operator's screen looking current --- and
+the new name is not polled, and therefore not born, until the process restarts.
+
+\textbf{And it keys files in the state directory.} A meter's energy-monotonicity reference lives in
+\code{energy-reference-<meter\_id>.toml} and repeats the same name in a \code{meter} field inside,
+as a second lock. Rename the meter and nothing else, and the bridge restarts \emph{without a
+reference}: the guard that catches a counter going backwards is inert for that meter until a fresh
+reading establishes a new one. Rename the files and rewrite the field in the same operation, with
+the container stopped, and confirm it in the log --- \code{restored the energy-monotonicity
+reference meter=cpt01 reference=…} --- which is the only place that says the rename was complete.
+
+\textbf{The rank is spent once.} If your site's naming rules forbid reusing a retired identifier
+--- and a historian's do, whether they are written down or not --- then the name you choose is the
+name that meter keeps. Decide it before the restart, not after the first day of history.
+\end{warning}
 
 \begin{warning}
 \textbf{Only the publish period and the staleness policy are genuinely hot today.}

@@ -35,6 +35,17 @@ container is started on the same volume --- it must come up publishing and must 
 file.
 \end{note}
 
+\begin{note}
+\textbf{If the update also changes what the bridge publishes, do both in the same stop.} An image
+that carries a new contract and a rename of the published identity are two crossings of the same
+window, and a host files history under the names it receives: each crossing made separately breaks
+the series once. Stop the container, edit the compose file \emph{and} the configuration --- and the
+state files the identity keys, see section~\ref{sec:changecost} --- then start once. Setting
+\code{mapping\_confirmed} back to \code{false} while you are in the file is worth the extra click:
+the bridge then comes up serving its screens and publishing nothing, so you read the mapping before
+a host discovers it rather than after.
+\end{note}
+
 \section{The rollback point, and its one trap}
 
 The rollback point is \textbf{the image tag you were running}, which step~1 above writes down.

@@ -14,9 +14,12 @@ is listed in section~\ref{sec:contract-limits} rather than described as though i
 \section{Contract version}
 
 The node BIRTH carries a metric \code{Contract/Version} (\code{Int64}), currently
-\textbf{12}. \emph{(This sentence said \textbf{8} until 2026-08-22, while the bridge emitted
-10 --- a stale constant in a document, which the chapter's own mechanical guard does not check
-because it reads routes and cause slugs, not numbers.)} It is incremented on \emph{any} change to the topic grammar, to a metric name or
+\textbf{13}. \emph{(This sentence has now been wrong twice, in the same way. It said \textbf{8}
+until 2026-08-22 while the bridge emitted 10, and \textbf{12} until 2026-08-28 while the bridge
+emitted 13 --- a stale constant in a document, which the chapter's own mechanical guard does not
+catch because it reads routes and cause slugs, not numbers. Twice is a pattern, and it has the same
+shape both times: a number written in prose, in two places, moved in one. Read it off
+\code{CONTRACT\_VERSION} in \code{sparkplug\_publisher.rs}, which is what the wire carries.)} It is incremented on \emph{any} change to the topic grammar, to a metric name or
 unit, or to the meaning of a published quality code. Publishing it means a consumer can
 \emph{see} the contract change instead of having to notice it from broken tags.
 
@@ -193,6 +196,17 @@ measurements under another's with every value still plausible. So the guarantee 
 rather than disappearing: \textbf{the device BIRTH declares the serial as the \code{serial}
 property} of every metric, and \prog{} \textbf{refuses to publish} a meter whose fetched serial
 is not the one its configuration declares --- a refusal that latches, not a warning.
+
+\begin{note}
+\textbf{In Ignition, look for \code{Serial} with a capital.} The wire publishes the key in
+lowercase --- \code{serial} --- but MQTT Engine capitalises custom metric property keys, so the
+Designer's tag browser shows \code{Serial}. It is a row of the tag itself, under
+\code{Edge Nodes / GROUP / NODE / METER / Power} unfolded, and \emph{not} a field of the Tag
+Editor. Measured on both sides during the Tier-3 session of 2026-08-28, where an operator
+searching for the published spelling found nothing and came within a sentence of recording the
+property as missing. It could not have been observed before contract~13: every custom property
+this bridge had published until then was already capitalised at the source.
+\end{note}
 
 Identifiers are validated \emph{before} the bridge connects. A \code{meter\_id} that cannot be a
 topic level makes the bridge refuse to publish, because the alternative — connecting,

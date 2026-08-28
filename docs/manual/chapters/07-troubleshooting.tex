@@ -39,6 +39,52 @@ Clear the topic in the SCADA host's tag tree as well if it has already persisted
 The host's tag either disappears with the folder clean-up or stops being re-created after a
 host restart.
 
+\section{A tag tree nobody refreshes any more}
+\label{sec:trouble-abandoned-tree}
+
+\emph{The section above is about a message the broker keeps. This one is about a tag the
+\emph{host} keeps, and it is the more dangerous of the two: no message exists anywhere, nothing
+is wrong with the bridge, and the SCADA shows a plausible value with a good quality.}
+
+\paragraph{Symptom.} A device folder shows values, and they look healthy --- \code{Good} quality,
+a number that is not absurd --- but they never change. Or worse, and this is how it was found: a
+\emph{degraded} reading is published and the tag goes on showing \code{Good}, so the guarantee
+this bridge exists for appears to have failed.
+
+\paragraph{Cause.} You are reading a folder the host discovered under a name the bridge no longer
+publishes. It happens after any identity change --- a \code{group\_id} edit, a meter renamed, a
+contract gate run under a fresh group --- because \textbf{a Sparkplug host persists what it
+discovers and has no way to learn that a name has been abandoned}. The last values it received stay
+on screen with the quality they had when they arrived, indefinitely.
+
+\begin{warning}
+\textbf{The quality shown is the last one received, not a current verdict.} A tag frozen while it
+was \code{Good} keeps showing \code{Good} for ever. That is the exact reading this bridge is built
+to make impossible on its own wire --- and it can still reach an operator through an abandoned
+folder, without a single fault upstream. On 2026-08-28 it cost two aborted passes of the Tier-3 gate
+before the residue was recognised.
+\end{warning}
+
+\paragraph{Action.} Establish which folder is live before believing anything in it. The wire is the
+authority: subscribe and look at what is actually published.
+\begin{verbatim}
+mosquitto_sub -h BROKER -v -t 'spBv1.0/#' -W 60
+\end{verbatim}
+Every device that appears there is live; every folder in the tag tree that does \emph{not} appear is
+abandoned. Delete those folders in the Designer --- and only those. Then re-read the value you were
+doubting.
+
+\paragraph{Two cheap discriminators, before you delete anything.} Compare the timestamps of two tags
+in the same folder: a message carries all of a device's metrics at once, so live siblings share an
+instant to the millisecond and an abandoned tag lags behind by however long ago it was orphaned. And
+watch the \code{Cause/*} metrics: they move on the same message as the quality, so a folder where
+the cause has moved and the quality has not is not showing you a stale folder --- it is showing you
+something else, and that would be worth an issue.
+
+\paragraph{Prevention.} Delete the old folder \emph{before} the pass that matters, not only after
+it. The clean-up at the end of the Tier-3 runbook protects the next session; it is the clean-up at
+the \emph{beginning} that protects the measurement you are about to take.
+
 \section{One meter is silent while the others publish}
 \label{sec:trouble-one-meter}
 
