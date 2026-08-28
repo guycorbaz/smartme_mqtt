@@ -29,6 +29,16 @@ semantic versioning as far as the shared version number allows.
 
 ### Added
 
+- **`SeqCounter::give_back` and `SessionEncoder::give_back_seq`.** Give back the sequence number
+  the last message took, when that message **never reached the wire**. A `seq` jump is a
+  lost-message condition to a Sparkplug host — it issues a Rebirth Request or marks the node stale
+  — so repairing the hole a refused message would leave is worth doing. **Replaying a number that
+  DID reach the wire is worse than the hole**, so exactly one condition makes this sound, and a
+  caller who cannot state it must not call it: *a single message was in flight and the transport
+  refused it*. It does not hold for a partly-refused BIRTH sequence. ADR 0046, issue [#92].
+
+
+
 - `README.md` and this file, and the crate metadata crates.io requires — the publication bar
   NFR19 describes. **Publication itself is decided against** — not deferred — by ADR 0045 on
   2026-08-22: a crates.io version cannot be withdrawn, only yanked; nothing yet feeds `decode`
