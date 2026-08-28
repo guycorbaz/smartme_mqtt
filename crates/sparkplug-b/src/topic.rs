@@ -58,6 +58,29 @@ impl std::error::Error for TopicError {}
 /// (`Sparkplug_5_Operational_Behavior.adoc:403-407`) is conditional — *"if the
 /// Device supports writing to outputs"* — and an unused variant would invite a
 /// subscription nothing needs.
+///
+/// # If you are adding `DCmd`, read this first ([#38])
+///
+/// **Two conformance verdicts stop being `n/a` the moment this variant exists**,
+/// and they will not tell you themselves — `docs/sparkplug-conformance.md` is not
+/// what anyone opens while writing a relay-command story, which is why this note
+/// lives here instead. Adding the variant is the one edit that cannot be skipped,
+/// so it is the one place the reminder cannot be missed.
+///
+/// - `tck-id-message-flow-device-dcmd-subscribe` — the bridge MUST then subscribe
+///   to `spBv1.0/{group}/DCMD/{node}/{device}`. Recorded `n/a` **on the stated
+///   condition** that no device supports writing to outputs; a meter relay is
+///   exactly such an output.
+/// - `topics-dcmd-topic` (chapter 4) — the matching topic-grammar clause, `n/a`
+///   for the same reason.
+///
+/// Re-verdict both in the same change that adds the variant, or the matrix will
+/// claim `n/a` for a condition that has stopped holding — the failure mode this
+/// project has already paid for several times: a claim that stayed correct while
+/// the world moved under it.
+///
+/// *Status on 2026-08-28: a meter relay is not planned "for the time being"
+/// (Guy). The condition holds today; the expiry is deferred, not cancelled.*
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageType {
     /// Node birth certificate.
