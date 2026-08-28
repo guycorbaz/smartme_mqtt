@@ -72,6 +72,10 @@ trap log_run EXIT
 
 step() { CURRENT_STEP="$1"; printf '\n\033[1m── %s\033[0m\n' "$1"; }
 ok()   { printf '\033[32m✓ %s\033[0m\n' "$1"; }
+# A step that could not check what it claims to check says so in yellow, and the
+# gate goes on. It must never print through `ok`: the whole point of this line is
+# that "green" and "not checked" stop looking alike.
+warn() { printf '\033[33m! %s\033[0m\n' "$*"; }
 
 # A test that has flaked this many times stops being tolerated.
 #
@@ -293,10 +297,34 @@ ok "no_context_leak"
 # ---------------------------------------------------------------------------
 step "deny.yml — licences and dependency direction"
 if command -v cargo-deny >/dev/null 2>&1; then
+    # FETCH FIRST, and this line is the whole of [#R9].
+    #
+    # `yanked = "deny"` in deny.toml is not checked against the advisory
+    # database: a yanked crate is not a security advisory, it is a fact of the
+    # crates.io INDEX. So this step's verdict is only as fresh as whenever this
+    # clone last talked to the registry — which is not a property of the
+    # repository, and is not displayed anywhere.
+    #
+    # On 2026-08-27 that made the gate GREEN while CI was RED: `chacha20 0.10.1`
+    # had just been yanked upstream, the action saw it and this script did not.
+    # The failure mode is worse than the red: a gate believed to reproduce CI
+    # verbatim makes the `gh run list` check afterwards feel optional.
+    #
+    # `fetch all` pulls the advisory db AND the index before deciding. It costs
+    # under a second when both are warm.
+    if ! cargo deny fetch all 2>/dev/null; then
+        warn "could not refresh the advisory db and the registry index — the" \
+             "yanked-crate check below is answered from whatever this clone" \
+             "already had, and is NOT equivalent to CI"
+    fi
     cargo deny check
     ok "cargo-deny"
 else
-    echo "cargo-deny not installed — SKIPPED (CI will still run it)"
+    # A missing tool must not read as a passed step. CI does run it, so this is
+    # not fatal — but the gate says out loud that it did not check.
+    warn "cargo-deny is NOT INSTALLED — this step verified NOTHING." \
+         "CI will run it, so a red build can still be waiting for you." \
+         "Install it with: cargo install --locked cargo-deny"
 fi
 
 # ---------------------------------------------------------------------------
