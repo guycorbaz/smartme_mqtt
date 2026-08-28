@@ -104,9 +104,9 @@ same.
 | `intro-group-id-string` | MUST | the Group ID is a Rust `String` (`topic.rs:99`) | — **no test, and none is possible**: `String`'s UTF-8 invariant is the standard library's, so invalid UTF-8 here fails to compile rather than failing a test. **Language type-invariant witness** ([ADR 0015](adr/0015-language-type-invariants-as-conformance-evidence.md)) | conformant |
 | `intro-edge-node-id-string` | MUST | as above (`topic.rs:100`) | — same witness, same ADR | conformant |
 | `intro-device-id-string` | MUST | `device_topic` takes `&str` (`topic.rs:140`) | — same witness, same ADR | conformant |
-| `intro-group-id-chars` | MUST | **`check_identifier` rejects `/`, `+`, `#` and empty — and nothing else** (`topic.rs:155-165`). That is chapter 4's wildcard rule, not MQTT's character set | — **measured: a `U+0000` passes validation and appears in the constructed topic.** See below | **gap (unimplemented)** ([#34](https://github.com/guycorbaz/smartme_mqtt/issues/34)) |
-| `intro-edge-node-id-chars` | MUST | as above, same function | — same measurement | **gap (unimplemented)** ([#34](https://github.com/guycorbaz/smartme_mqtt/issues/34)) |
-| `intro-device-id-chars` | MUST | as above, same function | — same measurement | **gap (unimplemented)** ([#34](https://github.com/guycorbaz/smartme_mqtt/issues/34)) |
+| `intro-group-id-chars` | MUST | **`check_identifier` rejects `/`, `+`, `#`, `U+0000` and empty** (`topic.rs`). The first three are chapter 4's wildcard rule; the null is this clause's own, deferred to MQTT, whose UTF-8 Encoded String MUST NOT carry it. *Deliberately not stricter: MQTT's `U+0001..U+001F` clause is a SHOULD NOT, and refusing those would refuse identifiers both specifications allow* | `a_null_character_is_refused_and_a_control_character_is_not` — asserts the refusal at all three levels **and** that a control character is still accepted, so a fix reaching too far fails it too. Mutation-tested: dropping `'\0'` from the match goes red | conformant |
+| `intro-edge-node-id-chars` | MUST | as above, same function | as above, same test — the edge node case is asserted by name | conformant |
+| `intro-device-id-chars` | MUST | as above, same function | as above, same test — the device case goes through `device_topic` | conformant |
 | `intro-edge-node-id-uniqueness` | MUST | nothing verifies that `group_id/edge_node_id` is unique across the infrastructure | — | **gap (unimplemented)** ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)) |
 
 **The three `-chars` clauses were the one place this pass expected agreement and did not find it,
@@ -1419,13 +1419,25 @@ not only here.
 
 ## Tally for chapter 1
 
-**3 conformant · 0 deviations · 4 gaps · 1 n/a**
+**6 conformant · 0 deviations · 1 gap · 1 n/a** *(was `3 · 0 · 4 · 1` until 2026-08-28, when
+[#34](https://github.com/guycorbaz/smartme_mqtt/issues/34) was repaired)*
 
-`3 + 0 + 4 + 1 = 8` — the enumerated clause set, with no remainder.
+`6 + 0 + 1 + 1 = 8` — the enumerated clause set, with no remainder.
 
-The 3 conformant are the `-string` clauses, and all three rest on a **language type invariant**
-rather than a test: a Rust `String`/`&str` is UTF-8 by construction, so a non-UTF-8 identifier is
-unrepresentable at compile time.
+Three of the conformant are the `-string` clauses, and all three rest on a **language type
+invariant** rather than a test: a Rust `String`/`&str` is UTF-8 by construction, so a non-UTF-8
+identifier is unrepresentable at compile time.
+
+The other three are the `-chars` clauses, repaired on 2026-08-28 and resting on a test rather than
+an invariant. They had been a gap since the story 4.3 audit **measured** a `U+0000` reaching the
+topic: `check_identifier` implemented chapter 4's wildcard rule and stopped there, while these
+clauses defer their character set to MQTT — whose UTF-8 Encoded String MUST NOT carry a null. The
+repair adds exactly that character and no more: MQTT's `U+0001..U+001F` clause is a SHOULD NOT, and
+the test asserts a control character is still accepted so that a fix reaching too far fails as well
+as one reaching too little.
+
+**The remaining gap is `intro-edge-node-id-uniqueness`** ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)), which no Edge Node can verify from
+inside itself.
 
 **This was the one place this pass loosened a rule, and it took an adversarial review to notice.**
 The draft cited `node_topics_follow_the_namespace_grammar` and
@@ -1817,14 +1829,25 @@ conformance scope".
 
 | Chapter | conformant | deviation | gap | n/a | clauses |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 1 — Introduction | 3 | 0 | 4 | 1 | 8 |
+| 1 — Introduction | 6 | 0 | 1 | 1 | 8 |
 | 2 — Principles | 1 | 1 | 1 | 1 | 4 |
 | 3 — Components | 0 | 0 | 0 | 1 | 1 |
 | 4 — Topics | 32 | 3 | 3 | 32 | 70 |
 | 5 — Operational behaviour | 32 | 1 | 17 | 49 | 99 |
 | 6 — Payloads | 45 | 4 | 1 | 59 | 109 |
 | 10 — Conformance | 0 | 0 | 0 | 12 | 12 |
-| **Total** | **113** | **9** | **26** | **155** | **303** |
+| **Total** | **116** | **9** | **23** | **155** | **303** |
+
+**Chapter 1 moved `3 · 4` → `6 · 1` on 2026-08-28**: [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34) is repaired, so the three
+`intro-*-chars` clauses go from `gap (unimplemented)` to `conformant`. `check_identifier` now
+refuses `U+0000` as well as the wildcards — the clause defers its character set to MQTT, whose
+UTF-8 Encoded String MUST NOT carry a null. No row was added or removed: 8 clauses before and
+after, and the whole-file total holds at 303.
+
+*What this correction also revealed: `scripts/check-conformance-arithmetic.py` checks that the
+chapter rows sum to the Total and that each chapter's own tally matches its row — it does NOT
+check either against the verdicts actually written in the tables. It stayed green while three
+rows said `conformant` and this table still counted them as gaps.*
 
 **Chapter 4 moved `31 · 4` → `32 · 3` on 2026-08-22**: ADR 0042 repaired
 `topics-nbirth-bdseq-increment`'s zero-start half ([#100]), so one row went from `deviation` to

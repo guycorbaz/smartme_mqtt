@@ -168,7 +168,28 @@ fn check_identifier(value: &str, element: &'static str) -> Result<(), TopicError
         return Err(TopicError::Empty { element });
     }
     for character in value.chars() {
-        if matches!(character, '/' | '+' | '#') {
+        // TWO RULES FROM TWO SPECIFICATIONS, and conflating them left a hole
+        // ([#34]).
+        //
+        // `/`, `+` and `#` are chapter 4's wildcard-and-separator rule
+        // (`tck-id-topic-structure-namespace-valid-*`): an identifier carrying one
+        // would not address the level it names.
+        //
+        // U+0000 is the other rule, and it arrives from further away. Chapter 1
+        // defers the character SET to MQTT — *"Because the Group ID is used in MQTT
+        // topic strings the Group ID MUST only contain characters allowed for MQTT
+        // topics per the MQTT Specification"* (`tck-id-intro-group-id-chars`, and
+        // the same clause for the edge node and the device) — and MQTT's UTF-8
+        // Encoded String **MUST NOT** carry U+0000. Implementing only chapter 4's
+        // rule satisfied a narrower set and let a null through, measured during the
+        // story 4.3 audit.
+        //
+        // **Stopping at the MUST is deliberate.** MQTT also says a string SHOULD
+        // NOT carry U+0001..U+001F and U+007F..U+009F; refusing those would be
+        // stricter than either specification and would turn a legal — if
+        // eccentric — identifier into a bridge that will not start. The unpaired
+        // surrogates MQTT also forbids cannot exist in a Rust `char`.
+        if matches!(character, '/' | '+' | '#' | '\0') {
             return Err(TopicError::IllegalCharacter { element, character });
         }
     }
@@ -223,6 +244,47 @@ mod tests {
                 "device {bad:?}"
             );
         }
+    }
+
+    /// [#34] — **a null character is refused at every level, because chapter 1
+    /// defers the character set to MQTT and MQTT forbids it.**
+    ///
+    /// `check_identifier` implemented chapter 4's wildcard-and-separator rule and
+    /// nothing else, so a U+0000 reached the topic — measured during the story 4.3
+    /// audit with a throwaway probe, not deduced.
+    ///
+    /// The last case is the discriminating one and must NOT be refused: a control
+    /// character MQTT merely says SHOULD NOT carry. A guard that refuses it too is
+    /// stricter than both specifications and turns a legal identifier into a bridge
+    /// that will not start — which is why this test would catch a fix that reached
+    /// too far, as well as one that does not reach far enough.
+    ///
+    /// FALSIFIED 2026-08-28 — mutation RUN: dropping `'\0'` from the match in
+    /// `check_identifier` goes red on the group case with *"a null must never reach
+    /// a topic"*.
+    #[test]
+    fn a_null_character_is_refused_and_a_control_character_is_not() {
+        assert!(
+            EdgeNode::new("gro\u{0}up", "node").is_err(),
+            "a null must never reach a topic: MQTT's UTF-8 Encoded String MUST NOT \
+             carry U+0000, and chapter 1 defers to MQTT for the character set"
+        );
+        assert!(
+            EdgeNode::new("group", "no\u{0}de").is_err(),
+            "the edge node id is under the same clause as the group id"
+        );
+        assert!(
+            node()
+                .device_topic(MessageType::DData, "dev\u{0}ice")
+                .is_err(),
+            "and so is the device id"
+        );
+        assert!(
+            EdgeNode::new("gro\u{1}up", "node").is_ok(),
+            "a control character is a SHOULD NOT, not a MUST NOT — refusing it would \
+             be stricter than MQTT and than Sparkplug, and would refuse to start on \
+             an identifier both specifications allow"
+        );
     }
 
     #[test]
