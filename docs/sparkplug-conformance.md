@@ -107,7 +107,7 @@ same.
 | `intro-group-id-chars` | MUST | **`check_identifier` rejects `/`, `+`, `#`, `U+0000` and empty** (`topic.rs`). The first three are chapter 4's wildcard rule; the null is this clause's own, deferred to MQTT, whose UTF-8 Encoded String MUST NOT carry it. *Deliberately not stricter: MQTT's `U+0001..U+001F` clause is a SHOULD NOT, and refusing those would refuse identifiers both specifications allow* | `a_null_character_is_refused_and_a_control_character_is_not` — asserts the refusal at all three levels **and** that a control character is still accepted, so a fix reaching too far fails it too. Mutation-tested: dropping `'\0'` from the match goes red | conformant |
 | `intro-edge-node-id-chars` | MUST | as above, same function | as above, same test — the edge node case is asserted by name | conformant |
 | `intro-device-id-chars` | MUST | as above, same function | as above, same test — the device case goes through `device_topic` | conformant |
-| `intro-edge-node-id-uniqueness` | MUST | nothing verifies that `group_id/edge_node_id` is unique across the infrastructure | — | **gap (unimplemented)** ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)) |
+| `intro-edge-node-id-uniqueness` | MUST | nothing verifies that `group_id/edge_node_id` is unique across the infrastructure — **and nothing can, from inside an Edge Node**. Decided rather than pending: [ADR 0052](adr/0052-uniqueness-is-asserted-by-the-operator-not-verified-by-the-node.md) refuses the pre-birth probe (it would answer *"no collision seen in 500 ms"* while reading as *"unique"*), and the identifiers have no defaults, so nothing collides by accident | — the operator manual states the requirement where the two identifiers are configured, and the troubleshooting chapter carries the collision's signature | **gap (unimplemented)** — *decided, not oversight* ([ADR 0052](adr/0052-uniqueness-is-asserted-by-the-operator-not-verified-by-the-node.md)) |
 
 **The three `-chars` clauses were the one place this pass expected agreement and did not find it,
 and the finding was measured rather than reasoned.** All three read *"MUST only contain characters
@@ -271,8 +271,8 @@ strength of an ADR it wrote itself.
 | `topic-structure-namespace-valid-device-id` | MUST | validated in `device_topic`, at the last moment before it becomes a level | same | conformant |
 | `topic-structure-namespace-device-id-associated-message-types` | MUST | `is_device_level()` gates DBIRTH/DDATA/DDEATH onto device topics | `a_message_type_cannot_address_the_wrong_level` | conformant |
 | `topic-structure-namespace-device-id-non-associated-message-types` | MUST NOT | the same gate refuses a node-level type on a device topic, **in release builds too** | same | conformant |
-| `topic-structure-namespace-unique-edge-node-descriptor` | MUST | nothing verifies that `group_id/edge_node_id` is unique across the MQTT infrastructure | — | **gap (unimplemented)** ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)) |
-| `topic-structure-namespace-unique-device-id` | MUST | one device today; uniqueness across a fleet is unenforced | — | **gap (unimplemented)** (Epic 3) |
+| `topic-structure-namespace-unique-edge-node-descriptor` | MUST | as `intro-edge-node-id-uniqueness`: unverifiable from inside, decided by [ADR 0052](adr/0052-uniqueness-is-asserted-by-the-operator-not-verified-by-the-node.md), documented in the manual | — | **gap (unimplemented)** — *decided, not oversight* ([ADR 0052](adr/0052-uniqueness-is-asserted-by-the-operator-not-verified-by-the-node.md)) |
+| `topic-structure-namespace-unique-device-id` | MUST | **`config::validate` refuses two meters sharing a `meter_id`**, naming both rows — and since contract v13 the `meter_id` IS the device level, so this is the clause's own subject. *This row said "one device today" until 2026-08-28: the fleet has been three since Epic 3, and the serial-duplicate guard that used to cover this stopped covering it when the device level moved* | `two_meters_sharing_a_meter_id_are_refused` — names the `meter ids` fault rather than taking any error. Mutation-tested: emptying the duplicate scan goes red | conformant |
 | `topic-structure-namespace-duplicate-device-id-across-edge-node` | MAY | permissive; nothing to do | — | n/a |
 
 **On the two gaps.** Neither is a coding error. An Edge Node cannot verify infrastructure-wide
@@ -1482,7 +1482,7 @@ rather than added, because adding a single row of another story's 29 would leave
 `42` with no account of the rest; but it is now a clause the bridge SATISFIES and does not claim,
 which is the less common direction for this document to be wrong in.
 
-**32 conformant · 3 deviations · 3 gaps · 32 n/a** (19 Host Application, 6 messages we do not emit,
+**33 conformant · 3 deviations · 2 gaps · 32 n/a** *(was `32 · 3 · 3 · 32` until 2026-08-28)* (19 Host Application, 6 messages we do not emit,
 6 command clauses that bind a Host Application publisher, 1 template clause whose condition never
 holds)
 
@@ -1490,7 +1490,7 @@ holds)
 half of `topics-nbirth-bdseq-increment` ([#100]) and moved one row from `deviation` to
 `conformant`. No row was added or removed.
 
-`32 + 3 + 3 + 32 = 70` clauses — **the whole chapter, with no remainder, since Story 4.19**
+`33 + 3 + 2 + 32 = 70` clauses — **the whole chapter, with no remainder, since Story 4.19**
 (2026-08-19). It read `17 · 0 · 3 · 21` over 41 rows until then. **This corrects a miscount**: the tally read `17 · 0 · 8 · 21` until the
 code review of Story 4.2 recounted the rows mechanically — the conformant and n/a figures were
 over-stated, and two of the gaps (`topics-ncmd-mqtt`, `topics-dcmd-mqtt`) then became `n/a`.
@@ -1500,9 +1500,12 @@ the bridge now builds that exact topic form and subscribes to it. This chapter w
 scope and the row was not on its list of documents to amend — it was reached by re-running the
 story's own grep and following what the change made false.
 
-The 3 gaps are all `gap (unimplemented)`: two uniqueness checks ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27), Epic 3)
-and `topics-dcmd-topic` (Story 4.19 — see the criterion note in chapter 5's device section; it
-probably belongs at `n/a`). **The two DDEATH topic rows left this list on 2026-08-04**, when Story
+The 2 gaps are both `gap (unimplemented)`: the edge-node descriptor's uniqueness, which no Edge Node
+can verify from inside itself and which [ADR 0052](adr/0052-uniqueness-is-asserted-by-the-operator-not-verified-by-the-node.md)
+decides rather than defers; and `topics-dcmd-topic` (Story 4.19 — see the criterion note in chapter
+5's device section; it probably belongs at `n/a`). **The device-id uniqueness row left this list on
+2026-08-28**, when the `meter_id` duplicate guard and the clause were found to have the same subject
+since contract v13. **The two DDEATH topic rows left this list on 2026-08-04**, when Story
 5.2 made the bridge emit one.
 
 **41 rows was not the chapter's clause set, and Story 4.19 closed the gap on 2026-08-19.** The
@@ -1832,11 +1835,18 @@ conformance scope".
 | 1 — Introduction | 6 | 0 | 1 | 1 | 8 |
 | 2 — Principles | 1 | 1 | 1 | 1 | 4 |
 | 3 — Components | 0 | 0 | 0 | 1 | 1 |
-| 4 — Topics | 32 | 3 | 3 | 32 | 70 |
+| 4 — Topics | 33 | 3 | 2 | 32 | 70 |
 | 5 — Operational behaviour | 32 | 1 | 17 | 49 | 99 |
 | 6 — Payloads | 45 | 4 | 1 | 59 | 109 |
 | 10 — Conformance | 0 | 0 | 0 | 12 | 12 |
-| **Total** | **116** | **9** | **23** | **155** | **303** |
+| **Total** | **117** | **9** | **22** | **155** | **303** |
+
+**Chapter 4 moved `32 · 3` → `33 · 2` on 2026-08-28**: `topic-structure-namespace-unique-device-id`
+is `conformant`. `config::validate` refuses two meters sharing a `meter_id`, and since contract v13
+the `meter_id` is the device level — so the guard and the clause finally have the same subject. The
+row had read *"one device today; uniqueness across a fleet is unenforced"* since before Epic 3
+delivered the fleet, and the serial-duplicate guard that used to cover this clause stopped covering
+it on 2026-08-25 without anything noticing.
 
 **Chapter 1 moved `3 · 4` → `6 · 1` on 2026-08-28**: [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34) is repaired, so the three
 `intro-*-chars` clauses go from `gap (unimplemented)` to `conformant`. `check_identifier` now

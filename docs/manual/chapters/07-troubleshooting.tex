@@ -85,6 +85,30 @@ something else, and that would be worth an issue.
 it. The clean-up at the end of the Tier-3 runbook protects the next session; it is the clean-up at
 the \emph{beginning} that protects the measurement you are about to take.
 
+\section{The node appears to flap, and nothing reports a fault}
+\label{sec:trouble-descriptor-collision}
+
+\paragraph{Symptom.} The SCADA host shows the node going offline and online repeatedly. Births
+arrive that nobody asked for, \code{bdSeq} values do not pair up, and \prog's own log says nothing
+unusual: it is publishing normally and has no complaint to make.
+
+\paragraph{Cause.} \textbf{Two bridges are sharing one group and edge-node identifier.} Sparkplug
+requires that pair to be unique across the whole MQTT infrastructure, and each session opened under
+it invalidates the other's. The likely second bridge is a copy of this configuration: a test
+container, a clone on another machine, an instance somebody left running.
+
+\paragraph{Why nothing names it.} An Edge Node sees only its own side. \prog cannot detect this
+and does not pretend to --- ADR~0052 records the decision and its reason.
+
+\paragraph{Action.} Subscribe to the node's own birth topic and watch for a birth this bridge did
+not send:
+\begin{verbatim}
+mosquitto_sub -h BROKER -v -t 'spBv1.0/GROUP/NBIRTH/NODE' -W 120
+\end{verbatim}
+One line per restart of \emph{your} bridge is expected. Lines arriving while it sits idle come from
+somewhere else, and that somewhere else is the collision. Give one of the two a different
+\code{node\_id}.
+
 \section{One meter is silent while the others publish}
 \label{sec:trouble-one-meter}
 

@@ -564,6 +564,22 @@ these have no default at all: they defaulted to \code{Site} and \code{Bridge} un
 most likely to be the production one.
 \end{warning}
 
+\begin{warning}
+\textbf{The pair must be unique on your broker, and \prog cannot check it for you.} Sparkplug
+requires the group and edge-node identifiers, taken together, to be unique across the whole MQTT
+infrastructure --- and an Edge Node can only see its own side of that. Two bridges sharing the pair
+interleave their sessions: each birth invalidates the other's, and a SCADA host sees one node
+flapping with no fault reported anywhere.
+
+Nothing here defaults, which removes the accidental collision --- a second \prog cannot fall into
+your namespace by starting with no configuration. What remains is the deliberate one: a copy of this
+configuration on another machine, a test container left running, a colleague's clone. **Give each
+one its own \code{node\_id}.** See ADR~0052 for why this is documented rather than detected.
+
+Device identifiers are the other half of the same rule, and that half \emph{is} checked:
+\prog refuses a configuration with two meters sharing a \code{meter\_id}, naming both rows.
+\end{warning}
+
 \section{Meter-to-topic mapping}
 Each \code{[[meters]]} table maps one smart-me device onto one Sparkplug device.
 \textbf{\code{meter\_id} becomes the device level of the topic}; \code{serial} is what the

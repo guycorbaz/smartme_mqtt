@@ -1293,6 +1293,45 @@ mod tests {
         );
     }
 
+    /// **`tck-id-topic-structure-namespace-unique-device-id`, [#27]** — the half
+    /// of the uniqueness rule an Edge Node CAN answer.
+    ///
+    /// *"The device_id MUST be unique from other devices being reported on by the
+    /// same Edge Node."* Since contract v13 the device level of the topic is the
+    /// `meter_id`, so two meters sharing one would publish two meters' readings
+    /// onto one device — the same tag folder receiving two sources, each
+    /// overwriting the other, with every value still plausible.
+    ///
+    /// The sibling test above pins the same rule for `serial`. That one was
+    /// enough while the serial WAS the device level; it stopped being enough on
+    /// 2026-08-25, and nothing noticed until [#27] was decided.
+    ///
+    /// The assertion names the field rather than taking any error: `validate` has
+    /// a dozen ways to fail, and `is_err()` would be satisfied by all of them.
+    ///
+    /// FALSIFIED 2026-08-28 — mutation RUN: deleting the `duplicates(… m.meter …)`
+    /// block from `validate` goes red with *"a shared meter id should be
+    /// refused"*.
+    #[test]
+    fn two_meters_sharing_a_meter_id_are_refused() {
+        let mut raw = sound();
+        raw.meters.push(RawMeter {
+            priority: None,
+            // The same name as `sound()`'s first meter, a different box behind it.
+            meter_id: raw.meters[0].meter_id.clone(),
+            device_id: Some("dev-b".into()),
+            serial: Some("9202798".into()),
+            enabled: Some(false),
+        });
+        let errors = validate(raw).expect_err("a shared meter id should be refused");
+        assert!(
+            fields(&errors).contains(&"meter ids"),
+            "the fault must name the meter ids, so the operator knows which rule \
+             was broken and which rows to look at: got {:?}",
+            fields(&errors)
+        );
+    }
+
     /// **Story 3.1 AC1, and this test asserted the OPPOSITE until 2026-08-06.**
     ///
     /// It was `more_enabled_meters_than_the_runtime_serves_is_refused`, and it was
