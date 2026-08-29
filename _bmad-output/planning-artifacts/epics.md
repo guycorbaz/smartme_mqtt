@@ -1386,7 +1386,18 @@ shape — and `staleness_republication_probe`, written mid-session, measured it 
 checklist still asked for a `Cause` PROPERTY that contract v12 removed, which came within one
 exchange of recording a failure that was not one.
 
-**[#43] closed 2026-08-29, and story 9.1 is complete — all six.** Its hypothesis (session takeover)
+**[#43] closed 2026-08-29 — FIVE of the six, not six.** The project review of the same evening
+caught the overclaim: **[#34] is still open**, and it is open for a reason its own body states —
+*"closing this issue should start by vendoring or pinning the relevant MQTT clause, so the fix is
+written against a norm rather than against memory"*. The repair shipped (`3ac88e0`) and the MQTT
+specification is still not in this repository, so the fix's justification rests on exactly what
+`CLAUDE.md` forbids for Sparkplug. **That gap blocked twice on 2026-08-29** — once on [#34]'s
+closure and once on interpreting [#43]'s takeover hypothesis — which is what makes it worth its own
+work rather than a footnote.
+
+So story 9.1 is complete **on its acceptance criteria** (each of the six is fixed or refused on the
+record) and **not on the milestone rule** (*one open issue, one milestone withheld*). The two
+readings disagree, and the disagreement is the instrument working. Its hypothesis (session takeover)
 was refuted by measurement, and the observation it rested on was **the observer's own socket**: the
 32 KiB frame `chaos_bdseq_per_connect` uses to force its disconnect also reaches the observer, whose
 inherited 10 KiB limit dropped it at the instant the will was published. `chaos_will_on_reconnect`
