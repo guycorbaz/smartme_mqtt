@@ -21,6 +21,17 @@ because the alternative has already failed twice:
 
 Both came from reading about the specification instead of reading it.
 
+**And where Sparkplug DEFERS to MQTT, the same rule applies to MQTT.** Chapter 1 hands the identifier
+character set to *"the MQTT Specification"* and stops. A repository that pins one norm and not the
+other can follow that reference exactly one step before it has to guess — which is what happened:
+`check_identifier`'s justification was written from memory for a month. The clauses actually relied
+on are now quoted verbatim, with their `[MQTT-…]` identifiers and the document's date, at
+**`docs/spec/mqtt/README.md`**. It is a pinned citation rather than a vendored copy, and it records
+what could NOT be retrieved as well as what could.
+
+It cost two blockings in one day (2026-08-29) before it was written: issue #34 could not be closed,
+and issue #43's hypothesis could not be argued — only measured.
+
 ## smart-me: two sources, and neither answers the other's question
 
 **What the API DECLARES is at `docs/spec/smart-me-api/openapi-v1.json`. What it actually SENT is

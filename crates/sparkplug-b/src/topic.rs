@@ -203,15 +203,26 @@ fn check_identifier(value: &str, element: &'static str) -> Result<(), TopicError
         // topic strings the Group ID MUST only contain characters allowed for MQTT
         // topics per the MQTT Specification"* (`tck-id-intro-group-id-chars`, and
         // the same clause for the edge node and the device) — and MQTT's UTF-8
-        // Encoded String **MUST NOT** carry U+0000. Implementing only chapter 4's
-        // rule satisfied a narrower set and let a null through, measured during the
-        // story 4.3 audit.
+        // encoded string **MUST NOT** carry U+0000:
         //
-        // **Stopping at the MUST is deliberate.** MQTT also says a string SHOULD
-        // NOT carry U+0001..U+001F and U+007F..U+009F; refusing those would be
-        // stricter than either specification and would turn a legal — if
+        //   *"A UTF-8 encoded string MUST NOT include an encoding of the null
+        //   character U+0000"* — **[MQTT-1.5.3-2]**, MQTT 3.1.1 §1.5.3
+        //
+        // Implementing only chapter 4's rule satisfied a narrower set and let a
+        // null through, measured during the story 4.3 audit.
+        //
+        // **Stopping at the MUST is deliberate.** The same section says a string
+        // SHOULD NOT carry U+0001..U+001F or U+007F..U+009F; refusing those would
+        // be stricter than either specification and would turn a legal — if
         // eccentric — identifier into a bridge that will not start. The unpaired
-        // surrogates MQTT also forbids cannot exist in a Rust `char`.
+        // surrogates MQTT also forbids cannot exist in a Rust `char`, and
+        // [MQTT-1.5.3-1]'s well-formedness is discharged by `String` itself.
+        //
+        // **The MQTT clauses are pinned at `docs/spec/mqtt/README.md`** — quoted
+        // verbatim with their identifiers, and dated. That file exists because
+        // this comment used to cite MQTT from memory, which is what `CLAUDE.md`
+        // forbids for the specification that is vendored, and there was no reason
+        // for the other one to be exempt ([#34]).
         if matches!(character, '/' | '+' | '#' | '\0') {
             return Err(TopicError::IllegalCharacter { element, character });
         }
