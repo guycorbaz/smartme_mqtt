@@ -118,10 +118,15 @@ three tags, three answers:
   its properties and **nothing else**: no value to infer a type from, and — since ADR 0053 — no
   declared type either. No step of either gate reaches that shape. Record what Ignition shows.
 - **[#29] / ADR 0013 — which timestamp the host believes.** Two tags carry the same value; one is
-  stamped with the payload instant and the other **37 minutes earlier**. If they display 37 minutes
-  apart, Ignition reads the METRIC timestamp and ADR 0013 is revisited — conformance would then cost
-  nothing. If they display identically, it reads the payload timestamp and the deviation is
-  load-bearing rather than merely deliberate.
+  stamped with the payload instant and the other **37 minutes earlier**. **Three outcomes, and all
+  three are answers:** 37 minutes apart — Ignition reads the METRIC timestamp and ADR 0013 is
+  revisited, conformance costing nothing; identical — it reads the PAYLOAD timestamp, the deviation
+  is load-bearing, and the conformant shape would move every future historised point from its
+  `ValueDate` to its publish instant; **or the backdated tag does not move at all** while its
+  neighbour does — Engine read the metric timestamp *and refused the value as out of order*, which
+  is the strongest form of the first answer and says something the other two do not: such a host
+  would also refuse the DDATA this bridge publishes after any outage. Record that as its own
+  finding, not as a failed step.
 - **the control** — the first tag must move from 11.0 to 22.0, which is also the valued half of
   [#28]. If it does not move, nothing else on the screen is worth recording.
 
