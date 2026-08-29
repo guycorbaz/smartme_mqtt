@@ -65,6 +65,32 @@ use crate::domain::{DeviceIdentity, Measurement, MeterId, Serial, UtcMillis};
 ///   0012.
 /// - **1** — initial contract, with the specification's quality codes.
 ///
+/// # ADR 0053 does NOT bump this, and the reasoning is recorded because the
+/// # question will be asked again
+///
+/// From 2026-08-29 the `datatype` field leaves every DDATA ([#28]): the
+/// specification's `-metric-datatype-not-req` is a SHOULD NOT for the four DATA
+/// and CMD message types, and one encoder had been serving every message type.
+/// It is a change to the wire, and it looks like it should move this number.
+///
+/// It does not, by the rule above. **The tag set is untouched**: no metric name,
+/// unit or quality code moves, and `contract_golden` is green without being
+/// edited — which is the mechanical statement of the same fact. What changes is
+/// a field's presence in one message type, for a value the consumer learned from
+/// the BIRTH.
+///
+/// The precedents are ADR 0042 and Story 5.2, both below: a wire change that did
+/// not move this number, each with its reasoning written down rather than
+/// assumed.
+///
+/// **But the attestation is owed anyway, and that is new.** Action H7 of the
+/// epic-8 retrospective ties a Tier-3 attestation to a *bump*, and this change
+/// needs one more than most while earning no bump — a host that silently ignored
+/// a DDATA carrying no datatype would stop the tags updating in production,
+/// which is worse than the deviation being repaired. ADR 0053 widens H7: **a
+/// change to what the wire carries earns an attestation whether or not this
+/// number moves.** `docs/ignition-contract-runbook.md` carries the entry.
+///
 /// # ADR 0049 bumps it to 13: the device is named by its measuring point
 ///
 /// The Sparkplug device id is the meter's short name (`cptNN`) instead of its
@@ -1284,7 +1310,15 @@ fn metrics_for(measurement: &Measurement, verdicts: Verdicts) -> Vec<Metric> {
         let carried = match (published, value) {
             // `Bad` withholds the number. That is the point of `Bad` rather than
             // `Stale`: a consumer must not be handed a value it would compute
-            // with, and the datatype is kept so the tag does not change shape.
+            // with.
+            //
+            // The variant still names its type, and since ADR 0053 that name
+            // reaches the wire in the BIRTH and NOT in the DDATA — so what keeps
+            // the tag from changing shape is the DECLARATION, not this message.
+            // A host that missed the DBIRTH sees a name, `is_null` and nothing
+            // else; `Node Control/Rebirth` is its way back. That is the sharpest
+            // consequence of ADR 0053 and it is measured by
+            // `sparkplug-b/tests/ignition_contract.rs::ddata_shape_probe`.
             (Quality::Bad, _) => MetricValue::Null(DataType::Double),
             (_, None) => MetricValue::Null(DataType::Double),
             (_, Some(value)) => MetricValue::Double(value),

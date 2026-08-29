@@ -63,7 +63,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use sparkplug_b::{
-    BdSeq, EdgeNode, MessageType, Metric, MetricValue, NodeSession, Quality, encode,
+    BdSeq, DataType, EdgeNode, MessageType, Metric, MetricValue, NodeSession, Quality, encode,
 };
 
 const NODE_ID: &str = "ContractNode";
@@ -480,4 +480,222 @@ async fn quality_code_probe() {
     pump.abort();
     println!("\n=== Clean-up (required) ===");
     println!("Delete Edge Nodes/{group}/QualityProbe in the Designer — only that folder.");
+}
+
+/// **The two questions a table cannot answer about a DDATA's shape** — what
+/// Ignition does with a metric that declares no datatype, and which timestamp it
+/// believes.
+///
+/// # Why one probe for two issues
+///
+/// They are the same look at the same screen. Both are read off one DDATA, in one
+/// Designer session, and separating them would buy nothing but a second set-up.
+///
+/// **[#28] / [ADR 0053] — the datatype is gone from every DATA message.** The
+/// specification says it SHOULD NOT be there and then prints a DDATA example that
+/// carries it (`Sparkplug_6_Payloads.adoc:1391`), so a host built on the example
+/// is not a strange thing to imagine. The valued case is attested by the bridge's
+/// own gate, whose steps 2 and 3 update a tag from a DDATA. **The case no gate
+/// reaches is a NULL metric**: it arrives with a name, `is_null`, its properties
+/// and nothing else — no value to infer a type from, and no declared type. The
+/// bridge publishes exactly that shape whenever an oracle returns `Bad`.
+///
+/// **[#29] / [ADR 0013] — the payload timestamp is the reading's `ValueDate`.**
+/// That deviates from two MUSTs, deliberately: a stale reading must read as old
+/// even to a consumer that ignores the quality flag. The conformant shape — `now`
+/// at payload level, `ValueDate` at metric level — is refused because it assumes
+/// the host reads METRIC timestamps, which is the assumption contract v1
+/// disproved for the quality property. ADR 0013 names the condition for
+/// revisiting it in one sentence: *"If a future host is shown to read metric
+/// timestamps correctly, this ADR should be revisited rather than worked
+/// around."* This probe is that showing, and nothing else decides it.
+///
+/// # The offset is 37 minutes, and that is not arbitrary
+///
+/// Ignition displays local time (measured 2026-08-28: `11:31:17 AM` for an event
+/// at `09:31:17` UTC), so an absolute instant proves nothing about which
+/// timestamp was read. An OFFSET does — provided no time zone can produce it. Zone
+/// offsets come in whole hours and in the :30 and :45 quarters; **none is :37**.
+/// A tag reading 37 minutes behind its neighbours is reading the metric
+/// timestamp, and no clock setting can imitate it.
+///
+/// ```text
+/// SPARKPLUG_CONTRACT_BROKER=host:1883 \
+/// SPARKPLUG_CONTRACT_GROUP=ShapeProbe \
+///   cargo test -p sparkplug-b --test ignition_contract ddata_shape_probe -- --ignored --nocapture
+/// ```
+///
+/// [#28]: https://github.com/guycorbaz/smartme_mqtt/issues/28
+/// [#29]: https://github.com/guycorbaz/smartme_mqtt/issues/29
+/// [ADR 0053]: ../../../docs/adr/0053-the-datatype-leaves-the-data-messages.md
+/// [ADR 0013]: ../../../docs/adr/0013-payload-timestamp-is-acquisition-time.md
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "manual probe: publishes to a real broker for a human to inspect"]
+async fn ddata_shape_probe() {
+    let target = std::env::var("SPARKPLUG_CONTRACT_BROKER")
+        .expect("set SPARKPLUG_CONTRACT_BROKER=host:port — there is deliberately no default");
+    let group = std::env::var("SPARKPLUG_CONTRACT_GROUP").expect(
+        "set SPARKPLUG_CONTRACT_GROUP to a disposable group — there is deliberately no default",
+    );
+    assert_ne!(
+        group, "Site",
+        "refusing to publish into the production group"
+    );
+    let (host, port) = target
+        .rsplit_once(':')
+        .expect("SPARKPLUG_CONTRACT_BROKER must be host:port");
+    let port: u16 = port.parse().expect("the port must be a number");
+
+    /// The offset no time zone can imitate. See the doc comment.
+    const SKEW_MS: u64 = 37 * 60 * 1_000;
+    const TS_NOW: &str = "ts_stamped_now";
+    const TS_BEHIND: &str = "ts_stamped_37_min_back";
+    const GOES_NULL: &str = "goes_null_in_ddata";
+
+    let node = EdgeNode::new(group.clone(), "ShapeProbe".to_string()).expect("identifiers");
+    let n_birth = node.node_topic(MessageType::NBirth).expect("topic");
+    let n_death = node.node_topic(MessageType::NDeath).expect("topic");
+    let d_birth = node
+        .device_topic(MessageType::DBirth, DEVICE)
+        .expect("topic");
+    let d_data = node
+        .device_topic(MessageType::DData, DEVICE)
+        .expect("topic");
+
+    let session = NodeSession::start(Some(BdSeq::new(9)));
+    let will = session.will(now_ms());
+    let mut options = MqttOptions::new("sparkplug-shape-probe", host, port);
+    options.set_keep_alive(Duration::from_secs(30));
+    options.set_last_will(rumqttc::LastWill::new(
+        n_death,
+        encode(&will),
+        QoS::AtMostOnce,
+        false,
+    ));
+    let (client, mut eventloop) = AsyncClient::new(options, 32);
+    let pump = tokio::spawn(async move {
+        loop {
+            if let Err(error) = eventloop.poll().await {
+                println!("  → transport: {error}");
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        }
+    });
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // ---- The declaration: three tags, each with a value and a datatype ------
+    let ts = now_ms();
+    let (mut live, birth) = session.birth(ts, vec![]);
+    client
+        .publish(n_birth, QoS::AtMostOnce, false, encode(&birth))
+        .await
+        .expect("publish");
+
+    let declared = |name: &str| {
+        Metric::new(name, MetricValue::Double(11.0), ts)
+            .with_quality(Quality::Good)
+            .with_engineering_unit(UNIT_POWER)
+    };
+    let d_birth_payload = live.device_birth(
+        ts,
+        vec![declared(TS_NOW), declared(TS_BEHIND), declared(GOES_NULL)],
+    );
+    client
+        .publish(
+            d_birth.clone(),
+            QoS::AtMostOnce,
+            false,
+            encode(&d_birth_payload),
+        )
+        .await
+        .expect("publish");
+
+    checkpoint(
+        "SET-UP — three tags are declared, all reading 11.0 kW and GOOD",
+        &[
+            "All three tags exist under contract-meter and read 11.0",
+            "If any is missing, STOP: the DBIRTH still carries its datatypes, so a",
+            "  tag absent here is a set-up fault and nothing measured below is worth",
+            "  recording",
+        ],
+    );
+
+    // ---- The measurement: ONE DDATA, three shapes ---------------------------
+    //
+    // Every metric below travels WITHOUT a datatype: `device_data` encodes with
+    // `Datatype::Omitted` since ADR 0053, so this is the bridge's real wire shape
+    // and not a hand-built imitation of it.
+    let publish_ts = now_ms();
+    let data = live.device_data(
+        publish_ts,
+        vec![
+            // The control: it moves, so a still screen is a still screen and not
+            // a rejected message.
+            Metric::new(TS_NOW, MetricValue::Double(22.0), publish_ts)
+                .with_quality(Quality::Good)
+                .with_engineering_unit(UNIT_POWER),
+            // The question: the PAYLOAD says now, the METRIC says 37 minutes ago.
+            Metric::new(TS_BEHIND, MetricValue::Double(22.0), publish_ts - SKEW_MS)
+                .with_quality(Quality::Good)
+                .with_engineering_unit(UNIT_POWER),
+            // The sharp edge: a name, `is_null`, properties, and nothing else.
+            Metric::new(GOES_NULL, MetricValue::Null(DataType::Double), publish_ts)
+                .with_quality(Quality::Bad)
+                .with_engineering_unit(UNIT_POWER),
+        ],
+    );
+    client
+        .publish(d_data, QoS::AtMostOnce, false, encode(&data))
+        .await
+        .expect("publish");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    println!("\n=== DDATA shape probe ===");
+    println!("  payload timestamp : {publish_ts}");
+    println!("  {TS_NOW:<24} metric timestamp = {publish_ts} (same)");
+    println!(
+        "  {TS_BEHIND:<24} metric timestamp = {} (37 min earlier)",
+        publish_ts - SKEW_MS
+    );
+    println!("  {GOES_NULL:<24} metric timestamp = {publish_ts}, is_null, NO value");
+    println!("\n  None of the three carries a datatype: that is what ADR 0053 changed.\n");
+
+    checkpoint(
+        "READ THE SCREEN — and record all three answers, including the boring ones",
+        &[
+            "[#28, valued]  ts_stamped_now reads 22.0 — a DDATA with NO datatype",
+            "               updated a tag. If it still reads 11.0, ADR 0053 must be",
+            "               reverted before anything ships.",
+            "",
+            "[#28, null]    goes_null_in_ddata — WHAT DOES IT SHOW? Look in the tag's",
+            "               `value` row, not the browser's Value column (the column",
+            "               renders the quality string for any non-good tag, so",
+            "               blanked and frozen look identical there). Record whether",
+            "               the tag went null, kept 11.0, or vanished.",
+            "",
+            "[#29]          ts_stamped_37_min_back — compare its timestamp with",
+            "               ts_stamped_now's. 37 MINUTES APART means Ignition reads the",
+            "               METRIC timestamp, and ADR 0013 gets revisited: the",
+            "               conformant shape costs nothing. IDENTICAL means it reads the",
+            "               PAYLOAD timestamp, ADR 0013 stands, and the deviation is",
+            "               load-bearing rather than merely deliberate.",
+            "",
+            "⚠ THIS STEP PASSES WRONGLY IF:",
+            "  · you compare ts_stamped_37_min_back against the WALL CLOCK instead of",
+            "    against ts_stamped_now. Ignition shows local time; the wall clock",
+            "    tells you about your time zone, not about which field was read.",
+            "  · the tag group has not polled since the DDATA, so all three still show",
+            "    the DBIRTH's instant — check ts_stamped_now moved to 22.0 FIRST.",
+            "  · you read the tag's `LastChange` or the browser's own receipt time",
+            "    rather than the tag timestamp: both are Ignition's clock and neither",
+            "    is the question.",
+            "  · a residual folder from an earlier run is on screen. That produced a",
+            "    false Good on 2026-08-28; delete the folder BEFORE the pass, not only",
+            "    after.",
+        ],
+    );
+
+    pump.abort();
+    println!("\n=== Clean-up (required) ===");
+    println!("Delete Edge Nodes/{group}/ShapeProbe in the Designer — only that folder.");
 }

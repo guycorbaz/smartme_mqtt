@@ -264,6 +264,23 @@ bdSeq            & Int64  & ---   & Session number; BIRTH and DEATH only. \\
 Units are exact and never inferred: a source value in a unit the bridge does not
 recognise is rejected, not converted on a guess.
 
+\begin{note}
+\textbf{The \emph{Type} column above is declared in the BIRTH and in no other message.}
+Since 2026-08-29 \prog omits the \code{datatype} field from every \code{DDATA}, which is
+what the specification asks for --- \code{tck-id-payloads-metric-datatype-not-req}, a
+\code{SHOULD NOT} --- and repairs a deviation this contract carried until then.
+
+What it means in practice: \textbf{a consumer that missed the device BIRTH cannot learn the
+tag set from the data stream}, and must request one. Publish \code{true} to
+\code{Node Control/Rebirth} (section~\ref{sec:contract-ncmd}) and every tag is re-declared,
+types included. A host connected before \prog started, or reconnecting after it, receives
+the BIRTH in the normal course and needs nothing.
+
+The contract version does \emph{not} move for this: no metric name, unit or quality code
+changes, so the tag set a host browses is identical on both sides of the change.
+Recorded as ADR~0053.
+\end{note}
+
 \section{Quality and freshness}
 \label{sec:quality}
 
@@ -381,6 +398,28 @@ Every published metric is stamped with the \emph{source} measurement time
 (\code{ValueDate}), never with the moment the bridge published it. Freshness is therefore
 computed end-to-end, and a message lost in transit reads downstream as old data rather
 than as current data.
+
+\begin{warning}
+\textbf{This deviates from the Sparkplug B specification, deliberately --- and it is the
+second of the two deviations this contract carries.} Two clauses are \code{MUST} and both
+say \emph{published}, not \emph{acquired}: \code{tck-id-payloads-ddata-timestamp} and
+\code{tck-id-payloads-dbirth-timestamp} require the \emph{payload} timestamp to denote the
+moment the message was sent. The specification reserves the \emph{metric} timestamp for
+acquisition time, so the conformant shape exists and was not taken.
+
+The reason is the invariant the whole bridge is built on: \textbf{a stale reading must read
+as old even to a consumer that ignores the quality flag}. Stamping the payload with the
+publication instant would hand such a consumer a 45-minute-old value wearing a fresh
+timestamp --- and it would be conformant. The consumer is not hypothetical: contract
+version~1 shipped quality codes a live host displayed as \emph{Good(500)}, so a reader that
+sees the timestamp and misreads the quality is exactly the reader that failure produced.
+
+Recorded as ADR~0013, and as two \code{deviation} rows in
+\code{docs/sparkplug-conformance.md}. It is revisited if, and only if, a live host is
+\emph{shown} to read metric-level timestamps correctly --- not argued into. The measurement
+is \code{ddata\_shape\_probe}, which publishes one message whose payload and metric
+timestamps differ by 37 minutes, an offset no time zone can imitate.
+\end{warning}
 
 \subsection{The first message is honest}
 
@@ -759,7 +798,8 @@ The two mechanisms are complementary rather than alternative: the will remains t
 \begin{center}
 \begin{tabular}{@{}>{\ttfamily}l l l@{}}
 \toprule
-\normalfont\textbf{Metric} & \textbf{Type} & \textbf{Unit, declared in the BIRTH} \\
+\normalfont\textbf{Metric} & \textbf{Type} & \textbf{Unit} \\
+\multicolumn{3}{@{}l@{}}{\footnotesize\itshape Both the type and the unit are declared in the BIRTH, and in no other message.} \\
 \midrule
 Power  & \code{Double} & kW \\
 Energy & \code{Double} & kWh \\

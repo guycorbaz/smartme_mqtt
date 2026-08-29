@@ -1351,6 +1351,51 @@ So that the free-change window is spent deliberately rather than allowed to expi
 
 *[#29] and the Tier-3 gate's step 2 answer each other: the step is recorded **not attested** because it cannot fail (action H4), and [#29] is the clause it would have attested. Whoever takes one should read the other.*
 
+**Progress, 2026-08-29 — three of the six were settled on 2026-08-28, and [#28]/[#29] on 2026-08-29.**
+[#34] fixed, [#27] decided by ADR 0052, [#38] closed by moving its expiry onto `MessageType`.
+
+**[#28] is fixed and `CONTRACT_VERSION` does NOT move — the second acceptance criterion's condition
+is ruled not to have fired, and the ruling is written here rather than left implicit.** The criterion
+binds *when the fix changes what a consumer reads*. The `datatype` left every DDATA
+([ADR 0053](../../docs/adr/0053-the-datatype-leaves-the-data-messages.md)); no metric name, unit or
+quality code moved, `contract_golden` is green unedited, and a consumer reads the same tag set with
+the same types — which it learned from the BIRTH, where the field still is. The precedents are
+ADR 0042 and Story 5.2: a wire change that did not move the number, each with its reasoning recorded.
+
+**The attestation is owed all the same, and H7 is widened to say so.** ADR 0053 makes it a rule: *a
+change to what the wire carries earns an attestation whether or not the version moves.* The runbook
+carries the entry, and the bridge gate's steps 2–3 plus `ddata_shape_probe` are what the next session
+must cover.
+
+**[#29] is not a decision — ADR 0013 took it on 2026-07-28 — and what it owed was the other two
+halves.** The manual now states the deviation *and what it deviates from* (two MUSTs, chapter 5),
+and the revisit condition ADR 0013 wrote — *"if a future host is shown to read metric timestamps
+correctly"* — now has the instrument that can show it, `ddata_shape_probe`. Until 2026-08-29 that
+sentence deferred a decision to an artifact that did not exist, which is the shape `CLAUDE.md`
+forbids. **[#29] stays open on one act: running the probe.**
+
+**The window argument, checked at this date: it is CLOSED, and has been since 2026-08-28 15:02.**
+Historisation has run since commissioning — asked and answered that evening, which is what closed
+site risk `R10` on the day it opened. So the third acceptance criterion is answered: the window was
+**not** still open when [#28] and [#29] were walked, and what replaced it is a permanent constraint
+rather than a risk — *any* change to identity, topic grammar, or a metric name or unit now costs a
+history rewrite.
+
+**Neither of these two is in that list, and that is checkable rather than convenient.** ADR 0053
+changes a field's presence in one message type; no identity, grammar, name or unit moves, which is
+the same enumeration the `CONTRACT_VERSION` rule uses and the same reason the number does not move.
+What being in service *does* add is that a host mishandling a type-less DDATA would stop the tags
+updating in production, and the resulting gap in the history is not recoverable — which is why
+ADR 0053 ships only after a session rather than on the strength of the clause.
+
+**And the closure bears on [#29] in a way the "names and units" list does not capture, which is
+worth writing down before the probe is run.** If `ddata_shape_probe` shows Ignition reading the
+METRIC timestamp, ADR 0013's option 2 is free in every sense. If it shows the host reading the
+PAYLOAD timestamp, then option 2 would move every recorded point from its `ValueDate` to its publish
+instant — **a discontinuity in an existing series, produced without renaming anything**. The probe
+therefore answers two questions in one look: whether the conformant shape is honest, and whether it
+is affordable. Those had been treated as one question, and they are not.
+
 ### Story 9.2: The triage reaches the forge, and R2 gets the hierarchy it has asked for since day one
 
 As the maintainer,

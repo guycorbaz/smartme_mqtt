@@ -878,8 +878,8 @@ them again.
 | `payloads-name-requirement` | MUST | `encode_metric` always sets `name` (`encode.rs:240`) | `encode.rs::a_birth_is_self_describing`, `sparkplug_publisher.rs::cold_start_birth_declares_tags_with_no_value_and_stale_quality` (both locate metrics *by name*; drop the field and they panic) | conformant |
 | `payloads-metric-datatype-value-type` | MUST | `datatype` is an unsigned 32-bit integer | the pinned `sparkplug_b.proto` types the field `optional uint32`; `DataType::code` is a `#[repr(u32)]` cast (`datatype.rs:55`) — **schema witness**, plus `datatype.rs::codes_match_the_specification_numbering` | conformant |
 | `payloads-metric-datatype-value` | MUST | every `MetricValue` variant maps to an enumerated code; no variant can produce an unlisted one | `model.rs::value_variants_pin_their_datatype`, `a_float_value_is_always_double_never_float32`, `a_null_value_still_declares_its_type`, `datatype.rs::codes_match_the_specification_numbering` | conformant |
-| `payloads-metric-datatype-req` | MUST | set on every metric of every BIRTH | `encode.rs::birth_carries_seq_zero_and_the_session_number`, `sparkplug_publisher.rs::cold_start_birth_declares_tags_with_no_value_and_stale_quality` | conformant |
-| `payloads-metric-datatype-not-req` | SHOULD NOT | **set on DDATA metrics too** — one encoder serves every message type (`encode.rs:243`) | — | **deviation** ([#28](https://github.com/guycorbaz/smartme_mqtt/issues/28)) |
+| `payloads-metric-datatype-req` | MUST | set on every metric of every BIRTH, and on the `bdSeq` metric of both deaths | `encode.rs::the_datatype_travels_with_the_declaration_and_with_nothing_else` walks all five builders and both death payloads; `birth_carries_seq_zero_and_the_session_number`, `a_null_metric_carries_no_value_and_declares_its_type_only_at_birth`, `sparkplug_publisher.rs::cold_start_birth_declares_tags_with_no_value_and_stale_quality` | conformant |
+| `payloads-metric-datatype-not-req` | SHOULD NOT | **omitted from NDATA, NCMD, DDATA and DCMD** since 2026-08-29. `encode_metric` takes a `Datatype::Included`/`Omitted` from its builder, so the choice is made once per message type rather than per call site ([ADR 0053](adr/0053-the-datatype-leaves-the-data-messages.md)) | `encode.rs::the_datatype_travels_with_the_declaration_and_with_nothing_else` — both directions, so a repair reaching too far fails it as surely as one that does not reach far enough. Falsified by three mutations, of which `device_birth` delegating to `data` is the ordinary shape: that is what this file did until the day of the repair | **conformant** — was **deviation** ([#28](https://github.com/guycorbaz/smartme_mqtt/issues/28)) from 2026-07-27 to 2026-08-29 |
 
 **`payloads-name-requirement` is conditional, and the condition always fires here.** It reads *"The
 name MUST be included with every metric unless aliases are being used"* (`:453`). The bridge never
@@ -1002,6 +1002,18 @@ The specification's own answer is that acquisition time belongs on the **metric*
 is an architectural position, not a bug, and it is recorded as one:
 [**ADR 0013**](adr/0013-payload-timestamp-is-acquisition-time.md), with
 [#29](https://github.com/guycorbaz/smartme_mqtt/issues/29) carrying the work.
+
+**And the condition for revisiting it now has an instrument, which is the whole of what
+[#29](https://github.com/guycorbaz/smartme_mqtt/issues/29) still owes.** ADR 0013 refuses the
+conformant shape on one premise — that a consumer reading only the payload timestamp would lose the
+staleness signal — and states in one sentence when that premise stops holding: *"If a future host is
+shown to read metric timestamps correctly, this ADR should be revisited rather than worked around."*
+Until 2026-08-29 nothing could show it. `sparkplug-b/tests/ignition_contract.rs::ddata_shape_probe`
+publishes one DDATA whose payload and metric timestamps differ by **37 minutes** — an offset no time
+zone can imitate, so a host displaying local time cannot produce a false answer — and the operator
+reads which of the two the tag shows. Two outcomes, both decisive: the metric timestamp is read, and
+ADR 0013 is revisited because conformance becomes free; or it is not, and the deviation is
+load-bearing rather than merely deliberate. **Neither row moves on a reading of a table.**
 
 **The DEATH timestamp means something else again.** `death_payload` stamps the payload at the moment
 it is **built**, not at the moment of death (`encode.rs:168-172`) — the broker does not rewrite a
@@ -1395,7 +1407,7 @@ not only here.
 | No verification of edge-node-descriptor or device-id uniqueness | 4, 6 | [#27](https://github.com/guycorbaz/smartme_mqtt/issues/27) |
 | ~~NCMD/DCMD not implemented — no subscription~~ ~~**NCMD is subscribed (Story 4.6) and every command is ignored on purpose**~~ **CLOSED for NCMD (Story 4.7).** The subscribe clause `message-flow-edge-node-ncmd-subscribe` is `conformant` (4.6) and so is the acting: the NBIRTH declares `Node Control/Rebirth` and a conformant request is answered with a complete birth sequence — seven rows moved. **DCMD remains `n/a` on a condition that is deferred rather than cancelled** (a meter relay would be a writable output; none is planned for the time being): [#38](https://github.com/guycorbaz/smartme_mqtt/issues/38). The publish-side QoS/retain clauses stay `n/a` in both chapters | 4, 5, 6 | 4.6 closed the subscription, **4.7 closed the answering**; DCMD → [#38](https://github.com/guycorbaz/smartme_mqtt/issues/38), [#23](https://github.com/guycorbaz/smartme_mqtt/issues/23) |
 | DDEATH never emitted (the crate-side encoder is conformant and tested; the bridge never calls it) | 4, 6 | Epic 3 |
-| **`datatype` is sent on every DDATA metric; `-metric-datatype-not-req` says SHOULD NOT.** One encoder serves every message type, so the same line satisfies the BIRTH MUST and violates the DATA SHOULD NOT | 6 | [#28](https://github.com/guycorbaz/smartme_mqtt/issues/28) |
+| ~~**`datatype` is sent on every DDATA metric; `-metric-datatype-not-req` says SHOULD NOT.** One encoder serves every message type, so the same line satisfies the BIRTH MUST and violates the DATA SHOULD NOT~~ **CLOSED 2026-08-29** by [ADR 0053](adr/0053-the-datatype-leaves-the-data-messages.md): the builder now tells the encoder which side of the clause it is on. **The specification contradicts itself here** — the chapter that states the SHOULD NOT prints a DDATA example whose metrics carry `"dataType": "Boolean"` (`:1391`, `:1396`) — so the clause was followed and the example is why a live host must confirm it | 6 | [#28](https://github.com/guycorbaz/smartme_mqtt/issues/28) |
 | **The DDATA and re-declaring-DBIRTH payload timestamps are the reading's `ValueDate`, not the publish instant.** Deliberate — the anti-replay invariant — and contrary to two MUSTs. Recorded as [ADR 0013](adr/0013-payload-timestamp-is-acquisition-time.md) | 6 | [#29](https://github.com/guycorbaz/smartme_mqtt/issues/29) |
 | **Eight invariants are correct by construction and proven by no test** — raised from four by the code review of Story 4.2: both property-set array-length clauses, the `engUnit` property's `type` field, the metric-level `timestamp` field, and four more the review found — the quality property's `type` (whose test asserted production's own expression against itself), `-propertyvalue-type-req` (witnessed for `int_property` only), the NBIRTH payload timestamp (a presence check, not a value check), and the registered will's retain flag (no test reaches the will) | 6 | [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30) — **its scope needs widening from "encoder invariants" to match** |
 | **`Int32` is the one datatype code no test pins to its literal.** `codes_match_the_specification_numbering` covers 1, 4, 8–13, 17; change `Int32 = 3` and the suite stays green while `-quality-value-type` violates a MUST | 6 | [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30) |
@@ -1674,9 +1686,19 @@ saying so.
 `-timestamp`, `-seq`, `-seq-inc`, `-seq-number` — moved from gap to conformant when the bridge
 began emitting the message. See the note under that table for what did *not* move.
 
-**45 conformant · 4 deviations · 1 gap · 59 n/a**
+**46 conformant · 3 deviations · 1 gap · 59 n/a** *(was `45 · 4 · 1 · 59` until 2026-08-29)*
 
-`45 + 4 + 1 + 59 = 109` — the enumerated clause set, with no remainder.
+`46 + 3 + 1 + 59 = 109` — the enumerated clause set, with no remainder.
+
+**Chapter 6 moved `45 · 4` → `46 · 3` on 2026-08-29**: `payloads-metric-datatype-not-req` is
+`conformant`. The datatype now travels with the declaration and with nothing else
+([ADR 0053](adr/0053-the-datatype-leaves-the-data-messages.md), [#28]). **The tallies above were
+corrected by hand, as they must be**: `check-conformance-arithmetic.py` compares the tallies against
+each other and against the total, never against the verdicts written in the tables, so it stays
+green while a row moves. That blindness is recorded under chapter 1's tally and is repeated here
+because this is the second time in two days it mattered.
+
+[#28]: https://github.com/guycorbaz/smartme_mqtt/issues/28
 
 **This tally was `38 · 4 · 8 · 59` until Story 4.12** (2026-08-18), which moved
 `payloads-nbirth-timestamp` from `gap (unproven)` to `conformant`: `38 + 1 = 39` and `8 − 1 = 7`.
@@ -1703,8 +1725,8 @@ from `gap (unimplemented)` to `conformant`. `30 + 1 = 31` and `15 − 1 = 14`.
 
 **The count of 109 is a count of ids, not of requirements.** Two of them,
 `payloads-sequence-num-req-nbirth` and `-zero-nbirth`, are one clause under two spellings (see the
-editorial note at the head of this chapter), and both hold a `conformant` row. So **45 conformant is
-44 distinct**, and the chapter states **108 distinct requirements**. The arithmetic is kept against
+editorial note at the head of this chapter), and both hold a `conformant` row. So **46 conformant is
+45 distinct**, and the chapter states **108 distinct requirements**. The arithmetic is kept against
 109 because 109 is what a mechanical enumeration of the specification returns, and a matrix that
 cannot be diffed against the norm is worth less than one that double-counts a known phantom.
 
@@ -1837,9 +1859,9 @@ conformance scope".
 | 3 — Components | 0 | 0 | 0 | 1 | 1 |
 | 4 — Topics | 33 | 3 | 2 | 32 | 70 |
 | 5 — Operational behaviour | 32 | 1 | 17 | 49 | 99 |
-| 6 — Payloads | 45 | 4 | 1 | 59 | 109 |
+| 6 — Payloads | 46 | 3 | 1 | 59 | 109 |
 | 10 — Conformance | 0 | 0 | 0 | 12 | 12 |
-| **Total** | **117** | **9** | **22** | **155** | **303** |
+| **Total** | **118** | **8** | **22** | **155** | **303** |
 
 **Chapter 4 moved `32 · 3` → `33 · 2` on 2026-08-28**: `topic-structure-namespace-unique-device-id`
 is `conformant`. `config::validate` refuses two meters sharing a `meter_id`, and since contract v13

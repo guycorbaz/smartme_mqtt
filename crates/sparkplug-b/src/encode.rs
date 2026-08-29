@@ -129,7 +129,10 @@ impl LiveSession {
     pub fn data(&mut self, timestamp_ms: u64, metrics: Vec<Metric>) -> Payload {
         Payload {
             timestamp: Some(timestamp_ms),
-            metrics: metrics.iter().map(encode_metric).collect(),
+            metrics: metrics
+                .iter()
+                .map(|m| encode_metric(m, Datatype::Omitted))
+                .collect(),
             seq: Some(self.seq.take()),
             uuid: None,
             body: None,
@@ -151,9 +154,28 @@ impl LiveSession {
     ///
     /// Unlike a node BIRTH it does NOT reset the numbering and carries no
     /// `bdSeq`: the session it belongs to is the node's.
+    ///
+    /// **It shares the shape of [`Self::data`] and NOT its metric encoding**, and
+    /// that difference is the whole of [#28]. A DBIRTH declares each metric's
+    /// `datatype` (`tck-id-payloads-metric-datatype-req`, a MUST); a DDATA does
+    /// not (`-not-req`, a SHOULD NOT). Until 2026-08-29 this method delegated to
+    /// `data`, which was harmless while one encoder served both — and is the one
+    /// edit that would silently strip the DBIRTH of the field a consumer learns
+    /// the tag set from. `a_device_birth_declares_datatypes_a_device_data_omits`
+    /// exists for that edit and nothing else.
+    ///
     #[must_use]
     pub fn device_birth(&mut self, timestamp_ms: u64, metrics: Vec<Metric>) -> Payload {
-        self.data(timestamp_ms, metrics)
+        Payload {
+            timestamp: Some(timestamp_ms),
+            metrics: metrics
+                .iter()
+                .map(|m| encode_metric(m, Datatype::Included))
+                .collect(),
+            seq: Some(self.seq.take()),
+            uuid: None,
+            body: None,
+        }
     }
 
     /// Gives back the sequence number the last message took, because that
@@ -205,7 +227,7 @@ impl LiveSession {
         self.seq.reset();
         let mut encoded = Vec::with_capacity(metrics.len() + 1);
         encoded.push(bd_seq_metric(self.bd_seq, timestamp_ms));
-        encoded.extend(metrics.iter().map(encode_metric));
+        encoded.extend(metrics.iter().map(|m| encode_metric(m, Datatype::Included)));
         Payload {
             timestamp: Some(timestamp_ms),
             metrics: encoded,
@@ -277,14 +299,59 @@ fn death_payload(bd_seq: BdSeq, timestamp_ms: u64) -> Payload {
 
 /// The `bdSeq` metric carried by every BIRTH and DEATH.
 fn bd_seq_metric(bd_seq: BdSeq, timestamp_ms: u64) -> payload::Metric {
-    encode_metric(&Metric::new(
-        BD_SEQ_METRIC,
-        MetricValue::Int64(bd_seq.wire_value()),
-        timestamp_ms,
-    ))
+    encode_metric(
+        &Metric::new(
+            BD_SEQ_METRIC,
+            MetricValue::Int64(bd_seq.wire_value()),
+            timestamp_ms,
+        ),
+        // NBIRTH requires it, and NDEATH is outside the SHOULD NOT's list of
+        // four — see [`Datatype`].
+        Datatype::Included,
+    )
 }
 
-fn encode_metric(metric: &Metric) -> payload::Metric {
+/// Whether a metric carries its `datatype`, which is the ONE field a message
+/// type decides here.
+///
+/// The specification asks for opposite things, and names the message types on
+/// each side explicitly:
+///
+/// > *"The datatype MUST be included with each metric definition in NBIRTH and
+/// > DBIRTH messages."* — `tck-id-payloads-metric-datatype-req`
+///
+/// > *"The datatype SHOULD NOT be included with metric definitions in NDATA,
+/// > NCMD, DDATA, and DCMD messages."* — `tck-id-payloads-metric-datatype-not-req`
+///
+/// Until [#28] one encoder served every message type, so a single line satisfied
+/// the MUST and violated the SHOULD NOT — on the message that repeats forever,
+/// for a field the consumer already learned from the BIRTH.
+///
+/// **The death payloads keep it, and that is a reading of the list rather than
+/// an oversight.** The SHOULD NOT enumerates four message types; NDEATH and
+/// DDEATH are in neither clause, and the specification's own NDEATH payload
+/// example carries `"dataType": "UInt64"` on its `bdSeq` metric
+/// (`Sparkplug_6_Payloads.adoc:1564`). A metric a host reads to reconcile a
+/// death with its birth is not the repetition the clause is aimed at.
+///
+/// **And the specification contradicts itself on the DDATA half**: the very
+/// chapter that states the SHOULD NOT prints a DDATA example whose two metrics
+/// both carry `"dataType": "Boolean"` (`:1391` and `:1396`). The clause is
+/// normative and the example is not, so the clause wins — but a host built
+/// against the example is a real possibility, which is why [#28]'s repair is
+/// attested against a live host before it ships. See [ADR 0053].
+///
+/// [ADR 0053]: ../../../docs/adr/0053-the-datatype-leaves-the-data-messages.md
+///
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Datatype {
+    /// NBIRTH, DBIRTH, NDEATH and DDEATH: the field travels.
+    Included,
+    /// NDATA, NCMD, DDATA and DCMD — the four the SHOULD NOT names.
+    Omitted,
+}
+
+fn encode_metric(metric: &Metric, datatype: Datatype) -> payload::Metric {
     let (value, is_null) = match &metric.value {
         MetricValue::Null(_) => (None, Some(true)),
         value => (Some(encode_value(value)), None),
@@ -293,7 +360,10 @@ fn encode_metric(metric: &Metric) -> payload::Metric {
         name: Some(metric.name.clone()),
         alias: None,
         timestamp: Some(metric.timestamp_ms),
-        datatype: Some(metric.value.datatype().code()),
+        datatype: match datatype {
+            Datatype::Included => Some(metric.value.datatype().code()),
+            Datatype::Omitted => None,
+        },
         is_historical: None,
         is_transient: None,
         is_null,
@@ -307,7 +377,9 @@ fn encode_value(value: &MetricValue) -> payload::metric::Value {
     match value {
         // `long_value` is a protobuf `uint64`; a signed 64-bit metric travels as
         // its two's-complement bit pattern, which is exactly what this cast is.
-        // A decoder disambiguates Int64 from UInt64 via the `datatype` field.
+        // A decoder disambiguates Int64 from UInt64 via the `datatype` field —
+        // which since [#28] is present in the BIRTH and in neither DATA message,
+        // so the disambiguation is the tag set's job, not each message's.
         MetricValue::Int64(v) => payload::metric::Value::LongValue(*v as u64),
         MetricValue::UInt64(v) => payload::metric::Value::LongValue(*v),
         // Always the 64-bit field: a counter encoded as float32 loses digits a
@@ -423,7 +495,16 @@ mod tests {
             .properties
             .push(("Cause".to_string(), "no-cause".to_string()));
 
-        let encoded = encode_metric(&metric);
+        // Both sides of [`Datatype`]: the clause below covers NBIRTH, DBIRTH,
+        // NDATA and DDATA alike, so [#28]'s split must not have moved it.
+        for side in [Datatype::Included, Datatype::Omitted] {
+            assert_eq!(
+                encode_metric(&metric, side).timestamp,
+                Some(1_784_984_792_050),
+                "-name-birth-data-requirement is a MUST on {side:?} messages too"
+            );
+        }
+        let encoded = encode_metric(&metric, Datatype::Included);
 
         // 4. The metric-level timestamp, read from the ENCODED metric.
         assert_eq!(
@@ -533,7 +614,10 @@ mod tests {
         let (mut live, _) = live_from(0);
         // A value that f32 cannot represent exactly.
         let precise = 40_437.819_123_456_79_f64;
-        let p = live.data(1_000, vec![energy(precise, 1_000)]);
+        // A DEVICE BIRTH, because that is where the declared type now lives
+        // ([#28]): the DDATA half of the same claim is the value round trip
+        // below, which is message-independent.
+        let p = live.device_birth(1_000, vec![energy(precise, 1_000)]);
         let m = &p.metrics[0];
         assert_eq!(m.datatype, Some(DataType::Double.code()));
         match m.value {
@@ -686,25 +770,65 @@ mod tests {
         assert!(p.metrics[0].properties.is_none());
     }
 
+    /// A null metric says "no value" in both messages, and declares its type in
+    /// only one of them.
+    ///
+    /// # This is [#28]'s sharpest edge, and it is deliberate
+    ///
+    /// A null DDATA metric carries a name, `is_null`, its properties and
+    /// **nothing else** — no value to infer a type from and no declared type. A
+    /// consumer that did not read the DBIRTH cannot tell what kind of tag just
+    /// went null. That is precisely the consumer Sparkplug says must not exist:
+    /// *"a consumer may discard DATA for a metric the BIRTH never declared"*.
+    ///
+    /// It matters because a caller that withholds a number rather than shipping
+    /// one it does not trust puts exactly this shape on the wire. That is not
+    /// hypothetical — it is what [ADR 0053] decided, and what a live host is
+    /// asked about before that decision ships.
+    ///
+    /// [ADR 0053]: ../../../docs/adr/0053-the-datatype-leaves-the-data-messages.md
+    ///
+    /// **FALSIFIED 2026-08-29, two mutations RUN, one per direction:**
+    ///
+    /// - `Datatype::Omitted` arm returning `Some(..)` — the DDATA half goes RED
+    ///   (`left: Some(10), right: None`), which is the whole of [#28];
+    /// - `device_birth` delegating back to `data`, the ORDINARY shape of the
+    ///   fault since that is what it did until today — the BIRTH half goes RED
+    ///   (`left: None, right: Some(10)`).
+    ///
     #[test]
-    fn a_null_metric_carries_no_value_but_keeps_its_datatype() {
+    fn a_null_metric_carries_no_value_and_declares_its_type_only_at_birth() {
         let (mut live, _) = live_from(0);
-        let unreadable = Metric::new("Power", MetricValue::Null(DataType::Double), 1)
-            .with_quality(Quality::Bad)
-            .with_engineering_unit("kW");
-        let p = live.data(1, vec![unreadable]);
-        let m = &p.metrics[0];
-        assert_eq!(m.value, None, "no fabricated number");
-        assert_eq!(m.is_null, Some(true));
+        let unreadable = || {
+            Metric::new("Power", MetricValue::Null(DataType::Double), 1)
+                .with_quality(Quality::Bad)
+                .with_engineering_unit("kW")
+        };
+
+        let birth = live.device_birth(1, vec![unreadable()]);
+        let data = live.device_data(1, vec![unreadable()]);
+
+        for (what, p) in [("DBIRTH", &birth), ("DDATA", &data)] {
+            let m = &p.metrics[0];
+            assert_eq!(m.value, None, "no fabricated number in the {what}");
+            assert_eq!(m.is_null, Some(true), "the {what} says so explicitly");
+            // And it survives the wire, nulls being the shape a decoder is most
+            // likely to drop.
+            let decoded = Payload::decode(encode(p).as_slice()).expect("decodes");
+            assert_eq!(decoded.metrics[0].is_null, Some(true));
+            assert_eq!(decoded.metrics[0].value, None);
+        }
+
         assert_eq!(
-            m.datatype,
+            birth.metrics[0].datatype,
             Some(DataType::Double.code()),
-            "the tag keeps its declared type"
+            "-metric-datatype-req: the DBIRTH declares the type, and it is the \
+             ONLY place a null tag's type is stated"
         );
-        // And it survives the wire.
-        let decoded = Payload::decode(encode(&p).as_slice()).expect("decodes");
-        assert_eq!(decoded.metrics[0].is_null, Some(true));
-        assert_eq!(decoded.metrics[0].value, None);
+        assert_eq!(
+            data.metrics[0].datatype, None,
+            "-metric-datatype-not-req: the DDATA does not repeat it"
+        );
     }
 
     #[test]
@@ -719,7 +843,16 @@ mod tests {
                 }
                 ref other => panic!("expected a long value, got {other:?}"),
             }
-            assert_eq!(decoded.metrics[0].datatype, Some(DataType::Int64.code()));
+            assert_eq!(
+                decoded.metrics[0].datatype, None,
+                "[#28]: a DDATA does not repeat the type"
+            );
+            // So the disambiguation this round trip depends on — Int64 from
+            // UInt64, which share `long_value` — is the BIRTH's job now, and
+            // only the BIRTH's. Asserted on the same value, in the same test,
+            // because separating them is how the pair drifts apart.
+            let born = live.device_birth(1, vec![Metric::new("N", MetricValue::Int64(v), 1)]);
+            assert_eq!(born.metrics[0].datatype, Some(DataType::Int64.code()));
         }
     }
 
@@ -763,6 +896,99 @@ mod tests {
             d.metrics.is_empty(),
             "the session number belongs to the node, not the device"
         );
+    }
+
+    /// The `datatype` is present in exactly the messages that declare a tag set,
+    /// and absent from exactly the messages that update one ([#28]).
+    ///
+    /// # Why every builder, and not the two that were repaired
+    ///
+    /// There are five ways to reach [`encode_metric`], and the fault this guards
+    /// against is not "the wrong constant" — it is **one builder quietly sharing
+    /// another's body**. `device_birth` did exactly that until 2026-08-29: it
+    /// returned `self.data(..)`, which was harmless while one encoder served
+    /// both and becomes a stripped DBIRTH the moment they differ. A test that
+    /// checked `device_birth` and `device_data` would have passed on the day the
+    /// delegation was written and failed only later; a test that walks the whole
+    /// set fails the moment any builder borrows another's encoding.
+    ///
+    /// The BIRTH side is what makes this a discrimination test rather than a
+    /// one-directional one: a repair that reached too far — dropping the field
+    /// everywhere — would satisfy the SHOULD NOT and violate the MUST, and is
+    /// caught here rather than by a live host.
+    ///
+    /// **FALSIFIED 2026-08-29, three mutations RUN:**
+    ///
+    /// - `device_birth` delegating to `data` again, the ORDINARY shape (it is
+    ///   the shape this file shipped for a month): RED here on the `DBIRTH` row
+    ///   (`left: None, right: Some(10)`), and red in three sibling tests too;
+    /// - `build_birth` encoding with `Datatype::Omitted` — the repair reaching
+    ///   too far: RED here ALONE, on `NBIRTH`, which is what makes this guard
+    ///   worth its length: no other test in the crate notices that direction;
+    /// - `Datatype::Omitted` returning the code anyway: RED on the DATA rows
+    ///   (`left: Some(10), right: None`).
+    ///
+    #[test]
+    fn the_datatype_travels_with_the_declaration_and_with_nothing_else() {
+        let declared = Some(DataType::Double.code());
+        let one = || vec![energy(4_843.822, 1)];
+
+        let session = NodeSession::start(Some(BdSeq::new(0)));
+        // Taken BEFORE the birth, which is the order a caller must use: the will
+        // is registered with the CONNECT.
+        let will = session.will(1);
+        let (mut live, nbirth) = session.birth(1, one());
+
+        // Each row: what it is, the payload, and whether the type must travel.
+        let cases: Vec<(&str, Payload, bool)> = vec![
+            ("NBIRTH", nbirth, true),
+            ("rebirth", live.rebirth(1, one()), true),
+            ("DBIRTH", live.device_birth(1, one()), true),
+            ("NDATA", live.data(1, one()), false),
+            ("DDATA", live.device_data(1, one()), false),
+        ];
+
+        for (what, payload, declares) in &cases {
+            let m = payload
+                .metrics
+                .iter()
+                .find(|m| m.name.as_deref() == Some("Energy"))
+                .unwrap_or_else(|| panic!("{what} carries the metric"));
+            assert_eq!(
+                m.datatype,
+                if *declares { declared } else { None },
+                "{what}: -metric-datatype-{} is the clause it answers to",
+                if *declares {
+                    "req (MUST)"
+                } else {
+                    "not-req (SHOULD NOT)"
+                }
+            );
+            // The name and timestamp travel either way — so a row going red
+            // above is about the datatype and not about a broken builder.
+            assert_eq!(m.timestamp, Some(1), "{what} keeps the metric timestamp");
+        }
+
+        // And the `bdSeq` metric — carried by the NBIRTH and by the two death
+        // certificates, the registered will and the explicit NDEATH — keeps its
+        // type in all three: the SHOULD NOT names four message types and no
+        // death is among them. (A DDEATH carries no metric at all.)
+        for (what, payload) in [
+            ("NBIRTH", &cases[0].1),
+            ("will", &will),
+            ("NDEATH", &live.death(1)),
+        ] {
+            let bd = payload
+                .metrics
+                .iter()
+                .find(|m| m.name.as_deref() == Some(BD_SEQ_METRIC))
+                .unwrap_or_else(|| panic!("{what} carries bdSeq"));
+            assert_eq!(
+                bd.datatype,
+                Some(DataType::Int64.code()),
+                "{what}: the metric a host reconciles a death by keeps its type"
+            );
+        }
     }
 
     #[test]

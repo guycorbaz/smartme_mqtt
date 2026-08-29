@@ -428,11 +428,22 @@ async fn ignition_contract_gate() {
             "Power now reads 2.345 kW and Energy 5679.1 kWh",
             "The values CHANGED rather than a second set of tags appearing",
             "Quality is still GOOD",
+            "★ ADR 0053, FIRST OBSERVATION: this update crossed on a DDATA that \
+             declares NO datatype. Steps 2 and 3 are therefore the attestation of \
+             [#28] — a value moving here IS the measurement, and there is nothing \
+             extra to look at. If the tags stopped updating between step 1 and \
+             here, that is the finding, and ADR 0053 is reverted rather than \
+             debugged",
         ],
         &[
             "a second device folder appeared and you are reading the new one — the topic \
              grammar is keyed on the serial, so a duplicate means the serial changed",
             "the timestamp did not move, and you are looking at STEP 2's value",
+            "★ you conclude ADR 0053 IS FULLY ATTESTED. It is not: these two steps \
+             cover a VALUED metric only. A null DDATA metric carries no value to \
+             infer a type from and no declared type either, and no step here \
+             reaches that shape. It is measured by `ddata_shape_probe` in the \
+             crate-level gate, and the run is incomplete without it",
         ],
     );
 

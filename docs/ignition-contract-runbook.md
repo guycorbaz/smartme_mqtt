@@ -99,6 +99,37 @@ demonstration the gate now exists for. See *Step 4* below.
 nothing about the product, so its folder has never been evidence — but a residual tree still
 misleads a person reading it. Delete the folder afterwards, or append a discriminator.
 
+### The probes in the same file — they measure, they do not attest
+
+Two `#[ignore]`d tests live beside the crate gate and answer questions no table can. They publish
+into their own node folders and are run on demand, not as part of a pass.
+
+```bash
+SPARKPLUG_CONTRACT_BROKER=<host>:1883 SPARKPLUG_CONTRACT_GROUP=ShapeProbe \
+  cargo test -p sparkplug-b --test ignition_contract ddata_shape_probe -- --ignored --nocapture
+```
+
+`quality_code_probe` is the older one; it produced the numbers ADR 0012 rests on.
+
+**`ddata_shape_probe` is new on 2026-08-29 and carries the open half of two issues.** One DDATA,
+three tags, three answers:
+
+- **[#28] / ADR 0053 — the null case.** A `Bad` verdict publishes a metric with a name, `is_null`,
+  its properties and **nothing else**: no value to infer a type from, and — since ADR 0053 — no
+  declared type either. No step of either gate reaches that shape. Record what Ignition shows.
+- **[#29] / ADR 0013 — which timestamp the host believes.** Two tags carry the same value; one is
+  stamped with the payload instant and the other **37 minutes earlier**. If they display 37 minutes
+  apart, Ignition reads the METRIC timestamp and ADR 0013 is revisited — conformance would then cost
+  nothing. If they display identically, it reads the payload timestamp and the deviation is
+  load-bearing rather than merely deliberate.
+- **the control** — the first tag must move from 11.0 to 22.0, which is also the valued half of
+  [#28]. If it does not move, nothing else on the screen is worth recording.
+
+**37 minutes is chosen, not arbitrary.** Ignition displays local time, so an absolute instant proves
+nothing about which field was read; zone offsets come in whole hours and in the :30 and :45
+quarters, and **none is :37**. Compare the two tags against EACH OTHER, never against the wall
+clock.
+
 ## Both gates
 
 `--nocapture` is **not optional**. Without it you see none of the prompts, and the test looks
@@ -453,6 +484,29 @@ list; this one needs the opposite discipline — **ask, then look, then compare.
 ---
 
 ## Record of runs
+
+> ### ⚠️ THE WIRE MOVED ON 2026-08-29 AND THE VERSION DID NOT — read this before trusting the row below
+>
+> `CONTRACT_VERSION` is still **13**, and that is a ruling rather than an omission
+> ([ADR 0053](adr/0053-the-datatype-leaves-the-data-messages.md)): the `datatype` field left every
+> `DDATA`, and no metric name, unit or quality code moved with it. The run table's promise — *two
+> runs sharing a version number attest to the same tag set* — still holds, because the tag set is
+> exactly what did not change.
+>
+> **But what the wire CARRIES changed, so the v13 row below attests to the version and no longer to
+> the binary.** Action H7 of the epic-8 retrospective tied an attestation to a bump; ADR 0053 widens
+> it, and this block is where the widening bites: **a change to what the wire carries earns an
+> attestation whether or not the version moves.**
+>
+> **What the next session must cover, and it is short:**
+>
+> - **steps 2 and 3 of the bridge gate ARE the attestation.** A value moving there crossed on a
+>   DDATA that declares no datatype. Nothing extra to look at — but if the tags stop updating
+>   between step 1 and step 3, that is the finding, and ADR 0053 is reverted rather than debugged.
+> - **`ddata_shape_probe` is not optional this time.** It carries the null case, which no gate step
+>   reaches, and the [#29] timestamp measurement in the same look at the same screen.
+>
+> Record the run against **v13, unchanged**, with a line saying it covered ADR 0053.
 
 > ### ✅ THE ATTESTATION IS CURRENT — v13, 2026-08-28
 >

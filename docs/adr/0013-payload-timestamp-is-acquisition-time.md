@@ -62,6 +62,46 @@ Two safeguards make the deviation legible rather than hidden:
   every consumer reading metric-level timestamps, which is the assumption contract v1 disproved —
   not because it is impossible. If a future host is shown to read metric timestamps correctly, this
   ADR should be revisited rather than worked around.
+
+## Amendment, 2026-08-29 — the revisit condition has an instrument
+
+The clause above said *"if a future host is **shown**"* and nothing could do the showing, which is
+the shape `CLAUDE.md` forbids: a decision deferred to an artifact that does not exist. The artifact
+now exists.
+
+`sparkplug-b/tests/ignition_contract.rs::ddata_shape_probe` publishes one DDATA carrying two tags
+with the same value, one stamped with the payload instant and one **37 minutes earlier** — an offset
+no time zone can imitate, so a host displaying local time cannot manufacture a false answer. The
+operator compares the two tags against each other.
+
+Two outcomes, both decisive, and neither is a reading of a table:
+
+- **they display 37 minutes apart** — Ignition reads the metric timestamp, this ADR's premise fails,
+  and the conformant shape costs nothing. Revisit it: `now` at payload level, `ValueDate` at metric
+  level, two MUSTs satisfied and the anti-replay invariant intact.
+- **they display identically** — Ignition reads the payload timestamp. The deviation is
+  **load-bearing** rather than merely deliberate, and this ADR is re-affirmed on measured ground
+  instead of on a prediction.
+
+### The probe answers a second question, which had been folded into the first
+
+Historisation has run on this deployment since commissioning, 2026-08-28 15:02. From that instant a
+change to what the wire carries can cost a history rewrite — and the usual test for that (does an
+identity, a topic level, a metric name or a unit move?) **does not catch this one**. Option 2 renames
+nothing, and yet:
+
+- if the host reads the **metric** timestamp, each point is already filed under its `ValueDate` and
+  option 2 changes nothing that is stored;
+- if the host reads the **payload** timestamp, option 2 moves every future point from its
+  `ValueDate` to its publish instant — a discontinuity in a running series, produced without
+  renaming anything.
+
+So one probe answers both halves at once: whether the conformant shape is **honest**, and whether it
+is **affordable**. Those two had been treated as one question and they are not.
+
+Until the probe is run, this ADR stands. [#29](https://github.com/guycorbaz/smartme_mqtt/issues/29)
+carries the run, and it is the last thing that issue owes: the manual states the deviation and what
+it deviates from (chapter 5), which was the other half.
 - **[#29](https://github.com/guycorbaz/smartme_mqtt/issues/29) is no longer the decision.** It is the
   work: making the deviation explicit in the operator manual, and re-testing it against a real host.
 

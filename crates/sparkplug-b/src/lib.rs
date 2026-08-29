@@ -20,6 +20,17 @@
 //! **Implemented (continued):** device-level BIRTH/DATA/DEATH sharing the edge
 //! node's sequence numbering, and validated topic construction ([`EdgeNode`]).
 //!
+//! **Implemented (continued, 2026-08-29):** the `datatype` field is carried by
+//! the message types that declare a tag set — NBIRTH, DBIRTH and both deaths —
+//! and omitted from the four the specification names in
+//! `tck-id-payloads-metric-datatype-not-req`. **A caller gets this from the
+//! builder it chooses**, not from a flag: `birth`, `rebirth` and `device_birth`
+//! declare, `data` and `device_data` do not. The consequence is worth stating
+//! because it is a caller's problem and not this crate's: a consumer that missed
+//! the BIRTH cannot learn a metric's type from the data stream, and a null metric
+//! in a DATA message carries no type at all — so whoever owns the transport owes
+//! that consumer a rebirth path.
+//!
 //! **Implemented (continued):** the NCMD topic form, via
 //! [`MessageType::NCmd`] — construction only. Subscribing to it, and the QoS 1
 //! that clause mandates, belong to whoever owns the transport.
