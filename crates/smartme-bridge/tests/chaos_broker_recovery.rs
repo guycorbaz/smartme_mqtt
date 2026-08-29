@@ -223,6 +223,7 @@ async fn a_broker_that_comes_back_gets_a_new_session_and_the_old_timestamps() {
             bd_seq_path: state_dir.0.join("bdseq.toml"),
             capacity: 64,
             death_flush: Duration::from_secs(2),
+            reconnect_floor: Duration::from_secs(1),
         },
         node,
         // Both names since contract v13 (ADR 0049): the topic carries the

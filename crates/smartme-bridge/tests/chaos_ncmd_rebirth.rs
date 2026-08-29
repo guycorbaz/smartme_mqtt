@@ -293,6 +293,7 @@ async fn chaos_a_rebirth_request_is_answered_with_a_complete_birth_sequence() {
             bd_seq_path: state_dir.0.join("bdseq.toml"),
             capacity: 64,
             death_flush: Duration::from_secs(2),
+            reconnect_floor: Duration::from_secs(1),
         },
         node,
         // Both names since contract v13 (ADR 0049): the topic carries the

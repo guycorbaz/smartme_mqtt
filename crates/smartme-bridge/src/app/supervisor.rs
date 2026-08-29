@@ -421,6 +421,10 @@ pub async fn run_with_control(
             bd_seq_path: config.bd_seq_path.clone(),
             capacity: 64,
             death_flush: Duration::from_secs(2),
+            // Production takes the durability floor and nothing above it. The
+            // field exists so a MEASUREMENT can raise it ([#43]); raising it here
+            // would slow every recovery for no operator benefit.
+            reconnect_floor: Duration::from_secs(1),
         },
         node,
         served.iter().map(MeterConfig::identity).collect(),

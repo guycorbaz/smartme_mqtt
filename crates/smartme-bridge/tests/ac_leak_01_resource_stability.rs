@@ -265,6 +265,7 @@ async fn a_hundred_thousand_iterations_do_not_grow_the_process() {
             bd_seq_path: dir.join("bdseq.toml"),
             capacity: 64,
             death_flush: Duration::from_secs(2),
+            reconnect_floor: Duration::from_secs(1),
         },
         node,
         // Both names since contract v13 (ADR 0049): the topic carries the

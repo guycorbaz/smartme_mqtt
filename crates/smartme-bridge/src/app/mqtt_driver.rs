@@ -135,6 +135,24 @@ pub struct MqttConfig {
     /// How long to keep pumping the transport after the DEATH is queued, so it
     /// actually reaches the wire before the socket closes.
     pub death_flush: Duration,
+    /// The shortest wait between two CONNECT attempts, **raised only**.
+    ///
+    /// [`RECONNECT_FLOOR`] is a durability bound — it caps how often `bdSeq`
+    /// reaches the disk — so this field is clamped UP to it and can never lower
+    /// it. A caller that asks for less gets the floor, and the property holds by
+    /// construction rather than by a comment.
+    ///
+    /// It exists because [#43] cannot be measured without it. That issue observes
+    /// no NDEATH reaching a subscriber across a reconnect, and its stated
+    /// hypothesis is session takeover: the new CONNECT arrives inside the floor
+    /// and supersedes the half-open session before the broker publishes its will.
+    /// Its own second bullet — *"vary the backoff floor; if a longer wait makes
+    /// the will appear, takeover is confirmed"* — is the cheapest of the three
+    /// things that would settle it, and the only one needing nothing outside this
+    /// repository.
+    ///
+    /// [#43]: https://github.com/guycorbaz/smartme_mqtt/issues/43
+    pub reconnect_floor: Duration,
 }
 
 /// The persisted session number.
@@ -436,13 +454,19 @@ const COMMAND_QUEUE: usize = 8;
 /// rate [`RECONNECT_FLOOR`] was chosen to cap and which its own doc comment
 /// already calls acceptable for a broker refusing every connection. A flapping
 /// broker costs exactly the same as a refusing one.
-fn ladder_step(previous: Duration, established: bool) -> (Duration, Duration) {
-    let now = if established {
-        RECONNECT_FLOOR
-    } else {
-        previous
-    };
-    (now, (now * 2).min(RECONNECT_CEILING))
+fn ladder_step(previous: Duration, established: bool, floor: Duration) -> (Duration, Duration) {
+    let now = if established { floor } else { previous };
+    (now, (now * 2).min(RECONNECT_CEILING.max(floor)))
+}
+
+/// The floor actually in force: the configured value, never below
+/// [`RECONNECT_FLOOR`].
+///
+/// The clamp is here rather than at the call site so there is ONE place the
+/// durability bound is enforced, and so a configuration cannot lower it by
+/// arriving from somewhere new.
+fn floor_in_force(configured: Duration) -> Duration {
+    configured.max(RECONNECT_FLOOR)
 }
 
 fn jittered(backoff: Duration, entropy: i64) -> Duration {
@@ -1233,7 +1257,8 @@ pub async fn run(
     // hold a certificate for a session that no longer exists, a consumer pairing
     // death to birth would discard it, and a frozen value would stay on screen
     // presented as live.
-    let mut backoff = RECONNECT_FLOOR;
+    let floor = floor_in_force(config.reconnect_floor);
+    let mut backoff = floor;
     let mut first_session = true;
     // Whether the reconfiguration channel is still open. It belongs OUTSIDE the
     // session loop: a supervisor that dropped its end stays dropped, and
@@ -1543,7 +1568,7 @@ pub async fn run(
             // actually happens. Logging the un-jittered base would have made the
             // log describe something other than the behaviour — the defect this
             // project keeps finding in its own documents.
-            let (base, next) = ladder_step(backoff, established);
+            let (base, next) = ladder_step(backoff, established, floor);
             let wait = jittered(base, clock.monotonic().0);
             tracing::warn!(
                 bd_seq = publisher.bd_seq().value(),
@@ -4012,7 +4037,7 @@ mod tests {
         let mut base = RECONNECT_FLOOR;
         let mut climbed = Vec::new();
         for _ in 0..8 {
-            let (now, next) = ladder_step(base, false);
+            let (now, next) = ladder_step(base, false, RECONNECT_FLOOR);
             climbed.push(now);
             base = next;
         }
@@ -4021,7 +4046,7 @@ mod tests {
             "eight failures should have reached the ceiling; got {climbed:?}"
         );
 
-        let (after_a_healthy_session, _) = ladder_step(base, true);
+        let (after_a_healthy_session, _) = ladder_step(base, true, RECONNECT_FLOOR);
         assert_eq!(
             after_a_healthy_session, RECONNECT_FLOOR,
             "a session that reached CONNACK must reset the ladder, not inherit {base:?}"
@@ -4033,7 +4058,7 @@ mod tests {
     fn the_ladder_is_capped() {
         let mut base = RECONNECT_FLOOR;
         for _ in 0..64 {
-            base = ladder_step(base, false).1;
+            base = ladder_step(base, false, RECONNECT_FLOOR).1;
         }
         assert_eq!(base, RECONNECT_CEILING);
     }

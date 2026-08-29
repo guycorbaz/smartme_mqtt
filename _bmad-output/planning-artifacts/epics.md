@@ -1386,6 +1386,13 @@ shape — and `staleness_republication_probe`, written mid-session, measured it 
 checklist still asked for a `Cause` PROPERTY that contract v12 removed, which came within one
 exchange of recording a failure that was not one.
 
+**[#43] closed 2026-08-29, and story 9.1 is complete — all six.** Its hypothesis (session takeover)
+was refuted by measurement, and the observation it rested on was **the observer's own socket**: the
+32 KiB frame `chaos_bdseq_per_connect` uses to force its disconnect also reaches the observer, whose
+inherited 10 KiB limit dropped it at the instant the will was published. `chaos_will_on_reconnect`
+now sees the will at the production floor and at a raised one, and is falsified against restoring
+that limit. **Closing this story is what solders E1–E6** (ADR 0051).
+
 **The window argument, checked at this date: it is CLOSED, and has been since 2026-08-28 15:02.**
 Historisation has run since commissioning — asked and answered that evening, which is what closed
 site risk `R10` on the day it opened. So the third acceptance criterion is answered: the window was

@@ -297,6 +297,7 @@ async fn ignition_contract_gate() {
             bd_seq_path: state_dir.0.join("bdseq.toml"),
             capacity: 64,
             death_flush: Duration::from_secs(2),
+            reconnect_floor: Duration::from_secs(1),
         },
         node,
         // Both names, since contract v13 (ADR 0049): the device is published as

@@ -91,6 +91,7 @@ async fn chaos_bd_seq_advances_on_every_connect() {
             bd_seq_path: state_dir.0.join("bdseq.toml"),
             capacity: 64,
             death_flush: Duration::from_secs(2),
+            reconnect_floor: Duration::from_secs(1),
         },
         node,
         // Both names since contract v13 (ADR 0049): the topic carries the
@@ -156,33 +157,31 @@ async fn chaos_bd_seq_advances_on_every_connect() {
          (first {first_bd_seq}, second {second_bd_seq})"
     );
 
-    // ---- what the WILL could NOT be made to prove, and why --------------
+    // ---- what the WILL could not be made to prove HERE, and why -----------
     //
     // AC2 asks for "the NDEATH the broker holds", i.e. the WILL, observed from
-    // outside. That could not be obtained on this path, and the reason is a
-    // MEASUREMENT rather than a limitation of the test:
+    // outside. This test does not obtain it, and until 2026-08-29 it recorded
+    // that as a MEASUREMENT: *"no NDEATH reaches a subscriber at all when the
+    // bridge reconnects"*, twice on two separate drops, raised as [#43] with
+    // session takeover as its hypothesis.
     //
-    //   **no NDEATH reaches a subscriber at all when the bridge reconnects.**
+    // **That measurement was an artefact of the instrument, and this file's own
+    // saboteur is what caused it.** The 32 KiB frame published above to force the
+    // disconnect reaches the OBSERVER too — it subscribes to `spBv1.0/#` — and
+    // `common::named_subscriber_on` inherited `rumqttc`'s 10 KiB incoming
+    // default, so the observer's own `poll()` rejected the frame, its socket
+    // dropped, and it was away (clean session, QoS 0, nothing queued) at the
+    // instant the will was published.
     //
-    // Instrumented over the whole run, the observer sees DBIRTH(session 1) then
-    // NBIRTH(session 2) with nothing in between — twice, on two separate
-    // disconnects. The socket drops, the bridge reconnects under the same
-    // `client_id` inside the backoff floor, and the will never appears. The most
-    // likely cause is session takeover: the new CONNECT supersedes the half-open
-    // session before the broker publishes its will. NOT CONFIRMED, and recorded
-    // as an open question rather than asserted.
+    // The observer now takes a limit large enough for any frame a test can
+    // produce, and `chaos_will_on_reconnect` shows the will arriving at BOTH the
+    // production floor and a raised one — so the wait is irrelevant and takeover
+    // is refuted. **An instrument knocked out by the event it measures reports
+    // the event as absent**, which is the third time this repository has met that
+    // shape.
     //
-    // Two consequences worth stating rather than discovering later. A consumer
-    // watching a reconnect sees a NEW BIRTH and no death for the session that
-    // ended — which is survivable (the birth supersedes) but is not what
-    // ADR 0011's two-mechanism story leads a reader to expect. And the stale-will
-    // failure this story warns about — advancing `bdSeq` without re-registering
-    // the will — cannot be caught on the reconnect path by any test shaped like
-    // this one, because there is no will to observe. `chaos_sigterm_no_lie`
-    // remains the place where a will is actually seen.
-    //
-    // What IS asserted here is the explicit death. It is weaker than AC2 asks
-    // for, and it is labelled as such.
+    // This test still asserts only the explicit death, because that is what its
+    // own sequence produces; the will belongs to the file written for it.
     let _ = death_tx.send(());
     let death = common::wait_for(&mut seen, Duration::from_secs(20), |s| {
         s.topic.contains("/NDEATH/")

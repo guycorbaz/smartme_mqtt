@@ -531,9 +531,19 @@ chapter provides for it.** Chapter 4's own id for it, `tck-id-topics-nbirth-bdse
 of the 29 clauses that chapter records nowhere and belongs to **Story 4.19** — which should now cite
 the evidence above rather than open the row as a fresh gap.
 
-**One thing 4.10 could NOT verify, recorded rather than glossed:** no NDEATH reaches a subscriber on
-the *reconnect* path at all, so the will's new number is observed only on the SIGTERM path. See
-[#43](https://github.com/guycorbaz/smartme_mqtt/issues/43).
+**One thing 4.10 could not verify, recorded rather than glossed — and it turned out to be the
+instrument.** Story 4.10 recorded that no NDEATH reaches a subscriber on the *reconnect* path at all,
+so the will's new number was observed only on the SIGTERM path
+([#43](https://github.com/guycorbaz/smartme_mqtt/issues/43), hypothesis: session takeover).
+
+**On 2026-08-29 that was measured and both halves failed.** Raising the reconnect floor to eight
+seconds changed nothing, which refutes takeover. The cause is that `chaos_bdseq_per_connect` forces
+its disconnect with a 32 KiB frame on the node's NCMD topic, and **the observer subscribes to
+`spBv1.0/#`, so the frame reaches the observer too** — its inherited 10 KiB incoming limit dropped
+its own socket, and with a clean session at QoS 0 it was away, nothing queued, at the instant the
+will was published. With the observer's limit raised, `chaos_will_on_reconnect` sees the will at the
+production floor **and** at a raised one. The will's new number is therefore observable on the
+reconnect path, and the row's evidence is no longer confined to the SIGTERM path.
 
 **Story 4.13 answered half of that, by measurement, on 2026-08-18 — and the half it answered is the
 opposite of what was expected.** `chaos_broker_recovery` stops the broker container and records
@@ -546,8 +556,10 @@ it tears down, and gets them out to subscribers before closing their sockets. So
 **No row moves on that**, and the limit is the point. It is a measurement of mosquitto's shutdown
 behaviour, not of this bridge's conformance: the same test run with `docker kill --signal SIGKILL`
 observes **nothing at all**, because there is no shutdown path to run. A broker that crashes, loses
-power, or is killed still delivers no death, which is the residue of [#43] and stays open. What 4.13
-closes is the *unqualified* form of the sentence above — "at all" was too strong — not the clause.
+power, or is killed still delivers no death, which stays true and is a property of brokers rather
+than of this bridge. What 4.13 closed is the *unqualified* form of the sentence above — "at all" was
+too strong — not the clause. **[#43] itself closed on 2026-08-29**, as an artefact of the observer;
+see the paragraph above.
 
 **The five Primary-Host clauses are `gap`, not `n/a`, and that is the single most reversible
 judgement in this chapter.** Every one is conditional — *"If the Edge Node is configured to wait for
@@ -1067,7 +1079,9 @@ Application could not distinguish a current session from a superseded one. Recor
 number that CONNECT will use, and the match holds because both values move together rather than
 because neither moves. The row is `conformant` on the same evidence chapter 5 cites for
 `-will-message-payload-bdSeq`, whose prose carries the full account of the fix and of the one thing
-4.10 could not verify ([#43](https://github.com/guycorbaz/smartme_mqtt/issues/43)).
+4.10 could not verify, **which 2026-08-29 showed to be an artefact of the observer rather than a
+property of the bridge** ([#43](https://github.com/guycorbaz/smartme_mqtt/issues/43), closed;
+`chaos_will_on_reconnect` now sees the will at either floor).
 
 #### DBIRTH
 
@@ -1422,7 +1436,7 @@ not only here.
 | **Eight invariants are correct by construction and proven by no test** — raised from four by the code review of Story 4.2: both property-set array-length clauses, the `engUnit` property's `type` field, the metric-level `timestamp` field, and four more the review found — the quality property's `type` (whose test asserted production's own expression against itself), `-propertyvalue-type-req` (witnessed for `int_property` only), the NBIRTH payload timestamp (a presence check, not a value check), and the registered will's retain flag (no test reaches the will) | 6 | [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30) — **its scope needs widening from "encoder invariants" to match** |
 | **`Int32` is the one datatype code no test pins to its literal.** `codes_match_the_specification_numbering` covers 1, 4, 8–13, 17; change `Int32 = 3` and the suite stays green while `-quality-value-type` violates a MUST | 6 | [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30) |
 | `qos_for` ignores its `MessageType` argument, so the six-type QoS/retain test is one assertion repeated six times. Harmless today; five retain verdicts revert to unproven the day it grows a real `match` | 4, 6 | Story 4.17 |
-| ~~**`bdSeq` is fixed for a client's lifetime**, so `-nbirth-bdseq-repeat` passes for the wrong reason and the per-CONNECT increment the clause requires never happens~~ **CLOSED (Story 4.10, 2026-08-01).** The driver owns its reconnect loop; each CONNECT advances the number and registers a will carrying it. **Found while closing it:** no NDEATH reaches a subscriber on the reconnect path at all — [#43](https://github.com/guycorbaz/smartme_mqtt/issues/43) — so the *will* half is verified only on the SIGTERM path | 6 | ~~Story 4.10~~ done |
+| ~~**`bdSeq` is fixed for a client's lifetime**, so `-nbirth-bdseq-repeat` passes for the wrong reason and the per-CONNECT increment the clause requires never happens~~ **CLOSED (Story 4.10, 2026-08-01).** The driver owns its reconnect loop; each CONNECT advances the number and registers a will carrying it. **Found while closing it:** no NDEATH appeared to reach a subscriber on the reconnect path — [#43](https://github.com/guycorbaz/smartme_mqtt/issues/43) — so the *will* half was verified only on the SIGTERM path. **That observation was the observer's own socket**, dropped by the saboteur's oversized frame; closed 2026-08-29 and now guarded by `chaos_will_on_reconnect` | 6 | ~~Story 4.10~~ done |
 | Specification editorial: `sequence-num-req-nbirth` / `-zero-nbirth` are one clause with two spellings, so a mechanical count of chapter 6 reads 109 where 108 requirements exist | 6 | recorded above; upstream, not ours |
 | Specification editorial: `-name-birth-data-requirement` and `-name-cmd-requirement` are timestamp clauses carrying `name` ids | 6 | recorded above; upstream, not ours |
 | **Identifier validation implements Sparkplug's wildcard rule, not MQTT's character set — measured: a `U+0000` passes `check_identifier` and reaches the published topic.** Three chapter-1 clauses defer their character set to a specification this repository keeps no copy of | 1 | [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34) |

@@ -328,6 +328,27 @@ pub async fn named_subscriber(port: u16, client_id: &str) -> mpsc::Receiver<Seen
 pub async fn named_subscriber_on(host: &str, port: u16, client_id: &str) -> mpsc::Receiver<Seen> {
     let mut options = MqttOptions::new(client_id, host, port);
     options.set_keep_alive(Duration::from_secs(5));
+    // AN OBSERVER MUST NOT INHERIT THE BRIDGE'S INCOMING LIMIT, and until
+    // 2026-08-29 it did — `rumqttc` defaults `max_incoming_packet_size` to
+    // 10 KiB, and this function never raised it.
+    //
+    // That default is what [#43] actually measured. `chaos_bdseq_per_connect`
+    // forces its disconnect by publishing a 32 KiB frame to the node's NCMD
+    // topic; this observer subscribes to `spBv1.0/#`, so **the saboteur's frame
+    // reaches the observer too**, its own `poll()` rejects it, its socket drops,
+    // and it is away — with a clean session and QoS 0, so nothing is queued —
+    // at the exact instant the broker publishes the bridge's will. It
+    // reconnects, re-subscribes, and sees the next NBIRTH. Hence
+    // `DBIRTH → NBIRTH` with no NDEATH between them: an artefact of the
+    // instrument, not a fault of the bridge.
+    //
+    // The bridge's 10 KiB limit is a deliberate, documented property of the
+    // BRIDGE (`MAX_INCOMING_PACKET`). An observer exists to see everything on
+    // the wire and has no such contract, so it takes a limit large enough for
+    // any frame a test can produce.
+    //
+    // [#43]: https://github.com/guycorbaz/smartme_mqtt/issues/43
+    options.set_max_packet_size(1024 * 1024, 1024 * 1024);
     let (client, mut eventloop) = AsyncClient::new(options, 64);
     let (tx, rx) = mpsc::channel(256);
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
