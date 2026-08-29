@@ -1374,6 +1374,18 @@ correctly"* — now has the instrument that can show it, `ddata_shape_probe`. Un
 sentence deferred a decision to an artifact that did not exist, which is the shape `CLAUDE.md`
 forbids. **[#29] stays open on one act: running the probe.**
 
+**Attested 2026-08-29, and [#28] closes on it.** Six steps on six against Ignition 8.3.7 Maker /
+MQTT Engine 5.0.0-rc1, plus `ddata_shape_probe` for the null case no gate step reaches. **[#29]
+closes too, on a different ground**: ADR 0013's two owed halves — the manual, and a re-test against a
+real host — are both done, and the measurement came back decisive. What remains is not [#29] but the
+decision it enables, which is a wire change with its own issue and its own ADR.
+
+**The session produced two findings neither issue carried.** Engine refuses a metric stamped BEHIND
+the value it holds, which raised the question of EQUALITY — the bridge's own staleness republication
+shape — and `staleness_republication_probe`, written mid-session, measured it safe. And step 4's
+checklist still asked for a `Cause` PROPERTY that contract v12 removed, which came within one
+exchange of recording a failure that was not one.
+
 **The window argument, checked at this date: it is CLOSED, and has been since 2026-08-28 15:02.**
 Historisation has run since commissioning — asked and answered that evening, which is what closed
 site risk `R10` on the day it opened. So the third acceptance criterion is answered: the window was

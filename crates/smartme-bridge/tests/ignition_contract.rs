@@ -499,9 +499,14 @@ async fn ignition_contract_gate() {
              Observed 2026-08-21: the `value` row showed 2,35 and 5 679,1 in red italics \
              beside Quality = Bad_Stale, so the question IS answerable [#108]",
             "The quality overlay is visible in the tag browser without hovering",
-            "CONTRACT v4, FIRST OBSERVATION: each tag carries a second property, \
-             `Cause = reading-too-old`, beside `Quality`. RECORD WHETHER IGNITION SHOWS IT \
-             AT ALL — that is the whole purpose of v4, and no run has ever checked it",
+            "★ THE CAUSE IS A FOLDER OF METRICS, NOT A PROPERTY — corrected 2026-08-29. \
+             Look in the TREE for a `Cause` folder under contract-meter, holding `Power` \
+             and `Energy`, each reading `reading-too-old`. Do NOT look for a `Cause` line \
+             beside `Quality` in the tag's properties: contract v12 removed it (ADR 0044), \
+             because a metric property is written by a BIRTH and by nothing else. This item \
+             asked for the property until tonight — v4 language that outlived the decision \
+             voiding it — and on 2026-08-29 it came within one exchange of having an \
+             operator record a failure that was not one",
         ],
         &[
             "★ the tag is stale because the BRIDGE DIED and Ignition applied its own \
@@ -513,11 +518,21 @@ async fn ignition_contract_gate() {
              node, not this one",
             "the value blanked instead of freezing — that is a different (and wrong) \
              behaviour that also looks 'not good'",
-            "★ the `Cause` property is visible AND YOU CONCLUDE [#68] IS ANSWERED — it is \
-             not. #68 asks what a host does with a property it never saw DECLARED at BIRTH, \
-             and seeing one here says nothing about a host that has been running for days. \
-             Use tests/observe_cause_property.rs, while a meter is degraded, to separate \
-             what the bridge EMITS from what Ignition DISPLAYS",
+            "★ the `Cause` metrics are visible AND YOU CONCLUDE [#68] IS ANSWERED — it is \
+             not. #68 asks what a host does with a PROPERTY it never saw DECLARED at BIRTH, \
+             and the cause stopped being a property at v12. Seeing the folder answers ADR \
+             0044, which it did on 2026-08-29; it says nothing about #68. Use \
+             tests/observe_cause_property.rs to separate what the bridge EMITS from what \
+             Ignition DISPLAYS",
+            "★ YOU CONCLUDE THE STALENESS PATH IS PROVEN. It is not, and this step cannot \
+             prove it: the reading above is sent with a FRESH acquisition time, so its \
+             metric timestamp ADVANCES like any other. In production a meter that has gone \
+             quiet republishes its LAST KNOWN value under the acquisition instant already \
+             sent — an EQUAL timestamp, which this step never puts on the wire. That gap \
+             existed from the day this file was written and was closed on 2026-08-29 by \
+             `sparkplug-b/tests/ignition_contract.rs::staleness_republication_probe`, which \
+             measured that Engine applies an equal timestamp and refuses only one that goes \
+             backwards. Re-run that probe, not this step, if the question comes back",
             "you record an absence without checking the tag's PROPERTIES pane as well as the \
              browser column — a property hidden by a display setting is not a contract failure",
         ],

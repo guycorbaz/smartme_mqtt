@@ -1010,10 +1010,20 @@ staleness signal — and states in one sentence when that premise stops holding:
 shown to read metric timestamps correctly, this ADR should be revisited rather than worked around."*
 Until 2026-08-29 nothing could show it. `sparkplug-b/tests/ignition_contract.rs::ddata_shape_probe`
 publishes one DDATA whose payload and metric timestamps differ by **37 minutes** — an offset no time
-zone can imitate, so a host displaying local time cannot produce a false answer — and the operator
-reads which of the two the tag shows. Two outcomes, both decisive: the metric timestamp is read, and
-ADR 0013 is revisited because conformance becomes free; or it is not, and the deviation is
-load-bearing rather than merely deliberate. **Neither row moves on a reading of a table.**
+zone can imitate, so a host displaying local time cannot produce a false answer.
+
+**It was run on 2026-08-29, and the answer is that this host reads metric timestamps.** The backdated
+tag **did not move at all**: it kept its birth value while its neighbour, in the same message, went
+to 22.0. Engine read the metric timestamp, found it older than the value it held, and refused it —
+had it trusted the payload timestamp, which said *now*, it would have accepted. So ADR 0013's stated
+reason for refusing the conformant shape is **falsified for this consumer**.
+
+**Both rows nonetheless stay `deviation`, and that is a decision rather than inertia.** Adopting the
+conformant shape is a wire change on a bridge whose history is running; it owes its own issue, its
+own ADR and its own attestation, and two things must be settled first — whether the metric timestamp
+is what Engine *stores* and not only what it orders by, and what the change costs a running series.
+See ADR 0013's amendment of 2026-08-29. **Neither row moves on a reading of a table, and neither
+moves on a measurement alone either.**
 
 **The DEATH timestamp means something else again.** `death_payload` stamps the payload at the moment
 it is **built**, not at the moment of death (`encode.rs:168-172`) — the broker does not rewrite a

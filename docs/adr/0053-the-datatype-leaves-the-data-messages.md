@@ -1,6 +1,7 @@
 # ADR 0053 — The datatype leaves the DATA messages, and the contract version does not move
 
-- **Status:** accepted
+- **Status:** accepted — **attested against a live host on 2026-08-29** (Ignition 8.3.7 Maker /
+  MQTT Engine 5.0.0-rc1, six steps on six plus `ddata_shape_probe`; see the runbook's run record)
 - **Date:** 2026-08-29
 - **Decides:** whether the bridge keeps repeating each metric's `datatype` on every DDATA, and
   whether stopping is a contract change a consumer must be told about.
@@ -117,9 +118,13 @@ was measured at, unchanged, with a note saying which change it was covering.
   has run on this deployment since commissioning, 2026-08-28 15:02, so from that instant a wire
   change can cost a history rewrite. The test for it is the same enumeration this ADR uses to refuse
   the version bump — identity, topic grammar, metric name, unit — and this change is in none of them.
-- **This ships only after a Tier-3 session, and the reason is the history rather than the clause.**
-  Ignition 8.3.7 / MQTT Engine 5.0.0-rc1 must be shown to update a tag from a DDATA that declares no
-  type, and to handle the null case above. A host that silently ignored such a DDATA would stop the
-  tags updating in production, and **the gap that leaves in a running history cannot be recovered** —
-  which is a worse failure than the deviation being repaired, and is why the norm's own
-  counter-example is enough to make a session compulsory.
+- **This shipped only after a Tier-3 session, and the session answered both halves.** Steps 2 and 3
+  of the bridge gate showed values arriving and changing on DDATA that declare no type;
+  `ddata_shape_probe` showed a null metric with no declared type **rendering as null**, which is the
+  case no gate step reaches. The norm's own counter-example did not reflect a requirement of this
+  host. Recorded in the runbook under *What the 2026-08-29 session established*.
+- **The probe found something this ADR did not ask about, and it was worth the evening.** Engine
+  refuses a metric stamped BEHIND the value it holds — which raised, and then settled, whether it
+  would also refuse an EQUAL one. It does not. That matters here only indirectly, but it matters:
+  the bridge's staleness republication carries an equal timestamp, and had the answer gone the other
+  way a degraded reading would never have reached the screen.

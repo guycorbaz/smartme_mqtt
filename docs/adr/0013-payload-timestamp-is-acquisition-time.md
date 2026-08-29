@@ -99,7 +99,48 @@ nothing, and yet:
 So one probe answers both halves at once: whether the conformant shape is **honest**, and whether it
 is **affordable**. Those two had been treated as one question and they are not.
 
-Until the probe is run, this ADR stands. [#29](https://github.com/guycorbaz/smartme_mqtt/issues/29)
+## The probe was run on 2026-08-29, and this ADR's premise does not hold
+
+**Ignition 8.3.7 / MQTT Engine 5.0.0-rc1 reads metric timestamps and acts on them.** The measurement
+was not the one the probe expected to make: `ts_stamped_37_min_back` **did not move at all**. It kept
+its birth value and its birth timestamp, while its neighbour — same payload, same message — went to
+22.0. Engine read the metric timestamp, found it older than the value it held, and refused it. Had it
+trusted the payload timestamp, which said *now*, it would have accepted.
+
+That is the third of the three outcomes the probe admits, and it is the strongest form of *"the host
+reads metric timestamps"*: not merely displaying one, but ordering by it.
+
+**So the reason this ADR gives for refusing option 2 is falsified for this consumer.** The refusal
+was *"it relies on every consumer reading metric-level timestamps, which is the assumption contract
+v1 disproved"*. Contract v1 disproved it for the QUALITY property; it is now measured true for the
+TIMESTAMP, on the host this bridge publishes to.
+
+**And the second question came back safe.** The refusal raised one nobody had asked: this bridge's
+staleness republication carries an **equal** metric timestamp, not a later one — it re-sends the last
+known value under the acquisition instant it already sent. If Engine applied a metric only when its
+timestamp advanced, a degradation would never reach the screen.
+`staleness_republication_probe`, written during the session, measured that **an equal timestamp is
+applied**: the value moved and the quality moved. Engine refuses what goes backwards, not what
+repeats.
+
+### What this ADR now owes, and what it does not
+
+**It is not superseded here.** Adopting option 2 — `now` at payload level, `ValueDate` at metric
+level — is a wire change on a bridge whose history is running, and it deserves its own decision, its
+own issue and its own attestation rather than being taken as a consequence of a measurement. Two
+things must be settled first:
+
+- **whether the metric timestamp is what Engine STORES**, and not only what it compares by. The
+  refusal does not separate the two. The discriminator is one publish: a metric stamped LATER than
+  its payload. If the tag displays that later instant, the question is closed.
+- **what the change costs a running series.** If Engine files points by the metric timestamp, option
+  2 stores nothing differently and is free. If it files by the payload timestamp, option 2 moves
+  every future point from its `ValueDate` to its publish instant — a discontinuity produced without
+  renaming anything.
+
+Until that decision is taken, **this ADR stands and the two matrix rows stay `deviation`**. What has
+changed is that they are now deviations from a position whose premise has been measured false, which
+is a different thing from deviations nobody has re-examined. [#29](https://github.com/guycorbaz/smartme_mqtt/issues/29)
 carries the run, and it is the last thing that issue owes: the manual states the deviation and what
 it deviates from (chapter 5), which was the other half.
 - **[#29](https://github.com/guycorbaz/smartme_mqtt/issues/29) is no longer the decision.** It is the

@@ -710,3 +710,215 @@ async fn ddata_shape_probe() {
     println!("\n=== Clean-up (required) ===");
     println!("Delete Edge Nodes/{group}/ShapeProbe in the Designer — only that folder.");
 }
+
+/// **Does this host apply a metric whose timestamp EQUALS the one it already
+/// holds?** Opened by `ddata_shape_probe` on 2026-08-29, and it is a bigger
+/// question than the one that produced it.
+///
+/// # Why it was asked
+///
+/// `ddata_shape_probe` showed Engine **refusing** a metric stamped 37 minutes
+/// behind the value it held: the tag kept its old number while its neighbour
+/// moved. So Engine reads metric timestamps and acts on them. Which raises the
+/// case nobody had measured — **equality**, not lateness.
+///
+/// It matters because equality is not a corner case for the bridge that owns
+/// this crate; it is its ordinary staleness path. When a source goes quiet, that
+/// bridge republishes **the last known value with a degraded verdict**, stamped
+/// with that value's own acquisition time — the same instant it already sent.
+/// It has a name for that shape in its own code (`is_republication`). If Engine
+/// applies a metric only when its timestamp advances, then **the degradation
+/// never reaches the screen and a stale reading goes on displaying as good** —
+/// which is the exact failure the whole design exists to prevent, arriving
+/// through the one door nobody had checked.
+///
+/// # Why no existing gate answers it
+///
+/// The bridge gate's step 4 shows an honest STALE and has passed repeatedly. It
+/// does not answer this: it sends its stale reading with a FRESH acquisition
+/// time, so its timestamp advances like any other. The equal-timestamp case has
+/// never been on the wire in front of a host. That is a false pass the gate has
+/// carried since it was written, and it is recorded on the step rather than
+/// here.
+///
+/// # What it publishes
+///
+/// Two tags, born at 11.0. One DDATA moves both to 22.0 at instant `T` — the
+/// control, which must be seen to land before anything else counts. Then a
+/// SECOND DDATA stamped with **the same `T`**:
+///
+/// - `same_ts_new_value` carries 33.0. A value change is unambiguous on screen,
+///   so this one says whether an equal timestamp is accepted AT ALL.
+/// - `same_ts_new_quality` keeps 22.0 and changes only its quality, which is the
+///   bridge's real shape: same measurement, new verdict.
+///
+/// ```text
+/// SPARKPLUG_CONTRACT_BROKER=host:1883 \
+/// SPARKPLUG_CONTRACT_GROUP=StaleProbe \
+///   cargo test -p sparkplug-b --test ignition_contract staleness_republication_probe -- --ignored --nocapture
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "manual probe: publishes to a real broker for a human to inspect"]
+async fn staleness_republication_probe() {
+    let target = std::env::var("SPARKPLUG_CONTRACT_BROKER")
+        .expect("set SPARKPLUG_CONTRACT_BROKER=host:port — there is deliberately no default");
+    let group = std::env::var("SPARKPLUG_CONTRACT_GROUP").expect(
+        "set SPARKPLUG_CONTRACT_GROUP to a disposable group — there is deliberately no default",
+    );
+    assert_ne!(
+        group, "Site",
+        "refusing to publish into the production group"
+    );
+    let (host, port) = target
+        .rsplit_once(':')
+        .expect("SPARKPLUG_CONTRACT_BROKER must be host:port");
+    let port: u16 = port.parse().expect("the port must be a number");
+
+    const NEW_VALUE: &str = "same_ts_new_value";
+    const NEW_QUALITY: &str = "same_ts_new_quality";
+
+    let node = EdgeNode::new(group.clone(), "StaleProbe".to_string()).expect("identifiers");
+    let n_birth = node.node_topic(MessageType::NBirth).expect("topic");
+    let n_death = node.node_topic(MessageType::NDeath).expect("topic");
+    let d_birth = node
+        .device_topic(MessageType::DBirth, DEVICE)
+        .expect("topic");
+    let d_data = node
+        .device_topic(MessageType::DData, DEVICE)
+        .expect("topic");
+
+    let session = NodeSession::start(Some(BdSeq::new(9)));
+    let will = session.will(now_ms());
+    let mut options = MqttOptions::new("sparkplug-stale-probe", host, port);
+    options.set_keep_alive(Duration::from_secs(30));
+    options.set_last_will(rumqttc::LastWill::new(
+        n_death,
+        encode(&will),
+        QoS::AtMostOnce,
+        false,
+    ));
+    let (client, mut eventloop) = AsyncClient::new(options, 32);
+    let pump = tokio::spawn(async move {
+        loop {
+            if let Err(error) = eventloop.poll().await {
+                println!("  → transport: {error}");
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        }
+    });
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let born = now_ms();
+    let (mut live, birth) = session.birth(born, vec![]);
+    client
+        .publish(n_birth, QoS::AtMostOnce, false, encode(&birth))
+        .await
+        .expect("publish");
+
+    let declared = |name: &str| {
+        Metric::new(name, MetricValue::Double(11.0), born)
+            .with_quality(Quality::Good)
+            .with_engineering_unit(UNIT_POWER)
+    };
+    let d_birth_payload = live.device_birth(born, vec![declared(NEW_VALUE), declared(NEW_QUALITY)]);
+    client
+        .publish(d_birth, QoS::AtMostOnce, false, encode(&d_birth_payload))
+        .await
+        .expect("publish");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // ---- The control: an ordinary update, at instant T ----------------------
+    let t = now_ms();
+    let at_t = |name: &str, value: f64, quality: Quality| {
+        Metric::new(name, MetricValue::Double(value), t)
+            .with_quality(quality)
+            .with_engineering_unit(UNIT_POWER)
+    };
+    let first = live.device_data(
+        t,
+        vec![
+            at_t(NEW_VALUE, 22.0, Quality::Good),
+            at_t(NEW_QUALITY, 22.0, Quality::Good),
+        ],
+    );
+    client
+        .publish(d_data.clone(), QoS::AtMostOnce, false, encode(&first))
+        .await
+        .expect("publish");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    println!("\n=== Staleness-republication probe ===");
+    println!("  metric timestamp of BOTH messages: {t}");
+
+    checkpoint(
+        "CONTROL — both tags must read 22.0 before the measurement means anything",
+        &[
+            "same_ts_new_value    -> 22.0",
+            "same_ts_new_quality  -> 22.0",
+            "",
+            "If either still reads 11.0, STOP. The second message is stamped with",
+            "the SAME instant as this one, so a tag that did not take this update",
+            "cannot tell you anything about the next.",
+        ],
+    );
+
+    // ---- The measurement: the SAME instant, published again -----------------
+    let second = live.device_data(
+        t,
+        vec![
+            // Unambiguous on screen: does an equal timestamp land at all?
+            at_t(NEW_VALUE, 33.0, Quality::Good),
+            // The bridge's real shape: same measurement, degraded verdict.
+            at_t(NEW_QUALITY, 22.0, Quality::Stale),
+        ],
+    );
+    client
+        .publish(d_data, QoS::AtMostOnce, false, encode(&second))
+        .await
+        .expect("publish");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    checkpoint(
+        "THE MEASUREMENT — a second DDATA at the SAME metric timestamp",
+        &[
+            "same_ts_new_value    -> 33.0, or still 22.0?",
+            "same_ts_new_quality  -> its quality changed, or not?",
+            "",
+            "★ THE QUALITY IS THE SPECIFICATION'S 500, NOT THE BRIDGE'S CODE. This",
+            "  crate publishes the specified codes, and Ignition renders 500 as",
+            "  `Good(500)` — NOT as Bad_Stale (ADR 0012, and the reason it exists).",
+            "  So the change you are looking for is `Good` becoming `Good(500)`:",
+            "  READ THE NUMBER IN PARENTHESES, not the word. Looking for the word",
+            "  `Bad` here reports a message that landed as one that did not.",
+            "",
+            "WHAT EACH ANSWER MEANS:",
+            "  · 33.0 AND the quality moved -> an equal timestamp is applied. The",
+            "    bridge's staleness republication reaches a host, and the question",
+            "    this probe was written for is closed in the safe direction.",
+            "  · NEITHER moved -> Engine applies a metric only when its timestamp",
+            "    ADVANCES. The bridge republishes its last known value under its own",
+            "    acquisition time, so a degradation would never reach the screen and",
+            "    a stale reading would go on displaying as good. That is the failure",
+            "    the design exists to prevent, and it would be a defect of the FIRST",
+            "    order — not a conformance point.",
+            "  · 33.0 but the quality did NOT move -> the value is applied and the",
+            "    property is not. That is the 2026-08-22 finding again in a new place",
+            "    (a property is written by a BIRTH and by nothing else, ADR 0044) and",
+            "    it would say the quality property cannot be refreshed at all, which",
+            "    contradicts what that same session measured. Record it verbatim and",
+            "    do not reconcile it here.",
+            "",
+            "⚠ THIS STEP PASSES WRONGLY IF:",
+            "  · you are reading the browser's Value column for the quality — it",
+            "    renders a quality string for non-good tags, and `Good(500)` is not",
+            "    non-good. Open the tag's properties.",
+            "  · the tag group has not polled since the second message: confirm by",
+            "    same_ts_new_value, which is the unambiguous one.",
+            "  · a residual folder from an earlier run is on screen.",
+        ],
+    );
+
+    pump.abort();
+    println!("\n=== Clean-up (required) ===");
+    println!("Delete Edge Nodes/{group}/StaleProbe in the Designer — only that folder.");
+}

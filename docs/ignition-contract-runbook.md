@@ -490,28 +490,18 @@ list; this one needs the opposite discipline — **ask, then look, then compare.
 
 ## Record of runs
 
-> ### ⚠️ THE WIRE MOVED ON 2026-08-29 AND THE VERSION DID NOT — read this before trusting the row below
+> ### ✅ ADR 0053 IS ATTESTED — 2026-08-29, at v13 unchanged
 >
-> `CONTRACT_VERSION` is still **13**, and that is a ruling rather than an omission
-> ([ADR 0053](adr/0053-the-datatype-leaves-the-data-messages.md)): the `datatype` field left every
+> **The wire moved on 2026-08-29 and `CONTRACT_VERSION` did not**, by the ruling in
+> [ADR 0053](adr/0053-the-datatype-leaves-the-data-messages.md): the `datatype` field left every
 > `DDATA`, and no metric name, unit or quality code moved with it. The run table's promise — *two
-> runs sharing a version number attest to the same tag set* — still holds, because the tag set is
-> exactly what did not change.
+> runs sharing a version number attest to the same tag set* — holds, because the tag set is exactly
+> what did not change.
 >
-> **But what the wire CARRIES changed, so the v13 row below attests to the version and no longer to
-> the binary.** Action H7 of the epic-8 retrospective tied an attestation to a bump; ADR 0053 widens
-> it, and this block is where the widening bites: **a change to what the wire carries earns an
-> attestation whether or not the version moves.**
->
-> **What the next session must cover, and it is short:**
->
-> - **steps 2 and 3 of the bridge gate ARE the attestation.** A value moving there crossed on a
->   DDATA that declares no datatype. Nothing extra to look at — but if the tags stop updating
->   between step 1 and step 3, that is the finding, and ADR 0053 is reverted rather than debugged.
-> - **`ddata_shape_probe` is not optional this time.** It carries the null case, which no gate step
->   reaches, and the [#29] timestamp measurement in the same look at the same screen.
->
-> Record the run against **v13, unchanged**, with a line saying it covered ADR 0053.
+> Action H7 tied an attestation to a *bump*; ADR 0053 widened it to **a change to what the wire
+> carries earns an attestation whether or not the version moves**, and this is the first run taken
+> under the widened rule. Six steps on six, against Ignition 8.3.7 Maker Edition and MQTT Engine
+> 5.0.0-rc1 — the same host as 2026-08-28, which is what makes the two comparable.
 
 > ### ✅ THE ATTESTATION IS CURRENT — v13, 2026-08-28
 >
@@ -597,6 +587,86 @@ A pass is only meaningful against a stated version, so add a row rather than edi
 **MQTT Engine module** column was added 2026-07-31: it is the component that decodes Sparkplug, so it
 governs conformance more directly than the Ignition platform version, and the note below had been
 asking for it since the table was written.
+
+### What the 2026-08-29 session established — ADR 0053 attested, and three answers no table could give
+
+**Ignition 8.3.7 Maker Edition, MQTT Engine 5.0.0-rc1 — unchanged from 2026-08-28**, which is what
+makes the two sessions comparable rather than merely consecutive. Groups `Adr0053` (bridge gate),
+`Adr0053Probe` and `StaleProbe`. Six steps on six, and two probes.
+
+**The order was inverted on purpose, and it earned its keep.** The probe ran BEFORE the gate,
+because it answers the question that commands everything else — *does a DDATA carrying no
+`datatype` update a tag at all?* — in two minutes, where the gate costs six steps. Had the answer
+been no, ADR 0053 would have been reverted that evening and the gate never spent.
+
+#### The gate — ADR 0053 attested on the product's bytes
+
+| Step | Result |
+| --- | --- |
+| 1 — cold start | node ONLINE, `Power` = `Bad_Stale` with **no value**; device folder is `contract-meter` and `30000001` is nowhere; `Serial` = 30000001; `Contract/Version` = **13** |
+| 2 — a good reading | `Power` 1,23 kW, `Energy` 5678,9 kWh, both `Good`. **`Energy` was NOT clamped** — `EngHigh` scaling is off on this tag, so that documented trap did not fire |
+| 3 — the value updates | 2,35 and 5679,1, changed **in place** |
+| 4 — an honest STALE | `Bad_Stale`, **`value` row frozen at 2,35** (not blanked), node still ONLINE, cause `reading-too-old` on both |
+| 5a/5b — rebirth from Ignition | the two log lines fired; **NBIRTHs gained 1, DBIRTHs gained 1, `bdSeq` UNCHANGED at 0** — read off the wire by an independent subscriber, not from the bridge's own log |
+| 6 — the announced stop | node OFFLINE, **`Death Count` 0 → 2** — both certificates arrived |
+
+**Steps 2 and 3 ARE the attestation, and that is the whole of it.** Every value on that screen
+crossed on a DDATA whose metrics declare no type. There was nothing extra to look at, which is why
+the step now says so rather than leaving the operator to infer it.
+
+#### `ddata_shape_probe` — and the third outcome was the one that happened
+
+- **A DDATA carrying no `datatype` updates a tag** (`ts_stamped_now` 11.0 → 22.0). The
+  specification's own DDATA example carries the field; this host does not require it.
+- **A null metric with no declared type renders as null.** The `Bad` verdict path — which withholds
+  the number rather than shipping one the bridge does not trust — crosses intact. That was ADR 0053's
+  sharpest edge and no gate step reaches it.
+- **`ts_stamped_37_min_back` DID NOT MOVE.** It kept 11.0 and the DBIRTH's timestamp. Engine READ the
+  metric timestamp and REFUSED the value as older than the one it held — which is the third outcome,
+  added to the probe hours before the session and the one that occurred. Had Engine trusted the
+  PAYLOAD timestamp, which said *now*, it would have accepted.
+
+**So [#29]'s question is answered, and decisively: this host reads metric timestamps and acts on
+them.** ADR 0013's premise — that the conformant shape *"relies on every consumer reading
+metric-level timestamps, which is the assumption contract v1 disproved"* — does not hold for
+Ignition 8.3.7 / Engine 5.0.0-rc1.
+
+**A residual ambiguity, named rather than folded away.** The refusal proves Engine *compares* metric
+timestamps; it does not formally prove that the metric timestamp is what it *stores*. The
+discriminator is cheap and was not run: publish a metric stamped LATER than its payload. If the tag
+displays that later instant, the question is closed. It belongs to the decision that adopts the
+conformant shape, not to this session.
+
+#### `staleness_republication_probe` — written mid-session, and it closed a hole nobody had seen
+
+The refusal above raised a question bigger than either issue. **Equality, not lateness**: when a
+source goes quiet this bridge republishes its LAST KNOWN VALUE with a degraded verdict, stamped with
+the acquisition instant it has already sent (`is_republication`). If Engine applied a metric only
+when its timestamp ADVANCES, the degradation would never reach the screen and a stale reading would
+go on displaying as good — the exact failure the design exists to prevent, through the one door
+nobody had checked.
+
+**Measured, and safe: an equal metric timestamp IS applied.** A second DDATA at the same instant
+moved `same_ts_new_value` 22.0 → 33.0, and moved the quality of `same_ts_new_quality`. Engine refuses
+what goes backwards, not what repeats.
+
+**And this gate carried a false pass on that point since it was written.** Step 4 shows an honest
+STALE and has passed for months — with a reading whose acquisition time is FRESH, so its timestamp
+advances like any other. The equal-timestamp case had never been on the wire in front of a host. The
+step now says so.
+
+#### ADR 0044 confirmed on a live host, and step 4's checklist was found stale
+
+Asked precisely — *is there a `Cause` FOLDER in the tree, and is there a `Cause` line in `Power`'s
+properties?* — the answer was **folder yes, property no**. The cause reaches the operator as the
+metrics `Cause/Power` and `Cause/Energy`, exactly as ADR 0044 decided after the 2026-08-22 session
+measured that a metric property is written by a BIRTH and by nothing else. **This is the first time
+the v12 cause mechanism has been seen to reach a screen** rather than the wire.
+
+**Step 4's checklist still asked for a `Cause` PROPERTY beside `Quality`** — v4 language that
+survived the decision that voided it. An operator following it looks in the wrong pane, finds
+nothing, and records a failure that is not one; it came within one exchange of doing so. Repaired in
+this commit.
 
 ### What the 2026-08-28 session established — v13 attested, and a false pass caught in time
 
