@@ -1447,6 +1447,30 @@ So that a hierarchy survives the session that produced it.
 **When** the story closes
 **Then** R2's register entry is restated: what remains of it, or its closure.
 
+**DONE 2026-08-30 — [ADR 0054](../../docs/adr/0054-the-rank-lives-in-labels-and-the-wire-criterion-has-expired.md).**
+The arbitration is made: **labels**, because a rank is non-exclusive and this repository already
+spends the word *milestone* on `gestion/jalons.md` (ADR 0051 calls it the milestone register). All
+twenty-five open issues carry a rank, queryable on the forge.
+
+**The first acceptance criterion could not be met as written, and that is the story's finding rather
+than its failure.** It requires the scheme to distinguish *changes the wire* from *does not*.
+Applied on 2026-08-30 **that pile is empty** — story 9.1 closed all ten of it — and the criterion had
+already come apart from what it stood for: on 2026-08-29 ADR 0053 changed the wire and cost **no**
+history. The wire was a proxy for *what deferring costs*, valid while the free-change window was
+open; the window closed on 2026-08-28 and the proxy expired with it. The axis kept is the underlying
+one, stated directly: `cost:data` (7), `cost:capability` (4), `cost:knowledge` (12), with
+`blocked-upstream` and `awaiting-measurement` as orthogonal markers.
+
+**The second criterion produced one correction and one refinement.** [#63] was misfiled by the
+2026-08-22 note's own criterion — its body says the heartbeat set decides *whether a DDEATH is sent
+at all*, which put it in pile A, and the title cannot say that. And pile B split in two: *a
+measurement can be wrong* and *a capability is absent* cost different things. **The note's scheduled
+re-read of [#99] also fell due** with [#43]'s closure, and is recorded on that issue.
+
+**Third criterion — `R2` is restated, not closed.** What it asked for exists and survives the session
+that produced it. What remains of it is exact: a rank by nature does not rank by risk, and nothing
+checks a label against the body it was drawn from.
+
 ### Story 9.3: The operational defects are worked in the order 9.2 established
 
 As the maintainer,
