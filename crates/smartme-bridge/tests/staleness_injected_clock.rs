@@ -106,6 +106,7 @@ fn reading_with(http_date: Option<UtcMillis>) -> Reading {
         },
         http_date,
         faults: smartme_bridge::core::SourceFaults::NONE,
+        energy_unit: Some("kWh".to_string()),
     }
 }
 

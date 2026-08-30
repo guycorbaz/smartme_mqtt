@@ -135,6 +135,7 @@ impl Source for Stopwatch {
             },
             http_date: Some(UtcMillis(value_date)),
             faults: SourceFaults::default(),
+            energy_unit: Some("kWh".to_string()),
         })
     }
 }

@@ -408,6 +408,13 @@ fn map_device(device: &Device, http_date_ms: Option<i64>, meter: &MeterId) -> Un
         },
         http_date: http_date_ms.map(UtcMillis),
         faults,
+        // THE UNIT AS SMART-ME REPORTED IT, kept beside a converted value
+        // ([#78]). Only the energy one: it is the only quantity compared ACROSS
+        // two readings, and a comparison spanning two conversion paths is what
+        // this lets the loop notice. Recorded whatever the conversion made of it
+        // — an unrecognised unit is a fault on its own terms and is not evidence
+        // that the unit CHANGED.
+        energy_unit: device.counter_reading_unit.clone(),
     })
 }
 

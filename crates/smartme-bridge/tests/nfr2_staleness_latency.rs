@@ -68,6 +68,7 @@ fn reading(meter: &MeterId, quality: Quality, tick: i64) -> Reading {
         // verdicts below are about the OUTAGE and not about staleness of value.
         http_date: Some(UtcMillis(BASE + shift + 950)),
         faults: smartme_bridge::core::SourceFaults::NONE,
+        energy_unit: Some("kWh".to_string()),
     }
 }
 

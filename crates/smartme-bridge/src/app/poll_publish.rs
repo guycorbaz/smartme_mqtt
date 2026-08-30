@@ -1029,6 +1029,30 @@ pub struct MeterMemory {
     /// [#80]: https://github.com/guycorbaz/smartme_mqtt/issues/80
     /// [`feed_is_advancing`]: crate::core::oracle::feed_is_advancing
     pub last_http_date: Option<crate::domain::UtcMillis>,
+    /// The energy unit the source last reported ([#78]).
+    ///
+    /// # It exists so a comparison is never made across two conversion paths
+    ///
+    /// `energy_reference` is a yardstick in kWh, and the reading it is compared
+    /// with reached kWh through whatever conversion its own unit required. If
+    /// smart-me ever reports `counter_reading` in `Wh` on one poll and `kWh` on
+    /// the next, the same physical index arrives through two different float
+    /// paths and can differ by an ULP either way — a downward one nulls a
+    /// perfectly good reading with `counter-went-backwards`.
+    ///
+    /// **The strict `<` is not softened**: that is a decided position and [#78]
+    /// says so explicitly. What is handled is the unit switch itself, which is the
+    /// unexamined input — a comparison made across two conversion paths without
+    /// noticing they were different.
+    ///
+    /// **In memory only, and that is correct here.** A restart already discards
+    /// the comparison for one reading (`load_persisted_memory` answers `None` for
+    /// a meter with no file, and the module says *"unjudged for one reading, then
+    /// judged for ever after"*). A unit switch across a restart therefore lands in
+    /// exactly the state it would produce anyway.
+    ///
+    /// [#78]: https://github.com/guycorbaz/smartme_mqtt/issues/78
+    pub last_energy_unit: Option<String>,
     /// The `value_date` of the last successful fetch, for the over-age guard's
     /// wrong-clock/old-data discrimination (story 2.7 AC2,
     /// [`Policy::step_remembering`]).
@@ -1059,6 +1083,7 @@ pub async fn step_once<S: Source + Send>(
         rate_limited_until,
         last_http_date,
         last_value_date,
+        last_energy_unit,
         over_age_cause,
     } = memory;
     let Context {
@@ -1273,6 +1298,41 @@ pub async fn step_once<S: Source + Send>(
     // would make the next re-serve fall back, which is the flap this repairs.
     if let Some(cause @ (Cause::TimestampsDisagree | Cause::ReadingTooOld)) = freshness.cause() {
         *over_age_cause = Some(cause);
+    }
+
+    // A UNIT SWITCH MAKES THE YARDSTICK INCOMPARABLE, SO IT IS DISCARDED ([#78]).
+    //
+    // `energy_reference` is in kWh and so is the reading, but they reached kWh
+    // through whatever conversion each one's own unit required. `Wh` on one poll
+    // and `kWh` on the next is the same physical index through two different
+    // float paths: they can differ by an ULP either way, and a downward one nulls
+    // a perfectly good reading with `counter-went-backwards`.
+    //
+    // **The comparison is not softened** — the strict `<` is a decided position
+    // and [#78] refuses to reopen it. The reference is dropped instead, which
+    // costs exactly one unjudged reading and then judges for ever after: the
+    // state a restart already produces for a meter with no stored reference, and
+    // named in this module in those words.
+    //
+    // Recorded BEFORE the judgements below, so this tick is the one that goes
+    // unjudged rather than the next.
+    if let Ok(reading) = &tick
+        && let Some(unit) = &reading.energy_unit
+    {
+        if let Some(previous) = last_energy_unit.as_deref()
+            && previous != unit
+        {
+            tracing::warn!(
+                meter = %meter,
+                previous_unit = previous,
+                unit,
+                "the source changed the energy unit; the monotonicity yardstick \
+                 cannot be compared across two conversion paths and is discarded. \
+                 This reading goes unjudged on that oracle, as at any start"
+            );
+            *energy_reference = None;
+        }
+        *last_energy_unit = Some(unit.clone());
     }
 
     let judgements = [
@@ -2237,6 +2297,7 @@ mod tests {
             },
             http_date: Some(UtcMillis(BASE + age_ms)),
             faults: crate::core::source::SourceFaults::NONE,
+            energy_unit: Some("kWh".to_string()),
         }
     }
 
@@ -3457,6 +3518,88 @@ mod tests {
     /// when a counter is most likely to have moved, and Epic 7 will make restarts
     /// automatic.
     ///
+    /// [#78] — a unit switch makes the monotonicity yardstick incomparable, so it
+    /// is discarded rather than trusted.
+    ///
+    /// # What the oracle cannot see
+    ///
+    /// `energy_reference` is in kWh and so is the reading, but each reached kWh
+    /// through whatever conversion its own unit required. `Wh` on one poll and
+    /// `kWh` on the next is the same physical index down two different float
+    /// paths: they can differ by an ULP either way, and a downward one nulls a
+    /// perfectly good reading with `counter-went-backwards` — a fault reported
+    /// about a meter that did nothing wrong.
+    ///
+    /// **The strict `<` is NOT softened.** [#78] says so and it is right: a
+    /// tolerance band would weaken the guard for every reading in order to
+    /// survive an input that is not a measurement problem at all. The unexamined
+    /// input is the unit switch, and it is now examined.
+    ///
+    /// # The cost, stated rather than discovered
+    ///
+    /// **A genuine backwards step that coincides with a unit switch goes unjudged
+    /// on that tick.** That is why the second reading below is strictly lower and
+    /// still expected to pass: the test asserts the mechanism at its most
+    /// uncomfortable, so nobody has to infer the cost from the implementation.
+    /// It is the same trade a restart already makes — `load_persisted_memory`
+    /// answers `None` for a meter with no file, and this module calls that
+    /// *"unjudged for one reading, then judged for ever after"*.
+    ///
+    /// **FALSIFIED 2026-08-30, mutation RUN:** deleting `*energy_reference = None`
+    /// — the state before this repair — turns the second reading into
+    /// `Bad(counter-went-backwards)`: RED, with the index nulled, which is the
+    /// false fault [#78] describes.
+    #[tokio::test]
+    async fn a_unit_switch_discards_the_yardstick_instead_of_faulting_the_reading() {
+        let clock = FakeClock::new(UtcMillis(SANE_NOW));
+        let meter = MeterId::new("garage");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let heartbeat = beats.of(&meter).expect("present");
+        let (tx, _rx) = mpsc::channel(16);
+        let ctx = Context {
+            meter: &meter,
+            clock: &clock,
+            policy: policy(),
+            config: config(),
+            heartbeat: &heartbeat,
+            outbox: &tx,
+        };
+
+        let in_unit = |unit: &str, energy: f64| {
+            let mut r = reading_with_energy(Quality::Good, 0, energy);
+            r.energy_unit = Some(unit.to_string());
+            r
+        };
+        // The second index is strictly LOWER — the shape that trips the oracle —
+        // and it arrives under a different unit.
+        let mut source = FakeSource::new()
+            .then(Ok(in_unit("kWh", 900_000.0)))
+            .then(Ok(in_unit("Wh", 899_999.0)));
+        let mut mem = MeterMemory::default();
+
+        let (state, _) = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
+        assert_eq!(
+            mem.energy_reference,
+            Some(crate::domain::Kwh(900_000.0)),
+            "a good first reading is adopted as the yardstick"
+        );
+
+        let (_, verdict) = step_once(&ctx, &mut source, state, &mut mem).await;
+        assert_ne!(
+            verdict.cause(),
+            Some(Cause::CounterWentBackwards),
+            "the two indices came through different conversion paths, so their \
+             order says nothing about the meter — reporting it as a counter going \
+             backwards is a fault about a device that did nothing"
+        );
+        assert_eq!(
+            mem.last_energy_unit.as_deref(),
+            Some("Wh"),
+            "and the new unit is remembered, so the tick after this one is judged \
+             again"
+        );
+    }
+
     /// **[#80], first half — the yardstick only moves forward.**
     ///
     /// `feed_is_advancing` was always right: it refuses `current <= before`,

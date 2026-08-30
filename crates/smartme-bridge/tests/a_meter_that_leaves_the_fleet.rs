@@ -56,6 +56,7 @@ fn reading(meter: &MeterId, tick: i64) -> Reading {
         },
         http_date: Some(UtcMillis(BASE + shift + 950)),
         faults: smartme_bridge::core::source::SourceFaults::NONE,
+        energy_unit: Some("kWh".to_string()),
     }
 }
 

@@ -30,6 +30,29 @@ pub struct Reading {
     pub http_date: Option<UtcMillis>,
     /// What the source could not read, per field.
     pub faults: SourceFaults,
+    /// The energy unit the source reported, **as it reported it**, before this
+    /// bridge converted it ([#78]).
+    ///
+    /// # Why a converted reading carries the unit it came from
+    ///
+    /// Everything else in [`Self::value`] is canonical, deliberately — a consumer
+    /// of a `Measurement` must never have to ask what scale it is in. This is not
+    /// part of the measurement: it is a fact about the RESPONSE, kept because one
+    /// oracle compares two readings and cannot do so across a conversion change.
+    ///
+    /// `counter_reading` in `Wh` on one poll and `kWh` on the next is the same
+    /// physical index reaching `energy_is_monotonic` through two different float
+    /// paths. They can differ by an ULP either way, and a downward one nulls a
+    /// perfectly good reading with `counter-went-backwards`. **The strict `<` is
+    /// not reopened by this** — it is a decided position — and the unhandled input
+    /// is the unit switch itself: a comparison made across two conversion paths
+    /// without noticing they were different.
+    ///
+    /// `None` means the source could not read a usable unit, which is already a
+    /// fault on its own terms; it is not evidence that the unit changed.
+    ///
+    /// [#78]: https://github.com/guycorbaz/smartme_mqtt/issues/78
+    pub energy_unit: Option<String>,
 }
 
 /// What a source could not read, said once per field rather than collapsed into
@@ -356,6 +379,7 @@ mod tests {
             },
             http_date: http_date.map(UtcMillis),
             faults: SourceFaults::NONE,
+            energy_unit: Some("kWh".to_string()),
         }
     }
 

@@ -230,6 +230,21 @@ moved it would change what the \emph{next} real cycle publishes.
 \end{note}
 
 \begin{note}
+\textbf{If smart-me ever changes the unit it reports an index in, one reading goes unjudged on
+the counter check --- and that is the intended answer.} The energy yardstick is kept in kWh, and a
+reading reaches kWh through whatever conversion its own unit needed. The same physical index sent
+once in \code{Wh} and once in \code{kWh} therefore arrives by two different arithmetic paths and
+can differ in the last digit either way; comparing across them once produced
+\code{counter-went-backwards} on a meter that had done nothing.
+
+\prog does not loosen the comparison --- a tolerance would weaken the check for every reading in
+order to survive one that is not a measurement problem. It drops the yardstick and takes the new
+reading as the next one, exactly as it does after a restart: unjudged once, judged for ever after.
+\textbf{The cost is that a genuine backwards step arriving in the same tick as a unit change is not
+caught}, and the log says loudly when this happens. Recorded as ADR~0058.
+\end{note}
+
+\begin{note}
 \textbf{Switching a meter off and on again re-judges it from nothing}, and since 2026-08-30 it
 does so \emph{however fast you click}. \prog forgets what it had latched about that meter and
 starts again at \textsc{stale}-until-proven, exactly as at any start.

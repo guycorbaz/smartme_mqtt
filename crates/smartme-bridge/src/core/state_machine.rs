@@ -376,6 +376,7 @@ mod tests {
             },
             http_date: http_date.map(UtcMillis),
             faults: crate::core::source::SourceFaults::NONE,
+            energy_unit: Some("kWh".to_string()),
         }
     }
 

@@ -152,6 +152,7 @@ impl Source for Treadmill {
             },
             http_date: Some(UtcMillis(at)),
             faults: SourceFaults::default(),
+            energy_unit: Some("kWh".to_string()),
         })
     }
 }
