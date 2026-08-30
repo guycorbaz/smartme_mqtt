@@ -186,6 +186,56 @@ tested() {
     return 0
 }
 
+# As `tested`, for a step that is NOT `cargo test` — no `failures:` block to
+# parse, so the STEP's own name is what the budget is counted against.
+#
+# # Why it exists, and it cost a refused push to find out
+#
+# R6's parade of 2026-08-24 gave the gate a retry so that an illegitimate refusal
+# costs a minute rather than a decision. It was wired into `tested`, which wraps
+# `cargo test` — and the image smoke tests are not one. On 2026-08-30 a push was
+# refused by `docker-smoke.sh` returning `EXIT:124`, a TIMEOUT, on a tree that had
+# passed the whole gate five minutes earlier and passed it again five minutes
+# later. **The one step outside the tolerance is the one that refused**, and a
+# timeout on a machine that is also compiling something else is exactly the
+# illegitimate refusal the parade was built for.
+#
+# The countdown is the same and so is the reasoning: a pass on the retry lets the
+# push through AND is written to the quarantine, printed on every later run, and
+# refused at `FLAKE_BUDGET`. Tolerance, not amnesty.
+retried_once() {
+    local label="$1"
+    shift
+    if "$@"; then
+        return 0
+    fi
+
+    local spent
+    spent=$(grep -cF "	${label}	" "$QUARANTINE" 2>/dev/null || true)
+    if (( spent >= FLAKE_BUDGET )); then
+        printf '\n\033[31m\033[1m✗ %s has now failed-then-passed %s times.\033[0m\n' \
+            "$label" "$spent"
+        echo "That is no longer a flake, and this gate will not retry it again."
+        echo "Its history: grep '$label' $QUARANTINE"
+        return 1
+    fi
+
+    printf '\n\033[33m── retrying the step once (R6): %s\033[0m\n' "$label"
+    if ! "$@"; then
+        echo "failed twice — this is not a flake."
+        FAILED_TESTS="$label"
+        return 1
+    fi
+
+    printf '%s\t%s\t%s\t%s\n' \
+        "$(date -Iseconds)" "$label" "$(git rev-parse --short HEAD 2>/dev/null || echo '?')" \
+        "$CURRENT_STEP" >>"$QUARANTINE"
+    spent=$(grep -cF "	${label}	" "$QUARANTINE" 2>/dev/null || true)
+    printf '\033[33m⚠ %s failed then passed — %s of %s before this gate refuses it\033[0m\n' \
+        "$label" "$spent" "$FLAKE_BUDGET"
+    return 0
+}
+
 # ---------------------------------------------------------------------------
 # Not a CI step, but the failure mode CI cannot warn you about early enough:
 # a dependency change that never made it into the commit.
@@ -379,7 +429,7 @@ ok "conformance arithmetic"
 if [[ $fast -eq 0 ]]; then
     step "docker-publish.yml — image build and smoke tests"
     docker build -t smartme_mqtt:ci . >/dev/null
-    scripts/docker-smoke.sh
+    retried_once "image smoke tests" scripts/docker-smoke.sh
     ok "image smoke tests"
 else
     step "docker-publish.yml — SKIPPED (--fast)"
