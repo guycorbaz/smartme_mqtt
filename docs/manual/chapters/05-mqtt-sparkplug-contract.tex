@@ -82,7 +82,26 @@ every other judgement is a fact about one response, this one is a relation betwe
 response is internally consistent, so its age looks plausible and every other check passes it,
 which is why a frozen cloud was indistinguishable from a working one until this version. It
 degrades rather than latching --- a frozen feed may thaw, and the meter behind it may be perfectly
-well. Version~8
+well.
+
+\begin{note}
+\textbf{Since 2026-08-30 the yardstick is a high-water mark, and it survives a restart.} The
+comparison is against the \emph{newest} \code{Date} \prog has ever seen for that meter, not the last
+one it happened to receive, and that mark is stored beside the meter's energy reference.
+
+Two consequences an operator should know. \textbf{A cloud whose clock is corrected backwards reads
+as a stalled feed until it catches up} --- honest and pessimistic, and the safe direction: the
+alternative let a replayed answer rewind the very yardstick it was about to be judged against. And
+\textbf{the first reading after a restart is now judged}: before, it compared against nothing,
+answered \emph{good}, and a replayed older answer served in that one window could be vouched for and
+rewind the persisted energy reference. One tick per restart, and it was the way FR15 could be
+defeated.
+
+Recorded as ADR~0055. A meter that has never had an energy reference has no file to carry the mark,
+so its own first reading after a restart is still unjudged on this point.
+\end{note}
+
+Version~8
 is \textbf{additive}: four more causes, three of which split \code{source-refused} into the
 refusals an operator repairs in different places --- a rejected credential, a configuration
 smart-me contradicts, and a meter answering under the wrong serial. \code{source-refused}

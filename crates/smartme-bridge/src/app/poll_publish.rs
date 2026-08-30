@@ -896,6 +896,33 @@ pub struct MeterMemory {
     /// answer?"*, which has nothing to do with whether we trusted the numbers
     /// inside. Refusing to record a header because the reading was stale would make
     /// a stale meter look like a frozen cloud on the following tick.
+    ///
+    /// # It is a HIGH-WATER MARK, and it is PERSISTED — both since [#80]
+    ///
+    /// **It only ever moves forward.** Recording every header, including one that
+    /// went backwards, left the memory rewindable by the very thing it exists to
+    /// catch: a response with an older `Date` dragged the mark back, and the next
+    /// replay — still behind the newest answer we had genuinely seen — then
+    /// compared favourably and read as *advancing*. The oracle was already right
+    /// ([`feed_is_advancing`] refuses `current <= before`, frozen and backwards
+    /// alike); what was wrong was the yardstick it was handed.
+    ///
+    /// The cost of the mark is stated rather than discovered: **a cloud whose clock
+    /// is corrected backwards reads as a stalled feed until it catches up.** That
+    /// is honest-pessimistic — the operator is told the feed is not advancing,
+    /// which by this yardstick it is not — and it is the safe direction for a
+    /// bridge whose motto is that it does not lie.
+    ///
+    /// **And it survives a restart**, stored beside the energy reference. Before
+    /// [#80] the first tick after every restart compared against `None`, which
+    /// [`feed_is_advancing`] answers `Good` — so the meter-replacement exemption's
+    /// voucher degenerated to *"the response carries a Date header"*, and a
+    /// replayed older answer served exactly on that tick could be vouched for and
+    /// rewind the persisted energy reference. One tick per restart, and it is the
+    /// FR15 defeat.
+    ///
+    /// [#80]: https://github.com/guycorbaz/smartme_mqtt/issues/80
+    /// [`feed_is_advancing`]: crate::core::oracle::feed_is_advancing
     pub last_http_date: Option<crate::domain::UtcMillis>,
     /// The `value_date` of the last successful fetch, for the over-age guard's
     /// wrong-clock/old-data discrimination (story 2.7 AC2,
@@ -1109,10 +1136,19 @@ pub async fn step_once<S: Source + Send>(
     // RECORDED ON EVERY SUCCESSFUL FETCH, whatever the verdict — see
     // `MeterMemory::last_http_date` for why this one does not follow the adoption
     // rule the value memories obey.
+    //
+    // **FORWARD ONLY since [#80].** A header that went backwards used to be
+    // written straight in, which let a replay rewind the yardstick it was about to
+    // be judged against. The oracle refuses `current <= before`; keeping the
+    // maximum is what makes `before` mean *the newest answer we have ever seen*
+    // rather than *the last one we happened to receive*.
     if let Ok(reading) = &tick
         && let Some(http_date) = reading.http_date
     {
-        *last_http_date = Some(http_date);
+        *last_http_date = Some(match *last_http_date {
+            Some(high) if high >= http_date => high,
+            _ => http_date,
+        });
     }
     // AND THE METER'S OWN CLOCK, for the wrong-clock/old-data discrimination —
     // recorded AFTER judging, so this tick was judged against the previous one.
@@ -1304,11 +1340,15 @@ pub async fn step_once<S: Source + Send>(
     // arrives (such a feed is already loudly `Stale(no-freshness-proof)` on
     // every tick, so the state is visible, and the accepted trade is that FR15's
     // yardstick never re-baselines on evidence the feed oracle could not see).
-    // And on the first tick after a restart the vouch is only "carries a Date"
-    // — `last_http_date` is not persisted, so the oracle has nothing to compare
-    // and a replayed older answer WITH its header can still rewind the restored
-    // reference in that one window ([#80]; pre-existing, not opened by this
-    // repair).
+    // The first tick after a restart used to vouch on "carries a Date" alone —
+    // `last_http_date` was not persisted, so the oracle had nothing to compare
+    // and a replayed older answer WITH its header could rewind the restored
+    // reference in that one window. **Closed on 2026-08-30 ([#80]):** the mark is
+    // persisted beside the reference and only ever moves forward, so a replay is
+    // judged against the newest answer ever seen rather than against `None`. One
+    // case remains and is honest: a meter that has never had an energy reference
+    // has no file to carry the mark, so its own first tick after a restart still
+    // vouches on "carries a Date".
     let feed_vouches = !feed_refused && matches!(&tick, Ok(reading) if reading.http_date.is_some());
     let energy_verdict = published.for_metric(Measured::Energy);
     let reference_adoptable = match energy_verdict.quality() {
@@ -1476,8 +1516,22 @@ pub async fn step_once<S: Source + Send>(
 /// than N files, for a value that is one `f64` per meter. The per-meter file is
 /// the cheap way to have no shared mutable state at all — the same reasoning that
 /// keeps `energy_reference` a task-local in the first place.
+/// # The struct is renamed and the FILE NAME is not, deliberately ([#80])
+///
+/// It carried the energy reference alone until 2026-08-30, and its name said so.
+/// It now carries a second memory — the feed's high-water `Date` — so
+/// `PersistedReference` would be a name that lies, which is the defect this
+/// repository keeps finding in its own documents.
+///
+/// **`energy-reference-<id>.toml` stays**, and that is a compatibility constraint
+/// rather than a description: those files exist on the deployment, reachable only
+/// over a file share, and renaming them would silently abandon every meter's
+/// reference — the exact loss the file exists to prevent. The name is therefore
+/// historical, and `reference_path_for` keeps it.
+///
+/// [#80]: https://github.com/guycorbaz/smartme_mqtt/issues/80
 #[derive(serde::Serialize, serde::Deserialize)]
-struct PersistedReference {
+struct PersistedMemory {
     /// Which meter this reference belongs to.
     ///
     /// **Written and checked since 2026-08-11.** The comment on
@@ -1495,6 +1549,37 @@ struct PersistedReference {
     meter: String,
     /// The last accepted energy index, in kWh.
     energy_kwh: f64,
+    /// The feed's high-water `Date`, in milliseconds since the epoch ([#80]).
+    ///
+    /// # The load-compatibility posture, and what actually carries it
+    ///
+    /// Every reference file already on the deployment carries `meter` and
+    /// `energy_kwh` and nothing else. Such a file must still load, and its
+    /// reference must survive: refusing it would abandon every meter's yardstick
+    /// on a file share, silently, because a failed load is `None` by design here.
+    ///
+    /// **What carries that is the `Option`, not an attribute.** This field was
+    /// written `#[serde(default)]` first, and the falsification of
+    /// `a_reference_file_written_before_the_high_water_mark_still_loads` measured
+    /// the attribute **inert**: removing it left the test green, because serde
+    /// already treats a missing `Option` as `None`. It is not kept as a harmless
+    /// restatement — with a NON-optional field it would be actively harmful,
+    /// turning a missing value into a silent `0`, an epoch mark presented as a
+    /// real one. That is the shape of lie this bridge exists to refuse, so the
+    /// attribute is gone and the type says it instead.
+    ///
+    /// A missing mark means `None`, **which is exactly the state every meter was
+    /// in before 2026-08-30** — the memory was never persisted at all — so an old
+    /// file costs nothing it was not already costing, and the repair takes effect
+    /// from the first successful fetch after the upgrade.
+    ///
+    /// The alternative — a schema version and a migration, as ADR 0040 did for the
+    /// configuration — buys nothing: the absence of this field is not an unknown
+    /// state needing interpretation, it is one this module already names and
+    /// handles (*"as if it had never been read"*). See ADR 0055.
+    ///
+    /// [#80]: https://github.com/guycorbaz/smartme_mqtt/issues/80
+    last_http_date_ms: Option<i64>,
 }
 
 /// Where one meter's reference lives, under the state directory.
@@ -1551,13 +1636,16 @@ pub fn reference_path_for(dir: &std::path::Path, meter: &MeterId) -> std::path::
 /// What is NOT acceptable is silence about it, so the `warn` names the meter and
 /// the error. The meter starts exactly as a brand-new one does — unjudged for one
 /// reading, then judged for ever after.
-fn load_energy_reference(dir: &std::path::Path, meter: &MeterId) -> Option<crate::domain::Kwh> {
+fn load_persisted_memory(
+    dir: &std::path::Path,
+    meter: &MeterId,
+) -> (Option<crate::domain::Kwh>, Option<crate::domain::UtcMillis>) {
     let path = reference_path_for(dir, meter);
     if !path.exists() {
         // The ordinary first run. Not a fault, and not worth a warning.
-        return None;
+        return (None, None);
     }
-    match crate::persist::load::<PersistedReference>(&path) {
+    match crate::persist::load::<PersistedMemory>(&path) {
         Ok(persisted) if persisted.meter != meter.to_string() => {
             // The path is collision-free, so reaching this means the file was
             // moved rather than mis-derived: copied while repairing a
@@ -1573,15 +1661,20 @@ fn load_energy_reference(dir: &std::path::Path, meter: &MeterId) -> Option<crate
                  meter's first reading will go unjudged, as if it had never been \
                  read"
             );
-            None
+            (None, None)
         }
         Ok(persisted) if persisted.energy_kwh.is_finite() => {
+            // The feed's high-water mark rides along, and is INDEPENDENT of the
+            // reference's own validity checks: it is a fact about responses, not
+            // about a value. An old file simply has none ([#80]).
+            let high_water = persisted.last_http_date_ms.map(crate::domain::UtcMillis);
             tracing::info!(
                 meter = %meter,
                 reference = persisted.energy_kwh,
+                feed_high_water = ?persisted.last_http_date_ms,
                 "restored the energy-monotonicity reference across the restart"
             );
-            Some(crate::domain::Kwh(persisted.energy_kwh))
+            (Some(crate::domain::Kwh(persisted.energy_kwh)), high_water)
         }
         Ok(persisted) => {
             // A non-finite reference would disable the oracle for this meter
@@ -1592,7 +1685,13 @@ fn load_energy_reference(dir: &std::path::Path, meter: &MeterId) -> Option<crate
                 "the stored energy reference is not a finite number; this meter's \
                  first reading will go unjudged, as if it had never been read"
             );
-            None
+            // The high-water mark is still usable: a non-finite ENERGY says
+            // nothing about the Date beside it, and discarding it would give back
+            // the vacuous first tick [#80] exists to remove.
+            (
+                None,
+                persisted.last_http_date_ms.map(crate::domain::UtcMillis),
+            )
         }
         Err(error) => {
             tracing::warn!(
@@ -1602,7 +1701,7 @@ fn load_energy_reference(dir: &std::path::Path, meter: &MeterId) -> Option<crate
                  bridge keeps publishing: a corrupt file for one meter must not \
                  take the fleet off the wire"
             );
-            None
+            (None, None)
         }
     }
 }
@@ -1614,19 +1713,25 @@ fn load_energy_reference(dir: &std::path::Path, meter: &MeterId) -> Option<crate
 /// reading and publishing perfectly, to protect a check that only matters across
 /// a restart. The cost of the swallow is bounded and stated — the reference
 /// reverts to whatever was last written, and at worst to absent.
-fn store_energy_reference(dir: &std::path::Path, meter: &MeterId, energy: crate::domain::Kwh) {
+fn store_persisted_memory(
+    dir: &std::path::Path,
+    meter: &MeterId,
+    energy: crate::domain::Kwh,
+    last_http_date: Option<crate::domain::UtcMillis>,
+) {
     let path = reference_path_for(dir, meter);
     if let Err(error) = crate::persist::persist_atomic(
         &path,
-        &PersistedReference {
+        &PersistedMemory {
             meter: meter.to_string(),
             energy_kwh: energy.0,
+            last_http_date_ms: last_http_date.map(|d| d.0),
         },
     ) {
         tracing::warn!(
             meter = %meter, %error, path = %path.display(),
-            "could not persist the energy-monotonicity reference; a restart will \
-             leave this meter's first reading unjudged"
+            "could not persist this meter's cross-restart memory; a restart will \
+             leave its first reading unjudged and its first feed check vacuous"
         );
     }
 }
@@ -1702,8 +1807,12 @@ pub async fn run<S: Source + Send>(
     // monotonic so a wall-clock correction cannot shorten or extend it), and the
     // last measurement adopted — carried so a failed tick publishes a verdict about
     // it rather than saying nothing (story 3.2).
+    let (energy_reference, last_http_date) = load_persisted_memory(&reference_dir, &meter);
     let mut memory = MeterMemory {
-        energy_reference: load_energy_reference(&reference_dir, &meter),
+        energy_reference,
+        // Restored since [#80]: without it the first tick after every restart
+        // compared against `None`, which `feed_is_advancing` answers `Good`.
+        last_http_date,
         ..MeterMemory::default()
     };
     // The period is READ FROM THE HANDLE, not captured (Story 5.2 AC4).
@@ -1875,14 +1984,31 @@ pub async fn run<S: Source + Send>(
         };
         let published;
         let before = memory.energy_reference;
+        let feed_before = memory.last_http_date;
         (state, published) = step_once(&ctx, &mut source, state, &mut memory).await;
-        // Persisted only when it MOVED, so a quiet meter does not rewrite the
-        // same number every period — an fsync per meter per cycle for a value
+        // Persisted only when something MOVED, so a quiet meter does not rewrite
+        // the same file every period — an fsync per meter per cycle for values
         // that did not change.
-        if memory.energy_reference != before
+        //
+        // **Either memory now triggers it ([#80]), and the cost is stated.** For a
+        // consuming meter the energy index rises on nearly every tick, so this
+        // already wrote once per meter per period and the feed's high-water mark
+        // rides along for free. What is genuinely new is a meter whose index is
+        // NOT moving — a quiet night — where the header still advances: that now
+        // costs one write per period where it previously cost none. It is bought
+        // deliberately, because a quiet meter is exactly where the stalled-feed
+        // oracle earns its keep, and a high-water mark nobody persists is one the
+        // next restart discards.
+        //
+        // The write needs an energy reference to exist: the file's first field is
+        // the index, and a meter that has never had one has nothing to write it
+        // beside. Such a meter keeps the pre-[#80] behaviour for its own first
+        // tick after a restart, which is the honest floor rather than a silent
+        // one.
+        if (memory.energy_reference != before || memory.last_http_date != feed_before)
             && let Some(energy) = memory.energy_reference
         {
-            store_energy_reference(&reference_dir, &meter, energy);
+            store_persisted_memory(&reference_dir, &meter, energy, memory.last_http_date);
         }
         // The verdict reaches anything outside that can report on this meter —
         // BOTH halves of it since Story 2.3, so a screen cannot call a meter
@@ -3190,6 +3316,170 @@ mod tests {
     /// when a counter is most likely to have moved, and Epic 7 will make restarts
     /// automatic.
     ///
+    /// **[#80], first half — the yardstick only moves forward.**
+    ///
+    /// `feed_is_advancing` was always right: it refuses `current <= before`,
+    /// frozen and backwards alike. What was wrong was the memory it was handed.
+    /// Every header was written straight in, **including one that went
+    /// backwards**, so a response with an older `Date` dragged the mark back and
+    /// the next replay — still behind the newest answer genuinely seen — then
+    /// compared favourably and read as *advancing*.
+    ///
+    /// The sequence below is that attack, at its smallest: a good answer at T3, a
+    /// replay at T1, then a replay at T2 with `T1 < T2 < T3`. T2 is stale by any
+    /// honest account, and under the old memory it was `Good`.
+    ///
+    /// **FALSIFIED 2026-08-30, mutation RUN:** restoring
+    /// `*last_http_date = Some(http_date)` — the line this repair replaced, and
+    /// the ordinary way anyone would write it — turns the third step green and
+    /// the assertion red with `left: None, right: Some(FeedNotAdvancing)`.
+    #[tokio::test]
+    async fn the_feed_yardstick_cannot_be_rewound_by_the_replay_it_judges() {
+        let clock = FakeClock::new(UtcMillis(SANE_NOW));
+        let meter = MeterId::new("garage");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let heartbeat = beats.of(&meter).expect("present");
+        let (tx, _rx) = mpsc::channel(32);
+        let ctx = Context {
+            meter: &meter,
+            clock: &clock,
+            policy: policy(),
+            config: config(),
+            heartbeat: &heartbeat,
+            outbox: &tx,
+        };
+
+        // Three responses, distinguished ONLY by their `Date`.
+        let at = |age_ms: i64| {
+            let mut r = reading(Quality::Good, 0);
+            r.http_date = Some(UtcMillis(BASE + age_ms));
+            r
+        };
+        let mut source = FakeSource::new()
+            .then(Ok(at(3_000)))
+            .then(Ok(at(1_000)))
+            .then(Ok(at(2_000)));
+        let mut mem = MeterMemory::default();
+        let mut state = State::initial();
+
+        for _ in 0..2 {
+            let (next, _) = step_once(&ctx, &mut source, state, &mut mem).await;
+            state = next;
+        }
+        assert_eq!(
+            mem.last_http_date,
+            Some(UtcMillis(BASE + 3_000)),
+            "the replay at T1 must not drag the mark back to T1"
+        );
+
+        let (_, verdict) = step_once(&ctx, &mut source, state, &mut mem).await;
+        assert_eq!(
+            verdict.cause(),
+            Some(Cause::FeedNotAdvancing),
+            "T2 is behind the newest answer ever seen, so the feed is not \
+             advancing — and saying otherwise is how a replay passes for a \
+             working cloud"
+        );
+        assert_eq!(
+            mem.last_http_date,
+            Some(UtcMillis(BASE + 3_000)),
+            "and the mark still stands where it did"
+        );
+    }
+
+    /// **[#80], second half — the yardstick survives a restart.**
+    ///
+    /// Before this, `last_http_date` was in memory only, so the first tick after
+    /// EVERY restart compared against `None` — which `feed_is_advancing` answers
+    /// `Good`. The meter-replacement exemption's voucher then degenerated to
+    /// *"the response carries a Date header"*, and a replayed older answer served
+    /// exactly on that tick could be vouched for and rewind the persisted energy
+    /// reference. One tick per restart, and it is the FR15 defeat.
+    ///
+    /// The restart is simulated the only honest way: the file, and nothing else.
+    ///
+    /// **FALSIFIED 2026-08-30, two mutations RUN:**
+    ///
+    /// - `last_http_date_ms: None` in `store_persisted_memory` — the mark is
+    ///   written as absent: RED, `left: None, right: Some(UtcMillis(...))`;
+    /// - the loader discarding it (`(Some(kwh), None)`) — the same red, which is
+    ///   the point: writing it and not reading it is the same defect wearing the
+    ///   other face.
+    #[test]
+    fn the_feed_yardstick_survives_a_restart() {
+        let dir = scratch_dir("feed_high_water_restart");
+        let _ = std::fs::create_dir_all(&dir);
+        let meter = MeterId::new("garage");
+        let _ = std::fs::remove_file(reference_path_for(&dir, &meter));
+
+        store_persisted_memory(
+            &dir,
+            &meter,
+            crate::domain::Kwh(900_000.0),
+            Some(UtcMillis(BASE + 3_000)),
+        );
+
+        let (energy, high_water) = load_persisted_memory(&dir, &meter);
+        assert_eq!(energy, Some(crate::domain::Kwh(900_000.0)));
+        assert_eq!(
+            high_water,
+            Some(UtcMillis(BASE + 3_000)),
+            "without it the first tick after every restart vouches on \
+             \"carries a Date\" alone"
+        );
+    }
+
+    /// **[#80] — a reference file written before 2026-08-30 still loads, and its
+    /// energy reference is not lost.**
+    ///
+    /// This is the load-compatibility posture stated as a test rather than as a
+    /// paragraph: the files on the deployment carry `meter` and `energy_kwh` and
+    /// nothing else, and they are reachable only over a file share. A schema
+    /// change that quietly refused them would abandon every meter's reference —
+    /// the exact loss the file exists to prevent — and would do it silently,
+    /// because a failed load is `None` by design here.
+    ///
+    /// # FALSIFICATION — the first mutation stayed GREEN, and that is recorded
+    ///
+    /// **The mutation I predicted does not work.** Removing `#[serde(default)]`
+    /// from `last_http_date_ms` left this test green: serde already treats a
+    /// missing `Option` as `None`, so the attribute was inert and the sentence
+    /// claiming it was the compatibility mechanism was wrong. **The attribute has
+    /// been removed** rather than kept as a harmless restatement — on a
+    /// non-optional field it would turn a missing value into a silent `0`.
+    ///
+    /// **FALSIFIED 2026-08-30 by the mutation that is the ordinary shape of this
+    /// fault — adding a REQUIRED field**, which is what anyone writes who is not
+    /// thinking about the files already on disk. `last_http_date_ms: i64` (with
+    /// the two call sites adjusted): the legacy file fails to parse, the loader's
+    /// `Err` arm returns `(None, None)`, and the reference assertion goes RED with
+    /// `left: None, right: Some(Kwh(900000.0))` — the abandonment this test
+    /// exists to forbid, reproduced.
+    #[test]
+    fn a_reference_file_written_before_the_high_water_mark_still_loads() {
+        let dir = scratch_dir("reference_pre_80");
+        let _ = std::fs::create_dir_all(&dir);
+        let meter = MeterId::new("garage");
+        let path = reference_path_for(&dir, &meter);
+        // Byte-for-byte the shape the deployment holds today.
+        std::fs::write(&path, "meter = \"garage\"\nenergy_kwh = 900000.0\n")
+            .expect("write the legacy file");
+
+        let (energy, high_water) = load_persisted_memory(&dir, &meter);
+        assert_eq!(
+            energy,
+            Some(crate::domain::Kwh(900_000.0)),
+            "an old file must keep its reference; refusing it would abandon \
+             every meter's yardstick on the upgrade"
+        );
+        assert_eq!(
+            high_water, None,
+            "and it carries no mark — which is exactly the state every meter was \
+             in before this change, so the upgrade costs nothing it was not \
+             already costing"
+        );
+    }
+
     /// The restart is simulated the only honest way: a fresh `energy_reference`
     /// binding, loaded from disk exactly as `run` loads it. Nothing is carried in
     /// memory across the two halves.
@@ -3221,18 +3511,18 @@ mod tests {
             let mut source =
                 FakeSource::new().then(Ok(reading_with_energy(Quality::Good, 950, 900_000.0)));
             let mut mem = MeterMemory {
-                energy_reference: load_energy_reference(&dir, &meter),
+                energy_reference: load_persisted_memory(&dir, &meter).0,
                 ..MeterMemory::default()
             };
             let (_, _) = step_once(&ctx, &mut source, State::initial(), &mut mem).await;
             let energy = mem
                 .energy_reference
                 .expect("a good reading is adopted as the reference");
-            store_energy_reference(&dir, &meter, energy);
+            store_persisted_memory(&dir, &meter, energy, mem.last_http_date);
         }
 
         // THE RESTART. Everything in memory is gone; only the file remains.
-        let restored = load_energy_reference(&dir, &meter);
+        let restored = load_persisted_memory(&dir, &meter).0;
         assert_eq!(
             restored,
             Some(crate::domain::Kwh(900_000.0)),
@@ -3301,7 +3591,7 @@ mod tests {
 
         std::fs::write(reference_path_for(&dir, &meter), b"this is not toml {{{").expect("written");
         assert_eq!(
-            load_energy_reference(&dir, &meter),
+            load_persisted_memory(&dir, &meter).0,
             None,
             "a corrupt reference reads as absent — the meter starts unjudged for \
              one reading, exactly as a brand-new meter does"
@@ -3310,7 +3600,7 @@ mod tests {
         // A non-finite reference is refused too: `x < NaN` is false for every x,
         // so keeping it would disable the oracle for this meter with no signal.
         std::fs::write(reference_path_for(&dir, &meter), b"energy_kwh = nan\n").expect("written");
-        assert_eq!(load_energy_reference(&dir, &meter), None);
+        assert_eq!(load_persisted_memory(&dir, &meter).0, None);
 
         let _ = std::fs::remove_file(reference_path_for(&dir, &meter));
     }
@@ -3478,9 +3768,9 @@ mod tests {
         for path in &paths {
             let _ = std::fs::remove_file(path);
         }
-        store_energy_reference(&dir, &spaced, crate::domain::Kwh(4_843.822));
+        store_persisted_memory(&dir, &spaced, crate::domain::Kwh(4_843.822), None);
         assert_eq!(
-            load_energy_reference(&dir, &spaced),
+            load_persisted_memory(&dir, &spaced).0,
             Some(crate::domain::Kwh(4_843.822)),
             "its own meter reads it back"
         );
@@ -3492,7 +3782,7 @@ mod tests {
         )
         .expect("renamed");
         assert_eq!(
-            load_energy_reference(&dir, &dotted),
+            load_persisted_memory(&dir, &dotted).0,
             None,
             "a reference belonging to another meter must be refused: accepting it \
              judges a live counter against an index that was never its own"
@@ -4154,7 +4444,7 @@ mod tests {
             task.abort();
         }
 
-        let written: PersistedReference = crate::persist::load(&reference_path_for(&dir, &meter))
+        let written: PersistedMemory = crate::persist::load(&reference_path_for(&dir, &meter))
             .expect(
                 "`run` must persist the reference itself — a test calling the helper \
                  proves only that the helper works",
