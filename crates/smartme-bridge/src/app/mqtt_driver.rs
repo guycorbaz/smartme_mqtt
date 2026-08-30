@@ -1155,7 +1155,21 @@ pub struct SinkState {
 /// the writer owns and readers clone from — and for the same reason: a reader
 /// holding a snapshot holds a state that existed.
 #[derive(Clone)]
-pub struct SinkHealth(std::sync::Arc<tokio::sync::watch::Sender<Option<SinkState>>>);
+pub struct SinkHealth(std::sync::Arc<tokio::sync::watch::Sender<SinkHealthState>>);
+
+/// What the sink handle carries: the transport's state, and the latency window
+/// NFR10 is measured over ([#102]).
+///
+/// They travel together because both are written by the driver and read by every
+/// surface, and because a latency figure with no idea whether the transport is up
+/// invites the reading it must not get — *slow* where the answer is *disconnected*.
+#[derive(Clone, Debug)]
+pub struct SinkHealthState {
+    /// The transport as last observed, or `None` if it has never connected.
+    pub sink: Option<SinkState>,
+    /// Read → accepted-for-transmission, over a rolling 24 h.
+    pub latency: crate::core::latency::LatencyWindow,
+}
 
 impl Default for SinkHealth {
     fn default() -> Self {
@@ -1166,20 +1180,58 @@ impl Default for SinkHealth {
 impl SinkHealth {
     /// A sink nothing has reported on yet.
     pub fn new() -> Self {
-        Self(std::sync::Arc::new(tokio::sync::watch::Sender::new(None)))
+        Self::starting_at(crate::core::clock::MonotonicMs(0))
+    }
+
+    /// As [`Self::new`], with the instant the latency window's first hour begins.
+    ///
+    /// Separated so a test can pin the window's clock; production hands it the
+    /// same monotonic zero the process starts from.
+    pub fn starting_at(now: crate::core::clock::MonotonicMs) -> Self {
+        Self(std::sync::Arc::new(tokio::sync::watch::Sender::new(
+            SinkHealthState {
+                sink: None,
+                latency: crate::core::latency::LatencyWindow::new(now),
+            },
+        )))
     }
 
     /// Records a transport event. The driver calls this and nobody else.
     pub fn observed(&self, connected: bool, at: crate::domain::UtcMillis) {
-        self.0.send_replace(Some(SinkState {
-            connected,
-            since: at,
-        }));
+        self.0.send_modify(|state| {
+            state.sink = Some(SinkState {
+                connected,
+                since: at,
+            });
+        });
+    }
+
+    /// Records one reading's read → accepted-for-transmission latency ([#102]).
+    ///
+    /// Called for a reading the transport ACCEPTED and for no other: a refusal is
+    /// already counted by `dropped_readings`, and timing a message that never
+    /// left would answer *"how fast do we fail"* under a heading that says
+    /// *"how fast do we deliver"*.
+    pub fn accepted(
+        &self,
+        fetched_at: crate::core::clock::MonotonicMs,
+        now: crate::core::clock::MonotonicMs,
+    ) {
+        self.0.send_modify(|state| {
+            state
+                .latency
+                .record(now, now.0.saturating_sub(fetched_at.0));
+        });
     }
 
     /// The sink as it stands, or `None` if it has never connected.
     pub fn state(&self) -> Option<SinkState> {
-        *self.0.borrow()
+        self.0.borrow().sink
+    }
+
+    /// The latency window as it stands.
+    pub fn latency(&self) -> crate::core::latency::LatencyWindow {
+        self.0.borrow().latency.clone()
     }
 }
 
@@ -1538,7 +1590,25 @@ pub async fn run(
                     // where a scrape saw a logged loss with no count. The error is
                     // now a field on the one line that carries `meter`, `reason`
                     // and `value_date`.
-                    if let Some(loss) = deliver(&client, &mut publisher, &update) {
+                    // NFR10'S INTERVAL CLOSES HERE ([#102]): the transport has
+                    // accepted the message, which is the "accepted-for-
+                    // transmission" the requirement names. Recorded only on
+                    // acceptance and only for an update that carries a fetch
+                    // instant — a refusal is already `dropped_readings`, and a
+                    // republication is not a read.
+                    //
+                    // What it CANNOT see is the rest of the journey: `try_publish`
+                    // answers on entering the client's queue, not on leaving the
+                    // socket ([#85]). So this figure is a floor on the interval,
+                    // exactly as the drop counts are a floor on the loss, and the
+                    // manual says so in the same words.
+                    let outcome = deliver(&client, &mut publisher, &update);
+                    if outcome.is_none()
+                        && let Some(fetched_at) = update.fetched_at
+                    {
+                        health.sink.accepted(fetched_at, clock.monotonic());
+                    }
+                    if let Some(loss) = outcome {
                         let Loss { reason, fault, .. } = &loss;
                         let (reason, fault) = (*reason, fault.clone());
                         count_loss(&pulse, &update.meter, &loss, clock.wall());
@@ -3493,6 +3563,7 @@ mod tests {
         for _ in 0..3 {
             tx.try_send(MeterUpdate {
                 meter: meter.clone(),
+                fetched_at: None,
                 measurement: crate::domain::Measurement {
                     meter: meter.clone(),
                     serial: crate::domain::Serial::new("30000001"),

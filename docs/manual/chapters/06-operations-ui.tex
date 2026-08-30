@@ -445,6 +445,37 @@ Each loss is also traced at \code{WARN} with the reading's own \code{ValueDate},
 the historian can be lined up against the log line for the reading that should have filled
 it.
 
+\subsection{How fast readings reach the wire}
+
+\code{/healthz} carries a \code{latency} object: how long \prog took, over a rolling window of
+about a day, between receiving a reading and the MQTT client accepting it for transmission.
+
+\begin{verbatim}
+"latency":{"count":2841,"p95_ms_at_most":2,"p99_ms_at_most":5,
+           "over_5000_ms":0,"window_hours":24}
+\end{verbatim}
+
+\textbf{A percentile here is the upper bound of a bucket, never a point} --- the counts are grouped,
+because a day of a fleet is more readings than a status page should hold. The last two boundaries
+are 3\,s and 5\,s on purpose: they are the budget \prog is held to, so the figure is read against
+the requirement without arithmetic.
+
+\begin{warning}
+\textbf{Three situations, and they must not be confused.} \code{count:0} with null percentiles means
+\emph{nothing has been published yet} --- not \emph{fast}. A number means the budget was met at that
+percentile. \textbf{A null percentile with a non-zero \code{over\_5000\_ms} means the budget was
+exceeded}, and this window cannot say by how much: it counts how many readings went past the last
+boundary but not how far. Printing the boundary itself there would report a breach as a pass.
+\end{warning}
+
+\textbf{What it measures and what it cannot.} The clock starts when the response arrives and stops
+when the MQTT client accepts the message --- both inside \prog, on one monotonic clock. It does not
+start at the meter's own timestamp, because that is a different clock and the difference would be
+folded into the figure; and it does not stop at your SCADA, because \prog cannot see it. As with the
+loss counts, \textbf{it is a floor}: the client accepts a message before writing it to the network.
+Republished values are not counted --- a re-sent old reading is not a fresh one, and timing it would
+report its age as latency. Recorded as ADR~0059.
+
 The status code stays \code{200}. A restart cannot reach a broker that is down; it would
 loop, and destroy the surface naming the fault.
 

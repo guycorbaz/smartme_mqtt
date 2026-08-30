@@ -47,6 +47,34 @@ pub struct MeterUpdate {
     pub meter: MeterId,
     /// The reading itself, carrying the source-level quality.
     pub measurement: Measurement,
+    /// When this reading entered the bridge, on the MONOTONIC clock ([#102]).
+    ///
+    /// # Why it travels with the reading
+    ///
+    /// NFR10's interval is *read → accepted-for-transmission*, and its two ends
+    /// are in two different tasks: the poll task receives the response, the driver
+    /// hands it to the transport. Nothing else connects them, so the instant rides
+    /// along.
+    ///
+    /// **Monotonic, never wall.** A wall-clock difference can be moved by an NTP
+    /// step mid-flight and would report a latency that never happened — and this
+    /// is a figure an operator reads against a requirement.
+    ///
+    /// # `None` is a statement, not a default nobody set
+    ///
+    /// **This update did not come from a fetch.** ADR 0027 makes every cycle
+    /// publish something, so a meter whose source has gone quiet republishes its
+    /// last known value, and a cold start declares a tag set with no reading at
+    /// all. Neither is a read, and timing one would report the AGE of an old
+    /// measurement as this bridge's latency — a figure that is not merely
+    /// imprecise but about a different thing.
+    ///
+    /// So the timing is set on the one path that fetched, and the driver records a
+    /// latency only for those. The count on `/healthz` is therefore of READINGS,
+    /// which is what NFR10 is about.
+    ///
+    /// [#102]: https://github.com/guycorbaz/smartme_mqtt/issues/102
+    pub fetched_at: Option<crate::core::clock::MonotonicMs>,
     /// What to publish on each metric, and what the meter as a whole is worth.
     ///
     /// **Was a single `Verdict` until Story 2.3.** One verdict per reading meant
@@ -62,8 +90,22 @@ impl MeterUpdate {
         Self {
             meter,
             measurement,
+            fetched_at: None,
             verdicts,
         }
+    }
+
+    /// Stamps this update with the instant its response entered the bridge
+    /// ([#102]).
+    ///
+    /// A builder rather than a fourth parameter, because the paths that are NOT
+    /// fetches — a republication, a cold start — outnumber the one that is, and
+    /// making them all pass `None` would put the interesting case in the same
+    /// shape as the uninteresting ones.
+    #[must_use]
+    pub const fn fetched_at(mut self, at: crate::core::clock::MonotonicMs) -> Self {
+        self.fetched_at = Some(at);
+        self
     }
 
     /// Assembles an update whose every metric carries the same verdict.

@@ -1064,9 +1064,46 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
         || ("null".to_string(), "null".to_string()),
         |s| (s.connected.to_string(), s.since.0.to_string()),
     );
+    // NFR10, MEASURED IN PRODUCTION ([#102]).
+    //
+    // Story 4.16 measures per-reading latency and recorded itself UNMET on the
+    // requirement's 24-hour window, because per-reading latency does not depend on
+    // uptime — a compressed run measures the same quantity and cannot see what a
+    // day contains besides readings. [#102] named the two ways out; this is the
+    // second, and it became possible the day the bridge went into service.
+    //
+    // **A percentile here is the UPPER BOUND of the bucket it falls in**, never a
+    // point: the counts are bucketed because a day of a fleet is more samples than
+    // an observability surface should hold. `null` with a non-zero
+    // `over_5000_ms` means the percentile is above the last bucket — the budget
+    // exceeded, and this window unable to say by how much. `null` with
+    // `count: 0` means nothing has been published yet, which is a different
+    // statement and must not read as "fast".
+    let latency_json = phase.control().map_or_else(
+        || "null".to_string(),
+        |c| {
+            use crate::core::latency::Bound;
+            let window = c.latency();
+            let render = |p: f64| match window.percentile(p) {
+                Some(Bound::AtMost(edge)) => edge.to_string(),
+                Some(Bound::Above(_)) | None => "null".to_string(),
+            };
+            format!(
+                "{{\"count\":{},\"p95_ms_at_most\":{},\"p99_ms_at_most\":{},\
+                 \"over_{}_ms\":{},\"window_hours\":{}}}",
+                window.count(),
+                render(95.0),
+                render(99.0),
+                crate::core::latency::EDGES_MS[crate::core::latency::EDGES_MS.len() - 1],
+                window.over_top(),
+                crate::core::latency::HOURS,
+            )
+        },
+    );
     let body = format!(
         "{{\"status\":\"{}\",\"intends_to_publish\":{},\"wedged\":{},\
           \"sink_connected\":{sink_connected},\"sink_since_ms\":{sink_since},\
+          \"latency\":{latency_json},\
           \"failed_sources\":{},\"degraded_meters\":{},\"dropped_readings\":{},\
           \"loop_age_ms\":{},\"loop_age_allowed_ms\":{},\
           \"version\":\"{}\",\"contract\":{}}}",
@@ -2171,6 +2208,78 @@ mod tests {
             "a running bridge shows its table, even with nothing in it yet — the \
              operator needs to see that the page works and the fleet is empty, not \
              wonder which:\n{html}"
+        );
+    }
+
+    /// [#102] — `/healthz` distinguishes *fast*, *over budget* and *nothing yet*,
+    /// and the middle one is why this test exists.
+    ///
+    /// NFR10's window is 24 hours and story 4.16 recorded itself UNMET on it: per
+    /// reading latency does not depend on uptime, so a compressed run measures the
+    /// same quantity and cannot see what a day contains besides readings. [#102]
+    /// named the way out — make production self-measuring — and the day-long
+    /// window has existed since the bridge went into service on 2026-08-28.
+    ///
+    /// **The dangerous rendering is a percentile above the last bucket.** The
+    /// window cannot say by how much, and an edge printed there would report a
+    /// budget EXCEEDED as a budget met — the one thing this bridge is built not to
+    /// do. It renders `null`, and `over_5000_ms` is what tells the two `null`s
+    /// apart: with `count: 0` nothing has been published; with a non-zero
+    /// overflow, the budget was blown.
+    ///
+    /// **FALSIFIED 2026-08-30, mutation RUN:** rendering `Bound::Above(edge)` as
+    /// the edge — the shape that falls out of treating a bound as a number — is
+    /// RED on the third assertion, with `p99_ms_at_most: 5000` where a breach is
+    /// owed.
+    #[tokio::test]
+    async fn healthz_tells_fast_from_over_budget_from_nothing_yet() {
+        use crate::app::mqtt_driver::SinkHealth;
+        use crate::core::clock::MonotonicMs;
+        use crate::domain::UtcMillis;
+        use std::sync::Arc;
+
+        let clock = Arc::new(crate::core::clock::FakeClock::new(UtcMillis(
+            1_784_984_793_000,
+        )));
+        let beats = Heartbeats::for_meters([crate::domain::MeterId::new("appart-est")]);
+        let config: ConfigHandle = Arc::new(arc_swap::ArcSwap::from_pointee(running_config()));
+        let sink = SinkHealth::starting_at(MonotonicMs(0));
+        let state = ui(Phase::running(Control::detached_with_sink(
+            Arc::clone(&config),
+            beats,
+            clock,
+            sink.clone(),
+        )));
+
+        // 1. NOTHING PUBLISHED YET — `null`, and a count that says why.
+        let health = body(healthz(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            health.contains("\"count\":0,\"p95_ms_at_most\":null"),
+            "a bridge that has published nothing is not a fast one, and rendering \
+             0 ms would say it is:\n{health}"
+        );
+
+        // 2. A HUNDRED FAST READINGS — a real bucket bound.
+        for _ in 0..100 {
+            sink.accepted(MonotonicMs(0), MonotonicMs(2));
+        }
+        let health = body(healthz(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            health.contains("\"count\":100,\"p95_ms_at_most\":2"),
+            "two milliseconds lands in the 2 ms bucket:\n{health}"
+        );
+
+        // 3. TEN READINGS PAST THE LAST BUCKET — the breach must not read as the
+        //    edge. Ten of a hundred and ten puts the 99th above the top.
+        for _ in 0..10 {
+            sink.accepted(MonotonicMs(0), MonotonicMs(60_000));
+        }
+        let health = body(healthz(State(Arc::clone(&state))).await.into_response()).await;
+        assert!(
+            health.contains("\"p99_ms_at_most\":null") && health.contains("\"over_5000_ms\":10"),
+            "a percentile above the last bucket is a budget EXCEEDED, and printing \
+             the edge would report it as met — the overflow count is what makes \
+             this `null` different from the empty one:\n{health}"
         );
     }
 

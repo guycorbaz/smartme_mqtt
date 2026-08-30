@@ -1163,6 +1163,10 @@ pub async fn step_once<S: Source + Send>(
             Err(_elapsed) => Err(SourceError::Timeout),
         }
     };
+    // WHEN THE RESPONSE ENTERED THE BRIDGE ([#102]). Read here and nowhere else:
+    // NFR10's interval starts at the read, and every instant after this one is
+    // work this process chose to do.
+    let fetched_at = clock.monotonic();
 
     // THE REASON REACHES AN OPERATOR HERE, AND NOWHERE ELSE DID (story 2.6 AC5).
     //
@@ -1620,6 +1624,15 @@ pub async fn step_once<S: Source + Send>(
     match to_publish {
         Some(measurement) => {
             let update = MeterUpdate::new((*meter).clone(), measurement, published);
+            // STAMPED ONLY WHEN THIS TICK ACTUALLY FETCHED ([#102]). A
+            // republication of a last known value carries no timing: it is not a
+            // read, and timing it would report the AGE of an old measurement as
+            // this bridge's latency.
+            let update = if tick.is_ok() {
+                update.fetched_at(fetched_at)
+            } else {
+                update
+            };
             // TRY, NEVER AWAIT (story 4.11 AC3). This was `send(update).await`
             // until 2026-08-18, and a blocking send here is not merely a lost
             // reading — it is a lost LOOP. The driver drains this channel inside

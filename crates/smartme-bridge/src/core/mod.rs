@@ -14,6 +14,7 @@
 
 pub mod channel;
 pub mod clock;
+pub mod latency;
 pub mod oracle;
 pub mod source;
 pub mod state_machine;

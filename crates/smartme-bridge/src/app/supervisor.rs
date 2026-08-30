@@ -187,6 +187,11 @@ impl Control {
         self.sink.state()
     }
 
+    /// The latency window NFR10 is measured over ([#102]).
+    pub fn latency(&self) -> crate::core::latency::LatencyWindow {
+        self.sink.latency()
+    }
+
     pub fn heartbeats(&self) -> Heartbeats {
         self.heartbeats.clone()
     }
