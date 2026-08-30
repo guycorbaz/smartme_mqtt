@@ -52,10 +52,35 @@ FAILED_TESTS=""
 # Written by an EXIT trap rather than at the end, because `set -e` means a
 # failing run never reaches the end — and a log that only records successes
 # would answer the opposite of the question being asked.
+#
+# AN INTERRUPTED RUN IS NOT A PASS, and it was recorded as one until 2026-08-30.
+#
+# The trap was on EXIT alone. `$?` at that moment is the status of the last
+# command that COMPLETED, not the reason the script is ending — so a gate stopped
+# by hand or by a stop gesture wrote `pass` with whatever step it had reached.
+# Two such lines are in this clone's log: 4 s and 32 s, mid-`ci.yml — test`,
+# against runs that never came near the image build a full pass ends on.
+#
+# It is R9's class exactly — an instrument reporting a verdict it did not reach —
+# and it lands on the one instrument that exists to make the refusal rate
+# KNOWABLE (R6's parade, 2026-08-24). A log that counts interruptions as calm
+# answers the opposite of the question it was built for, which is the same
+# sentence the paragraph above already had to write once.
+INTERRUPTED=0
+on_signal() {
+    INTERRUPTED=1
+    # 130 is the conventional "terminated by SIGINT"; the EXIT trap runs next and
+    # reads the flag rather than the status, because a status cannot distinguish
+    # "a step failed" from "somebody stopped me".
+    exit 130
+}
+trap on_signal INT TERM HUP
+
 log_run() {
     local status=$?
     local verdict="pass"
     (( status == 0 )) || verdict="fail"
+    (( INTERRUPTED )) && verdict="interrupted"
     local mode="full"
     (( fast )) && mode="fast"
     printf '%s\t%s\t%ss\t%s\t%s\t%s\t%s\n' \
