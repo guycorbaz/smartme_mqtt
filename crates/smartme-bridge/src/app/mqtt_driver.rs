@@ -1541,7 +1541,7 @@ pub async fn run(
                     if let Some(loss) = deliver(&client, &mut publisher, &update) {
                         let Loss { reason, fault, .. } = &loss;
                         let (reason, fault) = (*reason, fault.clone());
-                        count_loss(&pulse, &update.meter, &loss);
+                        count_loss(&pulse, &update.meter, &loss, clock.wall());
                         tracing::warn!(
                             meter = %update.meter,
                             serial = %update.measurement.serial,
@@ -1581,6 +1581,11 @@ pub async fn run(
             backoff = next;
             continue;
         }
+
+        // WHAT WAS STILL IN THE INBOX IS COUNTED, AND NOT PUBLISHED ([#87],
+        // ADR 0056). See `count_undrained`, which is a function for the reason
+        // `count_loss` is: inside this tail nothing could reach it.
+        count_undrained(&mut inbox, &pulse, clock.wall());
 
         // A polite death: queue it, then keep the transport pumping long enough for
         // it to actually reach the wire. We never send a graceful DISCONNECT — that
@@ -2037,12 +2042,83 @@ fn count_loss(
     pulse: &crate::app::poll_publish::Heartbeats,
     meter: &crate::domain::MeterId,
     loss: &Loss,
+    at: crate::domain::UtcMillis,
 ) {
     if loss.republication {
-        pulse.dropped_republication(meter, loss.reason);
+        pulse.dropped_republication(meter, loss.reason, at);
     } else {
-        pulse.dropped(meter, loss.reason);
+        pulse.dropped(meter, loss.reason, at);
     }
+}
+
+/// Counts whatever is still in the inbox when the bridge stops, and publishes
+/// none of it ([#87], ADR 0056). Returns how many there were.
+///
+/// # The seventh path, and it was counted by nothing
+///
+/// Until 2026-08-30 `run` simply returned on `SessionEnd::Shutdown`: the 64-slot
+/// channel was dropped with its receiver, the poll tasks were aborted by the
+/// supervisor and never observed `Closed`, so no `DropReason` fired, no line was
+/// logged, and `dropped_readings` reported **zero** for up to sixty-four judged
+/// readings. A clean stop swallowed them in silence, and `DropReason`'s own doc
+/// asserted the six were exhaustive.
+///
+/// # Why it counts rather than drains-and-publishes
+///
+/// Publishing after the shutdown decision is precisely what the death sequence
+/// exists to bound (AR13, SIGTERM-NO-LIE), which is why [#87] was filed rather
+/// than fixed in story 4.11: it is a decision, not an oversight. **Counting is not
+/// publishing.** These readings are lost either way; what changes is that the
+/// bridge names them.
+///
+/// **The signature is the guarantee.** This function is handed no sink and no
+/// client, so publishing is unrepresentable here — the same enforcement
+/// `SparkplugPublisher::publish` gets from being handed no clock. A future edit
+/// that wanted to publish would have to add a parameter, which is a change a
+/// reviewer sees.
+///
+/// # Why a function and not four lines in the tail
+///
+/// The same reason `count_loss` is one: inside that tail no test can reach it,
+/// and a `run` that drains perfectly with a caller that forgets to count is the
+/// defect being repaired with every other test green.
+///
+/// `try_recv`, not `recv`: senders may still be alive for a few more instants, and
+/// awaiting them would make a clean stop wait on the very tasks the supervisor is
+/// aborting.
+///
+/// [#87]: https://github.com/guycorbaz/smartme_mqtt/issues/87
+fn count_undrained(
+    inbox: &mut mpsc::Receiver<MeterUpdate>,
+    pulse: &crate::app::poll_publish::Heartbeats,
+    at: crate::domain::UtcMillis,
+) -> u64 {
+    let mut undrained = 0_u64;
+    while let Ok(update) = inbox.try_recv() {
+        undrained += 1;
+        count_loss(
+            pulse,
+            &update.meter,
+            &Loss {
+                reason: DropReason::UndrainedAtShutdown,
+                fault: None,
+                // Not a republication-axis question: what is lost is whatever was
+                // queued, and the bridge is in no position at this instant to ask
+                // whether the host already holds it.
+                republication: false,
+            },
+            at,
+        );
+    }
+    if undrained > 0 {
+        tracing::warn!(
+            undrained,
+            "readings were still in the inbox when the bridge stopped; they are \
+             counted as `undrained-at-shutdown` and NOT published — publishing \
+             after the shutdown decision is what the death sequence bounds"
+        );
+    }
+    undrained
 }
 
 /// One reading that never reached the host, and what is known about it.
@@ -3361,8 +3437,9 @@ mod tests {
             republication,
         };
 
-        count_loss(&beats, &meter, &loss(false));
-        count_loss(&beats, &meter, &loss(true));
+        let at = crate::domain::UtcMillis(1_784_984_792_050);
+        count_loss(&beats, &meter, &loss(false), at);
+        count_loss(&beats, &meter, &loss(true), at);
 
         let fleet = beats.snapshot();
         let lost = fleet.dropped();
@@ -3377,6 +3454,86 @@ mod tests {
             lost[0].republications, 1,
             "and one of them was a copy, so the historian is missing ONE distinct \
              measurement rather than two"
+        );
+    }
+
+    /// [#87] — a clean stop counts what it could not hand over, and publishes
+    /// none of it.
+    ///
+    /// Until 2026-08-30 the tail of `run` simply returned: the inbox was dropped
+    /// with its receiver, the poll tasks were aborted and never observed `Closed`,
+    /// and `dropped_readings` reported **zero** for up to sixty-four judged
+    /// readings. The surface said nothing was lost while the historian was missing
+    /// a minute of the fleet.
+    ///
+    /// **The other half of the claim — that they are NOT published — is enforced
+    /// by the signature and asserted here only as an absence.** `count_undrained`
+    /// is handed no sink and no client, so publishing is unrepresentable inside
+    /// it; a future edit that wanted to would have to add a parameter, which is a
+    /// change a reviewer sees. That is the same enforcement `publish` gets from
+    /// being handed no clock, and it is stronger than a test.
+    ///
+    /// **FALSIFIED 2026-08-30, two mutations RUN:**
+    ///
+    /// - the body reduced to `while inbox.try_recv().is_ok() {}` — draining
+    ///   without counting, which is the state this repairs and the shape anyone
+    ///   writes who only wants the channel empty: RED, `lost` comes back empty
+    ///   with *"a clean stop must not lose readings in silence"*;
+    /// - `DropReason::OutboxFull` in place of `UndrainedAtShutdown` — counted, but
+    ///   under a reason that sends an operator to look at a queue that was never
+    ///   full: RED on the reason assertion.
+    #[test]
+    fn a_clean_stop_counts_the_readings_it_could_not_hand_over() {
+        use crate::app::poll_publish::Heartbeats;
+        use crate::domain::MeterId;
+
+        let meter = MeterId::new("garage");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let (tx, mut inbox) = mpsc::channel(8);
+        for _ in 0..3 {
+            tx.try_send(MeterUpdate {
+                meter: meter.clone(),
+                measurement: crate::domain::Measurement {
+                    meter: meter.clone(),
+                    serial: crate::domain::Serial::new("30000001"),
+                    power: Some(crate::domain::Kw(0.018)),
+                    energy: Some(crate::domain::Kwh(4_843.822)),
+                    value_date: crate::domain::UtcMillis(1_784_984_792_050),
+                    quality: crate::domain::Quality::Good,
+                },
+                verdicts: crate::core::oracle::Verdicts::uniform(
+                    crate::core::oracle::Verdict::good(),
+                ),
+            })
+            .expect("the fixture channel has room");
+        }
+
+        let at = crate::domain::UtcMillis(1_784_984_793_000);
+        let counted = count_undrained(&mut inbox, &beats, at);
+
+        assert_eq!(
+            counted, 3,
+            "all three were in the channel when the bridge stopped"
+        );
+        let fleet = beats.snapshot();
+        let lost = fleet.dropped();
+        assert_eq!(
+            lost.len(),
+            1,
+            "a clean stop must not lose readings in silence: {lost:?}"
+        );
+        assert_eq!(lost[0].count, 3);
+        assert_eq!(
+            lost[0].reason,
+            DropReason::UndrainedAtShutdown,
+            "the reason must name the stop. `outbox-full` would send an operator \
+             to look at a queue that was never full"
+        );
+        assert_eq!(
+            lost[0].last_at,
+            Some(at),
+            "and it carries when it happened ([#91]), or a reader cannot tell this \
+             from a scar left by a stop last week"
         );
     }
 

@@ -1023,7 +1023,7 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
             // stopped getting worse.
             .map(|lost| format!(
                 "{{\"meter\":{},\"reason\":{},\"count\":{},\"retired\":{},\
-                 \"republications\":{}}}",
+                 \"republications\":{},\"last_at_ms\":{}}}",
                 json_string(&lost.meter.to_string()),
                 json_string(lost.reason.as_str()),
                 lost.count,
@@ -1035,6 +1035,18 @@ async fn healthz(State(state): State<Arc<UiState>>) -> impl IntoResponse {
                 // so it repeats across that meter's rows: it counts what was
                 // lost, not why.
                 lost.republications,
+                // WHEN IT LAST MOVED ([#91]). Without it a bridge that has
+                // published nothing for six hours and one that lost three
+                // readings at start-up render the same body, and the status code
+                // stays 200 for both by design (ADR 0027 §2). A single poll of
+                // `/healthz` could not tell a running fault from a healed one;
+                // now it can, by comparing this to its own clock.
+                //
+                // `null` is unreachable here — rows with a zero count are
+                // filtered out before this point — and is emitted rather than
+                // defaulted, because a fabricated instant is worse than an
+                // absent one.
+                lost.last_at.map_or("null".to_string(), |t| t.0.to_string()),
             ))
             .collect::<Vec<_>>()
             .join(",")
@@ -3003,13 +3015,17 @@ mod tests {
             Arc::clone(&config),
         ));
 
-        beats.dropped(&meter, DropReason::OutboxFull);
+        beats.dropped(
+            &meter,
+            DropReason::OutboxFull,
+            crate::domain::UtcMillis(1_784_984_792_050),
+        );
         beats.retire(&meter);
 
         let health = body(healthz(State(Arc::clone(&state))).await.into_response()).await;
         assert!(
             health.contains(
-                "{\"meter\":\"appart-est\",\"reason\":\"outbox-full\",\"count\":1,\"retired\":true,\"republications\":0}"
+                "{\"meter\":\"appart-est\",\"reason\":\"outbox-full\",\"count\":1,\"retired\":true,\"republications\":0,\"last_at_ms\":1784984792050}"
             ),
             "the reading WAS lost, so the count stays; what is added is that it \
              cannot rise, because the operator switched this meter off:\n{health}"
@@ -3054,9 +3070,21 @@ mod tests {
 
         // Two readings lost to a full outbox, one to a DATA that would have
         // preceded its BIRTH. Two reasons, one meter: the count is per PAIR.
-        beats.dropped(&meter, DropReason::OutboxFull);
-        beats.dropped(&meter, DropReason::OutboxFull);
-        beats.dropped(&meter, DropReason::BeforeBirth);
+        beats.dropped(
+            &meter,
+            DropReason::OutboxFull,
+            crate::domain::UtcMillis(1_784_984_792_050),
+        );
+        beats.dropped(
+            &meter,
+            DropReason::OutboxFull,
+            crate::domain::UtcMillis(1_784_984_792_050),
+        );
+        beats.dropped(
+            &meter,
+            DropReason::BeforeBirth,
+            crate::domain::UtcMillis(1_784_984_792_050),
+        );
 
         let response = healthz(State(Arc::clone(&state))).await.into_response();
         let status = response.status();
@@ -3064,7 +3092,7 @@ mod tests {
 
         assert!(
             health.contains(
-                "{\"meter\":\"appart-est\",\"reason\":\"outbox-full\",\"count\":2,\"retired\":false,\"republications\":0}"
+                "{\"meter\":\"appart-est\",\"reason\":\"outbox-full\",\"count\":2,\"retired\":false,\"republications\":0,\"last_at_ms\":1784984792050}"
             ),
             "the loss must name the meter, the reason and how many — an operator \
              told only that something was dropped cannot tell a full queue from an \

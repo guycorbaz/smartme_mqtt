@@ -92,6 +92,26 @@ pub enum DropReason {
     UndeclaredDevice,
     /// The reading could not be encoded or addressed at all.
     Unpublishable,
+    /// The bridge stopped while these readings were still in its inbox ([#87]).
+    ///
+    /// # The seventh path, and it was counted by nothing
+    ///
+    /// A clean `SIGTERM` used to return from `run` without draining the 64-slot
+    /// channel: it was dropped with the receiver, the poll tasks were aborted by
+    /// the supervisor and never observed `Closed`, so **no reason fired, no line
+    /// was logged, and `dropped_readings` reported zero** for up to sixty-four
+    /// judged readings. This enum's own doc asserted the six were exhaustive.
+    ///
+    /// # Counted, and deliberately NOT published — see ADR 0056
+    ///
+    /// Draining the inbox on the way out would mean publishing after the shutdown
+    /// decision, which is the thing the death sequence exists to bound (AR13,
+    /// SIGTERM-NO-LIE). **Counting is not publishing.** The readings are drained
+    /// so they can be counted and named, then discarded — the historian is
+    /// missing them either way, and what changes is that the bridge now says so.
+    ///
+    /// [#87]: https://github.com/guycorbaz/smartme_mqtt/issues/87
+    UndrainedAtShutdown,
 }
 
 impl DropReason {
@@ -100,7 +120,7 @@ impl DropReason {
     /// **This is where `Culprit::Bridge` comes from.** No [`Cause`] can produce it —
     /// the oracle judges readings, and a reading is never the bridge's fault — so a
     /// culprit derived from causes alone could never accuse this process. Five of
-    /// these six can.
+    /// these seven can.
     ///
     /// [`Cause`]: crate::core::oracle::Cause
     pub const fn culprit(self) -> crate::core::oracle::Culprit {
@@ -113,7 +133,11 @@ impl DropReason {
             | Self::MqttTaskGone
             | Self::BeforeBirth
             | Self::UndeclaredDevice
-            | Self::Unpublishable => Culprit::Bridge,
+            | Self::Unpublishable
+            // The bridge stopped holding them. An operator asked it to stop, but
+            // what to do with a judged reading at that instant is this process's
+            // choice and nobody else's.
+            | Self::UndrainedAtShutdown => Culprit::Bridge,
             // THE BROKER IS NOT KEEPING UP, or is gone. `rumqttc`'s request channel
             // fills because the far end is not draining it — that is the world,
             // and telling an operator to look at this process would send them to
@@ -126,13 +150,14 @@ impl DropReason {
     ///
     /// The array is the single source of both the count and the index, so a
     /// seventh variant cannot be added without the counter widening with it.
-    pub const ALL: [DropReason; 6] = [
+    pub const ALL: [DropReason; 7] = [
         DropReason::OutboxFull,
         DropReason::MqttTaskGone,
         DropReason::TransportQueueFull,
         DropReason::BeforeBirth,
         DropReason::UndeclaredDevice,
         DropReason::Unpublishable,
+        DropReason::UndrainedAtShutdown,
     ];
 
     /// How many reasons there are — the width of every per-meter counter.
@@ -152,6 +177,7 @@ impl DropReason {
             DropReason::BeforeBirth => 3,
             DropReason::UndeclaredDevice => 4,
             DropReason::Unpublishable => 5,
+            DropReason::UndrainedAtShutdown => 6,
         }
     }
 
@@ -167,6 +193,7 @@ impl DropReason {
             DropReason::BeforeBirth => "before-birth",
             DropReason::UndeclaredDevice => "undeclared-device",
             DropReason::Unpublishable => "unpublishable",
+            DropReason::UndrainedAtShutdown => "undrained-at-shutdown",
         }
     }
 }
@@ -327,6 +354,32 @@ pub struct MeterState {
     /// count that wraps to zero is a surface that lies, which is the one thing
     /// this bridge is built not to do.
     pub dropped: [u64; DropReason::COUNT],
+    /// When each of those counts last moved ([#91]).
+    ///
+    /// # A count without a time cannot say whether the fault is still happening
+    ///
+    /// The counts are cumulative for the process lifetime, and the status code
+    /// deliberately stays 200 (ADR 0027 §2). So a bridge that has published
+    /// nothing for six hours and one that lost three readings at start-up
+    /// produced **the same body**, and an operator reading `/healthz` once could
+    /// not tell them apart — only a scraper diffing successive polls could.
+    ///
+    /// It is the same argument that produced `degraded_meters` after [#62], where
+    /// a meter froze for ten hours and every surface said the fleet was healthy:
+    /// the difference between a surface that NAMES a fault and one that merely
+    /// CONTAINS it.
+    ///
+    /// **Per reason, not per meter.** A meter can be losing readings now for one
+    /// reason while another reason's count is a week-old scar, and one timestamp
+    /// per meter would report the scar as fresh — the confusion this exists to
+    /// remove, reintroduced one level up.
+    ///
+    /// The instant is the WALL clock, passed in by the caller rather than read
+    /// here: `arch_purity` confines raw time sources to their own modules, and a
+    /// counter that reads a clock is a counter no test can pin.
+    ///
+    /// [#91]: https://github.com/guycorbaz/smartme_mqtt/issues/91
+    pub last_dropped_at: [Option<crate::domain::UtcMillis>; DropReason::COUNT],
     /// The operator switched this meter OFF ([#90]).
     ///
     /// # Why the counters above are not cleared instead
@@ -396,6 +449,11 @@ pub struct Lost<'a> {
     /// for whatever reason the transport gives, and the reason is not what this
     /// counts.
     pub republications: u64,
+    /// When this row's count last moved ([#91]) — the difference between a fault
+    /// that is running and one that healed hours ago. `None` is unreachable for a
+    /// row that reaches a surface, since rows with a zero count are filtered out;
+    /// it is `Option` because the array it comes from starts empty.
+    pub last_at: Option<crate::domain::UtcMillis>,
 }
 
 /// The whole fleet at one instant (AR6).
@@ -498,6 +556,7 @@ impl FleetState {
                     count: m.dropped[reason.index()],
                     retired: m.retired,
                     republications: m.republications_lost,
+                    last_at: m.last_dropped_at[reason.index()],
                 })
             })
             .filter(|lost| lost.count > 0)
@@ -575,6 +634,7 @@ impl Heartbeats {
                 last_energy_kwh: None,
                 culprit: None,
                 dropped: [0; DropReason::COUNT],
+                last_dropped_at: [None; DropReason::COUNT],
                 retired: false,
                 republications_lost: 0,
             })
@@ -722,8 +782,13 @@ impl Heartbeats {
     /// Moves the ordinary counter too: the message really was not handed over,
     /// and the manual defines the total as messages the bridge could not hand
     /// over. This one only says how many of them were copies.
-    pub fn dropped_republication(&self, meter: &MeterId, reason: DropReason) {
-        self.dropped(meter, reason);
+    pub fn dropped_republication(
+        &self,
+        meter: &MeterId,
+        reason: DropReason,
+        at: crate::domain::UtcMillis,
+    ) {
+        self.dropped(meter, reason, at);
         self.0.send_modify(|fleet| {
             if let Some(entry) = fleet.meters.iter_mut().find(|m| &m.meter == meter) {
                 entry.republications_lost = entry.republications_lost.saturating_add(1);
@@ -732,11 +797,12 @@ impl Heartbeats {
         });
     }
 
-    pub fn dropped(&self, meter: &MeterId, reason: DropReason) {
+    pub fn dropped(&self, meter: &MeterId, reason: DropReason, at: crate::domain::UtcMillis) {
         self.0.send_modify(|fleet| {
             if let Some(entry) = fleet.meters.iter_mut().find(|m| &m.meter == meter) {
                 let cell = &mut entry.dropped[reason.index()];
                 *cell = cell.saturating_add(1);
+                entry.last_dropped_at[reason.index()] = Some(at);
                 fleet.generation += 1;
             }
         });
@@ -806,9 +872,10 @@ impl MeterPulse {
     /// [`FleetState::generation`] gives: a write that skips it hands a reader a
     /// state no instant ever had, and the snapshot property AR6 rests on becomes
     /// untestable.
-    pub fn dropped(&self, reason: DropReason) {
+    pub fn dropped(&self, reason: DropReason, at: crate::domain::UtcMillis) {
         self.fleet.send_modify(|fleet| {
             let entry = &mut fleet.meters[self.index];
+            entry.last_dropped_at[reason.index()] = Some(at);
             // **THE ONLY PATH BY WHICH `Culprit::Bridge` REACHES A SCREEN** (story
             // 6.3): no `Cause` yields it, because the oracle judges readings and a
             // reading is never this process's fault. A reading LOST is.
@@ -1473,7 +1540,7 @@ pub async fn step_once<S: Source + Send>(
                     mpsc::error::TrySendError::Full(update) => (DropReason::OutboxFull, update),
                     mpsc::error::TrySendError::Closed(update) => (DropReason::MqttTaskGone, update),
                 };
-                heartbeat.dropped(reason);
+                heartbeat.dropped(reason, clock.wall());
                 tracing::warn!(
                     meter = %meter,
                     reason = reason.as_str(),
@@ -4758,7 +4825,7 @@ mod tests {
             "nothing is wrong yet, and `None` is how that is said"
         );
 
-        pulse.dropped(DropReason::Unpublishable);
+        pulse.dropped(DropReason::Unpublishable, UtcMillis(SANE_NOW));
 
         assert_eq!(
             beats.snapshot().meters[0].culprit,
@@ -5066,7 +5133,7 @@ mod tests {
         let before = beats.snapshot();
 
         for _ in 0..1000 {
-            pulse.dropped(DropReason::MqttTaskGone);
+            pulse.dropped(DropReason::MqttTaskGone, UtcMillis(SANE_NOW));
         }
         let after = beats.snapshot();
 
@@ -5101,6 +5168,62 @@ mod tests {
         );
     }
 
+    /// [#91] — each reason carries WHEN it last moved, and the instants are per
+    /// REASON.
+    ///
+    /// # A count without a time cannot say whether the fault is still happening
+    ///
+    /// The counts are cumulative for the process lifetime and the status code
+    /// deliberately stays 200 (ADR 0027 §2), so a bridge that had published
+    /// nothing for six hours and one that lost three readings at start-up rendered
+    /// the same body. An operator reading `/healthz` once could not tell them
+    /// apart; only a scraper diffing successive polls could.
+    ///
+    /// # Why per reason and not per meter
+    ///
+    /// That is the whole of this test. A meter can be losing readings NOW for one
+    /// reason while another reason's count is a week-old scar. One instant per
+    /// meter reports the scar as fresh — the confusion [#91] exists to remove,
+    /// reintroduced one level up, and the cheaper implementation anyone would
+    /// reach for first.
+    ///
+    /// **FALSIFIED 2026-08-30, mutation RUN:** one `last_dropped_at: Option<…>`
+    /// per meter instead of an array — both rows then read the LATER instant and
+    /// the assertion goes RED with
+    /// `left: Some(UtcMillis(1784984793000)), right: Some(UtcMillis(1784984792050))`,
+    /// which is a scar reported as a running fault.
+    #[test]
+    fn each_reason_carries_its_own_last_seen_instant() {
+        let meter = MeterId::new("garage");
+        let beats = Heartbeats::for_meters([meter.clone()]);
+        let old = crate::domain::UtcMillis(1_784_984_792_050);
+        let recent = crate::domain::UtcMillis(1_784_984_793_000);
+
+        beats.dropped(&meter, DropReason::OutboxFull, old);
+        beats.dropped(&meter, DropReason::BeforeBirth, recent);
+
+        let fleet = beats.snapshot();
+        let lost = fleet.dropped();
+        let at = |reason: DropReason| {
+            lost.iter()
+                .find(|l| l.reason == reason)
+                .unwrap_or_else(|| panic!("{reason:?} has a row"))
+                .last_at
+        };
+
+        assert_eq!(
+            at(DropReason::OutboxFull),
+            Some(old),
+            "the older reason must keep its own instant; reporting it as fresh is \
+             a scar presented as a running fault"
+        );
+        assert_eq!(
+            at(DropReason::BeforeBirth),
+            Some(recent),
+            "and the recent one keeps its own"
+        );
+    }
+
     /// **AC2 — the count saturates rather than wrapping.**
     ///
     /// A counter that returns to zero reports the smallest figure at the moment
@@ -5130,7 +5253,11 @@ mod tests {
         });
 
         // POSITIVE CONTROL: the path runs at all.
-        beats.dropped(&meter, DropReason::OutboxFull);
+        beats.dropped(
+            &meter,
+            DropReason::OutboxFull,
+            crate::domain::UtcMillis(1_784_984_792_050),
+        );
         assert_eq!(
             beats.snapshot().meters[0].dropped[cell],
             u64::MAX,
@@ -5139,7 +5266,11 @@ mod tests {
         );
 
         // AND NOW the property.
-        beats.dropped(&meter, DropReason::OutboxFull);
+        beats.dropped(
+            &meter,
+            DropReason::OutboxFull,
+            crate::domain::UtcMillis(1_784_984_792_050),
+        );
         assert_eq!(
             beats.snapshot().meters[0].dropped[cell],
             u64::MAX,
@@ -5167,7 +5298,11 @@ mod tests {
         );
 
         // And one loss on one meter surfaces exactly one row.
-        beats.dropped(&MeterId::new("b"), DropReason::BeforeBirth);
+        beats.dropped(
+            &MeterId::new("b"),
+            DropReason::BeforeBirth,
+            crate::domain::UtcMillis(1_784_984_792_050),
+        );
         let fleet = beats.snapshot();
         let lost = fleet.dropped();
         assert_eq!(lost.len(), 1, "{lost:?}");

@@ -299,8 +299,17 @@ switched off:
 
 \begin{verbatim}
 "dropped_readings":[{"meter":"appart-est","reason":"outbox-full",
-                    "count":2,"retired":false,"republications":0}]
+                    "count":2,"retired":false,"republications":0,
+                    "last_at_ms":1784984792050}]
 \end{verbatim}
+
+\code{last\_at\_ms} is \textbf{when that row's count last moved}, and it is what lets a single
+look at \code{/healthz} tell a fault that is running from one that healed hours ago. The counts
+are cumulative for the life of the process and the status code stays \code{200} either way, so
+before this a bridge that had published nothing since breakfast and one that lost three readings
+at start-up rendered the same body. Compare it with your own clock. \textbf{It is per reason, not
+per meter}: a meter can be losing readings now for one reason while another reason's count is a
+week-old scar, and one instant per meter would report the scar as fresh.
 
 \code{republications} answers the question \code{count} cannot: \textbf{how many
 distinct measurements is the historian actually missing?} \prog publishes something every
@@ -380,6 +389,14 @@ a reading refused by the SCADA because it never saw the device's announcement is
 at all. \textbf{A gap in the historian with \code{dropped\_readings} empty is therefore
 possible, and it is not a contradiction.} The counts are a floor on what was lost, never a
 ceiling.
+
+\textbf{One path that used to be missing from the floor has been added.} A clean stop --- a
+container restart, a \code{SIGTERM} --- could leave up to sixty-four judged readings in \prog's
+inbox, and they were dropped in silence: no reason, no log line, and \code{dropped\_readings}
+reporting zero. They are now counted as \code{undrained-at-shutdown} and, deliberately,
+\textbf{not published}: sending them would mean publishing after the decision to stop, which is
+exactly what the death sequence exists to bound. They are lost either way; the difference is that
+\prog now says so. See ADR~0056.
 \end{warning}
 
 Each loss is also traced at \code{WARN} with the reading's own \code{ValueDate}, so a gap in
