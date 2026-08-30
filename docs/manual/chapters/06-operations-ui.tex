@@ -403,6 +403,20 @@ at all. \textbf{A gap in the historian with \code{dropped\_readings} empty is th
 possible, and it is not a contradiction.} The counts are a floor on what was lost, never a
 ceiling.
 
+\textbf{And the ceiling is now measured rather than left to the imagination.} With the socket
+dropped mid-stream while forty readings were in flight, an independent subscriber received
+\textbf{none} of them and the counts reported \textbf{zero losses} --- against a control run,
+undisturbed, that delivered all forty. What the MQTT client has accepted and not yet written to
+the network is discarded with the connection, and \prog has no way to learn of it: \textsc{qos}~0,
+which the Sparkplug specification requires for data messages, provides no acknowledgement to
+count against.
+
+\textbf{What that does and does not mean for you.} Forty readings in flight at once is not the
+shape of normal operation --- one meter polled every thirty seconds has one --- so the realistic
+loss at a broken connection is of the order of your meter count, not of forty. What the
+measurement settles is that the mechanism is real and that its ceiling is everything in flight.
+When a connection drops, trust your historian's gaps over this count.
+
 \textbf{One path that used to be missing from the floor has been added.} A clean stop --- a
 container restart, a \code{SIGTERM} --- could leave up to sixty-four judged readings in \prog's
 inbox, and they were dropped in silence: no reason, no log line, and \code{dropped\_readings}
