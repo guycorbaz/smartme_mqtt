@@ -233,6 +233,23 @@ impl Control {
             return plan;
         }
 
+        // THE TOGGLE IS RECORDED BEFORE THE CERTIFICATES ([#82]).
+        //
+        // The poll loop reads `enabled` as a level, once per tick, so a disable
+        // and a re-enable completed inside one period were invisible to it — the
+        // reset gesture ADR 0034 documents silently did nothing, while the
+        // DDEATH/DBIRTH pair below went out and made the screen say it had
+        // worked. `classify_meters` is the only place the FLIP is visible; this
+        // is where the handle to record it exists.
+        //
+        // Before the sends, and deliberately: a task that observes the count
+        // moving before the birth reaches the wire judges itself afresh one tick
+        // early, which is the harmless direction. The other order can lose the
+        // event entirely if the sends fail.
+        for meter in &plan.toggled {
+            self.heartbeats.toggled(meter);
+        }
+
         // Certificates FIRST, and deaths before births.
         //
         // A death that arrived after its replacement's birth would leave the host

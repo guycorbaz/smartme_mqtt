@@ -914,7 +914,40 @@ impl SparkplugPublisher {
         device: &DeviceIdentity,
         sink: &mut impl Sink,
     ) -> Result<bool, TopicError> {
-        let serial = &device.serial;
+        // THE CERTIFICATE NAMES THE SERIAL THE DBIRTH USED, NOT THE ONE THE
+        // CALLER HOLDS ([#83]).
+        //
+        // A serial edit is `Cost::ProcessRestart` — the poll task keeps the one
+        // it was spawned with — but `reconfigure::classify_meters` builds this
+        // call from the STORED row, which already carries the new serial. So a
+        // saved-but-unrestarted serial edit followed by a disable used to hand
+        // this function `S2` while the wire had birthed under `S1`.
+        //
+        // **Since contract v13 the consequence is worse than [#83] predicted, and
+        // it is worth writing down.** The issue was raised when the serial WAS
+        // the device level of the topic, so it read as a death addressed to the
+        // wrong device. ADR 0049 made the device level the published name, which
+        // a serial edit does not touch — so the DDEATH is now correctly
+        // addressed, and the failure moved to the line below it: `declared` is
+        // keyed by serial, so removing `S2` removed NOTHING. The host was told
+        // the device was offline while this publisher still held it as born, and
+        // the very next reading — carrying the poll task's `S1` — was published
+        // for a device the host had just been buried. **DDATA after DDEATH**,
+        // which is exactly what this function's own doc promises cannot happen.
+        //
+        // The resolution is by the name the WIRE carries, which is the only
+        // question the map can answer without trusting the caller. It is sound
+        // because published names are unique: `config::validate` refuses two
+        // meters sharing a `meter_id` (the verified half of [#27], ADR 0052).
+        //
+        // [#83]: https://github.com/guycorbaz/smartme_mqtt/issues/83
+        let serial = self
+            .declared
+            .iter()
+            .find(|(_, declaration)| declaration.published == device.published)
+            .map(|(serial, _)| serial.clone())
+            .unwrap_or_else(|| device.serial.clone());
+        let serial = &serial;
         let topic = self
             .node
             .device_topic(MessageType::DDeath, device.published.as_str())?;
@@ -1977,6 +2010,68 @@ mod tests {
         }
         assert_eq!(unit_of(metric(&dbirth, METRIC_POWER)), UNIT_POWER);
         assert_eq!(unit_of(metric(&dbirth, METRIC_ENERGY)), UNIT_ENERGY);
+    }
+
+    /// [#83] — a DDEATH undeclares the device the WIRE knows, not the one the
+    /// caller's row happens to name.
+    ///
+    /// # The scenario, and it is the one the review of story 3.5 walked
+    ///
+    /// A serial edit is `Cost::ProcessRestart`, so the poll task keeps the serial
+    /// it was spawned with. But `reconfigure::classify_meters` builds its
+    /// certificates from the STORED row, which already carries the new one. Save
+    /// `S1 → S2`, do not restart, then disable: this function is handed `S2`
+    /// while the publisher declared `S1`.
+    ///
+    /// **Since contract v13 the consequence is not the one [#83] describes**, and
+    /// this test asserts the real one. The device level of the topic is the
+    /// published name (ADR 0049), which a serial edit does not touch — so the
+    /// DDEATH is correctly addressed. What failed was the line after it:
+    /// `declared` is keyed by serial, so removing `S2` removed nothing, and the
+    /// next reading carrying `S1` was published for a device the host had just
+    /// been told was gone. **DDATA after DDEATH**, which this function's doc
+    /// promises cannot happen.
+    ///
+    /// **FALSIFIED 2026-08-30, mutation RUN:** restoring `let serial =
+    /// &device.serial;` — the state this repairs — turns the second assertion RED
+    /// (`Published::Emitted` where a drop is owed), which is the lie itself.
+    #[test]
+    fn a_death_undeclares_the_device_the_wire_knows_even_after_a_saved_serial_edit() {
+        // Born under the configured pair: published `garage`, serial `30000001`.
+        let (mut p, mut sink) = born();
+
+        // The operator saved a serial edit — `Cost::ProcessRestart`, so the poll
+        // task and the wire both still speak the OLD one — and then disabled the
+        // meter. `classify_meters` builds the certificate from the STORED row.
+        let after_edit = DeviceIdentity::new(MeterId::new(PUBLISHED), Serial::new("30000002"));
+        let sent = p
+            .device_death(UtcMillis(2_000), &after_edit, &mut sink)
+            .expect("a topic is buildable");
+        assert!(sent, "the device was born, so its death is owed");
+        assert_eq!(
+            sink.emitted.last().map(|o| o.topic.as_str()),
+            Some("spBv1.0/Site/DDEATH/Bridge/garage"),
+            "the topic is the PUBLISHED name, which a serial edit does not touch"
+        );
+
+        // THE ASSERTION THIS EXISTS FOR: the declaration is gone, so a reading
+        // still carrying the spawn-time serial is refused rather than published
+        // for a device the host has just been told is offline.
+        let pending = p
+            .publish(&update(Quality::Good), &mut sink)
+            .expect("a topic is buildable");
+        assert_eq!(
+            pending.outcome,
+            Published::DroppedUndeclaredDevice {
+                serial: Serial::new(SERIAL)
+            },
+            "publishing after the DDEATH tells a host that a device it was told \
+             is offline is still measuring — the lie this bridge exists to refuse"
+        );
+        // The transport's answer is owed even for a refusal ([#92], ADR 0046):
+        // nothing was emitted, so nothing was taken back, and dropping the
+        // `Pending` un-answered is what that guard forbids.
+        p.confirmed(pending);
     }
 
     #[test]

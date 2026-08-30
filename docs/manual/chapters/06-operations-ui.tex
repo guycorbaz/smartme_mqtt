@@ -229,6 +229,19 @@ fetches: the freshness and counter oracles judge against a per-meter memory, and
 moved it would change what the \emph{next} real cycle publishes.
 \end{note}
 
+\begin{note}
+\textbf{Switching a meter off and on again re-judges it from nothing}, and since 2026-08-30 it
+does so \emph{however fast you click}. \prog forgets what it had latched about that meter and
+starts again at \textsc{stale}-until-proven, exactly as at any start.
+
+Until then the gesture only worked if the meter stayed off for at least one polling period ---
+up to five minutes. Clicking the two checkboxes in one go left the switch reading \emph{on} at
+both of \prog's looks, so the loop saw nothing: the device certificates went out, the screen
+said the gesture had worked, and nothing was re-judged. A meter that had been certified gone and
+was since re-added to your smart-me account could stay silent for ever that way --- freshly
+announced on the wire and never publishing again. Recorded as ADR~0057.
+\end{note}
+
 \section{The configuration context line}
 
 The state screen carries one auto-written line: when this configuration was created, when it

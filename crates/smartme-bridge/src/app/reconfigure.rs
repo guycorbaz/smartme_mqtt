@@ -90,6 +90,29 @@ pub struct Plan {
     pub births: Vec<DeviceIdentity>,
     /// Devices to bury.
     pub deaths: Vec<DeviceIdentity>,
+    /// Served meters whose `enabled` flag FLIPPED in this edit ([#82]).
+    ///
+    /// # Why the plan carries an event the certificates already imply
+    ///
+    /// It does not imply it: `births` and `deaths` also carry removals and
+    /// re-adds, and a poll task must not reset itself for those. What this list
+    /// says is narrower and is the only thing the loop needs — *this meter's
+    /// switch was moved*.
+    ///
+    /// The loop reads the flag as a LEVEL, once per tick, which is all a poll
+    /// loop can see. So a disable and a re-enable completed inside one period —
+    /// an operator clicking two checkboxes, at a 300 s period — were invisible to
+    /// it: no retirement, no `State::initial()`, no `certified_gone` reset. The
+    /// documented reset gesture (ADR 0034, story 3.5) silently did nothing, and a
+    /// certified-gone device re-added to the account and toggled quickly stayed
+    /// silent for ever behind a freshly DBIRTHed name.
+    ///
+    /// **The gesture is an EVENT and only this function sees it as one.** It is
+    /// carried out rather than inferred, so the loop can compare a count instead
+    /// of a level and observe a toggle regardless of its width.
+    ///
+    /// [#82]: https://github.com/guycorbaz/smartme_mqtt/issues/82
+    pub toggled: Vec<crate::domain::MeterId>,
     /// Certificates the driver did NOT accept.
     ///
     /// **Empty is the claim, not the default.** `Control::apply` used to discard
@@ -399,6 +422,11 @@ fn classify_meters(
                         } else {
                             plan.births.push(before.identity());
                         }
+                        // THE EVENT, carried out so the poll loop can see it
+                        // ([#82]). Pushed here and not derived from the two lists
+                        // above: those also carry removals and re-adds, and a
+                        // task must not judge itself afresh for those.
+                        plan.toggled.push(before.meter.clone());
                         plan.changes.push(Change {
                             field: "meters (enabled)",
                             cost: Cost::DeviceCertificate,
@@ -785,6 +813,68 @@ mod tests {
         assert_eq!(gone.cost(), Some(Cost::DeviceCertificate));
         assert_eq!(gone.deaths, vec![identity("garage", "9202685")]);
         assert!(gone.births.is_empty());
+    }
+
+    /// [#82] — the switch being MOVED is carried out as an event, and a removal
+    /// is not one.
+    ///
+    /// # Why the certificates could not stand in for it
+    ///
+    /// The poll loop reads `enabled` as a level, once per tick, which is all a
+    /// poll loop can see. A disable and a re-enable completed inside one period —
+    /// an operator clicking two checkboxes, at up to a 300-second period — left
+    /// the flag `true` at both reads, so **nothing in the loop fired**: no
+    /// retirement, no `State::initial()`, no `certified_gone` reset. The gesture
+    /// ADR 0034 and story 3.5 present as *the* way to re-judge a latched meter
+    /// silently did nothing, while the DDEATH/DBIRTH pair went out and made the
+    /// screen say it had worked. A certified-gone device re-added to the account
+    /// and toggled quickly stayed silent for ever behind a freshly DBIRTHed name.
+    ///
+    /// **`births` and `deaths` cannot answer it**, which is the second assertion
+    /// here: they also carry removals and re-adds, and a task must not judge
+    /// itself afresh because a *different* meter's row was deleted. Deriving the
+    /// event from them would reset meters nobody touched.
+    ///
+    /// **FALSIFIED 2026-08-30, two mutations RUN:**
+    ///
+    /// - the `plan.toggled.push(..)` deleted — the state this repairs: RED, an
+    ///   empty list where the flip is owed;
+    /// - the push moved beside `plan.deaths.push(..)` in the REMOVAL arm, which
+    ///   is how anyone would wire it who took the certificates for the event:
+    ///   RED on the second half, a removed meter reported as a toggle.
+    #[test]
+    fn a_switch_that_moves_is_an_event_and_a_removal_is_not() {
+        let mut off = base();
+        off.meters[0].enabled = false;
+
+        assert_eq!(
+            classify(&base(), &off, &served()).toggled,
+            vec![crate::domain::MeterId::new("garage")],
+            "a disable is the switch moving, and the loop must see it even when \
+             the re-enable follows inside the same period"
+        );
+        assert_eq!(
+            classify(&off, &base(), &served()).toggled,
+            vec![crate::domain::MeterId::new("garage")],
+            "and so is the re-enable"
+        );
+
+        // THE DISCRIMINATION: a removed row produces a certificate and is NOT a
+        // toggle. A task resetting itself here would judge afresh because someone
+        // else's row was deleted.
+        let mut removed = base();
+        removed.meters.clear();
+        let plan = classify(&base(), &removed, &served());
+        assert!(
+            !plan.deaths.is_empty(),
+            "the removal still buries the device it takes off the wire"
+        );
+        assert!(
+            plan.toggled.is_empty(),
+            "but nobody moved a switch, and a reset here would be a gesture the \
+             operator never made: {:?}",
+            plan.toggled
+        );
     }
 
     /// **Moving `enabled` from one meter to another is NOT a certificate**, and

@@ -400,6 +400,22 @@ pub struct MeterState {
     /// It also answers a question no field could answer before: a retired meter
     /// and one that has never completed a tick both carry `None` everywhere.
     pub retired: bool,
+    /// How many times the operator has MOVED this meter's switch ([#82]).
+    ///
+    /// The poll loop reads `enabled` as a level, once per tick, which is all a
+    /// poll loop can see. A disable and a re-enable completed inside one period
+    /// were therefore invisible to it, and the reset gesture ADR 0034 documents
+    /// silently did nothing. This counter is the same gesture as an EVENT: the
+    /// loop compares it with what it saw last tick, so a toggle is observed
+    /// regardless of its width.
+    ///
+    /// **Runtime state, never persisted**, which is why it lives here and not on
+    /// `MeterConfig`: what the operator did is not part of what the operator
+    /// configured, and a count written to the file would come back after a
+    /// restart as a toggle nobody performed.
+    ///
+    /// [#82]: https://github.com/guycorbaz/smartme_mqtt/issues/82
+    pub enable_toggles: u64,
     /// How many of [`Self::dropped`] were **republications** rather than fresh
     /// readings ([#92]).
     ///
@@ -635,6 +651,7 @@ impl Heartbeats {
                 culprit: None,
                 dropped: [0; DropReason::COUNT],
                 last_dropped_at: [None; DropReason::COUNT],
+                enable_toggles: 0,
                 retired: false,
                 republications_lost: 0,
             })
@@ -797,6 +814,19 @@ impl Heartbeats {
         });
     }
 
+    /// Records that the operator moved this meter's switch ([#82]).
+    ///
+    /// Called by `Control::apply` from the plan's `toggled` list, which is the
+    /// only place a FLIP is visible: everything downstream sees a level.
+    pub fn toggled(&self, meter: &MeterId) {
+        self.0.send_modify(|fleet| {
+            if let Some(entry) = fleet.meters.iter_mut().find(|m| &m.meter == meter) {
+                entry.enable_toggles = entry.enable_toggles.saturating_add(1);
+                fleet.generation += 1;
+            }
+        });
+    }
+
     pub fn dropped(&self, meter: &MeterId, reason: DropReason, at: crate::domain::UtcMillis) {
         self.0.send_modify(|fleet| {
             if let Some(entry) = fleet.meters.iter_mut().find(|m| &m.meter == meter) {
@@ -894,6 +924,14 @@ impl MeterPulse {
     /// The period this meter's loop was pacing at when it last ticked.
     pub fn period_ms(&self) -> i64 {
         self.fleet.borrow().meters[self.index].period_ms
+    }
+
+    /// How many times this meter's switch has been moved ([#82]).
+    ///
+    /// The loop compares it with what it held a tick ago; a difference is a
+    /// toggle it never saw as a level.
+    pub fn toggles(&self) -> u64 {
+        self.fleet.borrow().meters[self.index].enable_toggles
     }
 }
 
@@ -1898,6 +1936,10 @@ pub async fn run<S: Source + Send>(
     // id — has been sent, after which the certificate IS the publication and
     // the loop stops asking a question whose answer cannot change the verdict.
     let mut was_enabled = true;
+    // What the operator's switch count stood at when this task last looked
+    // ([#82]). The level below cannot see a disable and a re-enable that both
+    // happen inside one period; this can.
+    let mut seen_toggles = heartbeat.toggles();
     let mut certified_gone = false;
     let mut gone_pending = false;
     loop {
@@ -1972,6 +2014,10 @@ pub async fn run<S: Source + Send>(
                 certified_gone = false;
                 gone_pending = false;
             }
+            // Kept in step so a disable that DID last a tick is not re-announced
+            // as a fast toggle when the meter comes back ([#82]): the level
+            // branch has already done the reset this tick.
+            seen_toggles = heartbeat.toggles();
             was_enabled = false;
             continue;
         }
@@ -1982,6 +2028,34 @@ pub async fn run<S: Source + Send>(
                  any start"
             );
             was_enabled = true;
+        }
+        // A TOGGLE THIS TICK NEVER SAW AS A LEVEL ([#82]).
+        //
+        // The block above catches a disable that lasted at least one tick. An
+        // operator clicking two checkboxes inside one period leaves `enabled`
+        // true at both reads, so nothing there fires — and the gesture ADR 0034
+        // and story 3.5 present as *the* way to re-judge a latched meter silently
+        // did nothing, while the DDEATH/DBIRTH pair went out and made the screen
+        // say it had worked. Worse, a certified-gone device re-added to the
+        // account and toggled quickly stayed silent for ever: a freshly DBIRTHed
+        // name that never published again.
+        //
+        // The count is compared, not the level, so the width of the gesture stops
+        // mattering. The reset is the SAME one the disable branch performs: a
+        // toggle means *judge this meter afresh*, whichever way the switch is
+        // resting now.
+        let toggles = heartbeat.toggles();
+        if toggles != seen_toggles {
+            tracing::info!(
+                meter = %meter,
+                toggles,
+                "meter switched off and on again within one period; judged afresh \
+                 — Stale until proven, as at any start"
+            );
+            seen_toggles = toggles;
+            state = State::initial();
+            certified_gone = false;
+            gone_pending = false;
         }
         // AFTER THE CERTIFICATE, SILENCE — and the silence is the honesty
         // (ADR 0034). The account said it has no such device; the DDEATH said
