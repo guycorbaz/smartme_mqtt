@@ -2781,17 +2781,66 @@ development_status:
   # FOUR ISSUES STAY OUT: #24, #25, #101 and #112 carry conduct and not product.
   # The review of 2026-08-27 confirmed they retain no epic milestone, and 9.4 names
   # #101's exclusion so that its absence reads as a decision.
+  # ==========================================================================
+  # 2026-08-30 — THE TRACKER CATCHES UP WITH WORK ALREADY DONE
+  # ==========================================================================
+  # Found by the project review of 2026-08-30: all four stories still read
+  # `backlog` while 9.1 was complete, 9.2 was delivered and 9.3 was half worked.
+  # THE BACKLOG WENT 32 -> 18 IN THREE DAYS AND NOT ONE STATUS MOVED. A tracker
+  # that says `backlog` for finished work is worse than no tracker: milestone E9
+  # in gestion/jalons.md is read off this file, so the dossier's only in-progress
+  # epic looked unstarted for three days of dense work.
+  #
+  # NO STORY FILE WAS EVER CREATED FOR EPIC 9, and that is why this drifted.
+  # `ready-for-dev` means "story file created in stories folder"; nothing here
+  # ever passed through it. The work went from the ISSUE straight to the commit —
+  # every commit of the window names its issue (`fix(#78)`, `docs(#113): story
+  # 9.2`), and the issues carry the reasoning that a story file would have held.
+  # THE FILES ARE NOT BEING WRITTEN NOW. A story file authored after the fact
+  # records what its author remembers, which is the failure this repository has
+  # logged against guards, citations and mutations; the issues are the contemporaneous
+  # record and they exist. What is corrected here is the STATUS, not the archive.
+  #
+  # THE MECHANISM STATED ABOVE HELD, AND DID NOT SUFFICE: closing these stories is
+  # what solders E1-E6, and 9.1 closed six issues without soldering one milestone —
+  # the six fell across E4 and E2, each of which keeps others open. Only E3 came
+  # within one ([#63]), and E1's remaining issue ([#20]) is blocked upstream.
   epic-9: in-progress
-  9.1: backlog   # the six wire-changing issues decided before `latest` moves:
-                 # #27 #28 #29 #34 #38 #43 — each fixed, or refused with an ADR.
-                 # FIRST on purpose: the window, not the severity, orders this one.
-  9.2: backlog   # the triage reaches the forge — the labels-or-milestones
-                 # arbitration, suspended since 2026-08-15, is made and applied.
-                 # This is what R2 has been asking for since the project opened.
-  9.3: backlog   # pile B worked in 9.2's order: #20 #49 #50 #52 #78 #80 #82 #83
-                 # #85 #87 #91 #109 — closed by work, or carried with a DATED reason.
-  9.4: backlog   # pile C's product debts read AT THE BODY: #35 #42 #63 #66 #71 #89
-                 # #96 #99 #102 — paid, refused on the record, or re-dated.
+  9.1: done      # DONE 2026-08-29 — six of six, and the sixth is the one that took
+                 # a norm rather than a fix: #38 (28th), then #27, #28, #29, #43 and
+                 # #34 on the 29th. #34 could not close until the MQTT clauses its own
+                 # body demanded were pinned (docs/spec/mqtt/README.md); the rule it
+                 # produced is now in CLAUDE.md. #43 held a year-old hypothesis that
+                 # measured FALSE: the missing NDEATH was the observer's own socket.
+                 # A project review caught this story overclaiming six-of-six while it
+                 # was five — recorded in fc61e98 before it was true.
+  9.2: done      # DONE 2026-08-30 — ADR 0054. The labels-or-milestones arbitration,
+                 # suspended since 2026-08-15, is made: LABELS, and every open issue
+                 # carries its rank on the forge. The axis it shipped is NOT the one
+                 # the story specified — `changes the wire` now names an EMPTY pile,
+                 # so the rank is cost-of-delay: cost:data, cost:capability,
+                 # cost:knowledge, plus blocked-upstream and awaiting-measurement.
+                 # R2's written condition ("R2 baissera quand 9.2 sera close") is
+                 # therefore met; the rating itself is Guy's and is still open.
+  9.3: in-progress  # pile B: #20 #49 #50 #52 #78 #80 #82 #83 #85 #87 #91 #109.
+                 # CLOSED 2026-08-30 — #80 #78 (ADR 0055, ADR 0058: a feed yardstick
+                 # only moves forward and survives a restart; a unit switch discards it
+                 # rather than softening the comparison), #82 #83 (ADR 0057), #87 #91
+                 # (ADR 0056: a clean stop counts what it drops). #85 is MEASURED and
+                 # not closable — 40 handed over, 0 received, 0 counted, with a control
+                 # proving the harness — its repair needs an acknowledgement QoS 0 does
+                 # not give. #20 and #50 are blocked upstream on rustls-webpki.
+                 # Remaining: #20 #49 #50 #52 #85 #109.
+  9.4: in-progress  # pile C: #35 #42 #63 #66 #71 #89 #96 #99 #102.
+                 # CLOSED — #66 (2026-08-28), #102 (2026-08-30, ADR 0059: production is
+                 # the 24-hour window, so production measures itself).
+                 # #42 IS DECIDED AND STAYS OPEN (2026-08-30, ADR 0060): `gap (declined)`
+                 # is the third label of the gap verdict, thirteen rows moved, no count
+                 # moved. It carries a residue found on the way — #27 is closed while two
+                 # matrix rows still name it as owner.
+                 # #96 BECAME REACHABLE WITHOUT ANYONE DECIDING IT: the test written for
+                 # #85 opens the exact window its AC needed. Read #85 before taking it.
+                 # Remaining: #35 #42 #63 #71 #89 #96 #99.
   epic-9-retrospective: required
                  # Condition of closing, per the 2026-08-10 amendment. It must state
                  # how many of the twenty-seven fell to WORK and how many to a BODY
