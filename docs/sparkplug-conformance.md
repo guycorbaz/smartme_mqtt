@@ -13,14 +13,26 @@ One row per normative clause, keyed by its `tck-id`. Verdicts:
 | --- | --- |
 | **conformant** | We do what the clause requires, **and a named test proves it** |
 | **deviation** | We knowingly do otherwise; the row carries the rationale and its ADR or deferred-work entry |
-| **gap (unimplemented)** | We do not do the thing the clause requires; the row carries an owning story, epic or issue |
+| **gap (unimplemented)** | We do not do the thing the clause requires **and we owe it**; the row carries an owning story, epic or issue |
 | **gap (unproven)** | We do do it, but nothing proves that we do; the row carries an owning story, epic or issue |
+| **gap (declined)** | The clause binds and we do not do what it requires, **and that is a recorded position rather than a debt**; the row carries its ADR, and the ADR carries the conditions that would reopen it |
 | **n/a** | The clause addresses a role we do not play, or a message we do not emit |
 
-**The two kinds of `gap` are one verdict wearing two labels**, and the inherited definition already
-covered both — "we do not do it, **or** nothing proves that we do". Splitting the label changes no
-verdict and no count; it exists because a reader of "every gap carries an owner" could not otherwise
-tell a broken behaviour from an untested one, and the two need different work: a fix versus a test.
+**The three kinds of `gap` are one verdict wearing three labels**, and the inherited definition
+already covered them — "we do not do it, **or** nothing proves that we do". Splitting the label
+changes no verdict and no count; it exists because a reader of "every gap carries an owner" could not
+otherwise tell a broken behaviour from an untested one, and **the three need different work: a fix,
+a test, and nothing at all.**
+
+**`declined` was added by [ADR 0060](adr/0060-a-declined-clause-is-a-gap-that-says-so.md)
+([#42](https://github.com/guycorbaz/smartme_mqtt/issues/42)), on the same reasoning that produced the
+first two.** Thirteen rows had been carrying `gap (unimplemented)` — *a debt with an owner* — beside
+an annotation saying the mechanism had been declined in writing, so the verdict and its own cell said
+opposite things and only the annotation was true. A row scanning as *not yet done* keeps a settled
+question open: these eleven stayed re-openable for thirty days. **`declined` is not `n/a`** — the
+criterion separating them is in ADR 0060 Decision 2, and it turns on whether the absent capability is
+a fact about the world we measure or a fact about our own software. **A `gap (declined)` row without
+an ADR link is refused by `scripts/check-conformance-arithmetic.py`.**
 
 **A row claiming `conformant` with no test named is a `gap`, not a `conformant`.** A behaviour
 nothing exercises is not a proven behaviour — that rule exists because contract v1 shipped
@@ -107,7 +119,7 @@ same.
 | `intro-group-id-chars` | MUST | **`check_identifier` rejects `/`, `+`, `#`, `U+0000` and empty** (`topic.rs`). The first three are chapter 4's wildcard rule; the null is this clause's own, deferred to MQTT — *"A UTF-8 encoded string MUST NOT include an encoding of the null character U+0000"*, **[MQTT-1.5.3-2]**, MQTT 3.1.1 §1.5.3. *Deliberately not stricter: the same section's `U+0001..U+001F` and `U+007F..U+009F` clause is a SHOULD NOT, and refusing those would refuse identifiers both specifications allow.* **The MQTT clauses are pinned at [`docs/spec/mqtt/README.md`](spec/mqtt/README.md) since 2026-08-29** — until then this row cited a norm the repository did not hold, which is what [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34) was kept open for | `a_null_character_is_refused_and_a_control_character_is_not` — asserts the refusal at all three levels **and** that a control character is still accepted, so a fix reaching too far fails it too. Mutation-tested: dropping `'\0'` from the match goes red | conformant |
 | `intro-edge-node-id-chars` | MUST | as above, same function | as above, same test — the edge node case is asserted by name | conformant |
 | `intro-device-id-chars` | MUST | as above, same function | as above, same test — the device case goes through `device_topic` | conformant |
-| `intro-edge-node-id-uniqueness` | MUST | nothing verifies that `group_id/edge_node_id` is unique across the infrastructure — **and nothing can, from inside an Edge Node**. Decided rather than pending: [ADR 0052](adr/0052-uniqueness-is-asserted-by-the-operator-not-verified-by-the-node.md) refuses the pre-birth probe (it would answer *"no collision seen in 500 ms"* while reading as *"unique"*), and the identifiers have no defaults, so nothing collides by accident | — the operator manual states the requirement where the two identifiers are configured, and the troubleshooting chapter carries the collision's signature | **gap (unimplemented)** — *decided, not oversight* ([ADR 0052](adr/0052-uniqueness-is-asserted-by-the-operator-not-verified-by-the-node.md)) |
+| `intro-edge-node-id-uniqueness` | MUST | nothing verifies that `group_id/edge_node_id` is unique across the infrastructure — **and nothing can, from inside an Edge Node**. Decided rather than pending: [ADR 0052](adr/0052-uniqueness-is-asserted-by-the-operator-not-verified-by-the-node.md) refuses the pre-birth probe (it would answer *"no collision seen in 500 ms"* while reading as *"unique"*), and the identifiers have no defaults, so nothing collides by accident | — the operator manual states the requirement where the two identifiers are configured, and the troubleshooting chapter carries the collision's signature | **gap (declined)** — [ADR 0052](adr/0052-uniqueness-is-asserted-by-the-operator-not-verified-by-the-node.md) |
 
 **The three `-chars` clauses were the one place this pass expected agreement and did not find it,
 and the finding was measured rather than reasoned.** All three read *"MUST only contain characters
@@ -251,10 +263,13 @@ One clause.
 **This clause is `n/a` and the STATE gap is still recorded**, which is the distinction the whole
 chapter-5 host section turns on. What a Host Application *publishes* is not our clause. What an Edge
 Node must *do* when its Primary Host goes offline is, and it is `gap` in four places below.
-**Those four gaps are now a recorded decision** — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md)
-rules the mechanism out on four grounds. The verdicts below are unchanged and the reason is
-[#42](https://github.com/guycorbaz/smartme_mqtt/issues/42): a story does not re-grade rows on the
-strength of an ADR it wrote itself.
+**Those four gaps are a recorded decision** — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md)
+rules the mechanism out on four grounds — **and since
+[ADR 0060](adr/0060-a-declined-clause-is-a-gap-that-says-so.md) they say so in the verdict itself:
+`gap (declined)`, not `gap (unimplemented)`.** They stayed `unimplemented` for thirty days for a good
+reason and one bad consequence: Story 4.5 would have been re-grading rows on the strength of an ADR
+it wrote itself ([#42](https://github.com/guycorbaz/smartme_mqtt/issues/42)), so it declined to — and
+the rows went on reading as a debt nobody owed.
 
 ---
 
@@ -271,7 +286,7 @@ strength of an ADR it wrote itself.
 | `topic-structure-namespace-valid-device-id` | MUST | validated in `device_topic`, at the last moment before it becomes a level | same | conformant |
 | `topic-structure-namespace-device-id-associated-message-types` | MUST | `is_device_level()` gates DBIRTH/DDATA/DDEATH onto device topics | `a_message_type_cannot_address_the_wrong_level` | conformant |
 | `topic-structure-namespace-device-id-non-associated-message-types` | MUST NOT | the same gate refuses a node-level type on a device topic, **in release builds too** | same | conformant |
-| `topic-structure-namespace-unique-edge-node-descriptor` | MUST | as `intro-edge-node-id-uniqueness`: unverifiable from inside, decided by [ADR 0052](adr/0052-uniqueness-is-asserted-by-the-operator-not-verified-by-the-node.md), documented in the manual | — | **gap (unimplemented)** — *decided, not oversight* ([ADR 0052](adr/0052-uniqueness-is-asserted-by-the-operator-not-verified-by-the-node.md)) |
+| `topic-structure-namespace-unique-edge-node-descriptor` | MUST | as `intro-edge-node-id-uniqueness`: unverifiable from inside, decided by [ADR 0052](adr/0052-uniqueness-is-asserted-by-the-operator-not-verified-by-the-node.md), documented in the manual | — | **gap (declined)** — [ADR 0052](adr/0052-uniqueness-is-asserted-by-the-operator-not-verified-by-the-node.md) |
 | `topic-structure-namespace-unique-device-id` | MUST | **`config::validate` refuses two meters sharing a `meter_id`**, naming both rows — and since contract v13 the `meter_id` IS the device level, so this is the clause's own subject. *This row said "one device today" until 2026-08-28: the fleet has been three since Epic 3, and the serial-duplicate guard that used to cover this stopped covering it when the device level moved* | `two_meters_sharing_a_meter_id_are_refused` — names the `meter ids` fault rather than taking any error. Mutation-tested: emptying the duplicate scan goes red | conformant |
 | `topic-structure-namespace-duplicate-device-id-across-edge-node` | MAY | permissive; nothing to do | — | n/a |
 
@@ -415,17 +430,17 @@ do below.
 | `message-flow-edge-node-birth-publish-nbirth-qos` | MUST (QoS 0) | QoS 0 | `the_delivery_table_matches_the_specification_clause_by_clause` — **mutation-verified at the Story 4.3 review**: changing `qos_for` to return `AtLeastOnce` goes red, and both call sites (`:295` the will, `:572`, inside the `publish` helper, every publish) derive from that one function | conformant |
 | `message-flow-edge-node-birth-publish-nbirth-retained` | MUST (false) | retain false | same, **plus an external witness**: `chaos_sigterm_no_lie:397-405` connects a late subscriber after the bridge is gone and asserts the broker replays nothing — and unlike the will, the NBIRTH is *certainly* published in that run, because the test waited for it | conformant |
 | `message-flow-edge-node-birth-publish-nbirth-payload-seq` | MUST (0–255) | a BIRTH resets the counter and takes `0`; `SeqCounter` is a `u8`, so the range is a type invariant | `birth_carries_seq_zero_and_the_session_number`, `prop_seq_stays_in_range_and_wraps_at_the_boundary`, `prop_rebirth_always_restarts_numbering_at_zero` | conformant |
-| `message-flow-edge-node-birth-publish-phid-wait` | MUST | **the bridge has no Primary Host Application configuration at all** | — | **gap (unimplemented)** · **DECIDED, not pending: [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism** (Story 4.5); the verdict word is under review in [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
-| `message-flow-edge-node-birth-publish-phid-wait-id` | MUST | as above — no STATE topic is parsed | — | **gap (unimplemented)** · **DECIDED, not pending: [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism** (Story 4.5); the verdict word is under review in [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
-| `message-flow-edge-node-birth-publish-phid-wait-online` | MUST | as above — no STATE payload is read | — | **gap (unimplemented)** · **DECIDED, not pending: [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism** (Story 4.5); the verdict word is under review in [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
-| `message-flow-edge-node-birth-publish-phid-wait-timestamp` | MUST | as above — no STATE timestamp is compared | — | **gap (unimplemented)** · **DECIDED, not pending: [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism** (Story 4.5); verdict word under review in [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant*, monotonicity undetermined |
-| `message-flow-edge-node-birth-publish-phid-offline` | MUST | as above — nothing makes the bridge disconnect on an offline STATE | — | **gap (unimplemented)** · **DECIDED, not pending: [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism** (Story 4.5); verdict word under review in [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
+| `message-flow-edge-node-birth-publish-phid-wait` | MUST | **the bridge has no Primary Host Application configuration at all** | — | **gap (declined)** — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
+| `message-flow-edge-node-birth-publish-phid-wait-id` | MUST | as above — no STATE topic is parsed | — | **gap (declined)** — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
+| `message-flow-edge-node-birth-publish-phid-wait-online` | MUST | as above — no STATE payload is read | — | **gap (declined)** — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
+| `message-flow-edge-node-birth-publish-phid-wait-timestamp` | MUST | as above — no STATE timestamp is compared | — | **gap (declined)** — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant*, monotonicity undetermined |
+| `message-flow-edge-node-birth-publish-phid-offline` | MUST | as above — nothing makes the bridge disconnect on an offline STATE | — | **gap (declined)** — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
 | `operational-behavior-edge-node-intentional-disconnect-ndeath` | MUST | the bridge publishes its own NDEATH before dropping the socket (`mqtt_driver.rs:1083`) | `chaos_sigterm_no_lie` — and it proves the **explicit** death rather than the will, because it asserts `death_stamp > birth_stamp`, which a CONNECT-time will can never satisfy | conformant — **and it vindicates [ADR 0011](adr/0011-graceful-shutdown-requires-both-deaths.md)** |
 | `operational-behavior-edge-node-intentional-disconnect-packet` | MAY | the bridge **never** sends a DISCONNECT packet, deliberately: it would instruct the broker to discard the will, removing the fallback (ADR 0011) | `chaos_sigterm_no_lie` observes the will still firing after the explicit death | n/a — a permission declined, not an obligation missed |
-| `operational-behavior-edge-node-birth-sequence-wait` | MUST | the bridge births as soon as the broker answers; it waits for no STATE | — | **gap (unimplemented)** (Stories 4.4–4.5) · **DECIDED, not pending: [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism** (Story 4.5); verdict word under review in [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant*, but which of two readings applies is undetermined |
-| `operational-behavior-edge-node-termination-host-offline` | MUST | nothing disconnects the bridge on an offline STATE | — | **gap (unimplemented)** · **DECIDED, not pending: [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism** (Story 4.5); verdict word under review in [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
-| `operational-behavior-edge-node-termination-host-offline-reconnect` | MUST | there is no server list to walk | — | **gap (unimplemented)** (Story 4.5) · **DECIDED, not pending: [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism** (Story 4.5); verdict word under review in [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* — one broker, so *"the next available MQTT Server"* is the same server and a literal implementation loops on itself; 4.5 must specify the alternative *(was *irrelevant*; changed by the 4.4 review)* |
-| `operational-behavior-edge-node-termination-host-offline-timestamp` | MUST NOT | the anti-replay rule for a stale offline STATE — nothing implements it because nothing reads STATE | — | **gap (unimplemented)** (Story 4.5) · **DECIDED, not pending: [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism** (Story 4.5); verdict word under review in [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant*, occurrence here undetermined |
+| `operational-behavior-edge-node-birth-sequence-wait` | MUST | the bridge births as soon as the broker answers; it waits for no STATE | — | **gap (declined)** (Stories 4.4–4.5) — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant*, but which of two readings applies is undetermined |
+| `operational-behavior-edge-node-termination-host-offline` | MUST | nothing disconnects the bridge on an offline STATE | — | **gap (declined)** — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* |
+| `operational-behavior-edge-node-termination-host-offline-reconnect` | MUST | there is no server list to walk | — | **gap (declined)** (Story 4.5) — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* — one broker, so *"the next available MQTT Server"* is the same server and a literal implementation loops on itself; 4.5 must specify the alternative *(was *irrelevant*; changed by the 4.4 review)* |
+| `operational-behavior-edge-node-termination-host-offline-timestamp` | MUST NOT | the anti-replay rule for a stale offline STATE — nothing implements it because nothing reads STATE | — | **gap (declined)** (Story 4.5) — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant*, occurrence here undetermined |
 
 **Why `-nbirth-qos` is `conformant` on `qos_for` while `-will-message-will-retained` is a `gap` on
 the same function — a convention, made explicit at the code review of Story 4.3 because the rows
@@ -576,15 +591,14 @@ review of Story 4.3 found it missing and a reader should not have to go looking:
 > certain applications."* — `Sparkplug_1_Introduction.adoc:285-286`
 
 The specification could hardly be plainer that this is optional. On that reading all five are `n/a`,
-chapter 5 becomes `29 · 1 · 15 · 54` and the whole-specification totals become `80 · 6 · 39 · 149`.
+chapter 5 becomes `32 · 1 · 12 · 54` and the whole-specification totals become `118 · 8 · 17 · 160`.
 
-*(This counterfactual read `22 · 2 · 21 · 54` and `70 · 8 · 47 · 149` until 2026-08-03: it was
-computed against the tallies of the day and not recomputed when they moved. The **delta** it applies
-is what carries — one `conformant` and four `gap` rows becoming `n/a` — and it is unchanged, because
-no story since has touched these five verdicts: 4.5 decided the mechanism without moving them
-([ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md)), 4.6 added NCMD and no
-STATE handling, and 4.7 and 4.10 moved rows elsewhere. Applied to today's `30 · 1 · 19 · 49` and
-`81 · 6 · 43 · 144`, the figures above are what that reading would produce.)*
+*(This counterfactual read `22 · 2 · 21 · 54` and `70 · 8 · 47 · 149` until 2026-08-03, then
+`29 · 1 · 15 · 54` and `80 · 6 · 39 · 149` until 2026-08-30: each time it was computed against the
+tallies of the day and not recomputed when they moved, which is twice now. The **delta** is what
+carries and it has changed once: it was one `conformant` and four `gap` rows becoming `n/a`, and it
+is now **five `gap` rows**, because Story 4.10 moved the fifth. Recomputed from today's
+`32 · 1 · 17 · 49` and `118 · 8 · 22 · 155`.)*
 
 **The reading is nonetheless rejected, on a distinction that must be stated because the same pass
 ruled the other way on a structurally identical clause.** `message-flow-device-dcmd-subscribe` is
@@ -603,6 +617,13 @@ requires these to appear as gaps pointing at Stories 4.4–4.8, and they do.
 
 **A reviewer wanting to overturn this should attack the distinction above, not the verdict.** If
 "absent capability" is one category rather than two, the five move and the totals move with them.
+
+**The distinction was ratified on 2026-08-30 and is no longer only this paragraph's**, which is what
+[#42](https://github.com/guycorbaz/smartme_mqtt/issues/42) asked for:
+[ADR 0060](adr/0060-a-declined-clause-is-a-gap-that-says-so.md) Decision 2 adopts it as the written
+criterion for `gap` against `n/a`, and Decision 1 gives these rows the label they lacked —
+**`gap (declined)`**, which says in the Verdict column what the cell had been saying in prose. The
+counterfactual above stands as the reading that was weighed and refused, not as an open question.
 
 ### Data behaviour and report-by-exception
 
@@ -816,8 +837,8 @@ The three clauses that bind **us**:
 
 | tck-id | Level | Our behaviour | Proof | Verdict |
 | --- | --- | --- | --- | --- |
-| `operational-behavior-primary-application-state-with-multiple-servers-state-subs` | MUST | the clause binds both sides — *"all Edge Nodes configured with a Primary Host Application MUST subscribe to this STATE message"* (`:586-589`). Since Story 4.6 the bridge does hold a subscription — to its own NCMD topic, and to that alone. It subscribes to no STATE topic, so this clause is unmet for the same reason as before, but the reason must now be stated precisely rather than as a blanket absence | — | **gap (unimplemented)** · **DECIDED, not pending: [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism** (Story 4.5); verdict word under review in [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* — the host half is satisfied, the edge-node half is not |
-| `operational-behavior-primary-application-state-with-multiple-servers-walk` | MUST | *"the Edge Node MUST terminate its session with this MQTT Server and move to the next available MQTT Server"* (`:610-613`) — there is no server list and no STATE to trigger it | — | **gap (unimplemented)** (Story 4.5) · **DECIDED, not pending: [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism** (Story 4.5); verdict word under review in [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *irrelevant* — one broker |
+| `operational-behavior-primary-application-state-with-multiple-servers-state-subs` | MUST | the clause binds both sides — *"all Edge Nodes configured with a Primary Host Application MUST subscribe to this STATE message"* (`:586-589`). Since Story 4.6 the bridge does hold a subscription — to its own NCMD topic, and to that alone. It subscribes to no STATE topic, so this clause is unmet for the same reason as before, but the reason must now be stated precisely rather than as a blanket absence | — | **gap (declined)** — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *relevant* — the host half is satisfied, the edge-node half is not |
+| `operational-behavior-primary-application-state-with-multiple-servers-walk` | MUST | *"the Edge Node MUST terminate its session with this MQTT Server and move to the next available MQTT Server"* (`:610-613`) — there is no server list and no STATE to trigger it | — | **gap (declined)** (Story 4.5) — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism (Story 4.5) · [4.4 measured](primary-host-state-observation.md#the-eleven-clauses-ruled): relevance *irrelevant* — one broker |
 | `operational-behavior-primary-application-state-with-multiple-servers-single-server` | MUST NOT | *"The Edge Nodes MUST not connected to more than one server at any point in time"* (`:600-601`, typo the specification's). `MqttConfig` holds one `host` and one `port` and the driver builds one `AsyncClient` | — **correct by our own code shape, and nothing asserts it**; the guarantee dissolves the day Story 4.5 adds a server list, which is exactly when it would matter | **gap (unproven)** ([#35](https://github.com/guycorbaz/smartme_mqtt/issues/35), Story 4.10) |
 
 **Why `-single-server` is not `conformant`.** A second concurrent session is unreachable today, which
@@ -1443,7 +1464,7 @@ not only here.
 | **This repository keeps no copy of the MQTT specification**, so three `-chars` clauses cannot be audited in full against their own norm — only a demonstrated violation of them | 1 | [#34](https://github.com/guycorbaz/smartme_mqtt/issues/34) — start by pinning the MQTT clause |
 | **`Clean Session` is true only because rumqttc defaults it that way** (`rumqttc-0.25.1/src/lib.rs:513`); `set_clean_session` is never called and no test asserts the flag. The first `gap (unproven)` whose guarantee comes from *outside* our code — a dependency default has none of the compile-time force [ADR 0014](adr/0014-schema-as-conformance-evidence.md) requires | 2 | [#35](https://github.com/guycorbaz/smartme_mqtt/issues/35), Story 4.10 |
 | **Nothing asserts that only one MQTT server is ever connected**; the guarantee is `MqttConfig`'s shape and dissolves the day Story 4.5 adds a server list | 5 | [#35](https://github.com/guycorbaz/smartme_mqtt/issues/35), Story 4.10 |
-| **The Primary Host / STATE mechanism is absent end to end** — no *STATE* subscription, no STATE parsing, no birth-wait, no offline-disconnect, no server walk. **Eleven chapter-5 clauses**, and they are `gap` rather than `n/a` because the condition they turn on is a capability the bridge lacks, not a deployment fact. Story 4.6 added an NCMD subscription and no STATE handling whatever, so all eleven stand unchanged. **Story 4.5 closed this as a DECISION rather than a gap** — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism, and the verdict word itself is [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42) | 5 | Stories 4.4, 4.5 — **done** |
+| **The Primary Host / STATE mechanism is absent end to end** — no *STATE* subscription, no STATE parsing, no birth-wait, no offline-disconnect, no server walk. **Eleven chapter-5 clauses**, and they are `gap` rather than `n/a` because the condition they turn on is a capability the bridge lacks, not a deployment fact. Story 4.6 added an NCMD subscription and no STATE handling whatever, so all eleven stand unchanged. **Story 4.5 closed this as a DECISION rather than a gap** — [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md) declines the mechanism, and [ADR 0060](adr/0060-a-declined-clause-is-a-gap-that-says-so.md) gives it the verdict word it lacked: all eleven read **`gap (declined)`** ([#42](https://github.com/guycorbaz/smartme_mqtt/issues/42), closed). The sentence above is the criterion that keeps them out of `n/a`, and it is now written down rather than inferred from this cell | 5 | Stories 4.4, 4.5 — **done** |
 | ~~**`Node Control/Rebirth` is unanswerable, and the mechanism already exists.**~~ **CLOSED (Story 4.7).** The handler landed and the prediction held — the published crate needed no change. What the finding got wrong: it said only the *handler* was missing, but the NBIRTH also carried no `Node Control/Rebirth` metric, so five MUST clauses were unmet and no conformant host had an endpoint to address. The matrix scored those five as gaps throughout; this summary did not connect them | 5 | ~~Story 4.7~~ done |
 | **The per-CONNECT `bdSeq` increment is stated by chapter 5 in its own clause** (`-will-message-payload-bdSeq`), where chapter 6 could only fold it into `-nbirth-bdseq-repeat`. One defect, one owner, one row per chapter | 5, 6 | Story 4.10 |
 | **Two metric-ordering clauses are satisfied only by habit** — the NBIRTH's three metrics and the DBIRTH/DDATA's two share a timestamp because one line gives it to them, and a mutation proved a mis-ordered payload passes every test. Both are live today, neither is latent | 5 | [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30) |
@@ -1601,21 +1622,32 @@ and not the voice*. That is what 4.7 supplies.
 one defect stated twice across chapters, each pointing at the owner its twin already had — not two
 new defects.
 
-**The 17 gaps, split by kind:**
+**The 17 gaps split 11 declined / 2 unimplemented / 4 unproven:**
 
-- **13 × `gap (unimplemented)`** — **eleven** Primary-Host/STATE clauses (Stories 4.4 and 4.5 — *not*
+- **11 × `gap (declined)`** — the Primary-Host/STATE clauses (Stories 4.4 and 4.5 — *not*
   4.6, which added an NCMD subscription and no STATE handling whatever; corrected by the Story 4.6
   code review, which found the same eleven clauses assigned three different owner sets across this
   document: the five
   `-phid-*` birth-wait clauses, the three `-termination-host-offline*` clauses,
-  `-birth-sequence-wait`, `-state-subs` and `-walk`), the will's QoS
-  ([#26](https://github.com/guycorbaz/smartme_mqtt/issues/26), Story 4.17), DDEATH (Epic 3), and
-  case-folded id collision ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)).
-- **5 × `gap (unproven)`** — the will's retain flag, the two metric-ordering clauses, metric-name
-  case collision (all [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)), and the
+  `-birth-sequence-wait`, `-state-subs` and `-walk`). Declined by
+  [ADR 0018](adr/0018-no-primary-host-state-the-repair-is-host-initiated.md), labelled by
+  [ADR 0060](adr/0060-a-declined-clause-is-a-gap-that-says-so.md).
+- **2 × `gap (unimplemented)`** — DDEATH on a lost Device connection (Epic 3; narrowed on 2026-08-04
+  — the message exists, the trigger does not) and case-folded id collision
+  ([#27](https://github.com/guycorbaz/smartme_mqtt/issues/27)).
+- **4 × `gap (unproven)`** — the two metric-ordering clauses and metric-name case collision (all
+  [#30](https://github.com/guycorbaz/smartme_mqtt/issues/30)), and the
   single-server rule ([#35](https://github.com/guycorbaz/smartme_mqtt/issues/35)).
 
-**Every gap carries an owning story, epic or issue**, and the shape of the 20 is the finding: this
+*(This split read `13 unimplemented / 5 unproven` — eighteen against a tally of seventeen — until
+2026-08-30. It named the will's QoS, closed as `conformant` by Story 4.17, and the will's retain
+flag, closed by Story 4.10's review; and it had never been recomputed after either. It is now
+counted from the rows rather than edited in place, and the checker verifies that the three numbers
+sum to the tally.)*
+
+**Every gap carries an owning story, epic or issue** — **[#27] is the one exception and it is a
+defect, not a category**: it is closed, so two rows in this document name an owner who cannot act.
+Recorded on [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42). The shape of the 17 is the finding: this
 chapter's dominant defect is **missing behaviour**, not untested behaviour — the exact inverse of
 chapter 6, where the unproven half outnumbered the unimplemented one. Chapter 6 audits what the
 bridge *says*; chapter 5 audits what it *does*, and two whole mechanisms — command handling and

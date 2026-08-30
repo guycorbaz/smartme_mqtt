@@ -191,6 +191,17 @@ and both clauses describe leaving a session that does not exist.
   4.3's review chose `gap` deliberately and listed it as one of the three judgements a reviewer should
   attack first. Moving them would move two tallies, so it belongs to whoever next owns the matrix,
   with this ADR as the argument.
+
+  > **CLOSED 2026-08-30 — [ADR 0060](0060-a-declined-clause-is-a-gap-that-says-so.md),
+  > [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42).** All eleven rows now read
+  > **`gap (declined)`**, a third label of the same verdict, and **no tally moved** — which is why
+  > the re-examination this bullet feared was expensive turned out to be free. `n/a` was refused on
+  > the distinction the matrix had already stated and ADR 0060 now adopts as a criterion: the
+  > Primary-Host antecedent is a fact about our software, not about the world we measure.
+  >
+  > **The deferral in this bullet was itself the defect.** *"Whoever next owns the matrix"* is an
+  > owner who does not exist, which `CLAUDE.md` forbids in the same words it forbids deferring to an
+  > artifact that does not exist. The rows read as a debt for thirty days because of this sentence.
 - **ADR 0016's ordering argument is formally spent**, and this ADR is the re-weighing it asked for.
 - **`docs/primary-host-state-observation.md` must not be re-run.** It cost an Ignition restart on
   production. Its measurements stand; only their interpretation was open, and it is now closed.

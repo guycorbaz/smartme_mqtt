@@ -409,6 +409,10 @@ fi
 # prose saying the old ones. A script had already been run that day — it checked
 # the tables.
 # ---------------------------------------------------------------------------
+step "the conformance checker still catches what it claims to"
+python3 scripts/check-conformance-arithmetic.py --self-test
+ok "conformance checker falsified"
+
 step "the conformance matrix agrees with itself"
 python3 scripts/check-conformance-arithmetic.py
 ok "conformance arithmetic"

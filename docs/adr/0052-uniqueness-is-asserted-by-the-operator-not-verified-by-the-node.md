@@ -52,6 +52,14 @@ collide.
 reading as an oversight. That is the honest verdict: we do not do what the clause requires, and we
 have decided not to.
 
+> **AMENDED 2026-08-30 — [ADR 0060](0060-a-declined-clause-is-a-gap-that-says-so.md),
+> [#42](https://github.com/guycorbaz/smartme_mqtt/issues/42).** The decision is unchanged; the
+> verdict word is now **`gap (declined)`** on both rows this ADR touches
+> (`intro-edge-node-id-uniqueness`, `topic-structure-namespace-unique-edge-node-descriptor`). The
+> paragraph above is the argument for the label: *"we do not do what the clause requires, and we
+> have decided not to"* is precisely what `declined` says, and `gap (unimplemented)` — a debt with
+> an owner — was the nearest word available when this was written.
+
 **What the operator gets instead is the one thing that helps** — the two identifiers have no
 defaults, so nothing collides by accident, and the manual states the requirement where they are
 typed.
